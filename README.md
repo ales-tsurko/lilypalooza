@@ -17,8 +17,12 @@ Features:
 Run it with:
 
 ```bash
-cargo run
+cargo run --release
 ```
+
+## CLI Arguments
+
+They mostly exist for development, you can do these things using UI.
 
 You can preload a SoundFont on startup with `--soundfont`, for example:
 
@@ -44,6 +48,8 @@ The same can be set via environment variable:
 ```bash
 LILY_VIEW_SCORE=path/to/score.ly cargo run
 ```
+
+## Tests
 
 Testing currently combines Rust unit tests and manual startup error-path checks.
 
