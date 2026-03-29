@@ -78,6 +78,11 @@ struct LilyView {
     piano_roll: PianoRollState,
     svg_zoom: f32,
     svg_page_brightness: u8,
+    svg_scroll_x: f32,
+    svg_scroll_y: f32,
+    score_viewport_cursor: Option<iced::Point>,
+    piano_roll_viewport_cursor: Option<iced::Point>,
+    keyboard_modifiers: keyboard::Modifiers,
 }
 
 struct SelectedScore {
@@ -212,6 +217,11 @@ fn new(
         piano_roll: PianoRollState::new(),
         svg_zoom: DEFAULT_SVG_ZOOM,
         svg_page_brightness: DEFAULT_SVG_PAGE_BRIGHTNESS,
+        svg_scroll_x: 0.0,
+        svg_scroll_y: 0.0,
+        score_viewport_cursor: None,
+        piano_roll_viewport_cursor: None,
+        keyboard_modifiers: keyboard::Modifiers::default(),
     };
 
     app.logger.push("Checking LilyPond availability");
@@ -264,6 +274,9 @@ fn runtime_event_to_message(
     _window_id: window::Id,
 ) -> Option<Message> {
     match event {
+        iced::Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+            Some(Message::ModifiersChanged(modifiers))
+        }
         iced::Event::Keyboard(keyboard::Event::KeyPressed {
             key,
             modified_key,
@@ -326,6 +339,12 @@ fn runtime_event_to_message(
             }
         }
         _ => None,
+    }
+}
+
+impl LilyView {
+    pub(super) fn zoom_modifier_active(&self) -> bool {
+        self.keyboard_modifiers.command() || self.keyboard_modifiers.control()
     }
 }
 

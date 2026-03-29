@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use iced::Size;
 use iced::time::Instant;
 use iced::widget::{pane_grid, text_editor};
+use iced::{Size, keyboard, mouse};
 
 #[derive(Debug, Clone)]
 pub(super) enum Message {
@@ -13,6 +13,7 @@ pub(super) enum Message {
     PianoRoll(PianoRollMessage),
     Logger(LoggerMessage),
     Prompt(PromptMessage),
+    ModifiersChanged(keyboard::Modifiers),
     Tick,
     Frame(Instant),
     WindowResized(Size),
@@ -42,10 +43,14 @@ pub(super) enum LoggerMessage {
 pub(super) enum ViewerMessage {
     ScrollUp,
     ScrollDown,
+    ScrollPositionChanged { x: f32, y: f32 },
+    ViewportCursorMoved(iced::Point),
+    ViewportCursorLeft,
     PrevPage,
     NextPage,
     ZoomIn,
     ZoomOut,
+    SmoothZoom(mouse::ScrollDelta),
     DecreasePageBrightness,
     IncreasePageBrightness,
     ResetZoom,
@@ -56,10 +61,13 @@ pub(super) enum ViewerMessage {
 pub(super) enum PianoRollMessage {
     Resized(pane_grid::ResizeEvent),
     ToggleVisible,
+    ViewportCursorMoved(iced::Point),
+    ViewportCursorLeft,
     RollScrolled { x: f32, y: f32 },
     SetCursorTicks(u64),
     ZoomIn,
     ZoomOut,
+    SmoothZoom(mouse::ScrollDelta),
     ResetZoom,
     BeatSubdivisionSliderChanged(u8),
     BeatSubdivisionInputChanged(String),

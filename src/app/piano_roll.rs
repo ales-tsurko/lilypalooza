@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use iced::widget::{
     Tooltip, button, canvas, column, container, mouse_area, pane_grid, row, scrollable, slider,
-    text, text_input, tooltip,
+    stack, text, text_input, tooltip,
 };
 use iced::{
     Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme, alignment,
@@ -31,7 +31,7 @@ const NOTE_ROW_HEIGHT: f32 = 14.0;
 const CONTENT_RIGHT_PADDING: f32 = 24.0;
 const ZOOM_MIN: f32 = 0.3;
 const ZOOM_MAX: f32 = 6.0;
-const ZOOM_STEP: f32 = 0.2;
+const ZOOM_STEP: f32 = 0.1;
 const BASE_PIXELS_PER_QUARTER: f32 = 72.0;
 const BEAT_SUBDIVISION_MIN: u8 = 1;
 const BEAT_SUBDIVISION_MAX: u8 = 16;
@@ -128,15 +128,24 @@ impl PianoRollState {
     }
 
     pub(super) fn zoom_in(&mut self) {
-        self.zoom_x = (self.zoom_x + ZOOM_STEP).min(ZOOM_MAX);
+        self.zoom_x = next_zoom_step_up(self.zoom_x, ZOOM_STEP, ZOOM_MAX);
     }
 
     pub(super) fn zoom_out(&mut self) {
-        self.zoom_x = (self.zoom_x - ZOOM_STEP).max(ZOOM_MIN);
+        self.zoom_x = next_zoom_step_down(self.zoom_x, ZOOM_STEP, ZOOM_MIN);
     }
 
     pub(super) fn reset_zoom(&mut self) {
         self.zoom_x = 1.0;
+    }
+
+    pub(super) fn zoom_for_delta(&self, delta: mouse::ScrollDelta) -> f32 {
+        let intensity = match delta {
+            mouse::ScrollDelta::Lines { y, .. } => y * 0.14,
+            mouse::ScrollDelta::Pixels { y, .. } => y * 0.0035,
+        };
+
+        (self.zoom_x * intensity.exp()).clamp(ZOOM_MIN, ZOOM_MAX)
     }
 
     pub(super) fn can_zoom_in(&self) -> bool {
@@ -281,6 +290,38 @@ impl PianoRollState {
         }
 
         (self.playback_tick as f32 / self.playback_total_ticks as f32).clamp(0.0, 1.0)
+    }
+}
+
+fn next_zoom_step_up(current: f32, step: f32, max_zoom: f32) -> f32 {
+    if step <= f32::EPSILON {
+        return current;
+    }
+
+    let snapped = (current / step).round() * step;
+
+    if (current - snapped).abs() <= 1e-4 {
+        (current + step).min(max_zoom)
+    } else if current < snapped {
+        snapped.min(max_zoom)
+    } else {
+        (snapped + step).min(max_zoom)
+    }
+}
+
+fn next_zoom_step_down(current: f32, step: f32, min_zoom: f32) -> f32 {
+    if step <= f32::EPSILON {
+        return current;
+    }
+
+    let snapped = (current / step).round() * step;
+
+    if (current - snapped).abs() <= 1e-4 {
+        (current - step).max(min_zoom)
+    } else if current > snapped {
+        snapped.max(min_zoom)
+    } else {
+        (snapped - step).max(min_zoom)
     }
 }
 
@@ -482,20 +523,21 @@ pub(super) fn content(app: &LilyView) -> Element<'_, Message> {
     };
     let show_track_panel = app.piano_roll.track_panel_visible() && file.data.tracks.len() > 1;
 
-    piano_roll_body(
+    piano_roll_body(PianoRollBody {
         file,
-        app.piano_roll.zoom_x,
-        app.piano_roll.beat_subdivision,
-        app.piano_roll.horizontal_scroll(),
-        app.piano_roll.vertical_scroll(),
-        app.piano_roll.playback_tick(),
-        app.piano_roll.current_track_mix(),
-        show_track_panel,
-        app.piano_roll.track_panel_width(),
-    )
+        zoom_x: app.piano_roll.zoom_x,
+        beat_subdivision: app.piano_roll.beat_subdivision,
+        horizontal_offset: app.piano_roll.horizontal_scroll(),
+        vertical_offset: app.piano_roll.vertical_scroll(),
+        playback_tick: app.piano_roll.playback_tick(),
+        track_mix: app.piano_roll.current_track_mix(),
+        track_panel_visible: show_track_panel,
+        track_panel_width: app.piano_roll.track_panel_width(),
+        zoom_modifier_active: app.zoom_modifier_active(),
+    })
 }
 
-fn piano_roll_body<'a>(
+struct PianoRollBody<'a> {
     file: &'a MidiRollFile,
     zoom_x: f32,
     beat_subdivision: u8,
@@ -505,7 +547,23 @@ fn piano_roll_body<'a>(
     track_mix: &'a [TrackMixState],
     track_panel_visible: bool,
     track_panel_width: f32,
-) -> Element<'a, Message> {
+    zoom_modifier_active: bool,
+}
+
+fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
+    let PianoRollBody {
+        file,
+        zoom_x,
+        beat_subdivision,
+        horizontal_offset,
+        vertical_offset,
+        playback_tick,
+        track_mix,
+        track_panel_visible,
+        track_panel_width,
+        zoom_modifier_active,
+    } = body;
+
     let pitch_rows = f32::from(pitch_count(file.data.min_pitch, file.data.max_pitch));
     let notes_height = pitch_rows * NOTE_ROW_HEIGHT;
 
@@ -571,6 +629,23 @@ fn piano_roll_body<'a>(
         .height(Fill)
         .spacing(0);
     let right_content = container(right_content).width(Fill).height(Fill);
+
+    let zoom_overlay: Element<'_, Message> = if zoom_modifier_active {
+        mouse_area(container(text("")).width(Fill).height(Fill))
+            .on_scroll(|delta| Message::PianoRoll(PianoRollMessage::SmoothZoom(delta)))
+            .into()
+    } else {
+        container(text("")).width(Fill).height(Fill).into()
+    };
+
+    let right_content: Element<'_, Message> = mouse_area(
+        stack([right_content.into(), zoom_overlay])
+            .width(Fill)
+            .height(Fill),
+    )
+    .on_move(|position| Message::PianoRoll(PianoRollMessage::ViewportCursorMoved(position)))
+    .on_exit(Message::PianoRoll(PianoRollMessage::ViewportCursorLeft))
+    .into();
 
     let left_content = column![tempo_stub_canvas, keyboard_canvas]
         .width(Length::Fixed(KEYBOARD_WIDTH))
@@ -851,9 +926,7 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
         let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event else {
             return None;
         };
-        let Some(cursor_position) = cursor.position_in(bounds) else {
-            return None;
-        };
+        let cursor_position = cursor.position_in(bounds)?;
         let pixels_per_tick =
             BASE_PIXELS_PER_QUARTER * self.zoom_x / f32::from(self.data.ppq.max(1));
         let absolute_x = cursor_position.x + self.horizontal_scroll;
@@ -892,7 +965,7 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
             self.horizontal_scroll,
             0.0,
             bounds.height,
-            &palette,
+            palette,
         );
         draw_bar_numbers(
             &mut frame,
@@ -900,7 +973,7 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
             pixels_per_tick,
             self.horizontal_scroll,
             bounds.height,
-            &palette,
+            palette,
         );
         draw_tempo_markers(
             &mut frame,
@@ -908,7 +981,7 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
             pixels_per_tick,
             self.horizontal_scroll,
             bounds.height,
-            &palette,
+            palette,
         );
         draw_playback_cursor(
             &mut frame,
@@ -917,7 +990,7 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
             self.horizontal_scroll,
             0.0,
             bounds.height,
-            &palette,
+            palette,
         );
 
         vec![frame.into_geometry()]
@@ -1047,9 +1120,7 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
         let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event else {
             return None;
         };
-        let Some(cursor_position) = cursor.position_in(bounds) else {
-            return None;
-        };
+        let cursor_position = cursor.position_in(bounds)?;
 
         let pixels_per_tick =
             BASE_PIXELS_PER_QUARTER * self.zoom_x / f32::from(self.data.ppq.max(1));
@@ -1129,7 +1200,7 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
             self.beat_subdivision,
             pixels_per_tick,
             bounds.height,
-            &palette,
+            palette,
         );
         draw_playback_cursor(
             &mut frame,
@@ -1138,7 +1209,7 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
             0.0,
             0.0,
             bounds.height,
-            &palette,
+            palette,
         );
 
         let notes = build_note_geometries(self.data, pixels_per_tick);

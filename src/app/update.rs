@@ -19,6 +19,7 @@ pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
         Message::PianoRoll(message) => app.handle_piano_roll_message(message),
         Message::Logger(message) => app.handle_logger_message(message),
         Message::Prompt(message) => app.handle_prompt_message(message),
+        Message::ModifiersChanged(modifiers) => app.handle_modifiers_changed(modifiers),
         Message::Tick => app.handle_tick(),
         Message::Frame(_now) => app.handle_frame(),
         Message::WindowResized(size) => app.handle_window_resized(size),
@@ -46,33 +47,58 @@ impl LilyView {
                     },
                 );
             }
+            ViewerMessage::ScrollPositionChanged { x, y } => {
+                self.svg_scroll_x = x.max(0.0);
+                self.svg_scroll_y = y.max(0.0);
+            }
+            ViewerMessage::ViewportCursorMoved(position) => {
+                self.score_viewport_cursor = Some(position);
+            }
+            ViewerMessage::ViewportCursorLeft => {
+                self.score_viewport_cursor = None;
+            }
             ViewerMessage::PrevPage => {
-                if let Some(rendered_score) = self.rendered_score.as_mut() {
-                    if rendered_score.current_page > 0 {
-                        rendered_score.current_page -= 1;
-                    }
+                if let Some(rendered_score) = self.rendered_score.as_mut()
+                    && rendered_score.current_page > 0
+                {
+                    rendered_score.current_page -= 1;
                 }
             }
             ViewerMessage::NextPage => {
-                if let Some(rendered_score) = self.rendered_score.as_mut() {
-                    if rendered_score.current_page + 1 < rendered_score.pages.len() {
-                        rendered_score.current_page += 1;
-                    }
+                if let Some(rendered_score) = self.rendered_score.as_mut()
+                    && rendered_score.current_page + 1 < rendered_score.pages.len()
+                {
+                    rendered_score.current_page += 1;
                 }
             }
             ViewerMessage::ZoomIn => {
-                let snapped = snap_zoom_to_step(self.svg_zoom, SVG_ZOOM_STEP);
-                self.svg_zoom = (snapped + SVG_ZOOM_STEP).clamp(MIN_SVG_ZOOM, MAX_SVG_ZOOM);
+                self.svg_zoom = next_zoom_step_up(self.svg_zoom, SVG_ZOOM_STEP, MAX_SVG_ZOOM);
             }
             ViewerMessage::ZoomOut => {
-                let snapped = snap_zoom_to_step(self.svg_zoom, SVG_ZOOM_STEP);
-                self.svg_zoom = (snapped - SVG_ZOOM_STEP).clamp(MIN_SVG_ZOOM, MAX_SVG_ZOOM);
+                self.svg_zoom = next_zoom_step_down(self.svg_zoom, SVG_ZOOM_STEP, MIN_SVG_ZOOM);
+            }
+            ViewerMessage::SmoothZoom(delta) => {
+                let previous_zoom = self.svg_zoom;
+                let next_zoom = smooth_zoom(self.svg_zoom, delta, MIN_SVG_ZOOM, MAX_SVG_ZOOM);
+
+                if (next_zoom - previous_zoom).abs() <= f32::EPSILON {
+                    return Task::none();
+                }
+
+                self.svg_zoom = next_zoom;
+
+                if let Some(cursor) = self.score_viewport_cursor {
+                    let scale = next_zoom / previous_zoom.max(f32::EPSILON);
+                    self.svg_scroll_x = anchored_scroll(self.svg_scroll_x, cursor.x, scale);
+                    self.svg_scroll_y = anchored_scroll(self.svg_scroll_y, cursor.y, scale);
+
+                    return self.restore_score_scroll();
+                }
             }
             ViewerMessage::DecreasePageBrightness => {
                 self.svg_page_brightness = self
                     .svg_page_brightness
-                    .saturating_sub(SVG_PAGE_BRIGHTNESS_STEP)
-                    .max(MIN_SVG_PAGE_BRIGHTNESS);
+                    .saturating_sub(SVG_PAGE_BRIGHTNESS_STEP);
             }
             ViewerMessage::IncreasePageBrightness => {
                 self.svg_page_brightness = self
@@ -123,6 +149,12 @@ impl LilyView {
 
                 self.score_panes.resize(self.score_split, self.piano_ratio);
             }
+            PianoRollMessage::ViewportCursorMoved(position) => {
+                self.piano_roll_viewport_cursor = Some(position);
+            }
+            PianoRollMessage::ViewportCursorLeft => {
+                self.piano_roll_viewport_cursor = None;
+            }
             PianoRollMessage::RollScrolled { x, y } => {
                 self.piano_roll.set_horizontal_scroll(x);
                 self.piano_roll.set_vertical_scroll(y);
@@ -132,6 +164,24 @@ impl LilyView {
             }
             PianoRollMessage::ZoomOut => {
                 self.piano_roll.zoom_out();
+            }
+            PianoRollMessage::SmoothZoom(delta) => {
+                let previous_zoom = self.piano_roll.zoom_x;
+                let next_zoom = self.piano_roll.zoom_for_delta(delta);
+
+                if (next_zoom - previous_zoom).abs() <= f32::EPSILON {
+                    return Task::none();
+                }
+
+                self.piano_roll.zoom_x = next_zoom;
+
+                if let Some(cursor) = self.piano_roll_viewport_cursor {
+                    let scale = next_zoom / previous_zoom.max(f32::EPSILON);
+                    let anchored =
+                        anchored_scroll(self.piano_roll.horizontal_scroll(), cursor.x, scale);
+                    self.piano_roll.set_horizontal_scroll(anchored);
+                    return self.restore_piano_roll_scroll();
+                }
             }
             PianoRollMessage::ResetZoom => {
                 self.piano_roll.reset_zoom();
@@ -712,6 +762,11 @@ impl LilyView {
         Task::none()
     }
 
+    fn handle_modifiers_changed(&mut self, modifiers: iced::keyboard::Modifiers) -> Task<Message> {
+        self.keyboard_modifiers = modifiers;
+        Task::none()
+    }
+
     fn show_prompt(&mut self, prompt: ErrorPrompt, ok_action: Option<PromptOkAction>) {
         self.error_prompt = Some(prompt);
         self.prompt_ok_action = ok_action;
@@ -743,6 +798,16 @@ impl LilyView {
             iced::widget::operation::AbsoluteOffset {
                 x: Some(self.piano_roll.horizontal_scroll()),
                 y: Some(self.piano_roll.vertical_scroll()),
+            },
+        )
+    }
+
+    fn restore_score_scroll(&self) -> Task<Message> {
+        iced::widget::operation::scroll_to(
+            super::SCORE_SCROLLABLE_ID,
+            iced::widget::operation::AbsoluteOffset {
+                x: Some(self.svg_scroll_x),
+                y: Some(self.svg_scroll_y),
             },
         )
     }
@@ -910,10 +975,8 @@ impl LilyView {
             .collect();
         if note_anchors.is_empty() {
             let point_and_click_disabled =
-                match score_cursor::score_disables_point_and_click(&selected_score.path) {
-                    Ok(value) => value,
-                    Err(_error) => false,
-                };
+                score_cursor::score_disables_point_and_click(&selected_score.path)
+                    .unwrap_or_default();
 
             if point_and_click_disabled {
                 self.logger.push(
@@ -936,18 +999,16 @@ impl LilyView {
 
                 if let Some(current_file) = self.piano_roll.current_file() {
                     let score_has_repeats =
-                        match score_cursor::score_contains_repeats(&selected_score.path) {
-                            Ok(result) => result,
-                            Err(_error) => false,
-                        };
+                        score_cursor::score_contains_repeats(&selected_score.path)
+                            .unwrap_or_default();
                     if score_has_repeats {
                         let tick_tolerance = u64::from(current_file.data.ppq);
-                        if let Some(map_max_tick) = maps.max_tick_for_midi(&current_file.path) {
-                            if current_file.data.total_ticks <= map_max_tick + tick_tolerance {
-                                self.logger.push(
-                                    "Score has repeats but MIDI appears non-unfolded, cursor follows MIDI timeline only",
-                                );
-                            }
+                        if let Some(map_max_tick) = maps.max_tick_for_midi(&current_file.path)
+                            && current_file.data.total_ticks <= map_max_tick + tick_tolerance
+                        {
+                            self.logger.push(
+                                "Score has repeats but MIDI appears non-unfolded, cursor follows MIDI timeline only",
+                            );
                         }
                     }
                 }
@@ -973,21 +1034,22 @@ impl LilyView {
             return;
         };
 
-        if let Some(rendered_score) = self.rendered_score.as_mut() {
-            if placement.page_index < rendered_score.pages.len() {
-                if let Some(page) = rendered_score.pages.get(placement.page_index) {
-                    if let Some(system_band) = closest_system_band(
-                        &page.system_bands,
-                        placement.x,
-                        placement.min_y,
-                        placement.max_y,
-                    ) {
-                        placement.min_y = system_band.min_y - 1.0;
-                        placement.max_y = system_band.max_y + 1.0;
-                    }
-                }
-                rendered_score.current_page = placement.page_index;
+        if let Some(rendered_score) = self.rendered_score.as_mut()
+            && placement.page_index < rendered_score.pages.len()
+        {
+            if let Some(page) = rendered_score.pages.get(placement.page_index)
+                && let Some(system_band) = closest_system_band(
+                    &page.system_bands,
+                    placement.x,
+                    placement.min_y,
+                    placement.max_y,
+                )
+            {
+                placement.min_y = system_band.min_y - 1.0;
+                placement.max_y = system_band.max_y + 1.0;
             }
+
+            rendered_score.current_page = placement.page_index;
         }
 
         self.score_cursor_overlay = Some(placement);
@@ -1175,6 +1237,48 @@ fn snap_zoom_to_step(value: f32, step: f32) -> f32 {
     }
 
     (value / step).round() * step
+}
+
+fn next_zoom_step_up(current: f32, step: f32, max_zoom: f32) -> f32 {
+    let snapped = snap_zoom_to_step(current, step);
+
+    if (current - snapped).abs() <= 1e-4 {
+        (snapped + step).clamp(MIN_SVG_ZOOM, max_zoom)
+    } else if current < snapped {
+        snapped.clamp(MIN_SVG_ZOOM, max_zoom)
+    } else {
+        (snapped + step).clamp(MIN_SVG_ZOOM, max_zoom)
+    }
+}
+
+fn next_zoom_step_down(current: f32, step: f32, min_zoom: f32) -> f32 {
+    let snapped = snap_zoom_to_step(current, step);
+
+    if (current - snapped).abs() <= 1e-4 {
+        (snapped - step).clamp(min_zoom, MAX_SVG_ZOOM)
+    } else if current > snapped {
+        snapped.clamp(min_zoom, MAX_SVG_ZOOM)
+    } else {
+        (snapped - step).clamp(min_zoom, MAX_SVG_ZOOM)
+    }
+}
+
+fn smooth_zoom(
+    current_zoom: f32,
+    delta: iced::mouse::ScrollDelta,
+    min_zoom: f32,
+    max_zoom: f32,
+) -> f32 {
+    let intensity = match delta {
+        iced::mouse::ScrollDelta::Lines { y, .. } => y * 0.14,
+        iced::mouse::ScrollDelta::Pixels { y, .. } => y * 0.0035,
+    };
+
+    (current_zoom * intensity.exp()).clamp(min_zoom, max_zoom)
+}
+
+fn anchored_scroll(current_scroll: f32, cursor_in_viewport: f32, scale: f32) -> f32 {
+    ((current_scroll + cursor_in_viewport) * scale - cursor_in_viewport).max(0.0)
 }
 
 fn is_relevant_score_change(event: &notify::Event, watched_path: &Path) -> bool {

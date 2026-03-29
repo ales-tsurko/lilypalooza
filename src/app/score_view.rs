@@ -263,16 +263,39 @@ fn score_content(app: &LilyView) -> Element<'_, Message> {
                 .padding(ui_style::PADDING_SM)
                 .style(move |theme| ui_style::svg_page_surface(theme, page_brightness));
 
-            scrollable(page_surface)
+            let score_scroll = scrollable(page_surface)
                 .direction(scrollable::Direction::Both {
                     vertical: scrollable::Scrollbar::new(),
                     horizontal: scrollable::Scrollbar::new(),
                 })
+                .on_scroll(|viewport| {
+                    let offset = viewport.absolute_offset();
+                    Message::Viewer(ViewerMessage::ScrollPositionChanged {
+                        x: offset.x,
+                        y: offset.y,
+                    })
+                })
                 .id(super::SCORE_SCROLLABLE_ID)
                 .width(Fill)
                 .height(Fill)
-                .style(ui_style::workspace_scrollable)
-                .into()
+                .style(ui_style::workspace_scrollable);
+
+            let zoom_overlay: Element<'_, Message> = if app.zoom_modifier_active() {
+                mouse_area(container(text("")).width(Fill).height(Fill))
+                    .on_scroll(|delta| Message::Viewer(ViewerMessage::SmoothZoom(delta)))
+                    .into()
+            } else {
+                container(text("")).width(Fill).height(Fill).into()
+            };
+
+            mouse_area(
+                stack([score_scroll.into(), zoom_overlay])
+                    .width(Fill)
+                    .height(Fill),
+            )
+            .on_move(|position| Message::Viewer(ViewerMessage::ViewportCursorMoved(position)))
+            .on_exit(Message::Viewer(ViewerMessage::ViewportCursorLeft))
+            .into()
         })
         .width(Fill)
         .height(Fill)

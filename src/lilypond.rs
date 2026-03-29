@@ -38,7 +38,7 @@ pub fn check_lilypond_with_min_version(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}\n{stderr}");
 
-    let detected = parse_version(&combined).ok_or_else(|| LilypondError::VersionParseFailed {
+    let detected = parse_version(&combined).ok_or(LilypondError::VersionParseFailed {
         raw_output: combined,
     })?;
 
