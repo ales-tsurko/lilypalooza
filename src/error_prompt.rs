@@ -76,8 +76,12 @@ impl ErrorPrompt {
             .padding(ui_style::PADDING_SM)
             .style(move |theme: &Theme| ui_style::prompt_message(theme, is_critical));
 
-        let ok_button = button(text("OK"))
-            .style(button::primary)
+        let ok_button = button(text("OK").size(ui_style::FONT_SIZE_BODY_SM))
+            .style(if is_critical {
+                ui_style::button_danger
+            } else {
+                ui_style::button_active
+            })
             .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
             .on_press(on_ok.clone());
 
@@ -87,7 +91,7 @@ impl ErrorPrompt {
                 let cancel_message = on_cancel.unwrap_or_else(|| on_ok.clone());
 
                 row![
-                    button(text("Cancel"))
+                    button(text("Cancel").size(ui_style::FONT_SIZE_BODY_SM))
                         .style(ui_style::button_neutral)
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(cancel_message),

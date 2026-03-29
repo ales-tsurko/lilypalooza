@@ -313,6 +313,38 @@ pub(crate) fn button_active(theme: &Theme, status: button::Status) -> button::St
     }
 }
 
+pub(crate) fn button_danger(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let base = button::Style {
+        background: Some(palette.danger.base.color.into()),
+        text_color: palette.danger.base.text,
+        border: border::rounded(10)
+            .width(1)
+            .color(palette.danger.strong.color),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.danger.strong.color.into()),
+            text_color: palette.danger.strong.text,
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.danger.weak.color.into()),
+            text_color: palette.danger.weak.text,
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(palette.background.weakest.color.into()),
+            text_color: palette.background.weakest.text,
+            ..base
+        },
+    }
+}
+
 pub(crate) fn button_compact_solid(theme: &Theme, status: button::Status) -> button::Style {
     let palette = theme.extended_palette();
 
