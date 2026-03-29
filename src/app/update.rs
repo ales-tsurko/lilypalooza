@@ -142,6 +142,10 @@ impl LilyView {
                 self.persist_settings();
             }
             PianoRollMessage::ToggleVisible => {
+                if self.score_layout_axis == PaneAxis::Stacked {
+                    return Task::none();
+                }
+
                 if self.piano_roll.visible {
                     self.piano_roll.visible = false;
                     self.piano_expanded_ratio = self.piano_ratio;
@@ -328,10 +332,63 @@ impl LilyView {
             }
             PaneMessage::ScoreDragged(event) => {
                 if let pane_grid::DragEvent::Dropped { pane, target } = event {
-                    self.score_panes.drop(pane, target);
-                    self.sync_score_layout_from_state();
-                    self.apply_piano_layout_constraints();
+                    if let pane_grid::Target::Pane(target_pane, pane_grid::Region::Center) = target
+                    {
+                        let Some(dragged_kind) = self.score_pane_kind(pane) else {
+                            return Task::none();
+                        };
+                        let Some(target_kind) = self.score_pane_kind(target_pane) else {
+                            return Task::none();
+                        };
+
+                        self.enter_stacked_layout(target_kind, dragged_kind);
+                    } else {
+                        self.score_panes.drop(pane, target);
+                        self.sync_score_layout_from_state();
+                        self.score_layout_axis = match self.score_split_axis {
+                            pane_grid::Axis::Horizontal => PaneAxis::Horizontal,
+                            pane_grid::Axis::Vertical => PaneAxis::Vertical,
+                        };
+                        self.apply_piano_layout_constraints();
+                    }
+
                     self.persist_settings();
+                }
+            }
+            PaneMessage::StackedTabPressed(kind) => {
+                self.stacked_active_pane = kind;
+                self.stacked_pressed_pane = Some(kind);
+                self.stacked_drop_target = None;
+                self.persist_settings();
+            }
+            PaneMessage::StackedTabHovered(kind) => {
+                self.stacked_hovered_pane = kind;
+            }
+            PaneMessage::StackedTabDragStarted(kind) => {
+                if self.stacked_pressed_pane == Some(kind) {
+                    self.stacked_dragging_pane = Some(kind);
+                }
+            }
+            PaneMessage::StackedDragMoved(position) => {
+                if self.stacked_dragging_pane.is_some() {
+                    self.stacked_drop_target = self.stacked_drop_target_for(position);
+                }
+            }
+            PaneMessage::StackedDragReleased => {
+                self.stacked_pressed_pane = None;
+
+                if self.stacked_dragging_pane.is_some() {
+                    if let Some(target) = self.stacked_drop_target {
+                        self.exit_stacked_layout(target);
+                        self.persist_settings();
+                    }
+
+                    self.clear_stacked_drag_state();
+                }
+            }
+            PaneMessage::StackedDragExited => {
+                if self.stacked_dragging_pane.is_some() {
+                    self.stacked_drop_target = None;
                 }
             }
             PaneMessage::ToggleLogger => {
@@ -808,6 +865,10 @@ impl LilyView {
     }
 
     fn apply_piano_layout_constraints(&mut self) {
+        if self.score_layout_axis == PaneAxis::Stacked {
+            return;
+        }
+
         if self.piano_roll.visible {
             let ratio =
                 constrained_piano_ratio(self.score_extent_for_split_axis(), self.piano_ratio);
@@ -863,15 +924,92 @@ impl LilyView {
         };
     }
 
+    fn score_pane_kind(&self, pane: pane_grid::Pane) -> Option<ScorePaneKind> {
+        self.score_panes.get(pane).copied()
+    }
+
+    fn enter_stacked_layout(&mut self, first_tab: ScorePaneKind, active_tab: ScorePaneKind) {
+        self.score_layout_axis = PaneAxis::Stacked;
+        self.score_pane_order = pane_order_from_first(first_tab);
+        self.stacked_active_pane = active_tab;
+        self.piano_roll.visible = true;
+        self.clear_stacked_drag_state();
+    }
+
+    fn exit_stacked_layout(&mut self, target: StackedDropTarget) {
+        let Some(dragged_pane) = self.stacked_dragging_pane else {
+            return;
+        };
+
+        self.score_layout_axis = match target {
+            StackedDropTarget::Top | StackedDropTarget::Bottom => PaneAxis::Horizontal,
+            StackedDropTarget::Left | StackedDropTarget::Right => PaneAxis::Vertical,
+        };
+        self.score_pane_order = pane_order_for_split(
+            dragged_pane,
+            matches!(target, StackedDropTarget::Top | StackedDropTarget::Left),
+        );
+        self.rebuild_split_score_panes();
+    }
+
+    fn rebuild_split_score_panes(&mut self) {
+        let (score_panes, score_split, score_split_axis, piano_ratio, piano_expanded_ratio) =
+            build_score_panes(
+                ScoreLayoutSettings {
+                    pane_axis: self.score_layout_axis,
+                    pane_order: self.score_pane_order,
+                    active_pane: score_pane_kind_to_settings(self.stacked_active_pane),
+                    piano_visible: self.piano_roll.visible,
+                    piano_expanded_ratio: self.piano_expanded_ratio,
+                },
+                self.score_area_height(),
+            );
+
+        self.score_panes = score_panes;
+        self.score_split = score_split;
+        self.score_split_axis = score_split_axis;
+        self.piano_ratio = piano_ratio;
+        self.piano_expanded_ratio = piano_expanded_ratio;
+    }
+
+    fn stacked_drop_target_for(&self, position: iced::Point) -> Option<StackedDropTarget> {
+        if self.score_layout_axis != PaneAxis::Stacked {
+            return None;
+        }
+
+        let width = self.window_width.max(1.0);
+        let height = self.score_area_height().max(1.0);
+        let horizontal_band = (width * 0.18).clamp(88.0, 160.0);
+        let vertical_band = (height * 0.18).clamp(88.0, 160.0);
+
+        if position.y <= vertical_band {
+            Some(StackedDropTarget::Top)
+        } else if position.y >= height - vertical_band {
+            Some(StackedDropTarget::Bottom)
+        } else if position.x <= horizontal_band {
+            Some(StackedDropTarget::Left)
+        } else if position.x >= width - horizontal_band {
+            Some(StackedDropTarget::Right)
+        } else {
+            None
+        }
+    }
+
+    fn clear_stacked_drag_state(&mut self) {
+        self.stacked_hovered_pane = None;
+        self.stacked_pressed_pane = None;
+        self.stacked_dragging_pane = None;
+        self.stacked_drop_target = None;
+    }
+
     fn persist_settings(&self) {
         let _ = settings::save(&settings::AppSettings {
             score_layout: ScoreLayoutSettings {
-                pane_axis: match self.score_split_axis {
-                    pane_grid::Axis::Horizontal => PaneAxis::Horizontal,
-                    pane_grid::Axis::Vertical => PaneAxis::Vertical,
-                },
+                pane_axis: self.score_layout_axis,
                 pane_order: self.score_pane_order,
-                piano_visible: self.piano_roll.visible,
+                active_pane: score_pane_kind_to_settings(self.stacked_active_pane),
+                piano_visible: self.score_layout_axis == PaneAxis::Stacked
+                    || self.piano_roll.visible,
                 piano_expanded_ratio: self.piano_expanded_ratio,
             },
             score_view: settings::ScoreViewSettings {

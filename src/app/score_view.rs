@@ -1,38 +1,257 @@
 use iced::widget::{
-    Tooltip, button, canvas, container, mouse_area, pane_grid, responsive, row, scrollable, stack,
-    svg, text, tooltip,
+    Tooltip, button, canvas, column, container, mouse_area, pane_grid, responsive, row, scrollable,
+    stack, svg, text, tooltip,
 };
-use iced::{ContentFit, Element, Fill, Length, Point, Rectangle, Size, alignment, mouse};
+use iced::{
+    Color, ContentFit, Element, Fill, Length, Point, Rectangle, Size, Theme, alignment, border,
+    mouse,
+};
 
 use super::{
     FileMessage, LilyView, Message, PianoRollMessage, ScoreCursorPlacement, ScorePaneKind,
-    ViewerMessage,
+    StackedDropTarget, ViewerMessage,
 };
 use super::{piano_roll, transport_bar};
+use crate::settings::PaneAxis;
 use crate::ui_style;
 
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
-    let panes =
-        pane_grid::PaneGrid::new(&app.score_panes, |_pane, kind, _is_maximized| match kind {
-            ScorePaneKind::Score => pane_grid::Content::new(score_content(app))
-                .title_bar(score_title_bar())
-                .style(ui_style::pane_main_surface),
-            ScorePaneKind::PianoRoll => pane_grid::Content::new(piano_roll::content(app))
-                .title_bar(piano_roll::title_bar(app))
-                .style(ui_style::piano_roll_surface),
-        })
-        .width(Fill)
-        .height(Fill)
-        .on_drag(|event| Message::Pane(super::PaneMessage::ScoreDragged(event)))
-        .on_resize(8, |event| {
-            Message::PianoRoll(PianoRollMessage::Resized(event))
-        });
+    let workspace = if app.score_layout_axis == PaneAxis::Stacked {
+        stacked_panes(app)
+    } else {
+        split_panes(app)
+    };
 
-    iced::widget::column![panes, transport_bar::view(app)]
+    iced::widget::column![workspace, transport_bar::view(app)]
         .width(Fill)
         .height(Fill)
         .spacing(0)
         .into()
+}
+
+fn split_panes(app: &LilyView) -> Element<'_, Message> {
+    pane_grid::PaneGrid::new(&app.score_panes, |_pane, kind, _is_maximized| match kind {
+        ScorePaneKind::Score => pane_grid::Content::new(score_content(app))
+            .title_bar(score_title_bar())
+            .style(ui_style::pane_main_surface),
+        ScorePaneKind::PianoRoll => pane_grid::Content::new(piano_roll::content(app))
+            .title_bar(piano_roll::title_bar(app))
+            .style(ui_style::piano_roll_surface),
+    })
+    .width(Fill)
+    .height(Fill)
+    .on_drag(|event| Message::Pane(super::PaneMessage::ScoreDragged(event)))
+    .on_resize(8, |event| {
+        Message::PianoRoll(PianoRollMessage::Resized(event))
+    })
+    .into()
+}
+
+fn stacked_panes(app: &LilyView) -> Element<'_, Message> {
+    let ordered_panes = match app.score_pane_order {
+        crate::settings::PaneOrder::ScoreFirst => [ScorePaneKind::Score, ScorePaneKind::PianoRoll],
+        crate::settings::PaneOrder::PianoFirst => [ScorePaneKind::PianoRoll, ScorePaneKind::Score],
+    };
+
+    let tab_bar = container(
+        row![
+            stacked_tab(app, ordered_panes[0]),
+            stacked_tab(app, ordered_panes[1]),
+        ]
+        .spacing(0)
+        .padding([0, ui_style::PADDING_STATUS_BAR_H])
+        .align_y(alignment::Vertical::Bottom),
+    )
+    .width(Fill)
+    .padding([ui_style::PADDING_STATUS_BAR_V + 2, 0])
+    .style(stacked_tab_bar_surface);
+
+    let stacked_view: Element<'_, Message> = match app.stacked_active_pane {
+        ScorePaneKind::Score => column![tab_bar, score_content(app)]
+            .width(Fill)
+            .height(Fill)
+            .spacing(0)
+            .into(),
+        ScorePaneKind::PianoRoll => {
+            column![tab_bar, piano_roll::header(app), piano_roll::content(app)]
+                .width(Fill)
+                .height(Fill)
+                .spacing(0)
+                .into()
+        }
+    };
+
+    let overlay = if app.stacked_dragging_pane.is_some() {
+        stacked_drop_overlay(app)
+    } else {
+        container(text("")).width(Fill).height(Fill).into()
+    };
+
+    mouse_area(stack([stacked_view, overlay]).width(Fill).height(Fill))
+        .on_move(|position| Message::Pane(super::PaneMessage::StackedDragMoved(position)))
+        .on_release(Message::Pane(super::PaneMessage::StackedDragReleased))
+        .on_exit(Message::Pane(super::PaneMessage::StackedDragExited))
+        .into()
+}
+
+fn stacked_tab(app: &LilyView, kind: ScorePaneKind) -> Element<'_, Message> {
+    let is_active = app.stacked_active_pane == kind;
+    let is_hovered = app.stacked_hovered_pane == Some(kind);
+    let is_dragging = app.stacked_dragging_pane == Some(kind);
+    let title = match kind {
+        ScorePaneKind::Score => "Score",
+        ScorePaneKind::PianoRoll => "Piano Roll",
+    };
+
+    let mut label = row![text(title).size(ui_style::FONT_SIZE_UI_SM)]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center);
+
+    if kind == ScorePaneKind::PianoRoll && !app.piano_roll.visible {
+        label = label.push(
+            text("Folded")
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .font(iced::Font::MONOSPACE),
+        );
+    }
+
+    let tab_body = container(label)
+        .width(Length::Shrink)
+        .padding([
+            ui_style::PADDING_STATUS_BAR_V + 3,
+            ui_style::PADDING_STATUS_BAR_H + 10,
+        ])
+        .style(move |theme: &Theme| {
+            let palette = theme.extended_palette();
+            if is_dragging {
+                container::Style {
+                    background: Some(palette.primary.weak.color.into()),
+                    text_color: Some(palette.primary.weak.text),
+                    border: border::rounded(12)
+                        .width(1)
+                        .color(palette.primary.base.color),
+                    ..container::Style::default()
+                }
+            } else if is_active {
+                container::Style {
+                    background: Some(palette.background.base.color.into()),
+                    text_color: Some(palette.background.base.text),
+                    border: border::rounded(9)
+                        .width(1)
+                        .color(palette.background.strong.color),
+                    ..container::Style::default()
+                }
+            } else if is_hovered {
+                container::Style {
+                    background: Some(palette.background.weakest.color.into()),
+                    text_color: Some(palette.background.weakest.text),
+                    border: border::rounded(9)
+                        .width(1)
+                        .color(palette.background.strong.color),
+                    ..container::Style::default()
+                }
+            } else {
+                container::Style {
+                    background: Some(palette.background.weak.color.into()),
+                    text_color: Some(palette.background.weak.text),
+                    border: border::rounded(9)
+                        .width(1)
+                        .color(palette.background.strong.color),
+                    ..container::Style::default()
+                }
+            }
+        });
+
+    mouse_area(tab_body)
+        .on_press(Message::Pane(super::PaneMessage::StackedTabPressed(kind)))
+        .on_enter(Message::Pane(super::PaneMessage::StackedTabHovered(Some(
+            kind,
+        ))))
+        .on_move(move |_| Message::Pane(super::PaneMessage::StackedTabDragStarted(kind)))
+        .on_exit(Message::Pane(super::PaneMessage::StackedTabHovered(None)))
+        .interaction(if is_dragging {
+            mouse::Interaction::Grabbing
+        } else {
+            mouse::Interaction::Grab
+        })
+        .into()
+}
+
+fn stacked_tab_bar_surface(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.strong.color.into()),
+        text_color: Some(palette.background.strong.text),
+        ..container::Style::default()
+    }
+}
+
+fn stacked_drop_overlay(app: &LilyView) -> Element<'_, Message> {
+    let zone = |target: StackedDropTarget, label: &'static str| {
+        let is_active = app.stacked_drop_target == Some(target);
+
+        container(
+            text(label)
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .font(iced::Font::MONOSPACE),
+        )
+        .center_x(Fill)
+        .center_y(Fill)
+        .style(move |_theme| container::Style {
+            background: Some(
+                if is_active {
+                    Color::from_rgba(0.22, 0.52, 0.88, 0.28)
+                } else {
+                    Color::from_rgba(0.08, 0.10, 0.14, 0.16)
+                }
+                .into(),
+            ),
+            text_color: Some(Color::from_rgb(0.95, 0.97, 1.0)),
+            border: border::rounded(10).width(1).color(Color::from_rgba(
+                0.42,
+                0.66,
+                0.98,
+                if is_active { 0.8 } else { 0.22 },
+            )),
+            ..container::Style::default()
+        })
+    };
+
+    let edge_size = 104.0;
+
+    container(
+        column![
+            zone(StackedDropTarget::Top, "Drop for top split")
+                .width(Fill)
+                .height(Length::Fixed(edge_size)),
+            row![
+                zone(StackedDropTarget::Left, "Drop for left split")
+                    .width(Length::Fixed(edge_size))
+                    .height(Fill),
+                container(text("")).width(Fill).height(Fill),
+                zone(StackedDropTarget::Right, "Drop for right split")
+                    .width(Length::Fixed(edge_size))
+                    .height(Fill),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .spacing(ui_style::SPACE_XS),
+            zone(StackedDropTarget::Bottom, "Drop for bottom split")
+                .width(Fill)
+                .height(Length::Fixed(edge_size)),
+        ]
+        .width(Fill)
+        .height(Fill)
+        .spacing(ui_style::SPACE_XS)
+        .padding(ui_style::PADDING_SM),
+    )
+    .width(Fill)
+    .height(Fill)
+    .style(|_theme| {
+        container::Style::default().background(Color::from_rgba(0.02, 0.03, 0.05, 0.18))
+    })
+    .into()
 }
 
 fn score_title_bar<'a>() -> pane_grid::TitleBar<'a, Message> {

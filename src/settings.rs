@@ -18,6 +18,14 @@ pub(crate) enum PaneAxis {
     #[default]
     Horizontal,
     Vertical,
+    Stacked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub(crate) enum ActiveScorePane {
+    #[default]
+    Score,
+    PianoRoll,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -25,6 +33,7 @@ pub(crate) enum PaneAxis {
 pub(crate) struct ScoreLayoutSettings {
     pub(crate) pane_axis: PaneAxis,
     pub(crate) pane_order: PaneOrder,
+    pub(crate) active_pane: ActiveScorePane,
     pub(crate) piano_visible: bool,
     pub(crate) piano_expanded_ratio: f32,
 }
@@ -34,6 +43,7 @@ impl Default for ScoreLayoutSettings {
         Self {
             pane_axis: PaneAxis::Horizontal,
             pane_order: PaneOrder::ScoreFirst,
+            active_pane: ActiveScorePane::Score,
             piano_visible: true,
             piano_expanded_ratio: 0.70,
         }

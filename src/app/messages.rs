@@ -4,6 +4,8 @@ use iced::time::Instant;
 use iced::widget::{pane_grid, text_editor};
 use iced::{Size, keyboard, mouse};
 
+use super::ScorePaneKind;
+
 #[derive(Debug, Clone)]
 pub(super) enum Message {
     StartupChecked(Result<crate::lilypond::VersionCheck, String>),
@@ -23,6 +25,12 @@ pub(super) enum Message {
 pub(super) enum PaneMessage {
     Resized(pane_grid::ResizeEvent),
     ScoreDragged(pane_grid::DragEvent),
+    StackedTabPressed(ScorePaneKind),
+    StackedTabHovered(Option<ScorePaneKind>),
+    StackedTabDragStarted(ScorePaneKind),
+    StackedDragMoved(iced::Point),
+    StackedDragReleased,
+    StackedDragExited,
     ToggleLogger,
 }
 

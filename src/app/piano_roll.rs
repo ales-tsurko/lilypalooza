@@ -11,7 +11,7 @@ use iced::{
 
 use super::{LilyView, Message, PianoRollMessage};
 use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
-use crate::settings::PianoRollViewSettings;
+use crate::settings::{PaneAxis, PianoRollViewSettings};
 use crate::ui_style;
 
 pub(super) const COLLAPSED_HEIGHT: f32 = 32.0;
@@ -346,30 +346,42 @@ pub(super) fn roll_scroll_id() -> iced::widget::Id {
 }
 
 pub(super) fn title_bar<'a>(app: &'a LilyView) -> pane_grid::TitleBar<'a, Message> {
+    pane_grid::TitleBar::new(header_content(app))
+        .padding([
+            ui_style::PADDING_STATUS_BAR_V,
+            ui_style::PADDING_STATUS_BAR_H,
+        ])
+        .always_show_controls()
+        .style(ui_style::pane_title_bar_surface)
+}
+
+pub(super) fn header<'a>(app: &'a LilyView) -> Element<'a, Message> {
+    container(header_content(app))
+        .width(Fill)
+        .padding([
+            ui_style::PADDING_STATUS_BAR_V,
+            ui_style::PADDING_STATUS_BAR_H,
+        ])
+        .style(ui_style::pane_title_bar_surface)
+        .into()
+}
+
+fn header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
     let state = &app.piano_roll;
+    let allow_folding = app.score_layout_axis != PaneAxis::Stacked;
+    let is_visible = !allow_folding || state.visible;
     let can_toggle_tracks = state
         .current_file()
         .is_some_and(|file| file.data.tracks.len() > 1);
 
-    let toggle_button =
-        button(text(if state.visible { "▾" } else { "▸" }).size(ui_style::FONT_SIZE_UI_SM))
-            .style(if state.visible {
+    let track_toggle_button = button(text("Tracks").size(ui_style::FONT_SIZE_UI_XS))
+        .style(
+            if can_toggle_tracks && is_visible && state.track_panel_visible() {
                 ui_style::button_active
             } else {
                 ui_style::button_neutral
-            })
-            .padding([
-                ui_style::PADDING_BUTTON_COMPACT_V,
-                ui_style::PADDING_BUTTON_COMPACT_H,
-            ])
-            .on_press(Message::PianoRoll(PianoRollMessage::ToggleVisible));
-
-    let track_toggle_button = button(text("Tracks").size(ui_style::FONT_SIZE_UI_XS))
-        .style(if can_toggle_tracks && state.track_panel_visible() {
-            ui_style::button_active
-        } else {
-            ui_style::button_neutral
-        })
+            },
+        )
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
             ui_style::PADDING_BUTTON_COMPACT_H,
@@ -380,24 +392,43 @@ pub(super) fn title_bar<'a>(app: &'a LilyView) -> pane_grid::TitleBar<'a, Messag
         track_toggle_button
     };
 
-    let mut title = row![
-        Tooltip::new(
-            toggle_button,
-            text(if state.visible {
-                "Hide piano roll"
-            } else {
-                "Show piano roll"
-            })
-            .size(ui_style::FONT_SIZE_UI_XS),
-            tooltip::Position::Top,
-        )
-        .gap(6),
-        text("Piano Roll").size(ui_style::FONT_SIZE_UI_SM),
-    ]
-    .spacing(ui_style::SPACE_SM)
-    .align_y(alignment::Vertical::Center);
+    let mut title = row![text("Piano Roll").size(ui_style::FONT_SIZE_UI_SM)]
+        .spacing(ui_style::SPACE_SM)
+        .align_y(alignment::Vertical::Center);
 
-    if state.visible {
+    if allow_folding {
+        let toggle_button =
+            button(text(if is_visible { "▾" } else { "▸" }).size(ui_style::FONT_SIZE_UI_SM))
+                .style(if is_visible {
+                    ui_style::button_active
+                } else {
+                    ui_style::button_neutral
+                })
+                .padding([
+                    ui_style::PADDING_BUTTON_COMPACT_V,
+                    ui_style::PADDING_BUTTON_COMPACT_H,
+                ])
+                .on_press(Message::PianoRoll(PianoRollMessage::ToggleVisible));
+
+        title = row![
+            Tooltip::new(
+                toggle_button,
+                text(if is_visible {
+                    "Hide piano roll"
+                } else {
+                    "Show piano roll"
+                })
+                .size(ui_style::FONT_SIZE_UI_XS),
+                tooltip::Position::Top,
+            )
+            .gap(6),
+            text("Piano Roll").size(ui_style::FONT_SIZE_UI_SM),
+        ]
+        .spacing(ui_style::SPACE_SM)
+        .align_y(alignment::Vertical::Center);
+    }
+
+    if is_visible {
         title = title.push(track_toggle_button);
 
         let zoom_out_button = button(text("−").size(ui_style::FONT_SIZE_UI_SM))
@@ -518,17 +549,11 @@ pub(super) fn title_bar<'a>(app: &'a LilyView) -> pane_grid::TitleBar<'a, Messag
         }
     }
 
-    pane_grid::TitleBar::new(title)
-        .padding([
-            ui_style::PADDING_STATUS_BAR_V,
-            ui_style::PADDING_STATUS_BAR_H,
-        ])
-        .always_show_controls()
-        .style(ui_style::pane_title_bar_surface)
+    title
 }
 
 pub(super) fn content(app: &LilyView) -> Element<'_, Message> {
-    if !app.piano_roll.visible {
+    if app.score_layout_axis != PaneAxis::Stacked && !app.piano_roll.visible {
         return container(text(""))
             .width(Fill)
             .height(Length::Shrink)

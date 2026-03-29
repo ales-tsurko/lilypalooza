@@ -12,7 +12,9 @@ use crate::lilypond;
 use crate::logger::Logger;
 use crate::playback::MidiPlayback;
 use crate::score_watcher::ScoreWatcher;
-use crate::settings::{self, AppSettings, PaneAxis, PaneOrder, ScoreLayoutSettings};
+use crate::settings::{
+    self, ActiveScorePane, AppSettings, PaneAxis, PaneOrder, ScoreLayoutSettings,
+};
 
 use messages::{
     FileMessage, LoggerMessage, Message, PaneMessage, PianoRollMessage, PromptMessage,
@@ -70,7 +72,13 @@ struct LilyView {
     score_panes: pane_grid::State<ScorePaneKind>,
     score_split: pane_grid::Split,
     score_split_axis: pane_grid::Axis,
+    score_layout_axis: PaneAxis,
     score_pane_order: PaneOrder,
+    stacked_active_pane: ScorePaneKind,
+    stacked_hovered_pane: Option<ScorePaneKind>,
+    stacked_pressed_pane: Option<ScorePaneKind>,
+    stacked_dragging_pane: Option<ScorePaneKind>,
+    stacked_drop_target: Option<StackedDropTarget>,
     piano_ratio: f32,
     piano_expanded_ratio: f32,
     rendered_score: Option<RenderedScore>,
@@ -130,10 +138,18 @@ enum PaneKind {
     Logger,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScorePaneKind {
     Score,
     PianoRoll,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StackedDropTarget {
+    Top,
+    Right,
+    Bottom,
+    Left,
 }
 
 enum LilypondStatus {
@@ -188,7 +204,11 @@ fn new(
     let (score_panes, score_split, score_split_axis, piano_ratio, piano_expanded_ratio) =
         build_score_panes(stored_layout, score_height);
     let mut piano_roll = PianoRollState::new(default_settings.piano_roll_view);
-    piano_roll.visible = stored_layout.piano_visible;
+    piano_roll.visible = if stored_layout.pane_axis == PaneAxis::Stacked {
+        true
+    } else {
+        stored_layout.piano_visible
+    };
     piano_roll.apply_view_settings(
         stored_settings.piano_roll_view.zoom_x,
         stored_settings.piano_roll_view.beat_subdivision,
@@ -217,7 +237,13 @@ fn new(
         score_panes,
         score_split,
         score_split_axis,
+        score_layout_axis: stored_layout.pane_axis,
         score_pane_order: stored_layout.pane_order,
+        stacked_active_pane: score_pane_kind_from_settings(stored_layout.active_pane),
+        stacked_hovered_pane: None,
+        stacked_pressed_pane: None,
+        stacked_dragging_pane: None,
+        stacked_drop_target: None,
         piano_ratio,
         piano_expanded_ratio,
         rendered_score: None,
@@ -380,6 +406,7 @@ fn build_score_panes(
     let split_axis = match layout.pane_axis {
         PaneAxis::Horizontal => pane_grid::Axis::Horizontal,
         PaneAxis::Vertical => pane_grid::Axis::Vertical,
+        PaneAxis::Stacked => pane_grid::Axis::Horizontal,
     };
     let available_extent = score_extent_for_axis(MIN_WINDOW_WIDTH, score_area_height, split_axis);
     let piano_expanded_ratio =
@@ -419,6 +446,34 @@ fn build_score_panes(
         piano_ratio,
         piano_expanded_ratio,
     )
+}
+
+fn score_pane_kind_from_settings(pane: ActiveScorePane) -> ScorePaneKind {
+    match pane {
+        ActiveScorePane::Score => ScorePaneKind::Score,
+        ActiveScorePane::PianoRoll => ScorePaneKind::PianoRoll,
+    }
+}
+
+fn score_pane_kind_to_settings(pane: ScorePaneKind) -> ActiveScorePane {
+    match pane {
+        ScorePaneKind::Score => ActiveScorePane::Score,
+        ScorePaneKind::PianoRoll => ActiveScorePane::PianoRoll,
+    }
+}
+
+fn pane_order_from_first(first: ScorePaneKind) -> PaneOrder {
+    match first {
+        ScorePaneKind::Score => PaneOrder::ScoreFirst,
+        ScorePaneKind::PianoRoll => PaneOrder::PianoFirst,
+    }
+}
+
+fn pane_order_for_split(dragged: ScorePaneKind, dragged_first: bool) -> PaneOrder {
+    match (dragged, dragged_first) {
+        (ScorePaneKind::Score, true) | (ScorePaneKind::PianoRoll, false) => PaneOrder::ScoreFirst,
+        (ScorePaneKind::PianoRoll, true) | (ScorePaneKind::Score, false) => PaneOrder::PianoFirst,
+    }
 }
 
 fn constrained_logger_ratio(window_height: f32, requested_ratio: f32) -> f32 {
