@@ -15,6 +15,10 @@ use super::{piano_roll, transport_bar};
 use crate::settings::PaneAxis;
 use crate::ui_style;
 
+const SCROLL_MARKER_THICKNESS: f32 = 3.0;
+const SCROLL_MARKER_LENGTH: f32 = 16.0;
+const SCROLL_MARKER_EDGE_INSET: f32 = 3.0;
+
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     let workspace = if app.score_layout_axis == PaneAxis::Stacked {
         stacked_panes(app)
@@ -700,6 +704,7 @@ fn score_body(app: &LilyView) -> Element<'_, Message> {
                 .height(Fill)
                 .style(ui_style::workspace_scrollable);
 
+            let score_scroll_marker = score_scroll_position_marker(cursor_overlay, page_size, size);
             let zoom_overlay: Element<'_, Message> = if app.zoom_modifier_active() {
                 mouse_area(container(text("")).width(Fill).height(Fill))
                     .on_scroll(|delta| Message::Viewer(ViewerMessage::SmoothZoom(delta)))
@@ -709,7 +714,7 @@ fn score_body(app: &LilyView) -> Element<'_, Message> {
             };
 
             mouse_area(
-                stack([score_scroll.into(), zoom_overlay])
+                stack([score_scroll.into(), score_scroll_marker, zoom_overlay])
                     .width(Fill)
                     .height(Fill),
             )
@@ -749,6 +754,69 @@ fn score_cursor_overlay(
     .width(Length::Fixed(width))
     .height(Length::Fixed(height))
     .into()
+}
+
+fn score_scroll_position_marker(
+    placement: Option<ScoreCursorPlacement>,
+    page_size: super::SvgSize,
+    viewport_size: Size,
+) -> Element<'static, Message> {
+    let Some(placement) = placement else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
+
+    let page_height = page_size.height.max(1.0);
+    let normalized = ((placement.min_y + placement.max_y) * 0.5 / page_height).clamp(0.0, 1.0);
+
+    canvas(VerticalScrollMarkerCanvas {
+        normalized,
+        viewport_size,
+    })
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+struct VerticalScrollMarkerCanvas {
+    normalized: f32,
+    viewport_size: Size,
+}
+
+impl canvas::Program<Message> for VerticalScrollMarkerCanvas {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let palette = theme.extended_palette();
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let track_height = self.viewport_size.height.max(1.0);
+        let marker_x = (bounds.width - SCROLL_MARKER_THICKNESS - SCROLL_MARKER_EDGE_INSET).max(0.0);
+        let marker_center_y = self.normalized * track_height;
+        let marker_y = (marker_center_y - SCROLL_MARKER_LENGTH * 0.5)
+            .clamp(0.0, (track_height - SCROLL_MARKER_LENGTH).max(0.0));
+
+        frame.fill_rectangle(
+            Point::new(marker_x, marker_y),
+            Size::new(
+                SCROLL_MARKER_THICKNESS,
+                SCROLL_MARKER_LENGTH.min(track_height),
+            ),
+            Color::from_rgba(
+                palette.secondary.base.color.r,
+                palette.secondary.base.color.g,
+                palette.secondary.base.color.b,
+                0.72,
+            ),
+        );
+
+        vec![frame.into_geometry()]
+    }
 }
 
 #[derive(Clone, Copy)]

@@ -29,6 +29,9 @@ const TEMPO_LANE_HEIGHT: f32 = 28.0;
 const REWIND_FLAG_HITBOX_WIDTH: f32 = 14.0;
 const REWIND_FLAG_WIDTH: f32 = 11.0;
 const REWIND_FLAG_BANNER_HEIGHT: f32 = 12.0;
+const SCROLL_MARKER_THICKNESS: f32 = 3.0;
+const SCROLL_MARKER_LENGTH: f32 = 18.0;
+const SCROLL_MARKER_EDGE_INSET: f32 = 3.0;
 const TEMPO_LABEL_TOP_PADDING: f32 = 1.0;
 const BAR_LABEL_BOTTOM_PADDING: f32 = 1.0;
 const NOTE_ROW_HEIGHT: f32 = 14.0;
@@ -723,6 +726,12 @@ fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
         .width(Fill)
         .height(Fill)
         .style(ui_style::workspace_scrollable);
+    let roll_scroll = stack([
+        roll_scroll.into(),
+        piano_roll_scroll_position_marker(playback_tick, file.data.total_ticks),
+    ])
+    .width(Fill)
+    .height(Fill);
 
     let right_content = column![tempo_canvas, roll_scroll]
         .width(Fill)
@@ -1842,6 +1851,61 @@ fn draw_rewind_flag(
         Size::new(REWIND_FLAG_WIDTH, REWIND_FLAG_BANNER_HEIGHT),
         fill_color,
     );
+}
+
+fn piano_roll_scroll_position_marker(
+    playback_tick: u64,
+    total_ticks: u64,
+) -> Element<'static, Message> {
+    let normalized = if total_ticks == 0 {
+        0.0
+    } else {
+        (playback_tick as f32 / total_ticks as f32).clamp(0.0, 1.0)
+    };
+
+    canvas(HorizontalScrollMarkerCanvas { normalized })
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
+struct HorizontalScrollMarkerCanvas {
+    normalized: f32,
+}
+
+impl canvas::Program<Message> for HorizontalScrollMarkerCanvas {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let palette = theme.extended_palette();
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let marker_width = SCROLL_MARKER_LENGTH.min(bounds.width.max(1.0));
+        let marker_center_x = self.normalized * bounds.width.max(1.0);
+        let marker_x = (marker_center_x - marker_width * 0.5)
+            .clamp(0.0, (bounds.width - marker_width).max(0.0));
+        let marker_y =
+            (bounds.height - SCROLL_MARKER_THICKNESS - SCROLL_MARKER_EDGE_INSET).max(0.0);
+
+        frame.fill_rectangle(
+            Point::new(marker_x, marker_y),
+            Size::new(marker_width, SCROLL_MARKER_THICKNESS),
+            Color::from_rgba(
+                palette.secondary.base.color.r,
+                palette.secondary.base.color.g,
+                palette.secondary.base.color.b,
+                0.72,
+            ),
+        );
+
+        vec![frame.into_geometry()]
+    }
 }
 
 fn rewind_flag_hitbox(
