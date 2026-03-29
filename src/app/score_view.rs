@@ -88,7 +88,7 @@ fn split_drag_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
         return container(text("")).width(Fill).height(Fill).into();
     }
 
-    canvas(SplitDropOverlayCanvas { target_bounds })
+    canvas(DropOverlayCanvas { target_bounds })
         .width(Fill)
         .height(Fill)
         .into()
@@ -191,11 +191,42 @@ fn split_rearrange_style(theme: &Theme) -> pane_grid::Style {
     style
 }
 
-struct SplitDropOverlayCanvas {
+fn stacked_preview_bounds(size: Size, target: StackedDropTarget) -> Option<Rectangle> {
+    let bounds = Rectangle {
+        x: 0.0,
+        y: 0.0,
+        width: size.width.max(1.0),
+        height: size.height.max(1.0),
+    };
+
+    Some(match target {
+        StackedDropTarget::Top => Rectangle {
+            height: bounds.height / 2.0,
+            ..bounds
+        },
+        StackedDropTarget::Right => Rectangle {
+            x: bounds.x + bounds.width / 2.0,
+            width: bounds.width / 2.0,
+            ..bounds
+        },
+        StackedDropTarget::Bottom => Rectangle {
+            y: bounds.y + bounds.height / 2.0,
+            height: bounds.height / 2.0,
+            ..bounds
+        },
+        StackedDropTarget::Left => Rectangle {
+            width: bounds.width / 2.0,
+            ..bounds
+        },
+        StackedDropTarget::Center => bounds,
+    })
+}
+
+struct DropOverlayCanvas {
     target_bounds: Rectangle,
 }
 
-impl<Message> canvas::Program<Message> for SplitDropOverlayCanvas {
+impl<Message> canvas::Program<Message> for DropOverlayCanvas {
     type State = ();
 
     fn draw(
@@ -239,50 +270,53 @@ impl<Message> canvas::Program<Message> for SplitDropOverlayCanvas {
 }
 
 fn stacked_panes(app: &LilyView) -> Element<'_, Message> {
-    let ordered_panes = match app.score_pane_order {
-        crate::settings::PaneOrder::ScoreFirst => [ScorePaneKind::Score, ScorePaneKind::PianoRoll],
-        crate::settings::PaneOrder::PianoFirst => [ScorePaneKind::PianoRoll, ScorePaneKind::Score],
-    };
+    responsive(move |size| {
+        let ordered_panes = match app.score_pane_order {
+            crate::settings::PaneOrder::ScoreFirst => {
+                [ScorePaneKind::Score, ScorePaneKind::PianoRoll]
+            }
+            crate::settings::PaneOrder::PianoFirst => {
+                [ScorePaneKind::PianoRoll, ScorePaneKind::Score]
+            }
+        };
 
-    let tab_bar = container(
-        row![
-            stacked_tab(app, ordered_panes[0]),
-            stacked_tab(app, ordered_panes[1]),
-        ]
-        .spacing(0)
-        .padding([0, ui_style::PADDING_STATUS_BAR_H])
-        .align_y(alignment::Vertical::Bottom),
-    )
-    .width(Fill)
-    .padding([ui_style::PADDING_STATUS_BAR_V + 2, 0])
-    .style(stacked_tab_bar_surface);
-
-    let stacked_view: Element<'_, Message> = match app.stacked_active_pane {
-        ScorePaneKind::Score => column![tab_bar, score_content(app)]
-            .width(Fill)
-            .height(Fill)
+        let tab_bar = container(
+            row![
+                stacked_tab(app, ordered_panes[0]),
+                stacked_tab(app, ordered_panes[1]),
+            ]
             .spacing(0)
-            .into(),
-        ScorePaneKind::PianoRoll => {
-            column![tab_bar, piano_roll::header(app), piano_roll::content(app)]
+            .padding([0, ui_style::PADDING_STATUS_BAR_H])
+            .align_y(alignment::Vertical::Bottom),
+        )
+        .width(Fill)
+        .padding([ui_style::PADDING_STATUS_BAR_V + 2, 0])
+        .style(stacked_tab_bar_surface);
+
+        let stacked_view: Element<'_, Message> = match app.stacked_active_pane {
+            ScorePaneKind::Score => column![tab_bar, score_content(app)]
                 .width(Fill)
                 .height(Fill)
                 .spacing(0)
-                .into()
-        }
-    };
+                .into(),
+            ScorePaneKind::PianoRoll => {
+                column![tab_bar, piano_roll::header(app), piano_roll::content(app)]
+                    .width(Fill)
+                    .height(Fill)
+                    .spacing(0)
+                    .into()
+            }
+        };
 
-    let overlay = if app.stacked_dragging_pane.is_some() {
-        stacked_drop_overlay(app)
-    } else {
-        container(text("")).width(Fill).height(Fill).into()
-    };
+        let overlay = stacked_drop_overlay(app, size);
 
-    mouse_area(stack([stacked_view, overlay]).width(Fill).height(Fill))
-        .on_move(|position| Message::Pane(super::PaneMessage::StackedDragMoved(position)))
-        .on_release(Message::Pane(super::PaneMessage::StackedDragReleased))
-        .on_exit(Message::Pane(super::PaneMessage::StackedDragExited))
-        .into()
+        mouse_area(stack([stacked_view, overlay]).width(Fill).height(Fill))
+            .on_move(|position| Message::Pane(super::PaneMessage::StackedDragMoved(position)))
+            .on_release(Message::Pane(super::PaneMessage::StackedDragReleased))
+            .on_exit(Message::Pane(super::PaneMessage::StackedDragExited))
+            .into()
+    })
+    .into()
 }
 
 fn stacked_tab(app: &LilyView, kind: ScorePaneKind) -> Element<'_, Message> {
@@ -378,70 +412,19 @@ fn stacked_tab_bar_surface(theme: &Theme) -> container::Style {
     }
 }
 
-fn stacked_drop_overlay(app: &LilyView) -> Element<'_, Message> {
-    let zone = |target: StackedDropTarget, label: &'static str| {
-        let is_active = app.stacked_drop_target == Some(target);
-
-        container(
-            text(label)
-                .size(ui_style::FONT_SIZE_UI_XS)
-                .font(iced::Font::MONOSPACE),
-        )
-        .center_x(Fill)
-        .center_y(Fill)
-        .style(move |_theme| container::Style {
-            background: Some(
-                if is_active {
-                    Color::from_rgba(0.22, 0.52, 0.88, 0.28)
-                } else {
-                    Color::from_rgba(0.08, 0.10, 0.14, 0.16)
-                }
-                .into(),
-            ),
-            text_color: Some(Color::from_rgb(0.95, 0.97, 1.0)),
-            border: border::rounded(10).width(1).color(Color::from_rgba(
-                0.42,
-                0.66,
-                0.98,
-                if is_active { 0.8 } else { 0.22 },
-            )),
-            ..container::Style::default()
-        })
+fn stacked_drop_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
+    let Some(target) = app.stacked_drop_target else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
+    let Some(bounds) = stacked_preview_bounds(size, target) else {
+        return container(text("")).width(Fill).height(Fill).into();
     };
 
-    let edge_size = 104.0;
-
-    container(
-        column![
-            zone(StackedDropTarget::Top, "Drop for top split")
-                .width(Fill)
-                .height(Length::Fixed(edge_size)),
-            row![
-                zone(StackedDropTarget::Left, "Drop for left split")
-                    .width(Length::Fixed(edge_size))
-                    .height(Fill),
-                container(text("")).width(Fill).height(Fill),
-                zone(StackedDropTarget::Right, "Drop for right split")
-                    .width(Length::Fixed(edge_size))
-                    .height(Fill),
-            ]
-            .width(Fill)
-            .height(Fill)
-            .spacing(ui_style::SPACE_XS),
-            zone(StackedDropTarget::Bottom, "Drop for bottom split")
-                .width(Fill)
-                .height(Length::Fixed(edge_size)),
-        ]
-        .width(Fill)
-        .height(Fill)
-        .spacing(ui_style::SPACE_XS)
-        .padding(ui_style::PADDING_SM),
-    )
+    canvas(DropOverlayCanvas {
+        target_bounds: bounds,
+    })
     .width(Fill)
     .height(Fill)
-    .style(|_theme| {
-        container::Style::default().background(Color::from_rgba(0.02, 0.03, 0.05, 0.18))
-    })
     .into()
 }
 

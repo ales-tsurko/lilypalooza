@@ -962,9 +962,15 @@ impl LilyView {
             return;
         };
 
+        if target == StackedDropTarget::Center {
+            self.clear_stacked_drag_state();
+            return;
+        }
+
         self.score_layout_axis = match target {
             StackedDropTarget::Top | StackedDropTarget::Bottom => PaneAxis::Horizontal,
             StackedDropTarget::Left | StackedDropTarget::Right => PaneAxis::Vertical,
+            StackedDropTarget::Center => PaneAxis::Stacked,
         };
         self.score_pane_order = pane_order_for_split(
             dragged_pane,
@@ -1012,7 +1018,7 @@ impl LilyView {
         } else if position.x >= width - horizontal_band {
             Some(StackedDropTarget::Right)
         } else {
-            None
+            Some(StackedDropTarget::Center)
         }
     }
 

@@ -152,6 +152,7 @@ enum StackedDropTarget {
     Right,
     Bottom,
     Left,
+    Center,
 }
 
 enum LilypondStatus {
