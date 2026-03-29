@@ -33,8 +33,8 @@ fn split_panes(app: &LilyView) -> Element<'_, Message> {
     responsive(move |size| {
         let panes: Element<'_, Message> =
             pane_grid::PaneGrid::new(&app.score_panes, |_pane, kind, _is_maximized| match kind {
-                ScorePaneKind::Score => pane_grid::Content::new(score_content(app))
-                    .title_bar(score_title_bar())
+                ScorePaneKind::Score => pane_grid::Content::new(score_body(app))
+                    .title_bar(score_title_bar(app))
                     .style(ui_style::pane_main_surface),
                 ScorePaneKind::PianoRoll => pane_grid::Content::new(piano_roll::content(app))
                     .title_bar(piano_roll::title_bar(app))
@@ -294,7 +294,7 @@ fn stacked_panes(app: &LilyView) -> Element<'_, Message> {
         .style(stacked_tab_bar_surface);
 
         let stacked_view: Element<'_, Message> = match app.stacked_active_pane {
-            ScorePaneKind::Score => column![tab_bar, score_content(app)]
+            ScorePaneKind::Score => column![tab_bar, score_header(app), score_body(app)]
                 .width(Fill)
                 .height(Fill)
                 .spacing(0)
@@ -428,8 +428,8 @@ fn stacked_drop_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
     .into()
 }
 
-fn score_title_bar<'a>() -> pane_grid::TitleBar<'a, Message> {
-    pane_grid::TitleBar::new(text("Score").size(ui_style::FONT_SIZE_UI_SM))
+fn score_title_bar<'a>(app: &'a LilyView) -> pane_grid::TitleBar<'a, Message> {
+    pane_grid::TitleBar::new(score_header_content(app))
         .padding([
             ui_style::PADDING_STATUS_BAR_V,
             ui_style::PADDING_STATUS_BAR_H,
@@ -437,26 +437,24 @@ fn score_title_bar<'a>() -> pane_grid::TitleBar<'a, Message> {
         .style(ui_style::pane_title_bar_surface)
 }
 
-fn score_content(app: &LilyView) -> Element<'_, Message> {
-    if app.current_score.is_none() {
-        let open_button = button(
-            row![
-                text("🗎").size(ui_style::FONT_SIZE_UI_SM),
-                text("Open file").size(ui_style::FONT_SIZE_BODY_MD),
-            ]
-            .spacing(ui_style::SPACE_SM)
-            .align_y(alignment::Vertical::Center),
-        )
-        .style(ui_style::button_neutral)
-        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
-        .on_press(Message::File(FileMessage::RequestOpen));
+fn score_header<'a>(app: &'a LilyView) -> Element<'a, Message> {
+    container(score_header_content(app))
+        .width(Fill)
+        .padding([
+            ui_style::PADDING_STATUS_BAR_V,
+            ui_style::PADDING_STATUS_BAR_H,
+        ])
+        .style(ui_style::pane_title_bar_surface)
+        .into()
+}
 
-        return container(open_button)
-            .width(Fill)
-            .height(Fill)
-            .center_x(Fill)
-            .center_y(Fill)
-            .into();
+fn score_header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
+    let mut header = row![text("Score").size(ui_style::FONT_SIZE_UI_SM)]
+        .spacing(ui_style::SPACE_SM)
+        .align_y(alignment::Vertical::Center);
+
+    if app.current_score.is_none() {
+        return header;
     }
 
     let page_label = app
@@ -586,51 +584,69 @@ fn score_content(app: &LilyView) -> Element<'_, Message> {
     let brightness_value = Tooltip::new(
         brightness_value,
         text("Double-click to reset brightness").size(ui_style::FONT_SIZE_UI_XS),
-        tooltip::Position::Bottom,
+        tooltip::Position::Top,
     )
-    .gap(8);
+    .gap(6);
 
-    let toolbar = container(
+    header = header.push(
+        text(page_label)
+            .size(ui_style::FONT_SIZE_UI_XS)
+            .font(iced::Font::MONOSPACE),
+    );
+    header = header.push(
+        row![prev_button, next_button]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center),
+    );
+    header = header.push(
         row![
-            text(page_label)
-                .size(ui_style::FONT_SIZE_UI_XS)
+            text("⌕")
+                .size(ui_style::FONT_SIZE_BODY_SM)
                 .font(iced::Font::MONOSPACE),
-            row![prev_button, next_button]
-                .spacing(ui_style::SPACE_XS)
-                .align_y(alignment::Vertical::Center),
-            row![
-                text("⌕")
-                    .size(ui_style::FONT_SIZE_BODY_SM)
-                    .font(iced::Font::MONOSPACE),
-                zoom_out_button,
-                zoom_value,
-                zoom_in_button
-            ]
-            .spacing(ui_style::SPACE_XS)
-            .align_y(alignment::Vertical::Center),
-            row![
-                text("◐")
-                    .size(ui_style::FONT_SIZE_UI_SM)
-                    .font(iced::Font::MONOSPACE),
-                brightness_down_button,
-                brightness_value,
-                brightness_up_button
-            ]
-            .spacing(ui_style::SPACE_XS)
-            .align_y(alignment::Vertical::Center),
+            zoom_out_button,
+            zoom_value,
+            zoom_in_button
         ]
-        .width(Fill)
-        .align_y(alignment::Vertical::Center)
-        .spacing(ui_style::SPACE_SM),
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center),
+    );
+    header.push(
+        row![
+            text("◐")
+                .size(ui_style::FONT_SIZE_UI_SM)
+                .font(iced::Font::MONOSPACE),
+            brightness_down_button,
+            brightness_value,
+            brightness_up_button
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center),
     )
-    .width(Fill)
-    .padding([
-        ui_style::PADDING_STATUS_BAR_V,
-        ui_style::PADDING_STATUS_BAR_H,
-    ])
-    .style(ui_style::workspace_toolbar_surface);
+}
 
-    let body: Element<'_, Message> = if let Some(rendered_page) = app
+fn score_body(app: &LilyView) -> Element<'_, Message> {
+    if app.current_score.is_none() {
+        let open_button = button(
+            row![
+                text("🗎").size(ui_style::FONT_SIZE_UI_SM),
+                text("Open file").size(ui_style::FONT_SIZE_BODY_MD),
+            ]
+            .spacing(ui_style::SPACE_SM)
+            .align_y(alignment::Vertical::Center),
+        )
+        .style(ui_style::button_neutral)
+        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
+        .on_press(Message::File(FileMessage::RequestOpen));
+
+        return container(open_button)
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into();
+    }
+
+    if let Some(rendered_page) = app
         .rendered_score
         .as_ref()
         .and_then(|rendered_score| rendered_score.current_page())
@@ -717,11 +733,7 @@ fn score_content(app: &LilyView) -> Element<'_, Message> {
             .center_x(Fill)
             .center_y(Fill)
             .into()
-    };
-
-    iced::widget::column![toolbar, container(body).width(Fill).height(Fill)]
-        .height(Fill)
-        .into()
+    }
 }
 
 fn score_cursor_overlay(

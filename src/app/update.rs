@@ -226,6 +226,7 @@ impl LilyView {
             }
             PianoRollMessage::TrackPanelToggle => {
                 self.piano_roll.toggle_track_panel();
+                task = self.restore_piano_roll_scroll();
             }
             PianoRollMessage::TrackPanelResizedBy(delta) => {
                 self.piano_roll.resize_track_panel_by(delta);
@@ -246,6 +247,9 @@ impl LilyView {
             }
             PianoRollMessage::SetCursorTicks(tick) => {
                 self.seek_playback_ticks(tick);
+            }
+            PianoRollMessage::SetRewindFlagTicks(tick) => {
+                self.piano_roll.set_rewind_flag_tick(tick);
             }
             PianoRollMessage::TransportSeekNormalized(position) => {
                 self.seek_playback_normalized(position);
@@ -272,15 +276,17 @@ impl LilyView {
                 }
             }
             PianoRollMessage::TransportRewind => {
+                let target_tick = self.rewind_target_tick();
+
                 if let Some(playback) = self.playback.as_mut() {
                     let was_playing = playback.is_playing();
-                    playback.jump_to_tick(0);
+                    playback.jump_to_tick(target_tick);
                     if was_playing {
                         let _ = playback.play();
                     }
                     self.refresh_playback_position();
                 } else {
-                    self.seek_playback_ticks(0);
+                    self.seek_playback_ticks(target_tick);
                 }
             }
         }
@@ -1445,6 +1451,17 @@ impl LilyView {
         let tick = (total_ticks as f32 * normalized).round() as u64;
 
         self.seek_playback_ticks(tick);
+    }
+
+    fn rewind_target_tick(&self) -> u64 {
+        let current_tick = self.piano_roll.playback_tick();
+        let rewind_flag_tick = self.piano_roll.rewind_flag_tick();
+
+        if current_tick > rewind_flag_tick {
+            rewind_flag_tick
+        } else {
+            0
+        }
     }
 
     fn seek_playback_ticks(&mut self, tick: u64) {

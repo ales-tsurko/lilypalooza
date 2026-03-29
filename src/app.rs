@@ -373,6 +373,11 @@ fn runtime_event_to_message(
                 {
                     Some(Message::PianoRoll(PianoRollMessage::TransportPlayPause))
                 }
+                keyboard::Key::Named(keyboard::key::Named::Enter)
+                    if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
+                {
+                    Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
+                }
                 keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
                     Some(Message::Viewer(ViewerMessage::ScrollUp))
                 }
@@ -385,7 +390,14 @@ fn runtime_event_to_message(
                 keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
                     Some(Message::Viewer(ViewerMessage::NextPage))
                 }
-                _ => None,
+                _ => match physical_key {
+                    keyboard::key::Physical::Code(keyboard::key::Code::NumpadEnter)
+                        if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
+                    {
+                        Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
+                    }
+                    _ => None,
+                },
             }
         }
         _ => None,

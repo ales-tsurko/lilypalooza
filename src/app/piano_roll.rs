@@ -26,6 +26,9 @@ const TRACK_BUTTONS_GAP: f32 = 4.0;
 const TRACK_LABEL_BUTTON_GAP: f32 = 6.0;
 const KEYBOARD_WIDTH: f32 = 30.0;
 const TEMPO_LANE_HEIGHT: f32 = 28.0;
+const REWIND_FLAG_HITBOX_WIDTH: f32 = 14.0;
+const REWIND_FLAG_WIDTH: f32 = 11.0;
+const REWIND_FLAG_BANNER_HEIGHT: f32 = 12.0;
 const TEMPO_LABEL_TOP_PADDING: f32 = 1.0;
 const BAR_LABEL_BOTTOM_PADDING: f32 = 1.0;
 const NOTE_ROW_HEIGHT: f32 = 14.0;
@@ -51,6 +54,7 @@ pub(super) struct PianoRollState {
     playback_tick: u64,
     playback_total_ticks: u64,
     playback_is_playing: bool,
+    rewind_flag_ticks: Vec<u64>,
     pub(super) files: Vec<MidiRollFile>,
     track_mix_by_file: Vec<Vec<TrackMixState>>,
     track_panel_visible: bool,
@@ -83,6 +87,7 @@ impl PianoRollState {
             playback_tick: 0,
             playback_total_ticks: 0,
             playback_is_playing: false,
+            rewind_flag_ticks: Vec::new(),
             files: Vec::new(),
             track_mix_by_file: Vec::new(),
             track_panel_visible: true,
@@ -100,16 +105,34 @@ impl PianoRollState {
         self.playback_tick = 0;
         self.playback_total_ticks = 0;
         self.playback_is_playing = false;
+        self.rewind_flag_ticks.clear();
         self.track_mix_by_file.clear();
     }
 
     pub(super) fn replace_files(&mut self, files: Vec<MidiRollFile>) {
         let had_no_files = self.files.is_empty();
+        let previous_rewind_flags: HashMap<_, _> = self
+            .files
+            .iter()
+            .zip(self.rewind_flag_ticks.iter().copied())
+            .map(|(file, tick)| (file.path.clone(), tick))
+            .collect();
         self.files = files;
         self.track_mix_by_file = self
             .files
             .iter()
             .map(|file| vec![TrackMixState::default(); file.data.tracks.len()])
+            .collect();
+        self.rewind_flag_ticks = self
+            .files
+            .iter()
+            .map(|file| {
+                previous_rewind_flags
+                    .get(&file.path)
+                    .copied()
+                    .unwrap_or(0)
+                    .min(file.data.total_ticks)
+            })
             .collect();
 
         if had_no_files && !self.files.is_empty() {
@@ -306,6 +329,29 @@ impl PianoRollState {
         }
 
         (self.playback_tick as f32 / self.playback_total_ticks as f32).clamp(0.0, 1.0)
+    }
+
+    pub(super) fn rewind_flag_tick(&self) -> u64 {
+        let total_ticks = self
+            .current_file()
+            .map(|file| file.data.total_ticks)
+            .unwrap_or(0);
+
+        self.rewind_flag_ticks
+            .get(self.selected_file)
+            .copied()
+            .unwrap_or(0)
+            .min(total_ticks)
+    }
+
+    pub(super) fn set_rewind_flag_tick(&mut self, tick: u64) {
+        let Some(total_ticks) = self.current_file().map(|file| file.data.total_ticks) else {
+            return;
+        };
+
+        if let Some(flag_tick) = self.rewind_flag_ticks.get_mut(self.selected_file) {
+            *flag_tick = tick.min(total_ticks);
+        }
     }
 }
 
@@ -579,6 +625,7 @@ pub(super) fn content(app: &LilyView) -> Element<'_, Message> {
         horizontal_offset: app.piano_roll.horizontal_scroll(),
         vertical_offset: app.piano_roll.vertical_scroll(),
         playback_tick: app.piano_roll.playback_tick(),
+        rewind_flag_tick: app.piano_roll.rewind_flag_tick(),
         track_mix: app.piano_roll.current_track_mix(),
         track_panel_visible: show_track_panel,
         track_panel_width: app.piano_roll.track_panel_width(),
@@ -593,6 +640,7 @@ struct PianoRollBody<'a> {
     horizontal_offset: f32,
     vertical_offset: f32,
     playback_tick: u64,
+    rewind_flag_tick: u64,
     track_mix: &'a [TrackMixState],
     track_panel_visible: bool,
     track_panel_width: f32,
@@ -607,6 +655,7 @@ fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
         horizontal_offset,
         vertical_offset,
         playback_tick,
+        rewind_flag_tick,
         track_mix,
         track_panel_visible,
         track_panel_width,
@@ -632,8 +681,10 @@ fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
     let tempo_canvas = canvas(TempoCanvas {
         data: &file.data,
         zoom_x,
+        beat_subdivision,
         horizontal_scroll: horizontal_offset,
         playback_tick,
+        rewind_flag_tick,
     })
     .width(Fill)
     .height(Length::Fixed(TEMPO_LANE_HEIGHT));
@@ -958,34 +1009,109 @@ impl canvas::Program<Message> for TrackResizeHandle {
 struct TempoCanvas<'a> {
     data: &'a MidiRollData,
     zoom_x: f32,
+    beat_subdivision: u8,
     horizontal_scroll: f32,
     playback_tick: u64,
+    rewind_flag_tick: u64,
+}
+
+#[derive(Debug, Default)]
+struct TempoCanvasState {
+    dragging_rewind_flag: bool,
 }
 
 impl canvas::Program<Message> for TempoCanvas<'_> {
-    type State = ();
+    type State = TempoCanvasState;
 
     fn update(
         &self,
-        _state: &mut Self::State,
+        state: &mut Self::State,
         event: &canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event else {
-            return None;
-        };
-        let cursor_position = cursor.position_in(bounds)?;
         let pixels_per_tick =
             BASE_PIXELS_PER_QUARTER * self.zoom_x / f32::from(self.data.ppq.max(1));
-        let absolute_x = cursor_position.x + self.horizontal_scroll;
-        let tick = ((absolute_x / pixels_per_tick).round() as i64)
-            .clamp(0, self.data.total_ticks as i64) as u64;
 
-        Some(
-            canvas::Action::publish(Message::PianoRoll(PianoRollMessage::SetCursorTicks(tick)))
-                .and_capture(),
-        )
+        match event {
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+                let cursor_position = cursor.position_in(bounds)?;
+                let tick = tick_from_tempo_lane_x(
+                    cursor_position.x,
+                    pixels_per_tick,
+                    self.horizontal_scroll,
+                    self.data.total_ticks,
+                );
+                let tick = snap_tick_to_subdivision_grid(self.data, self.beat_subdivision, tick);
+                state.dragging_rewind_flag = false;
+
+                Some(
+                    canvas::Action::publish(Message::PianoRoll(
+                        PianoRollMessage::SetRewindFlagTicks(tick),
+                    ))
+                    .and_capture(),
+                )
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let cursor_position = cursor.position_in(bounds)?;
+
+                if rewind_flag_hitbox(
+                    self.rewind_flag_tick,
+                    pixels_per_tick,
+                    self.horizontal_scroll,
+                    bounds,
+                )
+                .contains(cursor_position)
+                {
+                    state.dragging_rewind_flag = true;
+                    return Some(canvas::Action::capture());
+                }
+
+                let tick = tick_from_tempo_lane_x(
+                    cursor_position.x,
+                    pixels_per_tick,
+                    self.horizontal_scroll,
+                    self.data.total_ticks,
+                );
+
+                Some(
+                    canvas::Action::publish(Message::PianoRoll(PianoRollMessage::SetCursorTicks(
+                        tick,
+                    )))
+                    .and_capture(),
+                )
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if !state.dragging_rewind_flag {
+                    return None;
+                }
+
+                let Some(cursor_position) = cursor.position_in(bounds) else {
+                    state.dragging_rewind_flag = false;
+                    return None;
+                };
+                let tick = tick_from_tempo_lane_x(
+                    cursor_position.x,
+                    pixels_per_tick,
+                    self.horizontal_scroll,
+                    self.data.total_ticks,
+                );
+                let tick = snap_tick_to_subdivision_grid(self.data, self.beat_subdivision, tick);
+
+                Some(
+                    canvas::Action::publish(Message::PianoRoll(
+                        PianoRollMessage::SetRewindFlagTicks(tick),
+                    ))
+                    .and_capture(),
+                )
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(_))
+            | canvas::Event::Mouse(mouse::Event::CursorLeft) => {
+                state.dragging_rewind_flag = false;
+                None
+            }
+            _ => None,
+        }
     }
 
     fn draw(
@@ -1032,6 +1158,14 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
             bounds.height,
             palette,
         );
+        draw_rewind_flag(
+            &mut frame,
+            self.rewind_flag_tick,
+            pixels_per_tick,
+            self.horizontal_scroll,
+            bounds.height,
+            palette,
+        );
         draw_playback_cursor(
             &mut frame,
             self.playback_tick,
@@ -1043,6 +1177,34 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
         );
 
         vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        let pixels_per_tick =
+            BASE_PIXELS_PER_QUARTER * self.zoom_x / f32::from(self.data.ppq.max(1));
+
+        if state.dragging_rewind_flag {
+            return mouse::Interaction::Grabbing;
+        }
+
+        if cursor.position_in(bounds).is_some_and(|position| {
+            rewind_flag_hitbox(
+                self.rewind_flag_tick,
+                pixels_per_tick,
+                self.horizontal_scroll,
+                bounds,
+            )
+            .contains(position)
+        }) {
+            mouse::Interaction::Grab
+        } else {
+            mouse::Interaction::None
+        }
     }
 }
 
@@ -1654,6 +1816,118 @@ fn draw_tempo_markers(
             align_y: alignment::Vertical::Top,
             ..canvas::Text::default()
         });
+    }
+}
+
+fn draw_rewind_flag(
+    frame: &mut canvas::Frame,
+    tick: u64,
+    pixels_per_tick: f32,
+    horizontal_scroll: f32,
+    height: f32,
+    palette: &iced::theme::palette::Extended,
+) {
+    let x = tick as f32 * pixels_per_tick - horizontal_scroll;
+    let stem_left = (x - 1.0).round();
+    let fill_color = palette.primary.strong.color;
+
+    frame.fill_rectangle(
+        Point::new(stem_left, 0.0),
+        Size::new(2.0, height.max(1.0)),
+        fill_color,
+    );
+
+    frame.fill_rectangle(
+        Point::new(stem_left + 1.0, 0.0),
+        Size::new(REWIND_FLAG_WIDTH, REWIND_FLAG_BANNER_HEIGHT),
+        fill_color,
+    );
+}
+
+fn rewind_flag_hitbox(
+    tick: u64,
+    pixels_per_tick: f32,
+    horizontal_scroll: f32,
+    bounds: Rectangle,
+) -> Rectangle {
+    let x = tick as f32 * pixels_per_tick - horizontal_scroll;
+
+    Rectangle {
+        x: x - REWIND_FLAG_HITBOX_WIDTH * 0.5,
+        y: 0.0,
+        width: REWIND_FLAG_HITBOX_WIDTH,
+        height: bounds.height,
+    }
+}
+
+fn tick_from_tempo_lane_x(
+    local_x: f32,
+    pixels_per_tick: f32,
+    horizontal_scroll: f32,
+    total_ticks: u64,
+) -> u64 {
+    let absolute_x = local_x + horizontal_scroll;
+
+    ((absolute_x / pixels_per_tick).round() as i64).clamp(0, total_ticks as i64) as u64
+}
+
+fn snap_tick_to_subdivision_grid(data: &MidiRollData, beat_subdivision: u8, tick: u64) -> u64 {
+    let beat_subdivision = beat_subdivision.clamp(BEAT_SUBDIVISION_MIN, BEAT_SUBDIVISION_MAX);
+    let clamped_tick = tick.min(data.total_ticks);
+    let default_signature = TimeSignatureChange {
+        tick: 0,
+        numerator: 4,
+        denominator: 4,
+    };
+    let signatures: &[TimeSignatureChange] = if data.time_signatures.is_empty() {
+        std::slice::from_ref(&default_signature)
+    } else {
+        &data.time_signatures
+    };
+
+    let mut best_tick = 0;
+    let mut best_distance = u64::MAX;
+
+    for (index, signature) in signatures.iter().enumerate() {
+        let start_tick = signature.tick.min(data.total_ticks);
+        let next_signature_tick = signatures
+            .get(index + 1)
+            .map(|next| next.tick)
+            .unwrap_or(data.total_ticks.saturating_add(1));
+        let end_tick = next_signature_tick.min(data.total_ticks.saturating_add(1));
+        let beat_step = beat_step_ticks(data.ppq, *signature).max(1) as f64;
+        let subdivision_step = (beat_step / f64::from(beat_subdivision)).max(f64::EPSILON);
+        let relative_tick = clamped_tick.saturating_sub(start_tick) as f64;
+        let center_index = (relative_tick / subdivision_step).round() as i64;
+
+        for candidate_index in [center_index - 1, center_index, center_index + 1] {
+            if candidate_index < 0 {
+                continue;
+            }
+
+            let candidate_tick =
+                (start_tick as f64 + candidate_index as f64 * subdivision_step).round() as u64;
+
+            if candidate_tick < start_tick
+                || candidate_tick > data.total_ticks
+                || candidate_tick >= end_tick
+            {
+                continue;
+            }
+
+            let distance = candidate_tick.abs_diff(clamped_tick);
+            if distance < best_distance || (distance == best_distance && candidate_tick < best_tick)
+            {
+                best_tick = candidate_tick;
+                best_distance = distance;
+            }
+        }
+    }
+
+    if best_distance == u64::MAX {
+        clamped_tick
+    } else {
+        best_tick
     }
 }
 

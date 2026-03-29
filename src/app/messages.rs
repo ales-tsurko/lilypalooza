@@ -76,6 +76,7 @@ pub(super) enum PianoRollMessage {
     ViewportCursorLeft,
     RollScrolled { x: f32, y: f32 },
     SetCursorTicks(u64),
+    SetRewindFlagTicks(u64),
     ZoomIn,
     ZoomOut,
     SmoothZoom(mouse::ScrollDelta),
