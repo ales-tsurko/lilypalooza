@@ -13,6 +13,7 @@ mod logger;
 mod midi;
 mod playback;
 mod score_watcher;
+mod settings;
 mod status_bar;
 mod ui_style;
 

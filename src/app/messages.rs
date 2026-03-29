@@ -22,6 +22,7 @@ pub(super) enum Message {
 #[derive(Debug, Clone)]
 pub(super) enum PaneMessage {
     Resized(pane_grid::ResizeEvent),
+    ScoreDragged(pane_grid::DragEvent),
     ToggleLogger,
 }
 

@@ -11,6 +11,7 @@ use iced::{
 
 use super::{LilyView, Message, PianoRollMessage};
 use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
+use crate::settings::PianoRollViewSettings;
 use crate::ui_style;
 
 pub(super) const COLLAPSED_HEIGHT: f32 = 32.0;
@@ -35,7 +36,6 @@ const ZOOM_STEP: f32 = 0.1;
 const BASE_PIXELS_PER_QUARTER: f32 = 72.0;
 const BEAT_SUBDIVISION_MIN: u8 = 1;
 const BEAT_SUBDIVISION_MAX: u8 = 16;
-const BEAT_SUBDIVISION_DEFAULT: u8 = 4;
 const ROLL_SCROLL_ID: &str = "piano-roll-scroll";
 
 #[derive(Debug, Clone)]
@@ -43,6 +43,7 @@ pub(super) struct PianoRollState {
     pub(super) visible: bool,
     pub(super) zoom_x: f32,
     pub(super) beat_subdivision: u8,
+    default_view_settings: PianoRollViewSettings,
     beat_subdivision_input: String,
     pending_initial_center: bool,
     horizontal_scroll: f32,
@@ -64,12 +65,18 @@ pub(super) struct TrackMixState {
 }
 
 impl PianoRollState {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(default_view_settings: PianoRollViewSettings) -> Self {
+        let zoom_x = default_view_settings.zoom_x.clamp(ZOOM_MIN, ZOOM_MAX);
+        let beat_subdivision = default_view_settings
+            .beat_subdivision
+            .clamp(BEAT_SUBDIVISION_MIN, BEAT_SUBDIVISION_MAX);
+
         Self {
             visible: true,
-            zoom_x: 1.0,
-            beat_subdivision: BEAT_SUBDIVISION_DEFAULT,
-            beat_subdivision_input: BEAT_SUBDIVISION_DEFAULT.to_string(),
+            zoom_x,
+            beat_subdivision,
+            default_view_settings,
+            beat_subdivision_input: beat_subdivision.to_string(),
             pending_initial_center: false,
             horizontal_scroll: 0.0,
             vertical_scroll: 0.0,
@@ -127,6 +134,11 @@ impl PianoRollState {
         self.files.get(self.selected_file)
     }
 
+    pub(super) fn apply_view_settings(&mut self, zoom_x: f32, beat_subdivision: u8) {
+        self.zoom_x = zoom_x.clamp(ZOOM_MIN, ZOOM_MAX);
+        self.set_beat_subdivision(beat_subdivision);
+    }
+
     pub(super) fn zoom_in(&mut self) {
         self.zoom_x = next_zoom_step_up(self.zoom_x, ZOOM_STEP, ZOOM_MAX);
     }
@@ -136,7 +148,7 @@ impl PianoRollState {
     }
 
     pub(super) fn reset_zoom(&mut self) {
-        self.zoom_x = 1.0;
+        self.zoom_x = self.default_view_settings.zoom_x.clamp(ZOOM_MIN, ZOOM_MAX);
     }
 
     pub(super) fn zoom_for_delta(&self, delta: mouse::ScrollDelta) -> f32 {
@@ -154,6 +166,10 @@ impl PianoRollState {
 
     pub(super) fn can_zoom_out(&self) -> bool {
         self.zoom_x > ZOOM_MIN
+    }
+
+    pub(super) fn can_reset_zoom(&self) -> bool {
+        (self.zoom_x - self.default_view_settings.zoom_x.clamp(ZOOM_MIN, ZOOM_MAX)).abs() > 1e-4
     }
 
     pub(super) fn has_multiple_files(&self) -> bool {
@@ -376,13 +392,14 @@ pub(super) fn title_bar<'a>(app: &'a LilyView) -> pane_grid::TitleBar<'a, Messag
             tooltip::Position::Top,
         )
         .gap(6),
-        track_toggle_button,
         text("Piano Roll").size(ui_style::FONT_SIZE_UI_SM),
     ]
     .spacing(ui_style::SPACE_SM)
     .align_y(alignment::Vertical::Center);
 
     if state.visible {
+        title = title.push(track_toggle_button);
+
         let zoom_out_button = button(text("−").size(ui_style::FONT_SIZE_UI_SM))
             .style(ui_style::button_neutral)
             .padding([
@@ -430,17 +447,24 @@ pub(super) fn title_bar<'a>(app: &'a LilyView) -> pane_grid::TitleBar<'a, Messag
             row![
                 text("Zoom").size(ui_style::FONT_SIZE_UI_XS),
                 zoom_out_button,
-                Tooltip::new(
-                    mouse_area(
-                        text(format!("{:.0}%", state.zoom_x * 100.0))
-                            .size(ui_style::FONT_SIZE_UI_XS)
-                            .font(Font::MONOSPACE),
+                {
+                    let zoom_value = text(format!("{:.0}%", state.zoom_x * 100.0))
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .font(Font::MONOSPACE);
+                    let zoom_value = if state.can_reset_zoom() {
+                        mouse_area(zoom_value)
+                            .on_double_click(Message::PianoRoll(PianoRollMessage::ResetZoom))
+                    } else {
+                        mouse_area(zoom_value)
+                    };
+
+                    Tooltip::new(
+                        zoom_value,
+                        text("Double-click to reset zoom").size(ui_style::FONT_SIZE_UI_XS),
+                        tooltip::Position::Top,
                     )
-                    .on_double_click(Message::PianoRoll(PianoRollMessage::ResetZoom)),
-                    text("Double-click to reset zoom").size(ui_style::FONT_SIZE_UI_XS),
-                    tooltip::Position::Top,
-                )
-                .gap(6),
+                    .gap(6)
+                },
                 zoom_in_button,
             ]
             .spacing(ui_style::SPACE_XS)

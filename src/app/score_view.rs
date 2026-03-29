@@ -14,15 +14,16 @@ use crate::ui_style;
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     let panes =
         pane_grid::PaneGrid::new(&app.score_panes, |_pane, kind, _is_maximized| match kind {
-            ScorePaneKind::Score => {
-                pane_grid::Content::new(score_content(app)).style(ui_style::pane_main_surface)
-            }
+            ScorePaneKind::Score => pane_grid::Content::new(score_content(app))
+                .title_bar(score_title_bar())
+                .style(ui_style::pane_main_surface),
             ScorePaneKind::PianoRoll => pane_grid::Content::new(piano_roll::content(app))
                 .title_bar(piano_roll::title_bar(app))
                 .style(ui_style::piano_roll_surface),
         })
         .width(Fill)
         .height(Fill)
+        .on_drag(|event| Message::Pane(super::PaneMessage::ScoreDragged(event)))
         .on_resize(8, |event| {
             Message::PianoRoll(PianoRollMessage::Resized(event))
         });
@@ -32,6 +33,15 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
         .height(Fill)
         .spacing(0)
         .into()
+}
+
+fn score_title_bar<'a>() -> pane_grid::TitleBar<'a, Message> {
+    pane_grid::TitleBar::new(text("Score").size(ui_style::FONT_SIZE_UI_SM))
+        .padding([
+            ui_style::PADDING_STATUS_BAR_V,
+            ui_style::PADDING_STATUS_BAR_H,
+        ])
+        .style(ui_style::pane_title_bar_surface)
 }
 
 fn score_content(app: &LilyView) -> Element<'_, Message> {
@@ -80,8 +90,9 @@ fn score_content(app: &LilyView) -> Element<'_, Message> {
     let can_zoom_out = app.svg_zoom > super::MIN_SVG_ZOOM;
     let can_brightness_increase = app.svg_page_brightness < super::MAX_SVG_PAGE_BRIGHTNESS;
     let can_brightness_decrease = app.svg_page_brightness > super::MIN_SVG_PAGE_BRIGHTNESS;
-    let can_reset_zoom = app.svg_zoom != super::DEFAULT_SVG_ZOOM;
-    let can_reset_page_brightness = app.svg_page_brightness != super::DEFAULT_SVG_PAGE_BRIGHTNESS;
+    let can_reset_zoom = (app.svg_zoom - app.default_settings.score_view.zoom).abs() > 1e-4;
+    let can_reset_page_brightness =
+        app.svg_page_brightness != app.default_settings.score_view.page_brightness;
 
     let prev_button = button(text("←").size(ui_style::FONT_SIZE_UI_SM))
         .style(ui_style::button_neutral)

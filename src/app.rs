@@ -12,6 +12,7 @@ use crate::lilypond;
 use crate::logger::Logger;
 use crate::playback::MidiPlayback;
 use crate::score_watcher::ScoreWatcher;
+use crate::settings::{self, AppSettings, PaneAxis, PaneOrder, ScoreLayoutSettings};
 
 use messages::{
     FileMessage, LoggerMessage, Message, PaneMessage, PianoRollMessage, PromptMessage,
@@ -34,18 +35,15 @@ const MIN_WINDOW_WIDTH: f32 = 960.0;
 const MIN_WINDOW_HEIGHT: f32 = 640.0;
 const LOGGER_DEFAULT_SPLIT_RATIO: f32 = 0.74;
 const MIN_LOGGER_PANEL_HEIGHT: f32 = 140.0;
-const PIANO_DEFAULT_SPLIT_RATIO: f32 = 0.70;
 const PIANO_COLLAPSED_PANEL_HEIGHT: f32 = piano_roll::COLLAPSED_HEIGHT;
 const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_millis(120);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
 pub(super) const KEYBOARD_SCROLL_STEP: f32 = 84.0;
-const DEFAULT_SVG_ZOOM: f32 = 0.7;
 const MIN_SVG_ZOOM: f32 = 0.4;
 const MAX_SVG_ZOOM: f32 = 3.0;
 const SVG_ZOOM_STEP: f32 = 0.1;
 const MIN_SVG_PAGE_BRIGHTNESS: u8 = 0;
 const MAX_SVG_PAGE_BRIGHTNESS: u8 = 100;
-const DEFAULT_SVG_PAGE_BRIGHTNESS: u8 = 70;
 const SVG_PAGE_BRIGHTNESS_STEP: u8 = 10;
 pub(super) const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
@@ -55,6 +53,7 @@ struct LilyView {
     logger_pane: Option<pane_grid::Pane>,
     logger_split: Option<pane_grid::Split>,
     logger_ratio: f32,
+    window_width: f32,
     window_height: f32,
     lilypond_status: LilypondStatus,
     current_score: Option<SelectedScore>,
@@ -70,6 +69,8 @@ struct LilyView {
     soundfont_status: SoundfontStatus,
     score_panes: pane_grid::State<ScorePaneKind>,
     score_split: pane_grid::Split,
+    score_split_axis: pane_grid::Axis,
+    score_pane_order: PaneOrder,
     piano_ratio: f32,
     piano_expanded_ratio: f32,
     rendered_score: Option<RenderedScore>,
@@ -83,6 +84,7 @@ struct LilyView {
     score_viewport_cursor: Option<iced::Point>,
     piano_roll_viewport_cursor: Option<iced::Point>,
     keyboard_modifiers: keyboard::Modifiers,
+    default_settings: AppSettings,
 }
 
 struct SelectedScore {
@@ -176,17 +178,21 @@ fn new(
 ) -> (LilyView, Task<Message>) {
     let (panes, main_pane) = pane_grid::State::new(PaneKind::Main);
     let logger_ratio = constrained_logger_ratio(MIN_WINDOW_HEIGHT, LOGGER_DEFAULT_SPLIT_RATIO);
-    let (mut score_panes, score_pane) = pane_grid::State::new(ScorePaneKind::Score);
-    let (_piano_pane, score_split) = score_panes
-        .split(
-            pane_grid::Axis::Horizontal,
-            score_pane,
-            ScorePaneKind::PianoRoll,
-        )
-        .expect("score pane split must initialize");
+    let default_settings = AppSettings::default();
+    let (stored_settings, settings_error) = match settings::load() {
+        Ok(settings) => (settings, None),
+        Err(error) => (default_settings.clone(), Some(error)),
+    };
+    let stored_layout = stored_settings.score_layout;
     let score_height = estimated_score_area_height(MIN_WINDOW_HEIGHT, false, logger_ratio);
-    let piano_ratio = constrained_piano_ratio(score_height, PIANO_DEFAULT_SPLIT_RATIO);
-    score_panes.resize(score_split, piano_ratio);
+    let (score_panes, score_split, score_split_axis, piano_ratio, piano_expanded_ratio) =
+        build_score_panes(stored_layout, score_height);
+    let mut piano_roll = PianoRollState::new(default_settings.piano_roll_view);
+    piano_roll.visible = stored_layout.piano_visible;
+    piano_roll.apply_view_settings(
+        stored_settings.piano_roll_view.zoom_x,
+        stored_settings.piano_roll_view.beat_subdivision,
+    );
 
     let mut app = LilyView {
         panes,
@@ -194,6 +200,7 @@ fn new(
         logger_pane: None,
         logger_split: None,
         logger_ratio,
+        window_width: MIN_WINDOW_WIDTH,
         window_height: MIN_WINDOW_HEIGHT,
         lilypond_status: LilypondStatus::Checking,
         current_score: None,
@@ -209,19 +216,28 @@ fn new(
         soundfont_status: SoundfontStatus::NotSelected,
         score_panes,
         score_split,
+        score_split_axis,
+        score_pane_order: stored_layout.pane_order,
         piano_ratio,
-        piano_expanded_ratio: piano_ratio,
+        piano_expanded_ratio,
         rendered_score: None,
         score_cursor_maps: None,
         score_cursor_overlay: None,
-        piano_roll: PianoRollState::new(),
-        svg_zoom: DEFAULT_SVG_ZOOM,
-        svg_page_brightness: DEFAULT_SVG_PAGE_BRIGHTNESS,
+        piano_roll,
+        svg_zoom: stored_settings
+            .score_view
+            .zoom
+            .clamp(MIN_SVG_ZOOM, MAX_SVG_ZOOM),
+        svg_page_brightness: stored_settings
+            .score_view
+            .page_brightness
+            .clamp(MIN_SVG_PAGE_BRIGHTNESS, MAX_SVG_PAGE_BRIGHTNESS),
         svg_scroll_x: 0.0,
         svg_scroll_y: 0.0,
         score_viewport_cursor: None,
         piano_roll_viewport_cursor: None,
         keyboard_modifiers: keyboard::Modifiers::default(),
+        default_settings,
     };
 
     app.logger.push("Checking LilyPond availability");
@@ -232,6 +248,9 @@ fn new(
     if let Some(path) = startup_score.as_ref() {
         app.logger
             .push(format!("Startup score requested: {}", path.display()));
+    }
+    if let Some(error) = settings_error {
+        app.logger.push(format!("Settings load failed: {error}"));
     }
 
     let mut startup_tasks = vec![Task::perform(
@@ -348,6 +367,60 @@ impl LilyView {
     }
 }
 
+fn build_score_panes(
+    layout: ScoreLayoutSettings,
+    score_area_height: f32,
+) -> (
+    pane_grid::State<ScorePaneKind>,
+    pane_grid::Split,
+    pane_grid::Axis,
+    f32,
+    f32,
+) {
+    let split_axis = match layout.pane_axis {
+        PaneAxis::Horizontal => pane_grid::Axis::Horizontal,
+        PaneAxis::Vertical => pane_grid::Axis::Vertical,
+    };
+    let available_extent = score_extent_for_axis(MIN_WINDOW_WIDTH, score_area_height, split_axis);
+    let piano_expanded_ratio =
+        constrained_piano_ratio(available_extent, layout.piano_expanded_ratio);
+    let piano_ratio = if layout.piano_visible {
+        piano_expanded_ratio
+    } else {
+        collapsed_piano_ratio_for_layout(available_extent, layout.pane_order)
+    };
+
+    let configuration = match layout.pane_order {
+        PaneOrder::ScoreFirst => pane_grid::Configuration::Split {
+            axis: split_axis,
+            ratio: piano_ratio,
+            a: Box::new(pane_grid::Configuration::Pane(ScorePaneKind::Score)),
+            b: Box::new(pane_grid::Configuration::Pane(ScorePaneKind::PianoRoll)),
+        },
+        PaneOrder::PianoFirst => pane_grid::Configuration::Split {
+            axis: split_axis,
+            ratio: piano_ratio,
+            a: Box::new(pane_grid::Configuration::Pane(ScorePaneKind::PianoRoll)),
+            b: Box::new(pane_grid::Configuration::Pane(ScorePaneKind::Score)),
+        },
+    };
+
+    let score_panes = pane_grid::State::with_configuration(configuration);
+    let score_split = *score_panes
+        .layout()
+        .splits()
+        .next()
+        .expect("score pane split must initialize");
+
+    (
+        score_panes,
+        score_split,
+        split_axis,
+        piano_ratio,
+        piano_expanded_ratio,
+    )
+}
+
 fn constrained_logger_ratio(window_height: f32, requested_ratio: f32) -> f32 {
     if window_height <= 0.0 {
         return requested_ratio.clamp(0.05, 0.95);
@@ -369,6 +442,21 @@ fn collapsed_piano_ratio(score_area_height: f32) -> f32 {
     )
 }
 
+fn collapsed_first_pane_ratio(available_extent: f32) -> f32 {
+    constrained_top_panel_ratio(
+        available_extent,
+        PIANO_COLLAPSED_PANEL_HEIGHT / available_extent.max(1.0),
+        PIANO_COLLAPSED_PANEL_HEIGHT,
+    )
+}
+
+fn collapsed_piano_ratio_for_layout(available_extent: f32, order: PaneOrder) -> f32 {
+    match order {
+        PaneOrder::ScoreFirst => collapsed_piano_ratio(available_extent),
+        PaneOrder::PianoFirst => collapsed_first_pane_ratio(available_extent),
+    }
+}
+
 fn constrained_bottom_panel_ratio(
     available_height: f32,
     requested_ratio: f32,
@@ -382,6 +470,19 @@ fn constrained_bottom_panel_ratio(
     requested_ratio.clamp(0.05, max_ratio.clamp(0.05, 0.95))
 }
 
+fn constrained_top_panel_ratio(
+    available_extent: f32,
+    requested_ratio: f32,
+    min_top_extent: f32,
+) -> f32 {
+    if available_extent <= 0.0 {
+        return requested_ratio.clamp(0.05, 0.95);
+    }
+
+    let min_ratio = min_top_extent / available_extent;
+    requested_ratio.clamp(min_ratio.clamp(0.05, 0.95), 0.95)
+}
+
 fn estimated_score_area_height(window_height: f32, logger_visible: bool, logger_ratio: f32) -> f32 {
     let mut height = (window_height - crate::status_bar::HEIGHT).max(1.0);
 
@@ -390,6 +491,13 @@ fn estimated_score_area_height(window_height: f32, logger_visible: bool, logger_
     }
 
     height.max(1.0)
+}
+
+fn score_extent_for_axis(window_width: f32, score_area_height: f32, axis: pane_grid::Axis) -> f32 {
+    match axis {
+        pane_grid::Axis::Horizontal => score_area_height,
+        pane_grid::Axis::Vertical => window_width.max(1.0),
+    }
 }
 
 fn selected_score_from_path(path: PathBuf) -> Result<SelectedScore, String> {

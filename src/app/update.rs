@@ -9,6 +9,7 @@ use super::score_cursor;
 use super::*;
 use crate::error_prompt::{ErrorFatality, ErrorPrompt, PromptButtons};
 use crate::midi;
+use crate::settings::{self, PaneAxis, PaneOrder, ScoreLayoutSettings};
 
 pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
     match message {
@@ -73,9 +74,11 @@ impl LilyView {
             }
             ViewerMessage::ZoomIn => {
                 self.svg_zoom = next_zoom_step_up(self.svg_zoom, SVG_ZOOM_STEP, MAX_SVG_ZOOM);
+                self.persist_settings();
             }
             ViewerMessage::ZoomOut => {
                 self.svg_zoom = next_zoom_step_down(self.svg_zoom, SVG_ZOOM_STEP, MIN_SVG_ZOOM);
+                self.persist_settings();
             }
             ViewerMessage::SmoothZoom(delta) => {
                 let previous_zoom = self.svg_zoom;
@@ -86,6 +89,7 @@ impl LilyView {
                 }
 
                 self.svg_zoom = next_zoom;
+                self.persist_settings();
 
                 if let Some(cursor) = self.score_viewport_cursor {
                     let scale = next_zoom / previous_zoom.max(f32::EPSILON);
@@ -99,18 +103,22 @@ impl LilyView {
                 self.svg_page_brightness = self
                     .svg_page_brightness
                     .saturating_sub(SVG_PAGE_BRIGHTNESS_STEP);
+                self.persist_settings();
             }
             ViewerMessage::IncreasePageBrightness => {
                 self.svg_page_brightness = self
                     .svg_page_brightness
                     .saturating_add(SVG_PAGE_BRIGHTNESS_STEP)
                     .min(MAX_SVG_PAGE_BRIGHTNESS);
+                self.persist_settings();
             }
             ViewerMessage::ResetZoom => {
-                self.svg_zoom = DEFAULT_SVG_ZOOM;
+                self.svg_zoom = self.default_settings.score_view.zoom;
+                self.persist_settings();
             }
             ViewerMessage::ResetPageBrightness => {
-                self.svg_page_brightness = DEFAULT_SVG_PAGE_BRIGHTNESS;
+                self.svg_page_brightness = self.default_settings.score_view.page_brightness;
+                self.persist_settings();
             }
         }
 
@@ -126,20 +134,25 @@ impl LilyView {
                     self.piano_roll.visible = true;
                     task = self.restore_piano_roll_scroll();
                 }
-                let ratio = constrained_piano_ratio(self.score_area_height(), event.ratio);
+                let ratio =
+                    constrained_piano_ratio(self.score_extent_for_split_axis(), event.ratio);
                 self.piano_ratio = ratio;
                 self.piano_expanded_ratio = ratio;
                 self.score_panes.resize(event.split, ratio);
+                self.persist_settings();
             }
             PianoRollMessage::ToggleVisible => {
                 if self.piano_roll.visible {
                     self.piano_roll.visible = false;
                     self.piano_expanded_ratio = self.piano_ratio;
-                    self.piano_ratio = collapsed_piano_ratio(self.score_area_height());
+                    self.piano_ratio = collapsed_piano_ratio_for_layout(
+                        self.score_extent_for_split_axis(),
+                        self.score_pane_order,
+                    );
                 } else {
                     self.piano_roll.visible = true;
                     let ratio = constrained_piano_ratio(
-                        self.score_area_height(),
+                        self.score_extent_for_split_axis(),
                         self.piano_expanded_ratio,
                     );
                     self.piano_ratio = ratio;
@@ -148,6 +161,7 @@ impl LilyView {
                 }
 
                 self.score_panes.resize(self.score_split, self.piano_ratio);
+                self.persist_settings();
             }
             PianoRollMessage::ViewportCursorMoved(position) => {
                 self.piano_roll_viewport_cursor = Some(position);
@@ -161,9 +175,11 @@ impl LilyView {
             }
             PianoRollMessage::ZoomIn => {
                 self.piano_roll.zoom_in();
+                self.persist_settings();
             }
             PianoRollMessage::ZoomOut => {
                 self.piano_roll.zoom_out();
+                self.persist_settings();
             }
             PianoRollMessage::SmoothZoom(delta) => {
                 let previous_zoom = self.piano_roll.zoom_x;
@@ -174,6 +190,7 @@ impl LilyView {
                 }
 
                 self.piano_roll.zoom_x = next_zoom;
+                self.persist_settings();
 
                 if let Some(cursor) = self.piano_roll_viewport_cursor {
                     let scale = next_zoom / previous_zoom.max(f32::EPSILON);
@@ -185,12 +202,15 @@ impl LilyView {
             }
             PianoRollMessage::ResetZoom => {
                 self.piano_roll.reset_zoom();
+                self.persist_settings();
             }
             PianoRollMessage::BeatSubdivisionSliderChanged(subdivision) => {
                 self.piano_roll.set_beat_subdivision(subdivision);
+                self.persist_settings();
             }
             PianoRollMessage::BeatSubdivisionInputChanged(input) => {
                 self.piano_roll.set_beat_subdivision_input(input);
+                self.persist_settings();
             }
             PianoRollMessage::FilePrevious => {
                 self.piano_roll.select_previous_file();
@@ -305,6 +325,14 @@ impl LilyView {
                 self.logger_ratio = ratio;
                 self.panes.resize(event.split, ratio);
                 self.apply_piano_layout_constraints();
+            }
+            PaneMessage::ScoreDragged(event) => {
+                if let pane_grid::DragEvent::Dropped { pane, target } = event {
+                    self.score_panes.drop(pane, target);
+                    self.sync_score_layout_from_state();
+                    self.apply_piano_layout_constraints();
+                    self.persist_settings();
+                }
             }
             PaneMessage::ToggleLogger => {
                 if let Some(logger_pane) = self.logger_pane.take() {
@@ -463,8 +491,6 @@ impl LilyView {
         self.score_cursor_overlay = None;
         self.piano_roll.clear_files();
         self.unload_playback_file();
-        self.svg_zoom = DEFAULT_SVG_ZOOM;
-        self.svg_page_brightness = DEFAULT_SVG_PAGE_BRIGHTNESS;
         self.current_score = Some(selected_score);
         self.restart_score_watcher(&watched_path);
         self.queue_compile("Score loaded, compiling SVG and MIDI");
@@ -749,6 +775,7 @@ impl LilyView {
     }
 
     fn handle_window_resized(&mut self, size: Size) -> Task<Message> {
+        self.window_width = size.width.max(1.0);
         self.window_height = size.height.max(1.0);
 
         if let Some(split) = self.logger_split {
@@ -782,14 +809,80 @@ impl LilyView {
 
     fn apply_piano_layout_constraints(&mut self) {
         if self.piano_roll.visible {
-            let ratio = constrained_piano_ratio(self.score_area_height(), self.piano_ratio);
+            let ratio =
+                constrained_piano_ratio(self.score_extent_for_split_axis(), self.piano_ratio);
             self.piano_ratio = ratio;
             self.piano_expanded_ratio = ratio;
         } else {
-            self.piano_ratio = collapsed_piano_ratio(self.score_area_height());
+            self.piano_ratio = collapsed_piano_ratio_for_layout(
+                self.score_extent_for_split_axis(),
+                self.score_pane_order,
+            );
         }
 
         self.score_panes.resize(self.score_split, self.piano_ratio);
+    }
+
+    fn score_extent_for_split_axis(&self) -> f32 {
+        score_extent_for_axis(
+            self.window_width,
+            self.score_area_height(),
+            self.score_split_axis,
+        )
+    }
+
+    fn sync_score_layout_from_state(&mut self) {
+        let pane_grid::Node::Split {
+            id,
+            axis,
+            ratio,
+            a,
+            b,
+        } = self.score_panes.layout()
+        else {
+            return;
+        };
+
+        self.score_split = *id;
+        self.score_split_axis = *axis;
+        self.piano_ratio = *ratio;
+
+        self.score_pane_order = match (a.as_ref(), b.as_ref()) {
+            (pane_grid::Node::Pane(a_pane), pane_grid::Node::Pane(b_pane)) => {
+                match (self.score_panes.get(*a_pane), self.score_panes.get(*b_pane)) {
+                    (Some(ScorePaneKind::Score), Some(ScorePaneKind::PianoRoll)) => {
+                        PaneOrder::ScoreFirst
+                    }
+                    (Some(ScorePaneKind::PianoRoll), Some(ScorePaneKind::Score)) => {
+                        PaneOrder::PianoFirst
+                    }
+                    _ => self.score_pane_order,
+                }
+            }
+            _ => self.score_pane_order,
+        };
+    }
+
+    fn persist_settings(&self) {
+        let _ = settings::save(&settings::AppSettings {
+            score_layout: ScoreLayoutSettings {
+                pane_axis: match self.score_split_axis {
+                    pane_grid::Axis::Horizontal => PaneAxis::Horizontal,
+                    pane_grid::Axis::Vertical => PaneAxis::Vertical,
+                },
+                pane_order: self.score_pane_order,
+                piano_visible: self.piano_roll.visible,
+                piano_expanded_ratio: self.piano_expanded_ratio,
+            },
+            score_view: settings::ScoreViewSettings {
+                zoom: self.svg_zoom,
+                page_brightness: self.svg_page_brightness,
+            },
+            piano_roll_view: settings::PianoRollViewSettings {
+                zoom_x: self.piano_roll.zoom_x,
+                beat_subdivision: self.piano_roll.beat_subdivision,
+            },
+        });
     }
 
     fn restore_piano_roll_scroll(&self) -> Task<Message> {
