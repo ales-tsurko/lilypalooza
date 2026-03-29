@@ -382,3 +382,38 @@ pub(crate) fn button_compact_solid(theme: &Theme, status: button::Status) -> but
         },
     }
 }
+
+pub(crate) fn button_compact_active(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let base = button::Style {
+        background: Some(palette.primary.base.color.into()),
+        text_color: palette.primary.base.text,
+        border: border::rounded(4)
+            .width(1)
+            .color(palette.primary.strong.color),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.primary.strong.color.into()),
+            text_color: palette.primary.strong.text,
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.primary.weak.color.into()),
+            text_color: palette.primary.weak.text,
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(palette.background.strong.color.into()),
+            text_color: palette.background.weak.text,
+            border: border::rounded(4)
+                .width(1)
+                .color(palette.background.base.color),
+            ..base
+        },
+    }
+}

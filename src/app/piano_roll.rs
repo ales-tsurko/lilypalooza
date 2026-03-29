@@ -737,7 +737,7 @@ fn track_list<'a>(
         .width(Length::Fixed(TRACK_BUTTON_WIDTH))
         .height(Length::Fixed(TRACK_BUTTON_HEIGHT))
         .style(if state.soloed {
-            ui_style::button_active
+            ui_style::button_compact_active
         } else {
             ui_style::button_compact_solid
         })
@@ -761,7 +761,7 @@ fn track_list<'a>(
         .width(Length::Fixed(TRACK_BUTTON_WIDTH))
         .height(Length::Fixed(TRACK_BUTTON_HEIGHT))
         .style(if state.muted {
-            ui_style::button_active
+            ui_style::button_compact_active
         } else {
             ui_style::button_compact_solid
         })
