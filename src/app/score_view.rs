@@ -30,21 +30,212 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
 }
 
 fn split_panes(app: &LilyView) -> Element<'_, Message> {
-    pane_grid::PaneGrid::new(&app.score_panes, |_pane, kind, _is_maximized| match kind {
-        ScorePaneKind::Score => pane_grid::Content::new(score_content(app))
-            .title_bar(score_title_bar())
-            .style(ui_style::pane_main_surface),
-        ScorePaneKind::PianoRoll => pane_grid::Content::new(piano_roll::content(app))
-            .title_bar(piano_roll::title_bar(app))
-            .style(ui_style::piano_roll_surface),
-    })
-    .width(Fill)
-    .height(Fill)
-    .on_drag(|event| Message::Pane(super::PaneMessage::ScoreDragged(event)))
-    .on_resize(8, |event| {
-        Message::PianoRoll(PianoRollMessage::Resized(event))
+    responsive(move |size| {
+        let panes: Element<'_, Message> =
+            pane_grid::PaneGrid::new(&app.score_panes, |_pane, kind, _is_maximized| match kind {
+                ScorePaneKind::Score => pane_grid::Content::new(score_content(app))
+                    .title_bar(score_title_bar())
+                    .style(ui_style::pane_main_surface),
+                ScorePaneKind::PianoRoll => pane_grid::Content::new(piano_roll::content(app))
+                    .title_bar(piano_roll::title_bar(app))
+                    .style(ui_style::piano_roll_surface),
+            })
+            .width(Fill)
+            .height(Fill)
+            .style(split_rearrange_style)
+            .on_drag(|event| Message::Pane(super::PaneMessage::ScoreDragged(event)))
+            .on_resize(8, |event| {
+                Message::PianoRoll(PianoRollMessage::Resized(event))
+            })
+            .into();
+
+        let overlay = split_drag_overlay(app, size);
+
+        mouse_area(stack([panes, overlay]).width(Fill).height(Fill))
+            .on_move(|position| Message::Pane(super::PaneMessage::SplitDragMoved(position)))
+            .on_exit(Message::Pane(super::PaneMessage::SplitDragExited))
+            .into()
     })
     .into()
+}
+
+fn split_drag_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
+    let Some(_dragging) = app.split_dragging_pane else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
+    let Some(cursor) = app.split_drag_cursor else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
+
+    let Some((score_bounds, piano_bounds)) = split_pane_bounds(app, size) else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
+
+    let target_bounds = if score_bounds.contains(cursor) {
+        split_preview_bounds(score_bounds, cursor)
+    } else if piano_bounds.contains(cursor) {
+        split_preview_bounds(piano_bounds, cursor)
+    } else {
+        Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }
+    };
+
+    if target_bounds.width <= 0.0 || target_bounds.height <= 0.0 {
+        return container(text("")).width(Fill).height(Fill).into();
+    }
+
+    canvas(SplitDropOverlayCanvas { target_bounds })
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
+fn split_pane_bounds(app: &LilyView, size: Size) -> Option<(Rectangle, Rectangle)> {
+    let bounds = Rectangle {
+        x: 0.0,
+        y: 0.0,
+        width: size.width.max(1.0),
+        height: size.height.max(1.0),
+    };
+    let ratio = app.piano_ratio.clamp(0.05, 0.95);
+
+    match (app.score_split_axis, app.score_pane_order) {
+        (pane_grid::Axis::Horizontal, crate::settings::PaneOrder::ScoreFirst) => Some((
+            Rectangle {
+                height: bounds.height * ratio,
+                ..bounds
+            },
+            Rectangle {
+                y: bounds.y + bounds.height * ratio,
+                height: bounds.height * (1.0 - ratio),
+                ..bounds
+            },
+        )),
+        (pane_grid::Axis::Horizontal, crate::settings::PaneOrder::PianoFirst) => Some((
+            Rectangle {
+                y: bounds.y + bounds.height * ratio,
+                height: bounds.height * (1.0 - ratio),
+                ..bounds
+            },
+            Rectangle {
+                height: bounds.height * ratio,
+                ..bounds
+            },
+        )),
+        (pane_grid::Axis::Vertical, crate::settings::PaneOrder::ScoreFirst) => Some((
+            Rectangle {
+                width: bounds.width * ratio,
+                ..bounds
+            },
+            Rectangle {
+                x: bounds.x + bounds.width * ratio,
+                width: bounds.width * (1.0 - ratio),
+                ..bounds
+            },
+        )),
+        (pane_grid::Axis::Vertical, crate::settings::PaneOrder::PianoFirst) => Some((
+            Rectangle {
+                x: bounds.x + bounds.width * ratio,
+                width: bounds.width * (1.0 - ratio),
+                ..bounds
+            },
+            Rectangle {
+                width: bounds.width * ratio,
+                ..bounds
+            },
+        )),
+    }
+}
+
+fn split_preview_bounds(bounds: Rectangle, cursor: Point) -> Rectangle {
+    let left = bounds.x + bounds.width / 3.0;
+    let right = bounds.x + 2.0 * bounds.width / 3.0;
+    let top = bounds.y + bounds.height / 3.0;
+    let bottom = bounds.y + 2.0 * bounds.height / 3.0;
+
+    if cursor.x < left {
+        Rectangle {
+            width: bounds.width / 2.0,
+            ..bounds
+        }
+    } else if cursor.x > right {
+        Rectangle {
+            x: bounds.x + bounds.width / 2.0,
+            width: bounds.width / 2.0,
+            ..bounds
+        }
+    } else if cursor.y < top {
+        Rectangle {
+            height: bounds.height / 2.0,
+            ..bounds
+        }
+    } else if cursor.y > bottom {
+        Rectangle {
+            y: bounds.y + bounds.height / 2.0,
+            height: bounds.height / 2.0,
+            ..bounds
+        }
+    } else {
+        bounds
+    }
+}
+
+fn split_rearrange_style(theme: &Theme) -> pane_grid::Style {
+    let mut style = pane_grid::default(theme);
+    style.hovered_region.background = Color::TRANSPARENT.into();
+    style.hovered_region.border = border::rounded(0).width(0).color(Color::TRANSPARENT);
+    style
+}
+
+struct SplitDropOverlayCanvas {
+    target_bounds: Rectangle,
+}
+
+impl<Message> canvas::Program<Message> for SplitDropOverlayCanvas {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let palette = theme.extended_palette();
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+
+        frame.fill_rectangle(
+            Point::new(self.target_bounds.x, self.target_bounds.y),
+            Size::new(self.target_bounds.width, self.target_bounds.height),
+            Color::from_rgba(
+                palette.primary.base.color.r,
+                palette.primary.base.color.g,
+                palette.primary.base.color.b,
+                0.20,
+            ),
+        );
+        frame.stroke_rectangle(
+            Point::new(self.target_bounds.x, self.target_bounds.y),
+            Size::new(self.target_bounds.width, self.target_bounds.height),
+            canvas::Stroke {
+                width: 2.0,
+                style: canvas::Style::Solid(Color::from_rgba(
+                    palette.primary.strong.color.r,
+                    palette.primary.strong.color.g,
+                    palette.primary.strong.color.b,
+                    0.95,
+                )),
+                ..canvas::Stroke::default()
+            },
+        );
+
+        vec![frame.into_geometry()]
+    }
 }
 
 fn stacked_panes(app: &LilyView) -> Element<'_, Message> {

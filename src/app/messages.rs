@@ -25,6 +25,8 @@ pub(super) enum Message {
 pub(super) enum PaneMessage {
     Resized(pane_grid::ResizeEvent),
     ScoreDragged(pane_grid::DragEvent),
+    SplitDragMoved(iced::Point),
+    SplitDragExited,
     StackedTabPressed(ScorePaneKind),
     StackedTabHovered(Option<ScorePaneKind>),
     StackedTabDragStarted(ScorePaneKind),

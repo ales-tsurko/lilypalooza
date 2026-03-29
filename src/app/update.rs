@@ -330,8 +330,25 @@ impl LilyView {
                 self.panes.resize(event.split, ratio);
                 self.apply_piano_layout_constraints();
             }
-            PaneMessage::ScoreDragged(event) => {
-                if let pane_grid::DragEvent::Dropped { pane, target } = event {
+            PaneMessage::SplitDragMoved(position) => {
+                if self.split_dragging_pane.is_some() {
+                    self.split_drag_cursor = Some(position);
+                }
+            }
+            PaneMessage::SplitDragExited => {
+                if self.split_dragging_pane.is_some() {
+                    self.split_drag_cursor = None;
+                }
+            }
+            PaneMessage::ScoreDragged(event) => match event {
+                pane_grid::DragEvent::Picked { pane } => {
+                    self.split_dragging_pane = self.score_pane_kind(pane);
+                    self.split_drag_cursor = None;
+                }
+                pane_grid::DragEvent::Dropped { pane, target } => {
+                    self.split_dragging_pane = None;
+                    self.split_drag_cursor = None;
+
                     if let pane_grid::Target::Pane(target_pane, pane_grid::Region::Center) = target
                     {
                         let Some(dragged_kind) = self.score_pane_kind(pane) else {
@@ -354,7 +371,11 @@ impl LilyView {
 
                     self.persist_settings();
                 }
-            }
+                pane_grid::DragEvent::Canceled { .. } => {
+                    self.split_dragging_pane = None;
+                    self.split_drag_cursor = None;
+                }
+            },
             PaneMessage::StackedTabPressed(kind) => {
                 self.stacked_active_pane = kind;
                 self.stacked_pressed_pane = Some(kind);
