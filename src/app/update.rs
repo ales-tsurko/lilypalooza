@@ -963,6 +963,7 @@ impl LilyView {
         };
 
         if target == StackedDropTarget::Center {
+            self.score_pane_order = pane_order_from_first(dragged_pane);
             self.clear_stacked_drag_state();
             return;
         }
