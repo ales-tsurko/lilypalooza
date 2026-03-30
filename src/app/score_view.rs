@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use iced::widget::{
-    Tooltip, button, canvas, container, mouse_area, pane_grid, responsive, row, scrollable, stack,
-    svg, text, tooltip,
+    Column, Tooltip, button, canvas, container, mouse_area, opaque, pane_grid, responsive, row,
+    scrollable, stack, svg, text, tooltip,
 };
 use iced::{
     Color, ContentFit, Element, Fill, Length, Point, Rectangle, Size, Theme, alignment, border,
@@ -20,7 +20,17 @@ const SCROLL_MARKER_LENGTH: f32 = 16.0;
 const SCROLL_MARKER_EDGE_INSET: f32 = 3.0;
 const TOOLBAR_ICON_SIZE: f32 = 14.0;
 const FOLD_ICON_SIZE: f32 = 12.0;
+const FOLD_BUTTON_WIDTH: f32 = 26.0;
+const FOLD_BUTTON_HEIGHT: f32 = 22.0;
+const HEADER_MENU_ICON_SIZE: f32 = 12.0;
+const HEADER_MENU_BUTTON_WIDTH: f32 = 26.0;
 const TAB_ICON_GAP: u32 = 6;
+const HEADER_WIDTH_SAFETY: f32 = 24.0;
+
+pub(super) struct HeaderControlGroup<'a> {
+    pub(super) min_width: f32,
+    pub(super) content: Element<'a, Message>,
+}
 
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     let toolbar = workspace_toolbar(app);
@@ -64,8 +74,13 @@ fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
 
 fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
     responsive(move |size| {
+        let group_bounds = workspace_group_bounds_map(&app.workspace_panes, size);
         let panes: Element<'_, Message> =
             pane_grid::PaneGrid::new(&app.workspace_panes, |_pane, group_id, _is_maximized| {
+                let group_width = group_bounds
+                    .get(group_id)
+                    .map(|bounds| bounds.width)
+                    .unwrap_or(size.width);
                 let body = match app
                     .workspace_group(*group_id)
                     .map(|group| group.active)
@@ -78,8 +93,10 @@ fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
                     }),
                 };
 
+                let body = pane_body_with_header_menu(app, *group_id, group_width, body);
+
                 pane_grid::Content::new(body)
-                    .title_bar(group_title_bar(app, *group_id))
+                    .title_bar(group_title_bar(app, *group_id, group_width))
                     .style(ui_style::pane_main_surface)
             })
             .width(Fill)
@@ -104,8 +121,9 @@ fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
 fn group_title_bar<'a>(
     app: &'a LilyView,
     group_id: super::DockGroupId,
+    group_width: f32,
 ) -> pane_grid::TitleBar<'a, Message> {
-    pane_grid::TitleBar::new(group_header(app, group_id))
+    pane_grid::TitleBar::new(group_header(app, group_id, group_width))
         .padding([
             ui_style::PADDING_STATUS_BAR_V,
             ui_style::PADDING_STATUS_BAR_H,
@@ -113,29 +131,47 @@ fn group_title_bar<'a>(
         .style(ui_style::pane_title_bar_surface)
 }
 
-fn group_header<'a>(app: &'a LilyView, group_id: super::DockGroupId) -> Element<'a, Message> {
+fn group_header<'a>(
+    app: &'a LilyView,
+    group_id: super::DockGroupId,
+    group_width: f32,
+) -> Element<'a, Message> {
     let Some(group) = app.workspace_group(group_id) else {
         return container(text("")).width(Fill).into();
     };
     let active_pane = group.active;
     let can_fold = app.can_fold_workspace_pane(active_pane);
-
-    let controls = match active_pane {
-        WorkspacePaneKind::Score => score_controls(app),
-        WorkspacePaneKind::PianoRoll => piano_roll::controls(app).into(),
-        WorkspacePaneKind::Editor => container(text("")).into(),
+    let control_groups = pane_header_control_groups(app, active_pane);
+    let title_width = group_tabs_min_width(group);
+    let fold_width = if can_fold {
+        fold_button_reserved_width()
+    } else {
+        0.0
     };
-    let header = row![
-        group_tabs(app, group),
-        container(text("")).width(Fill),
-        controls
-    ]
-    .align_y(alignment::Vertical::Center)
-    .width(Fill);
+    let available_controls_width = (group_width - title_width - fold_width).max(0.0);
+    let (inline_controls, overflow_controls) =
+        split_header_control_groups(control_groups, available_controls_width);
+    let shows_menu_button = !overflow_controls.is_empty();
+    let is_menu_open = shows_menu_button && app.open_header_overflow_menu == Some(group_id);
+    let mut header = row![group_tabs(app, group), container(text("")).width(Fill)]
+        .align_y(alignment::Vertical::Center)
+        .width(Fill);
+
+    if !inline_controls.is_empty() {
+        header = header.push(
+            row(inline_controls)
+                .spacing(ui_style::SPACE_SM)
+                .align_y(alignment::Vertical::Center),
+        );
+    }
+
+    if shows_menu_button {
+        header = header.push(header_overflow_trigger(group_id, is_menu_open));
+    }
 
     let header = if can_fold {
         header
-            .push(container(text("")).width(Length::Fixed(ui_style::SPACE_MD as f32)))
+            .push(container(text("")).width(Length::Fixed(0.0)))
             .push(
                 container(text(""))
                     .width(Length::Fixed(1.0))
@@ -162,6 +198,56 @@ fn group_header<'a>(app: &'a LilyView, group_id: super::DockGroupId) -> Element<
     };
 
     header.into()
+}
+
+fn pane_body_with_header_menu<'a>(
+    app: &'a LilyView,
+    group_id: super::DockGroupId,
+    group_width: f32,
+    body: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let Some(group) = app.workspace_group(group_id) else {
+        return body;
+    };
+
+    let active_pane = group.active;
+    let can_fold = app.can_fold_workspace_pane(active_pane);
+    let control_groups = pane_header_control_groups(app, active_pane);
+    let title_width = group_tabs_min_width(group);
+    let fold_width = if can_fold {
+        fold_button_reserved_width()
+    } else {
+        0.0
+    };
+    let available_controls_width = (group_width - title_width - fold_width).max(0.0);
+    let (_inline_controls, overflow_controls) =
+        split_header_control_groups(control_groups, available_controls_width);
+    let show_menu =
+        !overflow_controls.is_empty() && app.open_header_overflow_menu == Some(group_id);
+
+    let close_backdrop: Element<'a, Message> = if show_menu {
+        mouse_area(container(text("")).width(Fill).height(Fill))
+            .on_press(Message::Pane(PaneMessage::CloseHeaderOverflowMenu))
+            .into()
+    } else {
+        container(text("")).width(Fill).height(Fill).into()
+    };
+    let menu: Element<'a, Message> = if show_menu {
+        let menu_panel = mouse_area(opaque(header_overflow_menu_panel(overflow_controls)))
+            .on_press(Message::Pane(PaneMessage::OpenHeaderOverflowMenu(group_id)))
+            .on_exit(Message::Pane(PaneMessage::CloseHeaderOverflowMenu));
+        container(menu_panel)
+            .width(Fill)
+            .height(Fill)
+            .align_x(alignment::Horizontal::Right)
+            .align_y(alignment::Vertical::Top)
+            .padding([ui_style::SPACE_XS as u16, ui_style::SPACE_XS as u16])
+            .into()
+    } else {
+        container(text("")).width(Fill).height(Fill).into()
+    };
+
+    stack([body, close_backdrop, menu]).into()
 }
 
 fn group_tabs<'a>(app: &'a LilyView, group: &'a super::DockGroup) -> row::Row<'a, Message> {
@@ -291,19 +377,56 @@ fn workspace_pane_title(pane: WorkspacePaneKind) -> &'static str {
     }
 }
 
-fn fold_button(pane: WorkspacePaneKind) -> Element<'static, Message> {
-    let button = button(
-        svg(icons::arrow_up_to_line())
-            .width(Length::Fixed(FOLD_ICON_SIZE))
-            .height(Length::Fixed(FOLD_ICON_SIZE))
-            .content_fit(ContentFit::Contain)
-            .style(ui_style::svg_window_control),
-    )
+fn header_overflow_button(
+    group_id: super::DockGroupId,
+    is_open: bool,
+) -> Element<'static, Message> {
+    let on_press = if is_open {
+        Message::Pane(PaneMessage::CloseHeaderOverflowMenu)
+    } else {
+        Message::Pane(PaneMessage::OpenHeaderOverflowMenu(group_id))
+    };
+    let button = button(header_icon(
+        icons::ellipsis_vertical(),
+        HEADER_MENU_ICON_SIZE,
+    ))
     .style(ui_style::button_window_control)
     .padding([4, 7])
-    .width(Length::Fixed(26.0))
-    .height(Length::Fixed(22.0))
-    .on_press(Message::Pane(PaneMessage::FoldWorkspacePane(pane)));
+    .width(Length::Fixed(HEADER_MENU_BUTTON_WIDTH))
+    .height(Length::Fixed(FOLD_BUTTON_HEIGHT))
+    .on_press(on_press);
+
+    let tooltip = if is_open {
+        "Hide pane controls"
+    } else {
+        "Show pane controls"
+    };
+
+    Tooltip::new(
+        container(button).padding([0, 2]),
+        text(tooltip).size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Top,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup)
+    .into()
+}
+
+fn header_overflow_trigger(
+    group_id: super::DockGroupId,
+    is_open: bool,
+) -> Element<'static, Message> {
+    header_overflow_button(group_id, is_open)
+}
+
+fn fold_button(pane: WorkspacePaneKind) -> Element<'static, Message> {
+    let button = button(header_icon(icons::arrow_up_to_line(), FOLD_ICON_SIZE))
+        .style(ui_style::button_window_control)
+        .padding([4, 7])
+        .width(Length::Fixed(FOLD_BUTTON_WIDTH))
+        .height(Length::Fixed(FOLD_BUTTON_HEIGHT))
+        .on_press(Message::Pane(PaneMessage::FoldWorkspacePane(pane)));
 
     Tooltip::new(
         container(button).padding([0, 2]),
@@ -314,6 +437,137 @@ fn fold_button(pane: WorkspacePaneKind) -> Element<'static, Message> {
     .padding(8)
     .style(ui_style::tooltip_popup)
     .into()
+}
+
+fn header_overflow_menu_panel<'a>(controls: Vec<Element<'a, Message>>) -> Element<'a, Message> {
+    container(
+        Column::with_children(controls)
+            .spacing(ui_style::SPACE_XS)
+            .align_x(alignment::Horizontal::Left),
+    )
+    .padding(ui_style::PADDING_XS)
+    .style(ui_style::tooltip_popup)
+    .into()
+}
+
+pub(super) fn workspace_group_min_width(app: &LilyView, group_id: super::DockGroupId) -> f32 {
+    let Some(group) = app.workspace_group(group_id) else {
+        return 0.0;
+    };
+    let tabs_width = group_tabs_min_width(group);
+    let menu_width = if pane_header_has_controls(app, group.active) {
+        HEADER_MENU_BUTTON_WIDTH
+    } else {
+        0.0
+    };
+    let fold_width = if app.can_fold_workspace_pane(group.active) {
+        fold_button_reserved_width()
+    } else {
+        0.0
+    };
+
+    tabs_width + menu_width + fold_width + HEADER_WIDTH_SAFETY
+}
+
+fn workspace_tab_min_width(pane: WorkspacePaneKind) -> f32 {
+    let title_width = match pane {
+        WorkspacePaneKind::Score => 36.0,
+        WorkspacePaneKind::PianoRoll => 66.0,
+        WorkspacePaneKind::Editor => 38.0,
+    };
+
+    TOOLBAR_ICON_SIZE
+        + TAB_ICON_GAP as f32
+        + title_width
+        + (ui_style::PADDING_STATUS_BAR_H + 8) as f32 * 2.0
+}
+
+fn group_tabs_min_width(group: &super::DockGroup) -> f32 {
+    group
+        .tabs
+        .iter()
+        .copied()
+        .map(workspace_tab_min_width)
+        .sum::<f32>()
+        + ui_style::SPACE_XS as f32 * group.tabs.len().saturating_sub(1) as f32
+}
+
+fn fold_button_reserved_width() -> f32 {
+    ui_style::SPACE_MD as f32 + 1.0 + FOLD_BUTTON_WIDTH
+}
+
+fn split_header_control_groups<'a>(
+    groups: Vec<HeaderControlGroup<'a>>,
+    available_width: f32,
+) -> (Vec<Element<'a, Message>>, Vec<Element<'a, Message>>) {
+    let total_width = header_groups_total_width(&groups);
+    if groups.is_empty() || total_width <= available_width {
+        return (
+            groups.into_iter().map(|group| group.content).collect(),
+            Vec::new(),
+        );
+    }
+
+    let available_inline_width = (available_width - HEADER_MENU_BUTTON_WIDTH).max(0.0);
+    let mut used_width = 0.0;
+    let mut inline = Vec::new();
+    let mut overflow = Vec::new();
+
+    for group in groups {
+        let spacing = if inline.is_empty() {
+            0.0
+        } else {
+            ui_style::SPACE_SM as f32
+        };
+
+        if used_width + spacing + group.min_width <= available_inline_width {
+            used_width += spacing + group.min_width;
+            inline.push(group.content);
+        } else {
+            overflow.push(group.content);
+        }
+    }
+
+    (inline, overflow)
+}
+
+fn header_groups_total_width(groups: &[HeaderControlGroup<'_>]) -> f32 {
+    groups.iter().map(|group| group.min_width).sum::<f32>()
+        + ui_style::SPACE_SM as f32 * groups.len().saturating_sub(1) as f32
+}
+
+fn header_icon(icon: svg::Handle, size: f32) -> Element<'static, Message> {
+    container(
+        svg(icon)
+            .width(Length::Fixed(size))
+            .height(Length::Fixed(size))
+            .content_fit(ContentFit::Contain)
+            .style(ui_style::svg_window_control),
+    )
+    .width(Length::Fixed(size))
+    .height(Length::Fixed(size))
+    .center_x(Length::Fixed(size))
+    .center_y(Length::Fixed(size))
+    .into()
+}
+
+fn pane_header_control_groups<'a>(
+    app: &'a LilyView,
+    pane: WorkspacePaneKind,
+) -> Vec<HeaderControlGroup<'a>> {
+    match pane {
+        WorkspacePaneKind::Score => score_controls(app),
+        WorkspacePaneKind::PianoRoll => piano_roll::controls(app),
+        WorkspacePaneKind::Editor => Vec::new(),
+    }
+}
+
+fn pane_header_has_controls(app: &LilyView, pane: WorkspacePaneKind) -> bool {
+    match pane {
+        WorkspacePaneKind::Score => app.current_score.is_some(),
+        WorkspacePaneKind::PianoRoll => true,
+        WorkspacePaneKind::Editor => false,
+    }
 }
 
 fn folded_pane_chip(pane: WorkspacePaneKind) -> Element<'static, Message> {
@@ -516,9 +770,9 @@ impl<Message> canvas::Program<Message> for DropOverlayCanvas {
     }
 }
 
-pub(super) fn score_controls<'a>(app: &'a LilyView) -> Element<'a, Message> {
+pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
     if app.current_score.is_none() {
-        return container(text("")).into();
+        return Vec::new();
     }
 
     let page_label = app
@@ -656,37 +910,50 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Element<'a, Message> {
     .padding(8)
     .style(ui_style::tooltip_popup);
 
-    row![
-        text(page_label)
-            .size(ui_style::FONT_SIZE_UI_XS)
-            .font(iced::Font::MONOSPACE),
-        row![prev_button, next_button]
+    vec![
+        HeaderControlGroup {
+            min_width: 78.0,
+            content: text(page_label)
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .font(iced::Font::MONOSPACE)
+                .into(),
+        },
+        HeaderControlGroup {
+            min_width: 78.0,
+            content: row![prev_button, next_button]
+                .spacing(ui_style::SPACE_XS)
+                .align_y(alignment::Vertical::Center)
+                .into(),
+        },
+        HeaderControlGroup {
+            min_width: 156.0,
+            content: row![
+                text("⌕")
+                    .size(ui_style::FONT_SIZE_BODY_SM)
+                    .font(iced::Font::MONOSPACE),
+                zoom_out_button,
+                zoom_value,
+                zoom_in_button
+            ]
             .spacing(ui_style::SPACE_XS)
-            .align_y(alignment::Vertical::Center),
-        row![
-            text("⌕")
-                .size(ui_style::FONT_SIZE_BODY_SM)
-                .font(iced::Font::MONOSPACE),
-            zoom_out_button,
-            zoom_value,
-            zoom_in_button
-        ]
-        .spacing(ui_style::SPACE_XS)
-        .align_y(alignment::Vertical::Center),
-        row![
-            text("◐")
-                .size(ui_style::FONT_SIZE_UI_SM)
-                .font(iced::Font::MONOSPACE),
-            brightness_down_button,
-            brightness_value,
-            brightness_up_button
-        ]
-        .spacing(ui_style::SPACE_XS)
-        .align_y(alignment::Vertical::Center),
+            .align_y(alignment::Vertical::Center)
+            .into(),
+        },
+        HeaderControlGroup {
+            min_width: 164.0,
+            content: row![
+                text("◐")
+                    .size(ui_style::FONT_SIZE_UI_SM)
+                    .font(iced::Font::MONOSPACE),
+                brightness_down_button,
+                brightness_value,
+                brightness_up_button
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center)
+            .into(),
+        },
     ]
-    .spacing(ui_style::SPACE_SM)
-    .align_y(alignment::Vertical::Center)
-    .into()
 }
 
 fn score_body(app: &LilyView) -> Element<'_, Message> {

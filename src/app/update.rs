@@ -310,12 +310,15 @@ impl LilyView {
                 self.panes.resize(event.split, ratio);
             }
             PaneMessage::WorkspaceResized(event) => {
-                self.workspace_panes.resize(event.split, event.ratio);
+                let ratio = self.constrained_workspace_split_ratio(event.split, event.ratio);
+                self.workspace_panes.resize(event.split, ratio);
+                self.open_header_overflow_menu = None;
                 self.sync_dock_layout_from_workspace_state();
                 self.persist_settings();
             }
             PaneMessage::WorkspaceTabPressed(kind) => {
                 self.set_active_workspace_pane(kind);
+                self.open_header_overflow_menu = None;
                 self.pressed_workspace_pane = Some(kind);
                 self.workspace_drag_origin = None;
                 self.dock_drop_target = None;
@@ -324,12 +327,20 @@ impl LilyView {
             PaneMessage::WorkspaceTabHovered(kind) => {
                 self.hovered_workspace_pane = kind;
             }
+            PaneMessage::OpenHeaderOverflowMenu(group_id) => {
+                self.open_header_overflow_menu = Some(group_id);
+            }
+            PaneMessage::CloseHeaderOverflowMenu => {
+                self.open_header_overflow_menu = None;
+            }
             PaneMessage::FoldWorkspacePane(pane) => {
+                self.open_header_overflow_menu = None;
                 if self.fold_workspace_pane(pane) {
                     self.persist_settings();
                 }
             }
             PaneMessage::UnfoldWorkspacePane(pane) => {
+                self.open_header_overflow_menu = None;
                 if self.unfold_workspace_pane(pane) {
                     self.persist_settings();
                     if pane == WorkspacePaneKind::PianoRoll {
@@ -847,6 +858,36 @@ impl LilyView {
     fn sync_dock_layout_from_workspace_state(&mut self) {
         if let Some(layout) = dock_node_from_workspace_state(&self.workspace_panes) {
             self.dock_layout = layout;
+        }
+    }
+
+    fn constrained_workspace_split_ratio(&self, split: pane_grid::Split, ratio: f32) -> f32 {
+        let split_regions =
+            self.workspace_panes
+                .layout()
+                .split_regions(0.0, 0.0, self.workspace_area_size());
+        let Some((axis, region, _)) = split_regions.get(&split).copied() else {
+            return ratio.clamp(0.05, 0.95);
+        };
+
+        if axis != pane_grid::Axis::Vertical {
+            return ratio.clamp(0.05, 0.95);
+        }
+
+        let Some((first, second)) = split_children(self.workspace_panes.layout(), split) else {
+            return ratio.clamp(0.05, 0.95);
+        };
+
+        let total_width = region.width.max(1.0);
+        let min_first = dock_node_min_width(first, &self.workspace_panes, self).min(total_width);
+        let min_second = dock_node_min_width(second, &self.workspace_panes, self).min(total_width);
+        let min_ratio = (min_first / total_width).clamp(0.05, 0.95);
+        let max_ratio = (1.0 - min_second / total_width).clamp(0.05, 0.95);
+
+        if min_ratio > max_ratio {
+            ratio.clamp(0.05, 0.95)
+        } else {
+            ratio.clamp(min_ratio, max_ratio)
         }
     }
 
@@ -1678,6 +1719,44 @@ fn collect_workspace_group_bounds(
                 );
             }
         },
+    }
+}
+
+fn split_children(
+    node: &pane_grid::Node,
+    split: pane_grid::Split,
+) -> Option<(&pane_grid::Node, &pane_grid::Node)> {
+    match node {
+        pane_grid::Node::Pane(_) => None,
+        pane_grid::Node::Split { id, a, b, .. } => {
+            if *id == split {
+                Some((a.as_ref(), b.as_ref()))
+            } else {
+                split_children(a, split).or_else(|| split_children(b, split))
+            }
+        }
+    }
+}
+
+fn dock_node_min_width(
+    node: &pane_grid::Node,
+    state: &pane_grid::State<DockGroupId>,
+    app: &LilyView,
+) -> f32 {
+    match node {
+        pane_grid::Node::Pane(pane) => state
+            .get(*pane)
+            .map(|group_id| super::score_view::workspace_group_min_width(app, *group_id))
+            .unwrap_or(0.0),
+        pane_grid::Node::Split { axis, a, b, .. } => {
+            let first = dock_node_min_width(a, state, app);
+            let second = dock_node_min_width(b, state, app);
+
+            match axis {
+                pane_grid::Axis::Horizontal => first.max(second),
+                pane_grid::Axis::Vertical => first + second,
+            }
+        }
     }
 }
 

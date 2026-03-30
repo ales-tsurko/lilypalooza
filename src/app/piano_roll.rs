@@ -9,7 +9,7 @@ use iced::{
     mouse,
 };
 
-use super::{LilyView, Message, PianoRollMessage};
+use super::{LilyView, Message, PianoRollMessage, score_view::HeaderControlGroup};
 use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
 use crate::settings::PianoRollViewSettings;
 use crate::ui_style;
@@ -399,7 +399,7 @@ pub(super) fn roll_scroll_id() -> iced::widget::Id {
     iced::widget::Id::new(ROLL_SCROLL_ID)
 }
 
-pub(super) fn controls<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
+pub(super) fn controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
     let state = &app.piano_roll;
     let can_toggle_tracks = state
         .current_file()
@@ -420,11 +420,6 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
     } else {
         track_toggle_button
     };
-
-    let mut controls = row![]
-        .spacing(ui_style::SPACE_SM)
-        .align_y(alignment::Vertical::Center);
-    controls = controls.push(track_toggle_button);
 
     let zoom_out_button = button(text("−").size(ui_style::FONT_SIZE_UI_SM))
         .style(ui_style::button_neutral)
@@ -467,8 +462,9 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
         .size(Pixels(ui_style::FONT_SIZE_UI_XS as f32))
         .width(Length::Fixed(44.0));
 
-    controls = controls.push(
-        row![
+    let zoom_group = HeaderControlGroup {
+        min_width: 154.0,
+        content: row![
             text("Zoom").size(ui_style::FONT_SIZE_UI_XS),
             zoom_out_button,
             {
@@ -494,18 +490,30 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
             zoom_in_button,
         ]
         .spacing(ui_style::SPACE_XS)
-        .align_y(alignment::Vertical::Center),
-    );
+        .align_y(alignment::Vertical::Center)
+        .into(),
+    };
 
-    controls = controls.push(
-        row![
+    let beat_subdiv_group = HeaderControlGroup {
+        min_width: 228.0,
+        content: row![
             text("Beat Subdiv").size(ui_style::FONT_SIZE_UI_XS),
             subdivision_slider,
             subdivision_input,
         ]
         .spacing(ui_style::SPACE_XS)
-        .align_y(alignment::Vertical::Center),
-    );
+        .align_y(alignment::Vertical::Center)
+        .into(),
+    };
+
+    let mut controls = vec![
+        HeaderControlGroup {
+            min_width: 68.0,
+            content: track_toggle_button.into(),
+        },
+        zoom_group,
+        beat_subdiv_group,
+    ];
 
     if state.has_multiple_files() {
         let prev_file_button = button(text("←").size(ui_style::FONT_SIZE_UI_SM))
@@ -529,8 +537,9 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
             .map(|file| file.file_name.as_str())
             .unwrap_or("No MIDI");
 
-        controls = controls.push(
-            row![
+        controls.push(HeaderControlGroup {
+            min_width: 182.0,
+            content: row![
                 text("MIDI").size(ui_style::FONT_SIZE_UI_XS),
                 prev_file_button,
                 text(file_name)
@@ -539,8 +548,9 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
                 next_file_button,
             ]
             .spacing(ui_style::SPACE_XS)
-            .align_y(alignment::Vertical::Center),
-        );
+            .align_y(alignment::Vertical::Center)
+            .into(),
+        });
     }
 
     controls

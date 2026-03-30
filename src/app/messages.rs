@@ -28,6 +28,8 @@ pub(super) enum PaneMessage {
     WorkspaceResized(pane_grid::ResizeEvent),
     WorkspaceTabPressed(WorkspacePaneKind),
     WorkspaceTabHovered(Option<WorkspacePaneKind>),
+    OpenHeaderOverflowMenu(u64),
+    CloseHeaderOverflowMenu,
     FoldWorkspacePane(WorkspacePaneKind),
     UnfoldWorkspacePane(WorkspacePaneKind),
     WorkspaceDragMoved(iced::Point),
