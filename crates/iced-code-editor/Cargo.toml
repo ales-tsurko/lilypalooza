@@ -1,0 +1,33 @@
+[package]
+name = "iced-code-editor"
+description = "A custom code editor widget for the Iced GUI framework with syntax highlighting, line numbers, and scrolling support."
+version = "0.3.7"
+authors = ["LuDog71 <ludog71.trekker238@passmail.net>", "lily-view contributors"]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/LuDog71FR/iced-code-editor"
+homepage = "https://github.com/LuDog71FR/iced-code-editor"
+documentation = "https://docs.rs/iced-code-editor"
+readme = "README.md"
+keywords = ["gui", "interface", "widgets", "iced", "editor"]
+categories = ["gui"]
+
+[features]
+lsp-process = ["dep:serde_json"]
+
+[dependencies]
+iced = { version = "0.14", features = ["advanced", "highlighter", "canvas", "markdown"] }
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+web-time = "1"
+iced_font_awesome = "0.4"
+iced_aw = "0.13"
+rust-i18n = "3"
+unicode-width = "0.2.2"
+serde_json = { version = "1", optional = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

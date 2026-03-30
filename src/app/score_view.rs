@@ -12,7 +12,7 @@ use iced_core::image;
 
 use super::{
     DockDropRegion, LilyView, Message, PaneMessage, ScoreCursorPlacement, ViewerMessage,
-    WorkspacePaneKind, editor, piano_roll, transport_bar,
+    WorkspacePaneKind, piano_roll, transport_bar,
 };
 use crate::{icons, ui_style};
 
@@ -183,9 +183,9 @@ fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
                 {
                     WorkspacePaneKind::Score => score_body(app),
                     WorkspacePaneKind::PianoRoll => piano_roll::content(app),
-                    WorkspacePaneKind::Editor => editor::content(&app.editor, |action| {
-                        Message::Editor(super::EditorMessage::Action(action))
-                    }),
+                    WorkspacePaneKind::Editor => app
+                        .editor
+                        .view(|message| Message::Editor(super::EditorMessage::Widget(message))),
                     WorkspacePaneKind::Logger => app
                         .logger
                         .view(|action| Message::Logger(super::LoggerMessage::TextAction(action))),
@@ -703,7 +703,7 @@ fn pane_header_control_groups<'a>(
     match pane {
         WorkspacePaneKind::Score => score_controls(app),
         WorkspacePaneKind::PianoRoll => piano_roll::controls(app),
-        WorkspacePaneKind::Editor => Vec::new(),
+        WorkspacePaneKind::Editor => editor_controls(app),
         WorkspacePaneKind::Logger => logger_controls(app),
     }
 }
@@ -712,7 +712,7 @@ fn pane_header_has_controls(app: &LilyView, pane: WorkspacePaneKind) -> bool {
     match pane {
         WorkspacePaneKind::Score => app.current_score.is_some(),
         WorkspacePaneKind::PianoRoll => true,
-        WorkspacePaneKind::Editor => false,
+        WorkspacePaneKind::Editor => app.editor.has_document(),
         WorkspacePaneKind::Logger => true,
     }
 }
@@ -1103,6 +1103,78 @@ fn logger_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
     }]
 }
 
+fn editor_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
+    if !app.editor.has_document() {
+        return Vec::new();
+    }
+
+    let file_name = app.editor.file_name().unwrap_or("Editor");
+    let file_label = if app.editor.is_dirty() {
+        format!("{file_name} *")
+    } else {
+        file_name.to_string()
+    };
+
+    let reload_button = button(compact_control_icon(icons::refresh_cw()))
+        .style(ui_style::button_neutral)
+        .padding([
+            ui_style::PADDING_BUTTON_COMPACT_V,
+            ui_style::PADDING_BUTTON_COMPACT_H,
+        ]);
+    let reload_button = if app.editor.is_dirty() {
+        reload_button
+    } else {
+        reload_button.on_press(Message::Editor(super::EditorMessage::ReloadRequested))
+    };
+
+    let save_button = button(compact_control_icon(icons::save()))
+        .style(ui_style::button_neutral)
+        .padding([
+            ui_style::PADDING_BUTTON_COMPACT_V,
+            ui_style::PADDING_BUTTON_COMPACT_H,
+        ]);
+    let save_button = if app.editor.is_dirty() {
+        save_button.on_press(Message::Editor(super::EditorMessage::SaveRequested))
+    } else {
+        save_button
+    };
+
+    vec![
+        HeaderControlGroup {
+            min_width: 120.0,
+            content: text(file_label)
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .font(iced::Font::MONOSPACE)
+                .into(),
+        },
+        HeaderControlGroup {
+            min_width: 72.0,
+            content: row![
+                Tooltip::new(
+                    reload_button,
+                    text("Reload from disk").size(ui_style::FONT_SIZE_UI_XS),
+                    tooltip::Position::Top,
+                )
+                .gap(6)
+                .padding(8)
+                .style(ui_style::tooltip_popup),
+                Tooltip::new(
+                    save_button,
+                    text(format!("Save ({})", editor_save_shortcut_label()))
+                        .size(ui_style::FONT_SIZE_UI_XS),
+                    tooltip::Position::Top,
+                )
+                .gap(6)
+                .padding(8)
+                .style(ui_style::tooltip_popup),
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center)
+            .into(),
+        },
+    ]
+}
+
 fn compact_control_icon(icon: svg::Handle) -> Element<'static, Message> {
     container(
         svg(icon)
@@ -1116,6 +1188,18 @@ fn compact_control_icon(icon: svg::Handle) -> Element<'static, Message> {
     .center_x(Length::Fixed(12.0))
     .center_y(Length::Fixed(12.0))
     .into()
+}
+
+fn editor_save_shortcut_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "Cmd+S"
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Ctrl+S"
+    }
 }
 
 fn score_body(app: &LilyView) -> Element<'_, Message> {

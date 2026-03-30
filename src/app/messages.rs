@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use iced::time::Instant;
 use iced::widget::{pane_grid, text_editor};
 use iced::{Size, keyboard, mouse};
+use iced_code_editor::Message as EditorWidgetMessage;
 use iced_core::image;
 
 use super::WorkspacePaneKind;
@@ -55,7 +56,9 @@ pub(super) enum FileMessage {
 
 #[derive(Debug, Clone)]
 pub(super) enum EditorMessage {
-    Action(text_editor::Action),
+    Widget(EditorWidgetMessage),
+    SaveRequested,
+    ReloadRequested,
 }
 
 #[derive(Debug, Clone)]

@@ -376,7 +376,7 @@ fn subscription(app: &LilyView) -> Subscription<Message> {
         event::listen_with(runtime_event_to_message),
     ];
 
-    if app.compile_session.is_some() || app.score_watcher.is_some() {
+    if app.compile_session.is_some() || app.score_watcher.is_some() || app.editor.has_document() {
         subscriptions.push(iced::time::every(BACKGROUND_POLL_INTERVAL).map(|_| Message::Tick));
     }
 
@@ -407,11 +407,22 @@ fn runtime_event_to_message(
             modifiers,
             ..
         }) => {
+            let has_primary_modifier = modifiers.command() || modifiers.control();
+
+            if has_primary_modifier
+                && matches!(
+                    physical_key,
+                    keyboard::key::Physical::Code(keyboard::key::Code::KeyS)
+                )
+            {
+                return Some(Message::Editor(EditorMessage::SaveRequested));
+            }
+
             if matches!(status, event::Status::Captured) {
                 return None;
             }
 
-            let has_zoom_modifier = modifiers.command() || modifiers.control();
+            let has_zoom_modifier = has_primary_modifier;
             if has_zoom_modifier {
                 match modified_key.as_ref() {
                     keyboard::Key::Character("+") | keyboard::Key::Character("=") => {

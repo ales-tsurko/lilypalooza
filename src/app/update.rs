@@ -329,8 +329,62 @@ impl LilyView {
 
     fn handle_editor_message(&mut self, message: EditorMessage) -> Task<Message> {
         match message {
-            EditorMessage::Action(action) => {
-                self.editor.handle_action(action);
+            EditorMessage::Widget(message) => self
+                .editor
+                .update(&message)
+                .map(|message| Message::Editor(EditorMessage::Widget(message))),
+            EditorMessage::SaveRequested => {
+                if !self.editor.has_document() {
+                    return Task::none();
+                }
+
+                match self.editor.save_to_disk() {
+                    Ok(path) => {
+                        self.logger.push(format!("Saved {}", path.display()));
+                        self.queue_compile("Editor saved, recompiling");
+                        self.start_compile_if_queued();
+                    }
+                    Err(error) => {
+                        self.show_prompt(
+                            ErrorPrompt::new(
+                                "Editor Save Error",
+                                error,
+                                ErrorFatality::Recoverable,
+                                PromptButtons::Ok,
+                            ),
+                            None,
+                        );
+                    }
+                }
+
+                Task::none()
+            }
+            EditorMessage::ReloadRequested => {
+                if !self.editor.has_document() {
+                    return Task::none();
+                }
+
+                match self.editor.reload_from_disk() {
+                    Ok(()) => {
+                        if let Some(file_name) = self.editor.file_name() {
+                            self.logger.push(format!("Reloaded {file_name}"));
+                        } else {
+                            self.logger.push("Reloaded editor file");
+                        }
+                    }
+                    Err(error) => {
+                        self.show_prompt(
+                            ErrorPrompt::new(
+                                "Editor Reload Error",
+                                error,
+                                ErrorFatality::Recoverable,
+                                PromptButtons::Ok,
+                            ),
+                            None,
+                        );
+                    }
+                }
+
                 Task::none()
             }
         }
@@ -558,6 +612,14 @@ impl LilyView {
     fn handle_tick(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
 
+        if self.editor.has_document() {
+            tasks.push(
+                self.editor
+                    .update(&iced_code_editor::Message::Tick)
+                    .map(|message| Message::Editor(EditorMessage::Widget(message))),
+            );
+        }
+
         if self.compile_session.is_some() || self.score_watcher.is_some() {
             self.spinner_step = self.spinner_step.wrapping_add(1);
             self.poll_score_watcher();
@@ -588,6 +650,17 @@ impl LilyView {
 
     fn activate_score(&mut self, selected_score: SelectedScore) {
         let watched_path = selected_score.path.clone();
+        if let Err(error) = self.editor.load_file(&watched_path) {
+            self.show_prompt(
+                ErrorPrompt::new(
+                    "Editor Load Error",
+                    error,
+                    ErrorFatality::Recoverable,
+                    PromptButtons::Ok,
+                ),
+                None,
+            );
+        }
         self.logger.push(format!(
             "Opened score file {}",
             selected_score.path.display()

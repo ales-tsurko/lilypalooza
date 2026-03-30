@@ -3,11 +3,15 @@ name = "lily-view"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = ["crates/iced-code-editor"]
+
 [dependencies]
 cpal = "0.16.0"
 directories = "5.0.1"
 iced = { version = "0.14", features = ["canvas", "image", "tokio", "svg"] }
 iced_core = "0.14.0"
+iced-code-editor = { path = "crates/iced-code-editor" }
 midi-player = "0.2.3"
 notify = "8.2.0"
 resvg = "0.45.1"
@@ -17,16 +21,19 @@ serde = { version = "1.0", features = ["derive"] }
 tempfile = "3.25.0"
 thiserror = "2.0.18"
 
-[lints.rust]
+[lints]
+workspace = true
+
+[workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
 rust_2018_idioms = { level = "warn", priority = -1 }
 
-[lints.rustdoc]
+[workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 bare_urls = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 dbg_macro = "warn"
 todo = "warn"
 unwrap_used = "warn"

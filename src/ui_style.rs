@@ -205,19 +205,6 @@ pub(crate) fn logger_text_editor(theme: &Theme, status: text_editor::Status) -> 
     style
 }
 
-pub(crate) fn editor_text_editor(theme: &Theme, status: text_editor::Status) -> text_editor::Style {
-    let palette = theme.extended_palette();
-
-    let mut style = text_editor::default(theme, status);
-    style.background = palette.background.base.color.into();
-    style.border = border::rounded(0).width(0);
-    style.placeholder = palette.background.strong.color;
-    style.value = palette.background.base.text;
-    style.selection = palette.primary.weak.color;
-
-    style
-}
-
 pub(crate) fn status_bar_surface(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
 

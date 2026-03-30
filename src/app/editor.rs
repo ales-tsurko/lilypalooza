@@ -1,48 +1,113 @@
-use iced::widget::{container, scrollable, text_editor};
-use iced::{Element, Fill, Font};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use iced::widget::{container, text};
+use iced::{Element, Fill};
+use iced_code_editor::{CodeEditor, Message as EditorWidgetMessage};
 
 use crate::ui_style;
 
-#[derive(Debug, Default)]
+const EMPTY_EDITOR_MESSAGE: &str = "Open a LilyPond score to edit its source here.";
+
 pub(super) struct EditorState {
-    content: text_editor::Content,
+    widget: CodeEditor,
+    path: Option<PathBuf>,
 }
 
 impl EditorState {
     pub(super) fn new() -> Self {
         Self {
-            content: text_editor::Content::new(),
+            widget: build_editor("", "text"),
+            path: None,
         }
     }
 
-    pub(super) fn handle_action(&mut self, action: text_editor::Action) {
-        self.content.perform(action);
+    pub(super) fn update(
+        &mut self,
+        message: &EditorWidgetMessage,
+    ) -> iced::Task<EditorWidgetMessage> {
+        self.widget.update(message)
+    }
+
+    pub(super) fn load_file(&mut self, path: &Path) -> Result<(), String> {
+        let text = fs::read_to_string(path)
+            .map_err(|error| format!("Failed to read editor file {}: {error}", path.display()))?;
+
+        self.widget = build_editor(&text, syntax_for_path(path));
+        self.widget.mark_saved();
+        self.path = Some(path.to_path_buf());
+
+        Ok(())
+    }
+
+    pub(super) fn reload_from_disk(&mut self) -> Result<(), String> {
+        let Some(path) = self.path.clone() else {
+            return Err("No editor file is currently loaded".to_string());
+        };
+
+        self.load_file(&path)
+    }
+
+    pub(super) fn save_to_disk(&mut self) -> Result<PathBuf, String> {
+        let Some(path) = self.path.clone() else {
+            return Err("No editor file is currently loaded".to_string());
+        };
+
+        fs::write(&path, self.widget.content())
+            .map_err(|error| format!("Failed to save editor file {}: {error}", path.display()))?;
+        self.widget.mark_saved();
+
+        Ok(path)
+    }
+
+    pub(super) fn has_document(&self) -> bool {
+        self.path.is_some()
+    }
+
+    pub(super) fn is_dirty(&self) -> bool {
+        self.widget.is_modified()
+    }
+
+    pub(super) fn file_name(&self) -> Option<&str> {
+        self.path
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(|file_name| file_name.to_str())
+    }
+
+    pub(super) fn view<'a, Message>(
+        &'a self,
+        map_message: impl Fn(EditorWidgetMessage) -> Message + 'a,
+    ) -> Element<'a, Message>
+    where
+        Message: Clone + 'a,
+    {
+        if !self.has_document() {
+            return container(text(EMPTY_EDITOR_MESSAGE).size(ui_style::FONT_SIZE_BODY_MD))
+                .width(Fill)
+                .height(Fill)
+                .center_x(Fill)
+                .center_y(Fill)
+                .into();
+        }
+
+        container(self.widget.view().map(map_message))
+            .width(Fill)
+            .height(Fill)
+            .style(ui_style::pane_main_surface)
+            .into()
     }
 }
 
-pub(super) fn content<'a, Message>(
-    state: &'a EditorState,
-    on_action: impl Fn(text_editor::Action) -> Message + 'a,
-) -> Element<'a, Message>
-where
-    Message: Clone + 'a,
-{
-    let editor = text_editor(&state.content)
-        .placeholder("Editor")
-        .on_action(on_action)
-        .font(Font::MONOSPACE)
-        .size(ui_style::FONT_SIZE_BODY_SM)
-        .padding(ui_style::PADDING_XS)
-        .style(ui_style::editor_text_editor);
+fn build_editor(content: &str, syntax: &str) -> CodeEditor {
+    let mut editor = CodeEditor::new(content, syntax).with_wrap_enabled(false);
+    editor.set_font_size(ui_style::FONT_SIZE_BODY_SM as f32, true);
+    editor.set_lsp_enabled(false);
+    editor
+}
 
-    container(
-        scrollable(editor)
-            .height(Fill)
-            .width(Fill)
-            .style(ui_style::workspace_scrollable),
-    )
-    .width(Fill)
-    .height(Fill)
-    .style(ui_style::pane_main_surface)
-    .into()
+fn syntax_for_path(path: &Path) -> &str {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("text")
 }

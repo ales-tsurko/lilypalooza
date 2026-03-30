@@ -12,6 +12,8 @@ const PLAY: &[u8] = include_bytes!("../assets/icons/play.svg");
 const PAUSE: &[u8] = include_bytes!("../assets/icons/pause.svg");
 const FILE_PEN: &[u8] = include_bytes!("../assets/icons/file-pen.svg");
 const LIST_MUSIC: &[u8] = include_bytes!("../assets/icons/list-music.svg");
+const REFRESH_CW: &[u8] = include_bytes!("../assets/icons/refresh-cw.svg");
+const SAVE: &[u8] = include_bytes!("../assets/icons/save.svg");
 const SCROLL_TEXT: &[u8] = include_bytes!("../assets/icons/scroll-text.svg");
 const SKIP_BACK: &[u8] = include_bytes!("../assets/icons/skip-back.svg");
 
@@ -61,6 +63,14 @@ pub(crate) fn file_pen() -> svg::Handle {
 
 pub(crate) fn list_music() -> svg::Handle {
     svg::Handle::from_memory(LIST_MUSIC)
+}
+
+pub(crate) fn refresh_cw() -> svg::Handle {
+    svg::Handle::from_memory(REFRESH_CW)
+}
+
+pub(crate) fn save() -> svg::Handle {
+    svg::Handle::from_memory(SAVE)
 }
 
 pub(crate) fn scroll_text() -> svg::Handle {
