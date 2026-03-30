@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 
 use iced::widget::{
-    Tooltip, button, canvas, column, container, mouse_area, row, scrollable, slider, stack, text,
-    text_input, tooltip,
+    Tooltip, button, canvas, column, container, mouse_area, row, scrollable, slider, stack, svg,
+    text, text_input, tooltip,
 };
 use iced::{
-    Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme, alignment,
-    mouse,
+    Color, ContentFit, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size,
+    Theme, alignment, mouse,
 };
 
 use super::{LilyView, Message, PianoRollMessage, score_view::HeaderControlGroup};
 use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
 use crate::settings::PianoRollViewSettings;
-use crate::ui_style;
+use crate::{icons, ui_style};
 
 const TRACK_PANEL_DEFAULT_WIDTH: f32 = 96.0;
 const TRACK_PANEL_MIN_WIDTH: f32 = 92.0;
@@ -35,6 +35,7 @@ const TEMPO_LABEL_TOP_PADDING: f32 = 1.0;
 const BAR_LABEL_BOTTOM_PADDING: f32 = 1.0;
 const NOTE_ROW_HEIGHT: f32 = 14.0;
 const CONTENT_RIGHT_PADDING: f32 = 24.0;
+const TRACK_TOGGLE_ICON_SIZE: f32 = 13.0;
 const ZOOM_MIN: f32 = 0.3;
 const ZOOM_MAX: f32 = 6.0;
 const ZOOM_STEP: f32 = 0.1;
@@ -405,21 +406,47 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
         .current_file()
         .is_some_and(|file| file.data.tracks.len() > 1);
 
-    let track_toggle_button = button(text("Tracks").size(ui_style::FONT_SIZE_UI_XS))
-        .style(if can_toggle_tracks && state.track_panel_visible() {
-            ui_style::button_active
-        } else {
-            ui_style::button_neutral
-        })
-        .padding([
-            ui_style::PADDING_BUTTON_COMPACT_V,
-            ui_style::PADDING_BUTTON_COMPACT_H,
-        ]);
+    let track_toggle_button = button(
+        svg(icons::list_music())
+            .width(Length::Fixed(TRACK_TOGGLE_ICON_SIZE))
+            .height(Length::Fixed(TRACK_TOGGLE_ICON_SIZE))
+            .content_fit(ContentFit::Contain)
+            .style(move |theme: &Theme, status| {
+                let palette = theme.extended_palette();
+                svg::Style {
+                    color: Some(if can_toggle_tracks && state.track_panel_visible() {
+                        match status {
+                            svg::Status::Idle => palette.background.weakest.text,
+                            svg::Status::Hovered => palette.background.base.text,
+                        }
+                    } else {
+                        match status {
+                            svg::Status::Idle => palette.background.base.text,
+                            svg::Status::Hovered => palette.primary.weak.text,
+                        }
+                    }),
+                }
+            }),
+    )
+    .style(if can_toggle_tracks && state.track_panel_visible() {
+        ui_style::button_toolbar_toggle_active
+    } else {
+        ui_style::button_neutral
+    })
+    .padding([6, 7]);
     let track_toggle_button = if can_toggle_tracks {
         track_toggle_button.on_press(Message::PianoRoll(PianoRollMessage::TrackPanelToggle))
     } else {
         track_toggle_button
     };
+    let track_toggle_button = Tooltip::new(
+        track_toggle_button,
+        text("Tracks").size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Top,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup);
 
     let zoom_out_button = button(text("−").size(ui_style::FONT_SIZE_UI_SM))
         .style(ui_style::button_neutral)
@@ -508,7 +535,7 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
 
     let mut controls = vec![
         HeaderControlGroup {
-            min_width: 68.0,
+            min_width: 34.0,
             content: track_toggle_button.into(),
         },
         zoom_group,
