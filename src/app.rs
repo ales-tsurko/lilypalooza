@@ -13,7 +13,9 @@ use crate::lilypond;
 use crate::logger::Logger;
 use crate::playback::MidiPlayback;
 use crate::score_watcher::ScoreWatcher;
-use crate::settings::{self, AppSettings, DockAxis, DockNodeSettings};
+use crate::settings::{
+    self, AppSettings, DockAxis, DockNodeSettings, FoldedPaneRestoreSettings, FoldedPaneSettings,
+};
 
 use messages::{
     EditorMessage, FileMessage, LoggerMessage, Message, PaneMessage, PianoRollMessage,
@@ -37,7 +39,6 @@ const MIN_WINDOW_WIDTH: f32 = 960.0;
 const MIN_WINDOW_HEIGHT: f32 = 640.0;
 const LOGGER_DEFAULT_SPLIT_RATIO: f32 = 0.74;
 const MIN_LOGGER_PANEL_HEIGHT: f32 = 140.0;
-const PIANO_COLLAPSED_PANEL_HEIGHT: f32 = piano_roll::COLLAPSED_HEIGHT;
 const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_millis(120);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
 pub(super) const KEYBOARD_SCROLL_STEP: f32 = 84.0;
@@ -77,6 +78,7 @@ struct LilyView {
     dock_layout: DockNode,
     dock_groups: HashMap<DockGroupId, DockGroup>,
     next_dock_group_id: DockGroupId,
+    folded_panes: Vec<FoldedPaneState>,
     hovered_workspace_pane: Option<WorkspacePaneKind>,
     pressed_workspace_pane: Option<WorkspacePaneKind>,
     workspace_drag_origin: Option<Point>,
@@ -87,7 +89,6 @@ struct LilyView {
     score_cursor_maps: Option<ScoreCursorMaps>,
     score_cursor_overlay: Option<ScoreCursorPlacement>,
     piano_roll: PianoRollState,
-    piano_roll_expanded_ratio: f32,
     svg_zoom: f32,
     svg_page_brightness: u8,
     svg_scroll_x: f32,
@@ -145,6 +146,24 @@ enum PaneKind {
 struct DockGroup {
     tabs: Vec<WorkspacePaneKind>,
     active: WorkspacePaneKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FoldedPaneState {
+    pane: WorkspacePaneKind,
+    restore: FoldedPaneRestore,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FoldedPaneRestore {
+    Tab {
+        anchor: WorkspacePaneKind,
+    },
+    Split {
+        anchor: WorkspacePaneKind,
+        axis: pane_grid::Axis,
+        insert_first: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -223,12 +242,24 @@ fn new(
 
     let (dock_layout, dock_groups, next_dock_group_id, workspace_panes) =
         build_dock_runtime(&stored_settings.workspace_layout.root);
-    let piano_roll_visible =
-        if workspace_pane_is_tabbed_in_groups(&dock_groups, WorkspacePaneKind::PianoRoll) {
-            true
-        } else {
-            stored_settings.workspace_layout.piano_visible
-        };
+    let mut folded_panes: Vec<_> = stored_settings
+        .workspace_layout
+        .folded_panes
+        .iter()
+        .copied()
+        .map(folded_pane_from_settings)
+        .collect();
+    if folded_panes.is_empty() && !stored_settings.workspace_layout.piano_visible {
+        folded_panes.push(FoldedPaneState {
+            pane: WorkspacePaneKind::PianoRoll,
+            restore: FoldedPaneRestore::Tab {
+                anchor: WorkspacePaneKind::Score,
+            },
+        });
+    }
+    let piano_roll_visible = !folded_panes
+        .iter()
+        .any(|folded| folded.pane == WorkspacePaneKind::PianoRoll);
 
     let mut piano_roll = PianoRollState::new(default_settings.piano_roll_view);
     piano_roll.visible = piano_roll_visible;
@@ -261,6 +292,7 @@ fn new(
         dock_layout,
         dock_groups,
         next_dock_group_id,
+        folded_panes,
         hovered_workspace_pane: None,
         pressed_workspace_pane: None,
         workspace_drag_origin: None,
@@ -271,7 +303,6 @@ fn new(
         score_cursor_maps: None,
         score_cursor_overlay: None,
         piano_roll,
-        piano_roll_expanded_ratio: 0.70,
         svg_zoom: stored_settings
             .score_view
             .zoom
@@ -287,13 +318,6 @@ fn new(
         keyboard_modifiers: keyboard::Modifiers::default(),
         default_settings,
     };
-
-    if app.piano_roll.visible
-        && let Some(group_id) = app.group_for_pane(WorkspacePaneKind::PianoRoll)
-        && let Some((_, _, ratio)) = app.parent_split_for_group(group_id)
-    {
-        app.piano_roll_expanded_ratio = ratio;
-    }
 
     app.logger.push("Checking LilyPond availability");
     if let Some(path) = startup_soundfont.as_ref() {
@@ -443,22 +467,23 @@ impl LilyView {
             .find_map(|(group_id, group)| group.tabs.contains(&pane).then_some(*group_id))
     }
 
-    pub(super) fn workspace_pane_is_tabbed(&self, pane: WorkspacePaneKind) -> bool {
-        self.group_for_pane(pane)
-            .and_then(|group_id| self.workspace_group(group_id))
-            .is_some_and(|group| group.tabs.len() > 1)
+    pub(super) fn folded_panes(&self) -> &[FoldedPaneState] {
+        &self.folded_panes
     }
 
-    pub(super) fn piano_roll_effectively_visible(&self) -> bool {
-        !self.can_fold_piano_roll() || self.piano_roll.visible
+    pub(super) fn is_pane_folded(&self, pane: WorkspacePaneKind) -> bool {
+        self.folded_panes.iter().any(|folded| folded.pane == pane)
     }
 
-    pub(super) fn can_fold_piano_roll(&self) -> bool {
-        !self.workspace_pane_is_tabbed(WorkspacePaneKind::PianoRoll)
-            && self
-                .group_for_pane(WorkspacePaneKind::PianoRoll)
-                .and_then(|group_id| self.parent_split_for_group(group_id))
-                .is_some()
+    pub(super) fn can_fold_workspace_pane(&self, pane: WorkspacePaneKind) -> bool {
+        !self.is_pane_folded(pane) && self.workspace_visible_pane_count() > 1
+    }
+
+    fn workspace_visible_pane_count(&self) -> usize {
+        self.dock_groups
+            .values()
+            .map(|group| group.tabs.len())
+            .sum()
     }
 
     pub(super) fn workspace_area_size(&self) -> Size {
@@ -481,13 +506,6 @@ impl LilyView {
             self.logger_pane.is_some(),
             self.logger_ratio,
         )
-    }
-
-    fn parent_split_for_group(
-        &self,
-        group_id: DockGroupId,
-    ) -> Option<(pane_grid::Axis, bool, f32)> {
-        parent_split_for_group(&self.dock_layout, group_id)
     }
 }
 
@@ -596,43 +614,46 @@ fn pane_grid_axis_from_settings(axis: DockAxis) -> pane_grid::Axis {
     }
 }
 
+fn folded_pane_from_settings(settings: FoldedPaneSettings) -> FoldedPaneState {
+    FoldedPaneState {
+        pane: settings.pane,
+        restore: match settings.restore {
+            FoldedPaneRestoreSettings::Tab { anchor } => FoldedPaneRestore::Tab { anchor },
+            FoldedPaneRestoreSettings::Split {
+                anchor,
+                axis,
+                insert_first,
+            } => FoldedPaneRestore::Split {
+                anchor,
+                axis: pane_grid_axis_from_settings(axis),
+                insert_first,
+            },
+        },
+    }
+}
+
+fn folded_pane_to_settings(state: FoldedPaneState) -> FoldedPaneSettings {
+    FoldedPaneSettings {
+        pane: state.pane,
+        restore: match state.restore {
+            FoldedPaneRestore::Tab { anchor } => FoldedPaneRestoreSettings::Tab { anchor },
+            FoldedPaneRestore::Split {
+                anchor,
+                axis,
+                insert_first,
+            } => FoldedPaneRestoreSettings::Split {
+                anchor,
+                axis: dock_axis_to_settings(axis),
+                insert_first,
+            },
+        },
+    }
+}
+
 pub(super) fn dock_axis_to_settings(axis: pane_grid::Axis) -> DockAxis {
     match axis {
         pane_grid::Axis::Horizontal => DockAxis::Horizontal,
         pane_grid::Axis::Vertical => DockAxis::Vertical,
-    }
-}
-
-fn workspace_pane_is_tabbed_in_groups(
-    groups: &HashMap<DockGroupId, DockGroup>,
-    pane: WorkspacePaneKind,
-) -> bool {
-    groups
-        .values()
-        .any(|group| group.tabs.contains(&pane) && group.tabs.len() > 1)
-}
-
-fn parent_split_for_group(
-    node: &DockNode,
-    group_id: DockGroupId,
-) -> Option<(pane_grid::Axis, bool, f32)> {
-    match node {
-        DockNode::Group(_) => None,
-        DockNode::Split {
-            axis,
-            ratio,
-            first,
-            second,
-        } => {
-            if contains_group(first, group_id) {
-                Some((*axis, true, *ratio))
-            } else if contains_group(second, group_id) {
-                Some((*axis, false, *ratio))
-            } else {
-                parent_split_for_group(first, group_id)
-                    .or_else(|| parent_split_for_group(second, group_id))
-            }
-        }
     }
 }
 
@@ -652,52 +673,6 @@ fn constrained_logger_ratio(window_height: f32, requested_ratio: f32) -> f32 {
 
     let max_ratio_for_min_logger = 1.0 - (MIN_LOGGER_PANEL_HEIGHT / window_height);
     requested_ratio.clamp(0.05, max_ratio_for_min_logger.clamp(0.05, 0.95))
-}
-
-pub(super) fn constrained_piano_ratio(score_area_height: f32, requested_ratio: f32) -> f32 {
-    constrained_bottom_panel_ratio(score_area_height, requested_ratio, MIN_LOGGER_PANEL_HEIGHT)
-}
-
-pub(super) fn collapsed_piano_ratio(score_area_height: f32) -> f32 {
-    constrained_bottom_panel_ratio(
-        score_area_height,
-        1.0 - (PIANO_COLLAPSED_PANEL_HEIGHT / score_area_height.max(1.0)),
-        PIANO_COLLAPSED_PANEL_HEIGHT,
-    )
-}
-
-pub(super) fn collapsed_first_pane_ratio(available_extent: f32) -> f32 {
-    constrained_top_panel_ratio(
-        available_extent,
-        PIANO_COLLAPSED_PANEL_HEIGHT / available_extent.max(1.0),
-        PIANO_COLLAPSED_PANEL_HEIGHT,
-    )
-}
-
-fn constrained_bottom_panel_ratio(
-    available_height: f32,
-    requested_ratio: f32,
-    min_bottom_height: f32,
-) -> f32 {
-    if available_height <= 0.0 {
-        return requested_ratio.clamp(0.05, 0.95);
-    }
-
-    let max_ratio = 1.0 - (min_bottom_height / available_height);
-    requested_ratio.clamp(0.05, max_ratio.clamp(0.05, 0.95))
-}
-
-fn constrained_top_panel_ratio(
-    available_extent: f32,
-    requested_ratio: f32,
-    min_top_extent: f32,
-) -> f32 {
-    if available_extent <= 0.0 {
-        return requested_ratio.clamp(0.05, 0.95);
-    }
-
-    let min_ratio = min_top_extent / available_extent;
-    requested_ratio.clamp(min_ratio.clamp(0.05, 0.95), 0.95)
 }
 
 fn estimated_score_area_height(window_height: f32, logger_visible: bool, logger_ratio: f32) -> f32 {

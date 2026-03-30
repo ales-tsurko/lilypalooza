@@ -28,6 +28,8 @@ pub(super) enum PaneMessage {
     WorkspaceResized(pane_grid::ResizeEvent),
     WorkspaceTabPressed(WorkspacePaneKind),
     WorkspaceTabHovered(Option<WorkspacePaneKind>),
+    FoldWorkspacePane(WorkspacePaneKind),
+    UnfoldWorkspacePane(WorkspacePaneKind),
     WorkspaceDragMoved(iced::Point),
     WorkspaceDragReleased,
     WorkspaceDragExited,
@@ -73,7 +75,6 @@ pub(super) enum ViewerMessage {
 
 #[derive(Debug, Clone)]
 pub(super) enum PianoRollMessage {
-    ToggleVisible,
     ViewportCursorMoved(iced::Point),
     ViewportCursorLeft,
     RollScrolled { x: f32, y: f32 },

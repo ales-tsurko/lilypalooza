@@ -14,8 +14,6 @@ use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
 use crate::settings::PianoRollViewSettings;
 use crate::ui_style;
 
-pub(super) const COLLAPSED_HEIGHT: f32 = 32.0;
-
 const TRACK_PANEL_DEFAULT_WIDTH: f32 = 96.0;
 const TRACK_PANEL_MIN_WIDTH: f32 = 92.0;
 const TRACK_PANEL_MAX_WIDTH: f32 = 160.0;
@@ -403,20 +401,16 @@ pub(super) fn roll_scroll_id() -> iced::widget::Id {
 
 pub(super) fn controls<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
     let state = &app.piano_roll;
-    let allow_folding = app.can_fold_piano_roll();
-    let is_visible = !allow_folding || state.visible;
     let can_toggle_tracks = state
         .current_file()
         .is_some_and(|file| file.data.tracks.len() > 1);
 
     let track_toggle_button = button(text("Tracks").size(ui_style::FONT_SIZE_UI_XS))
-        .style(
-            if can_toggle_tracks && is_visible && state.track_panel_visible() {
-                ui_style::button_active
-            } else {
-                ui_style::button_neutral
-            },
-        )
+        .style(if can_toggle_tracks && state.track_panel_visible() {
+            ui_style::button_active
+        } else {
+            ui_style::button_neutral
+        })
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
             ui_style::PADDING_BUTTON_COMPACT_H,
@@ -430,172 +424,129 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
     let mut controls = row![]
         .spacing(ui_style::SPACE_SM)
         .align_y(alignment::Vertical::Center);
+    controls = controls.push(track_toggle_button);
 
-    if allow_folding {
-        let toggle_button =
-            button(text(if is_visible { "▾" } else { "▸" }).size(ui_style::FONT_SIZE_UI_SM))
-                .style(if is_visible {
-                    ui_style::button_active
-                } else {
-                    ui_style::button_neutral
-                })
-                .padding([
-                    ui_style::PADDING_BUTTON_COMPACT_V,
-                    ui_style::PADDING_BUTTON_COMPACT_H,
-                ])
-                .on_press(Message::PianoRoll(PianoRollMessage::ToggleVisible));
+    let zoom_out_button = button(text("−").size(ui_style::FONT_SIZE_UI_SM))
+        .style(ui_style::button_neutral)
+        .padding([
+            ui_style::PADDING_BUTTON_COMPACT_V,
+            ui_style::PADDING_BUTTON_COMPACT_H,
+        ]);
+    let zoom_out_button = if state.can_zoom_out() {
+        zoom_out_button.on_press(Message::PianoRoll(PianoRollMessage::ZoomOut))
+    } else {
+        zoom_out_button
+    };
 
-        let toggle_group = row![
-            Tooltip::new(
-                toggle_button,
-                text(if is_visible {
-                    "Hide piano roll"
+    let zoom_in_button = button(text("+").size(ui_style::FONT_SIZE_UI_SM))
+        .style(ui_style::button_neutral)
+        .padding([
+            ui_style::PADDING_BUTTON_COMPACT_V,
+            ui_style::PADDING_BUTTON_COMPACT_H,
+        ]);
+    let zoom_in_button = if state.can_zoom_in() {
+        zoom_in_button.on_press(Message::PianoRoll(PianoRollMessage::ZoomIn))
+    } else {
+        zoom_in_button
+    };
+
+    let subdivision_slider = slider(
+        BEAT_SUBDIVISION_MIN..=BEAT_SUBDIVISION_MAX,
+        state.beat_subdivision,
+        |value| Message::PianoRoll(PianoRollMessage::BeatSubdivisionSliderChanged(value)),
+    )
+    .step(1u8)
+    .width(Length::Fixed(120.0));
+
+    let subdivision_input = text_input("", state.beat_subdivision_input())
+        .on_input(|value| Message::PianoRoll(PianoRollMessage::BeatSubdivisionInputChanged(value)))
+        .padding([
+            ui_style::PADDING_BUTTON_COMPACT_V,
+            ui_style::PADDING_BUTTON_COMPACT_H,
+        ])
+        .size(Pixels(ui_style::FONT_SIZE_UI_XS as f32))
+        .width(Length::Fixed(44.0));
+
+    controls = controls.push(
+        row![
+            text("Zoom").size(ui_style::FONT_SIZE_UI_XS),
+            zoom_out_button,
+            {
+                let zoom_value = text(format!("{:.0}%", state.zoom_x * 100.0))
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .font(Font::MONOSPACE);
+                let zoom_value = if state.can_reset_zoom() {
+                    mouse_area(zoom_value)
+                        .on_double_click(Message::PianoRoll(PianoRollMessage::ResetZoom))
                 } else {
-                    "Show piano roll"
-                })
-                .size(ui_style::FONT_SIZE_UI_XS),
-                tooltip::Position::Top,
-            )
-            .gap(6),
+                    mouse_area(zoom_value)
+                };
+
+                Tooltip::new(
+                    zoom_value,
+                    text("Double-click to reset zoom").size(ui_style::FONT_SIZE_UI_XS),
+                    tooltip::Position::Top,
+                )
+                .gap(6)
+                .padding(8)
+                .style(ui_style::tooltip_popup)
+            },
+            zoom_in_button,
         ]
-        .spacing(ui_style::SPACE_SM)
-        .align_y(alignment::Vertical::Center);
-        controls = controls.push(toggle_group);
-    }
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center),
+    );
 
-    if is_visible {
-        controls = controls.push(track_toggle_button);
+    controls = controls.push(
+        row![
+            text("Beat Subdiv").size(ui_style::FONT_SIZE_UI_XS),
+            subdivision_slider,
+            subdivision_input,
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center),
+    );
 
-        let zoom_out_button = button(text("−").size(ui_style::FONT_SIZE_UI_SM))
+    if state.has_multiple_files() {
+        let prev_file_button = button(text("←").size(ui_style::FONT_SIZE_UI_SM))
             .style(ui_style::button_neutral)
-            .padding([
-                ui_style::PADDING_BUTTON_COMPACT_V,
-                ui_style::PADDING_BUTTON_COMPACT_H,
-            ]);
-        let zoom_out_button = if state.can_zoom_out() {
-            zoom_out_button.on_press(Message::PianoRoll(PianoRollMessage::ZoomOut))
-        } else {
-            zoom_out_button
-        };
-
-        let zoom_in_button = button(text("+").size(ui_style::FONT_SIZE_UI_SM))
-            .style(ui_style::button_neutral)
-            .padding([
-                ui_style::PADDING_BUTTON_COMPACT_V,
-                ui_style::PADDING_BUTTON_COMPACT_H,
-            ]);
-        let zoom_in_button = if state.can_zoom_in() {
-            zoom_in_button.on_press(Message::PianoRoll(PianoRollMessage::ZoomIn))
-        } else {
-            zoom_in_button
-        };
-
-        let subdivision_slider = slider(
-            BEAT_SUBDIVISION_MIN..=BEAT_SUBDIVISION_MAX,
-            state.beat_subdivision,
-            |value| Message::PianoRoll(PianoRollMessage::BeatSubdivisionSliderChanged(value)),
-        )
-        .step(1u8)
-        .width(Length::Fixed(120.0));
-
-        let subdivision_input = text_input("", state.beat_subdivision_input())
-            .on_input(|value| {
-                Message::PianoRoll(PianoRollMessage::BeatSubdivisionInputChanged(value))
-            })
             .padding([
                 ui_style::PADDING_BUTTON_COMPACT_V,
                 ui_style::PADDING_BUTTON_COMPACT_H,
             ])
-            .size(Pixels(ui_style::FONT_SIZE_UI_XS as f32))
-            .width(Length::Fixed(44.0));
+            .on_press(Message::PianoRoll(PianoRollMessage::FilePrevious));
+
+        let next_file_button = button(text("→").size(ui_style::FONT_SIZE_UI_SM))
+            .style(ui_style::button_neutral)
+            .padding([
+                ui_style::PADDING_BUTTON_COMPACT_V,
+                ui_style::PADDING_BUTTON_COMPACT_H,
+            ])
+            .on_press(Message::PianoRoll(PianoRollMessage::FileNext));
+
+        let file_name = state
+            .current_file()
+            .map(|file| file.file_name.as_str())
+            .unwrap_or("No MIDI");
 
         controls = controls.push(
             row![
-                text("Zoom").size(ui_style::FONT_SIZE_UI_XS),
-                zoom_out_button,
-                {
-                    let zoom_value = text(format!("{:.0}%", state.zoom_x * 100.0))
-                        .size(ui_style::FONT_SIZE_UI_XS)
-                        .font(Font::MONOSPACE);
-                    let zoom_value = if state.can_reset_zoom() {
-                        mouse_area(zoom_value)
-                            .on_double_click(Message::PianoRoll(PianoRollMessage::ResetZoom))
-                    } else {
-                        mouse_area(zoom_value)
-                    };
-
-                    Tooltip::new(
-                        zoom_value,
-                        text("Double-click to reset zoom").size(ui_style::FONT_SIZE_UI_XS),
-                        tooltip::Position::Top,
-                    )
-                    .gap(6)
-                },
-                zoom_in_button,
+                text("MIDI").size(ui_style::FONT_SIZE_UI_XS),
+                prev_file_button,
+                text(file_name)
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .font(Font::MONOSPACE),
+                next_file_button,
             ]
             .spacing(ui_style::SPACE_XS)
             .align_y(alignment::Vertical::Center),
         );
-
-        controls = controls.push(
-            row![
-                text("Beat Subdiv").size(ui_style::FONT_SIZE_UI_XS),
-                subdivision_slider,
-                subdivision_input,
-            ]
-            .spacing(ui_style::SPACE_XS)
-            .align_y(alignment::Vertical::Center),
-        );
-
-        if state.has_multiple_files() {
-            let prev_file_button = button(text("←").size(ui_style::FONT_SIZE_UI_SM))
-                .style(ui_style::button_neutral)
-                .padding([
-                    ui_style::PADDING_BUTTON_COMPACT_V,
-                    ui_style::PADDING_BUTTON_COMPACT_H,
-                ])
-                .on_press(Message::PianoRoll(PianoRollMessage::FilePrevious));
-
-            let next_file_button = button(text("→").size(ui_style::FONT_SIZE_UI_SM))
-                .style(ui_style::button_neutral)
-                .padding([
-                    ui_style::PADDING_BUTTON_COMPACT_V,
-                    ui_style::PADDING_BUTTON_COMPACT_H,
-                ])
-                .on_press(Message::PianoRoll(PianoRollMessage::FileNext));
-
-            let file_name = state
-                .current_file()
-                .map(|file| file.file_name.as_str())
-                .unwrap_or("No MIDI");
-
-            controls = controls.push(
-                row![
-                    text("MIDI").size(ui_style::FONT_SIZE_UI_XS),
-                    prev_file_button,
-                    text(file_name)
-                        .size(ui_style::FONT_SIZE_UI_XS)
-                        .font(Font::MONOSPACE),
-                    next_file_button,
-                ]
-                .spacing(ui_style::SPACE_XS)
-                .align_y(alignment::Vertical::Center),
-            );
-        }
     }
 
     controls
 }
 
 pub(super) fn content(app: &LilyView) -> Element<'_, Message> {
-    if !app.piano_roll_effectively_visible() {
-        return container(text(""))
-            .width(Fill)
-            .height(Length::Shrink)
-            .style(ui_style::piano_roll_surface)
-            .into();
-    }
-
     let Some(file) = app.piano_roll.current_file() else {
         return container(text("No MIDI output yet").size(ui_style::FONT_SIZE_UI_SM))
             .width(Fill)

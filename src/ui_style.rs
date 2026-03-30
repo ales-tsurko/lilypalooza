@@ -1,4 +1,4 @@
-use iced::widget::{button, container, scrollable, text_editor};
+use iced::widget::{button, container, scrollable, svg, text_editor};
 use iced::{Color, Shadow, Theme, Vector, border};
 
 pub(crate) const FONT_SIZE_HEADING_LG: u32 = 30;
@@ -67,6 +67,24 @@ pub(crate) fn prompt_dialog(theme: &Theme) -> container::Style {
 
 pub(crate) fn prompt_backdrop(_theme: &Theme) -> container::Style {
     container::Style::default().background(Color::from_rgba(0.0, 0.0, 0.0, 0.55))
+}
+
+pub(crate) fn tooltip_popup(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.base.color.into()),
+        text_color: Some(palette.background.base.text),
+        border: border::rounded(8)
+            .width(1)
+            .color(palette.background.strong.color),
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.18),
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
+        },
+        ..container::Style::default()
+    }
 }
 
 pub(crate) fn pane_main_surface(theme: &Theme) -> container::Style {
@@ -428,5 +446,115 @@ pub(crate) fn button_compact_active(theme: &Theme, status: button::Status) -> bu
                 .color(palette.background.base.color),
             ..base
         },
+    }
+}
+
+pub(crate) fn button_toolbar_chip(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let base = button::Style {
+        background: None,
+        text_color: palette.background.base.text,
+        border: border::rounded(12).width(0).color(Color::TRANSPARENT),
+        shadow: Shadow::default(),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.background.base.color.into()),
+            text_color: palette.background.base.text,
+            border: border::rounded(12)
+                .width(1)
+                .color(palette.background.strong.color),
+            shadow: Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.12),
+                offset: Vector::new(0.0, 2.0),
+                blur_radius: 6.0,
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.primary.base.color.into()),
+            text_color: palette.primary.base.text,
+            border: border::rounded(12)
+                .width(1)
+                .color(palette.primary.strong.color),
+            shadow: Shadow::default(),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(palette.background.weak.color.into()),
+            text_color: palette.background.weak.text,
+            shadow: Shadow::default(),
+            ..base
+        },
+    }
+}
+
+pub(crate) fn button_window_control(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let base = button::Style {
+        background: None,
+        text_color: palette.background.strong.text,
+        border: border::rounded(999).width(0).color(Color::TRANSPARENT),
+        shadow: Shadow::default(),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.background.base.color.into()),
+            text_color: palette.background.base.text,
+            border: border::rounded(999)
+                .width(1)
+                .color(palette.background.strong.color),
+            shadow: Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.10),
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 4.0,
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.primary.base.color.into()),
+            text_color: palette.primary.base.text,
+            border: border::rounded(999)
+                .width(1)
+                .color(palette.primary.strong.color),
+            shadow: Shadow::default(),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(palette.background.weak.color.into()),
+            text_color: palette.background.weak.text,
+            shadow: Shadow::default(),
+            ..base
+        },
+    }
+}
+
+pub(crate) fn svg_toolbar_chip(theme: &Theme, status: svg::Status) -> svg::Style {
+    let palette = theme.extended_palette();
+
+    svg::Style {
+        color: Some(match status {
+            svg::Status::Idle => palette.background.base.text,
+            svg::Status::Hovered => palette.primary.weak.text,
+        }),
+    }
+}
+
+pub(crate) fn svg_window_control(theme: &Theme, status: svg::Status) -> svg::Style {
+    let palette = theme.extended_palette();
+
+    svg::Style {
+        color: Some(match status {
+            svg::Status::Idle => palette.background.strong.text,
+            svg::Status::Hovered => palette.background.base.text,
+        }),
     }
 }

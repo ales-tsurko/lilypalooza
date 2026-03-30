@@ -13,20 +13,53 @@ use super::{
     DockDropRegion, LilyView, Message, PaneMessage, ScoreCursorPlacement, ViewerMessage,
     WorkspacePaneKind, editor, piano_roll, transport_bar,
 };
-use crate::ui_style;
+use crate::{icons, ui_style};
 
 const SCROLL_MARKER_THICKNESS: f32 = 3.0;
 const SCROLL_MARKER_LENGTH: f32 = 16.0;
 const SCROLL_MARKER_EDGE_INSET: f32 = 3.0;
+const TOOLBAR_ICON_SIZE: f32 = 14.0;
+const FOLD_ICON_SIZE: f32 = 12.0;
+const TAB_ICON_GAP: u32 = 6;
 
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
+    let toolbar = workspace_toolbar(app);
     let workspace = workspace_panes(app);
 
-    iced::widget::column![workspace, transport_bar::view(app)]
+    iced::widget::column![toolbar, workspace, transport_bar::view(app)]
         .width(Fill)
         .height(Fill)
         .spacing(0)
         .into()
+}
+
+fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
+    let folded = app.folded_panes().iter().copied().fold(
+        row![]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center),
+        |row, folded| row.push(folded_pane_chip(folded.pane)),
+    );
+
+    container(
+        row![
+            text("Dock")
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .font(iced::Font::MONOSPACE),
+            folded,
+            container(text("")).width(Fill),
+        ]
+        .spacing(ui_style::SPACE_SM)
+        .align_y(alignment::Vertical::Center)
+        .width(Fill),
+    )
+    .padding([
+        ui_style::PADDING_STATUS_BAR_V,
+        ui_style::PADDING_STATUS_BAR_H,
+    ])
+    .style(ui_style::workspace_toolbar_surface)
+    .width(Fill)
+    .into()
 }
 
 fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
@@ -84,26 +117,58 @@ fn group_header<'a>(app: &'a LilyView, group_id: super::DockGroupId) -> Element<
     let Some(group) = app.workspace_group(group_id) else {
         return container(text("")).width(Fill).into();
     };
+    let active_pane = group.active;
+    let can_fold = app.can_fold_workspace_pane(active_pane);
 
-    let controls = match group.active {
+    let controls = match active_pane {
         WorkspacePaneKind::Score => score_controls(app),
         WorkspacePaneKind::PianoRoll => piano_roll::controls(app).into(),
         WorkspacePaneKind::Editor => container(text("")).into(),
     };
-
-    row![
+    let header = row![
         group_tabs(app, group),
         container(text("")).width(Fill),
-        controls,
+        controls
     ]
     .align_y(alignment::Vertical::Center)
-    .width(Fill)
-    .into()
+    .width(Fill);
+
+    let header = if can_fold {
+        header
+            .push(container(text("")).width(Length::Fixed(ui_style::SPACE_MD as f32)))
+            .push(
+                container(text(""))
+                    .width(Length::Fixed(1.0))
+                    .height(Length::Fixed(20.0))
+                    .style(|theme: &Theme| {
+                        let palette = theme.extended_palette();
+                        container::Style {
+                            background: Some(
+                                Color::from_rgba(
+                                    palette.background.strong.color.r,
+                                    palette.background.strong.color.g,
+                                    palette.background.strong.color.b,
+                                    0.55,
+                                )
+                                .into(),
+                            ),
+                            ..container::Style::default()
+                        }
+                    }),
+            )
+            .push(fold_button(active_pane))
+    } else {
+        header
+    };
+
+    header.into()
 }
 
 fn group_tabs<'a>(app: &'a LilyView, group: &'a super::DockGroup) -> row::Row<'a, Message> {
     group.tabs.iter().copied().fold(
-        row![].spacing(0).align_y(alignment::Vertical::Bottom),
+        row![]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Bottom),
         |tabs, pane| tabs.push(workspace_tab(app, pane)),
     )
 }
@@ -116,53 +181,76 @@ fn workspace_tab(app: &LilyView, pane: WorkspacePaneKind) -> Element<'_, Message
     let is_hovered = app.hovered_workspace_pane == Some(pane);
     let is_dragging = app.dragged_workspace_pane == Some(pane);
     let title = workspace_pane_title(pane);
+    let icon = match pane {
+        WorkspacePaneKind::Score => icons::music_4(),
+        WorkspacePaneKind::PianoRoll => icons::piano(),
+        WorkspacePaneKind::Editor => icons::file_pen(),
+    };
+    let icon_color = workspace_tab_foreground_color(is_active, is_hovered, is_dragging);
 
-    let tab_body = container(text(title).size(ui_style::FONT_SIZE_UI_SM))
-        .width(Length::Shrink)
-        .padding([
-            ui_style::PADDING_STATUS_BAR_V + 3,
-            ui_style::PADDING_STATUS_BAR_H + 10,
-        ])
-        .style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
-            if is_dragging {
-                container::Style {
-                    background: Some(palette.primary.weak.color.into()),
-                    text_color: Some(palette.primary.weak.text),
-                    border: border::rounded(12)
-                        .width(1)
-                        .color(palette.primary.base.color),
-                    ..container::Style::default()
-                }
-            } else if is_active {
-                container::Style {
-                    background: Some(palette.background.base.color.into()),
-                    text_color: Some(palette.background.base.text),
-                    border: border::rounded(9)
-                        .width(1)
-                        .color(palette.background.strong.color),
-                    ..container::Style::default()
-                }
-            } else if is_hovered {
-                container::Style {
-                    background: Some(palette.background.weakest.color.into()),
-                    text_color: Some(palette.background.weakest.text),
-                    border: border::rounded(9)
-                        .width(1)
-                        .color(palette.background.strong.color),
-                    ..container::Style::default()
-                }
-            } else {
-                container::Style {
-                    background: Some(palette.background.weak.color.into()),
-                    text_color: Some(palette.background.weak.text),
-                    border: border::rounded(9)
-                        .width(1)
-                        .color(palette.background.strong.color),
-                    ..container::Style::default()
-                }
+    let tab_body: Element<'_, Message> = container(
+        row![
+            container(
+                svg(icon)
+                    .width(Length::Fixed(TOOLBAR_ICON_SIZE))
+                    .height(Length::Fixed(TOOLBAR_ICON_SIZE))
+                    .content_fit(ContentFit::Contain)
+                    .style(move |theme: &Theme, _status| svg::Style {
+                        color: Some(icon_color(theme)),
+                    }),
+            )
+            .width(Length::Fixed(TOOLBAR_ICON_SIZE))
+            .height(Length::Fixed(TOOLBAR_ICON_SIZE))
+            .center_x(Length::Fixed(TOOLBAR_ICON_SIZE))
+            .center_y(Length::Fixed(TOOLBAR_ICON_SIZE)),
+            text(title).size(ui_style::FONT_SIZE_UI_SM),
+        ]
+        .spacing(TAB_ICON_GAP)
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Length::Shrink)
+    .padding([
+        ui_style::PADDING_STATUS_BAR_V + 3,
+        ui_style::PADDING_STATUS_BAR_H + 8,
+    ])
+    .style(move |theme: &Theme| {
+        let palette = theme.extended_palette();
+
+        if is_dragging {
+            container::Style {
+                background: Some(palette.primary.weak.color.into()),
+                text_color: Some(icon_color(theme)),
+                border: border::rounded(10)
+                    .width(1)
+                    .color(palette.primary.base.color),
+                ..container::Style::default()
             }
-        });
+        } else if is_active {
+            container::Style {
+                background: Some(Color::TRANSPARENT.into()),
+                text_color: Some(icon_color(theme)),
+                border: border::rounded(10)
+                    .width(1)
+                    .color(palette.background.strong.color),
+                ..container::Style::default()
+            }
+        } else if is_hovered {
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                text_color: Some(icon_color(theme)),
+                border: border::rounded(10).width(0).color(Color::TRANSPARENT),
+                ..container::Style::default()
+            }
+        } else {
+            container::Style {
+                background: Some(Color::TRANSPARENT.into()),
+                text_color: Some(icon_color(theme)),
+                border: border::rounded(10).width(0).color(Color::TRANSPARENT),
+                ..container::Style::default()
+            }
+        }
+    })
+    .into();
 
     mouse_area(tab_body)
         .on_press(Message::Pane(PaneMessage::WorkspaceTabPressed(pane)))
@@ -176,12 +264,83 @@ fn workspace_tab(app: &LilyView, pane: WorkspacePaneKind) -> Element<'_, Message
         .into()
 }
 
+fn workspace_tab_foreground_color(
+    is_active: bool,
+    is_hovered: bool,
+    is_dragging: bool,
+) -> impl Fn(&Theme) -> Color + Copy {
+    move |theme: &Theme| {
+        let palette = theme.extended_palette();
+        if is_dragging {
+            palette.primary.weak.text
+        } else if is_active {
+            palette.background.weakest.text
+        } else if is_hovered {
+            palette.background.base.text
+        } else {
+            palette.background.strong.text
+        }
+    }
+}
+
 fn workspace_pane_title(pane: WorkspacePaneKind) -> &'static str {
     match pane {
         WorkspacePaneKind::Score => "Score",
         WorkspacePaneKind::PianoRoll => "Piano Roll",
         WorkspacePaneKind::Editor => "Editor",
     }
+}
+
+fn fold_button(pane: WorkspacePaneKind) -> Element<'static, Message> {
+    let button = button(
+        svg(icons::arrow_up_to_line())
+            .width(Length::Fixed(FOLD_ICON_SIZE))
+            .height(Length::Fixed(FOLD_ICON_SIZE))
+            .content_fit(ContentFit::Contain)
+            .style(ui_style::svg_window_control),
+    )
+    .style(ui_style::button_window_control)
+    .padding([4, 7])
+    .width(Length::Fixed(26.0))
+    .height(Length::Fixed(22.0))
+    .on_press(Message::Pane(PaneMessage::FoldWorkspacePane(pane)));
+
+    Tooltip::new(
+        container(button).padding([0, 2]),
+        text("Fold pane into toolbar").size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Top,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup)
+    .into()
+}
+
+fn folded_pane_chip(pane: WorkspacePaneKind) -> Element<'static, Message> {
+    let icon = match pane {
+        WorkspacePaneKind::Score => icons::music_4(),
+        WorkspacePaneKind::PianoRoll => icons::piano(),
+        WorkspacePaneKind::Editor => icons::file_pen(),
+    };
+
+    Tooltip::new(
+        button(
+            svg(icon)
+                .width(Length::Fixed(TOOLBAR_ICON_SIZE))
+                .height(Length::Fixed(TOOLBAR_ICON_SIZE))
+                .content_fit(ContentFit::Contain)
+                .style(ui_style::svg_toolbar_chip),
+        )
+        .style(ui_style::button_toolbar_chip)
+        .padding([5, 8])
+        .on_press(Message::Pane(PaneMessage::UnfoldWorkspacePane(pane))),
+        text(workspace_pane_title(pane)).size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Bottom,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup)
+    .into()
 }
 
 fn workspace_drag_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
@@ -475,7 +634,9 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Element<'a, Message> {
         text("Double-click to reset zoom").size(ui_style::FONT_SIZE_UI_XS),
         tooltip::Position::Bottom,
     )
-    .gap(8);
+    .gap(8)
+    .padding(8)
+    .style(ui_style::tooltip_popup);
 
     let brightness_value = text(brightness_label)
         .size(ui_style::FONT_SIZE_UI_XS)
@@ -491,7 +652,9 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Element<'a, Message> {
         text("Double-click to reset brightness").size(ui_style::FONT_SIZE_UI_XS),
         tooltip::Position::Top,
     )
-    .gap(6);
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup);
 
     row![
         text(page_label)

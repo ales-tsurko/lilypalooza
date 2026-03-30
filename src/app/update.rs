@@ -132,27 +132,6 @@ impl LilyView {
         let mut task = Task::none();
 
         match message {
-            PianoRollMessage::ToggleVisible => {
-                if !self.can_fold_piano_roll() {
-                    return Task::none();
-                }
-
-                if let Some(group_id) = self.group_for_pane(WorkspacePaneKind::PianoRoll)
-                    && let Some((_, _, ratio)) = self.parent_split_for_group(group_id)
-                    && self.piano_roll.visible
-                {
-                    self.piano_roll_expanded_ratio = ratio;
-                }
-
-                self.piano_roll.visible = !self.piano_roll.visible;
-                self.apply_piano_roll_fold_constraints();
-
-                if self.piano_roll.visible {
-                    task = self.restore_piano_roll_scroll();
-                }
-
-                self.persist_settings();
-            }
             PianoRollMessage::ViewportCursorMoved(position) => {
                 self.piano_roll_viewport_cursor = Some(position);
             }
@@ -329,16 +308,10 @@ impl LilyView {
                 let ratio = constrained_logger_ratio(self.window_height, event.ratio);
                 self.logger_ratio = ratio;
                 self.panes.resize(event.split, ratio);
-                self.apply_piano_roll_fold_constraints();
             }
             PaneMessage::WorkspaceResized(event) => {
                 self.workspace_panes.resize(event.split, event.ratio);
                 self.sync_dock_layout_from_workspace_state();
-                if self.piano_roll.visible {
-                    self.sync_piano_roll_expanded_ratio();
-                } else {
-                    self.apply_piano_roll_fold_constraints();
-                }
                 self.persist_settings();
             }
             PaneMessage::WorkspaceTabPressed(kind) => {
@@ -350,6 +323,19 @@ impl LilyView {
             }
             PaneMessage::WorkspaceTabHovered(kind) => {
                 self.hovered_workspace_pane = kind;
+            }
+            PaneMessage::FoldWorkspacePane(pane) => {
+                if self.fold_workspace_pane(pane) {
+                    self.persist_settings();
+                }
+            }
+            PaneMessage::UnfoldWorkspacePane(pane) => {
+                if self.unfold_workspace_pane(pane) {
+                    self.persist_settings();
+                    if pane == WorkspacePaneKind::PianoRoll {
+                        return self.restore_piano_roll_scroll();
+                    }
+                }
             }
             PaneMessage::WorkspaceDragMoved(position) => {
                 if self.dragged_workspace_pane.is_none()
@@ -420,8 +406,6 @@ impl LilyView {
                         None,
                     );
                 }
-
-                self.apply_piano_roll_fold_constraints();
             }
         }
 
@@ -843,8 +827,6 @@ impl LilyView {
             self.panes.resize(split, ratio);
         }
 
-        self.apply_piano_roll_fold_constraints();
-
         Task::none()
     }
 
@@ -865,49 +847,6 @@ impl LilyView {
     fn sync_dock_layout_from_workspace_state(&mut self) {
         if let Some(layout) = dock_node_from_workspace_state(&self.workspace_panes) {
             self.dock_layout = layout;
-        }
-    }
-
-    fn sync_piano_roll_expanded_ratio(&mut self) {
-        if !self.piano_roll.visible {
-            return;
-        }
-
-        if let Some(group_id) = self.group_for_pane(WorkspacePaneKind::PianoRoll)
-            && let Some((_, _, ratio)) = self.parent_split_for_group(group_id)
-        {
-            self.piano_roll_expanded_ratio = ratio;
-        }
-    }
-
-    fn apply_piano_roll_fold_constraints(&mut self) {
-        let Some(group_id) = self.group_for_pane(WorkspacePaneKind::PianoRoll) else {
-            return;
-        };
-        let Some((axis, is_first, current_ratio)) = self.parent_split_for_group(group_id) else {
-            return;
-        };
-        let Some(group_bounds) = self.workspace_group_bounds().get(&group_id).copied() else {
-            return;
-        };
-
-        let extent =
-            parent_split_extent_for_group_bounds(group_bounds, axis, is_first, current_ratio);
-
-        let ratio = if self.piano_roll.visible {
-            constrain_split_ratio_for_piano_parent(extent, is_first, self.piano_roll_expanded_ratio)
-        } else if is_first {
-            collapsed_first_pane_ratio(extent)
-        } else {
-            collapsed_piano_ratio(extent)
-        };
-
-        if set_parent_split_ratio(&mut self.dock_layout, group_id, ratio) {
-            self.rebuild_workspace_panes();
-        }
-
-        if self.piano_roll.visible {
-            self.sync_piano_roll_expanded_ratio();
         }
     }
 
@@ -946,6 +885,144 @@ impl LilyView {
             &mut bounds,
         );
         bounds
+    }
+
+    fn fold_workspace_pane(&mut self, pane: WorkspacePaneKind) -> bool {
+        if !self.can_fold_workspace_pane(pane) {
+            return false;
+        }
+
+        let Some(group_id) = self.group_for_pane(pane) else {
+            return false;
+        };
+        let Some(group) = self.dock_groups.get(&group_id) else {
+            return false;
+        };
+
+        let restore = if group.tabs.len() > 1 {
+            let Some(anchor) = group
+                .tabs
+                .iter()
+                .copied()
+                .find(|candidate| *candidate != pane)
+            else {
+                return false;
+            };
+            let _ = remove_pane_from_group(&mut self.dock_groups, group_id, pane);
+            FoldedPaneRestore::Tab { anchor }
+        } else {
+            let Some((axis, insert_first, anchor)) =
+                split_restore_target_for_group(&self.dock_layout, group_id, &self.dock_groups)
+            else {
+                return false;
+            };
+            self.dock_groups.remove(&group_id);
+            let layout = std::mem::replace(&mut self.dock_layout, DockNode::Group(group_id));
+            self.dock_layout = prune_group_from_layout(layout, group_id);
+            FoldedPaneRestore::Split {
+                anchor,
+                axis,
+                insert_first,
+            }
+        };
+
+        self.folded_panes.retain(|folded| folded.pane != pane);
+        self.folded_panes.push(FoldedPaneState { pane, restore });
+        if pane == WorkspacePaneKind::PianoRoll {
+            self.piano_roll.visible = false;
+        }
+
+        self.clear_workspace_drag_state();
+        self.rebuild_workspace_panes();
+        true
+    }
+
+    fn unfold_workspace_pane(&mut self, pane: WorkspacePaneKind) -> bool {
+        let Some(index) = self
+            .folded_panes
+            .iter()
+            .position(|folded| folded.pane == pane)
+        else {
+            return false;
+        };
+        let folded = self.folded_panes.remove(index);
+
+        let restored = match folded.restore {
+            FoldedPaneRestore::Tab { anchor } => self.restore_folded_pane_as_tab(pane, anchor),
+            FoldedPaneRestore::Split {
+                anchor,
+                axis,
+                insert_first,
+            } => self.restore_folded_pane_as_split(pane, anchor, axis, insert_first),
+        };
+
+        if !restored {
+            let Some(group_id) = first_group_id_in_layout(&self.dock_layout) else {
+                return false;
+            };
+            if let Some(group) = self.dock_groups.get_mut(&group_id) {
+                group.tabs.push(pane);
+                group.active = pane;
+            } else {
+                return false;
+            }
+        }
+
+        if pane == WorkspacePaneKind::PianoRoll {
+            self.piano_roll.visible = true;
+        }
+
+        self.rebuild_workspace_panes();
+        true
+    }
+
+    fn restore_folded_pane_as_tab(
+        &mut self,
+        pane: WorkspacePaneKind,
+        anchor: WorkspacePaneKind,
+    ) -> bool {
+        let Some(group_id) = self.group_for_pane(anchor) else {
+            return false;
+        };
+        let Some(group) = self.dock_groups.get_mut(&group_id) else {
+            return false;
+        };
+
+        group.tabs.retain(|candidate| *candidate != pane);
+        group.tabs.push(pane);
+        group.active = pane;
+        true
+    }
+
+    fn restore_folded_pane_as_split(
+        &mut self,
+        pane: WorkspacePaneKind,
+        anchor: WorkspacePaneKind,
+        axis: pane_grid::Axis,
+        insert_first: bool,
+    ) -> bool {
+        let Some(group_id) = self.group_for_pane(anchor) else {
+            return false;
+        };
+
+        let new_group_id = self.next_dock_group_id;
+        self.next_dock_group_id = self.next_dock_group_id.saturating_add(1);
+        self.dock_groups.insert(
+            new_group_id,
+            DockGroup {
+                tabs: vec![pane],
+                active: pane,
+            },
+        );
+
+        replace_group_with_split(
+            &mut self.dock_layout,
+            group_id,
+            axis,
+            0.5,
+            new_group_id,
+            insert_first,
+        )
     }
 
     fn apply_dock_drop(&mut self, dragged: WorkspacePaneKind, target: DockDropTarget) {
@@ -1029,13 +1106,7 @@ impl LilyView {
             }
         }
 
-        if self.workspace_pane_is_tabbed(WorkspacePaneKind::PianoRoll) {
-            self.piano_roll.visible = true;
-        }
-
         self.rebuild_workspace_panes();
-        self.apply_piano_roll_fold_constraints();
-        self.sync_piano_roll_expanded_ratio();
     }
 
     fn clear_workspace_drag_state(&mut self) {
@@ -1050,8 +1121,13 @@ impl LilyView {
         let _ = settings::save(&settings::AppSettings {
             workspace_layout: WorkspaceLayoutSettings {
                 root: dock_node_to_settings(&self.dock_layout, &self.dock_groups),
-                piano_visible: self.piano_roll.visible
-                    || self.workspace_pane_is_tabbed(WorkspacePaneKind::PianoRoll),
+                folded_panes: self
+                    .folded_panes
+                    .iter()
+                    .copied()
+                    .map(folded_pane_to_settings)
+                    .collect(),
+                piano_visible: !self.is_pane_folded(WorkspacePaneKind::PianoRoll),
             },
             score_view: settings::ScoreViewSettings {
                 zoom: self.svg_zoom,
@@ -1750,65 +1826,52 @@ fn replace_group_with_split(
     }
 }
 
-fn set_parent_split_ratio(node: &mut DockNode, group_id: DockGroupId, ratio: f32) -> bool {
+fn split_restore_target_for_group(
+    node: &DockNode,
+    group_id: DockGroupId,
+    groups: &std::collections::HashMap<DockGroupId, DockGroup>,
+) -> Option<(pane_grid::Axis, bool, WorkspacePaneKind)> {
     match node {
-        DockNode::Group(_) => false,
+        DockNode::Group(_) => None,
         DockNode::Split {
-            ratio: current_ratio,
+            axis,
             first,
             second,
             ..
         } => {
-            if set_parent_split_ratio(first, group_id, ratio)
-                || set_parent_split_ratio(second, group_id, ratio)
-            {
-                return true;
-            }
-
-            if contains_group(first, group_id) || contains_group(second, group_id) {
-                if (*current_ratio - ratio).abs() > 1e-4 {
-                    *current_ratio = ratio;
-                    true
-                } else {
-                    false
-                }
+            if contains_group(first, group_id) {
+                Some((*axis, true, first_pane_in_node(second, groups)?))
+            } else if contains_group(second, group_id) {
+                Some((*axis, false, first_pane_in_node(first, groups)?))
             } else {
-                false
+                split_restore_target_for_group(first, group_id, groups)
+                    .or_else(|| split_restore_target_for_group(second, group_id, groups))
             }
         }
     }
 }
 
-fn constrain_split_ratio_for_piano_parent(
-    available_extent: f32,
-    piano_is_first: bool,
-    requested_ratio: f32,
-) -> f32 {
-    if piano_is_first {
-        constrained_top_panel_ratio(
-            available_extent,
-            requested_ratio,
-            super::MIN_LOGGER_PANEL_HEIGHT,
-        )
-    } else {
-        constrained_piano_ratio(available_extent, requested_ratio)
+fn first_pane_in_node(
+    node: &DockNode,
+    groups: &std::collections::HashMap<DockGroupId, DockGroup>,
+) -> Option<WorkspacePaneKind> {
+    match node {
+        DockNode::Group(group_id) => groups
+            .get(group_id)
+            .and_then(|group| group.tabs.first().copied()),
+        DockNode::Split { first, second, .. } => {
+            first_pane_in_node(first, groups).or_else(|| first_pane_in_node(second, groups))
+        }
     }
 }
 
-fn parent_split_extent_for_group_bounds(
-    group_bounds: iced::Rectangle,
-    axis: pane_grid::Axis,
-    group_is_first: bool,
-    ratio: f32,
-) -> f32 {
-    let child_extent = match axis {
-        pane_grid::Axis::Horizontal => group_bounds.height,
-        pane_grid::Axis::Vertical => group_bounds.width,
+fn first_group_id_in_layout(node: &DockNode) -> Option<DockGroupId> {
+    match node {
+        DockNode::Group(group_id) => Some(*group_id),
+        DockNode::Split { first, second, .. } => {
+            first_group_id_in_layout(first).or_else(|| first_group_id_in_layout(second))
+        }
     }
-    .max(1.0);
-    let share = if group_is_first { ratio } else { 1.0 - ratio }.max(0.05);
-
-    (child_extent / share).max(1.0)
 }
 
 fn snap_zoom_to_step(value: f32, step: f32) -> f32 {

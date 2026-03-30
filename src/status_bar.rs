@@ -53,7 +53,9 @@ where
             text("Open file").size(ui_style::FONT_SIZE_UI_XS),
             tooltip::Position::Top,
         )
-        .gap(6),
+        .gap(6)
+        .padding(8)
+        .style(ui_style::tooltip_popup),
     )
     .height(Fill)
     .center_y(Fill)
@@ -125,13 +127,17 @@ where
             .size(ui_style::FONT_SIZE_UI_XS),
             tooltip::Position::Top,
         )
-        .gap(6),
+        .gap(6)
+        .padding(8)
+        .style(ui_style::tooltip_popup),
         Tooltip::new(
             clear_button,
             text("Clear logger").size(ui_style::FONT_SIZE_UI_XS),
             tooltip::Position::Top,
         )
-        .gap(6),
+        .gap(6)
+        .padding(8)
+        .style(ui_style::tooltip_popup),
     ]
     .spacing(ui_style::SPACE_XS)
     .align_y(alignment::Vertical::Center);
