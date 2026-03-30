@@ -28,6 +28,7 @@ pub(super) const TOOLBAR_HEIGHT: f32 = 32.0;
 const TOOLBAR_TOGGLE_ICON_SIZE: f32 = 13.0;
 const TOOLBAR_BUTTON_HEIGHT: f32 = 25.0;
 const TOOLBAR_FILE_NAME_MAX_CHARS: usize = 24;
+const SCORE_BASE_SCALE: f32 = 5.6;
 
 pub(super) struct HeaderControlGroup<'a> {
     pub(super) min_width: f32,
@@ -1087,7 +1088,7 @@ fn logger_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
         min_width: 32.0,
         content: Tooltip::new(
             clear_button,
-            text("Clear logger").size(ui_style::FONT_SIZE_UI_XS),
+            text("Clear").size(ui_style::FONT_SIZE_UI_XS),
             tooltip::Position::Top,
         )
         .gap(6)
@@ -1142,7 +1143,6 @@ fn score_body(app: &LilyView) -> Element<'_, Message> {
         let svg_handle = rendered_page.handle.clone();
         let zoom = app.svg_zoom;
         let page_brightness = app.svg_page_brightness;
-        let aspect_ratio = (rendered_page.size.height / rendered_page.size.width).clamp(0.25, 8.0);
         let page_size = rendered_page.size;
         let current_page = app
             .rendered_score
@@ -1154,10 +1154,8 @@ fn score_body(app: &LilyView) -> Element<'_, Message> {
             .filter(|placement| placement.page_index == current_page);
 
         responsive(move |size| {
-            let page_horizontal_gutter = f32::from(ui_style::PADDING_SM) * 2.0 + 2.0;
-            let fit_width = (size.width - page_horizontal_gutter).max(1.0);
-            let width = (fit_width * zoom).max(1.0);
-            let height = (width * aspect_ratio).max(1.0);
+            let width = (page_size.width * SCORE_BASE_SCALE * zoom).max(1.0);
+            let height = (page_size.height * SCORE_BASE_SCALE * zoom).max(1.0);
 
             let page_svg = svg(svg_handle.clone())
                 .width(Length::Fixed(width))
