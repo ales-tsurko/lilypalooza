@@ -134,7 +134,7 @@ pub(crate) struct ScoreViewSettings {
 impl Default for ScoreViewSettings {
     fn default() -> Self {
         Self {
-            zoom: 0.7,
+            zoom: 1.0,
             page_brightness: 70,
         }
     }

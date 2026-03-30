@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::event;
 use iced::keyboard;
 use iced::widget::{pane_grid, svg};
 use iced::{Point, Rectangle, Size, Subscription, Task, window};
+use iced_core::{Bytes, image};
 use tempfile::TempDir;
 
 use crate::error_prompt::ErrorPrompt;
@@ -46,6 +47,8 @@ const SVG_ZOOM_STEP: f32 = 0.1;
 const MIN_SVG_PAGE_BRIGHTNESS: u8 = 0;
 const MAX_SVG_PAGE_BRIGHTNESS: u8 = 100;
 const SVG_PAGE_BRIGHTNESS_STEP: u8 = 10;
+const SCORE_ZOOM_PREVIEW_INTERVAL: Duration = Duration::from_millis(16);
+const SCORE_ZOOM_PREVIEW_SETTLE_DELAY: Duration = Duration::from_millis(120);
 pub(super) const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 pub(super) type WorkspacePaneKind = crate::settings::WorkspacePane;
@@ -88,6 +91,10 @@ struct LilyView {
     svg_scroll_x: f32,
     svg_scroll_y: f32,
     score_viewport_cursor: Option<iced::Point>,
+    score_zoom_last_interaction: Option<Instant>,
+    score_zoom_persist_pending: bool,
+    score_zoom_preview: Option<ScoreZoomPreview>,
+    score_zoom_preview_pending: Option<ScoreZoomPreviewRequest>,
     piano_roll_viewport_cursor: Option<iced::Point>,
     keyboard_modifiers: keyboard::Modifiers,
     default_settings: AppSettings,
@@ -105,6 +112,7 @@ struct RenderedScore {
 
 struct RenderedPage {
     handle: svg::Handle,
+    svg_bytes: Bytes,
     size: SvgSize,
     note_anchors: Vec<score_cursor::SvgNoteAnchor>,
     system_bands: Vec<score_cursor::SystemBand>,
@@ -114,6 +122,26 @@ struct RenderedPage {
 struct SvgSize {
     width: f32,
     height: f32,
+}
+
+#[derive(Clone)]
+struct ScoreZoomPreview {
+    page_index: usize,
+    tier: ScoreZoomPreviewTier,
+    handle: image::Handle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ScoreZoomPreviewRequest {
+    page_index: usize,
+    zoom: f32,
+    tier: ScoreZoomPreviewTier,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScoreZoomPreviewTier {
+    Fallback,
+    Primary,
 }
 
 impl RenderedScore {
@@ -303,6 +331,10 @@ fn new(
         svg_scroll_x: 0.0,
         svg_scroll_y: 0.0,
         score_viewport_cursor: None,
+        score_zoom_last_interaction: None,
+        score_zoom_persist_pending: false,
+        score_zoom_preview: None,
+        score_zoom_preview_pending: None,
         piano_roll_viewport_cursor: None,
         keyboard_modifiers: keyboard::Modifiers::default(),
         default_settings,
@@ -346,6 +378,10 @@ fn subscription(app: &LilyView) -> Subscription<Message> {
 
     if app.compile_session.is_some() || app.score_watcher.is_some() {
         subscriptions.push(iced::time::every(BACKGROUND_POLL_INTERVAL).map(|_| Message::Tick));
+    }
+
+    if app.score_zoom_preview_active() || app.score_zoom_persist_pending {
+        subscriptions.push(iced::time::every(SCORE_ZOOM_PREVIEW_INTERVAL).map(|_| Message::Tick));
     }
 
     if app.playback.as_ref().is_some_and(MidiPlayback::is_playing) {

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use iced::time::Instant;
 use iced::widget::{pane_grid, text_editor};
 use iced::{Size, keyboard, mouse};
+use iced_core::image;
 
 use super::WorkspacePaneKind;
 
@@ -12,6 +13,7 @@ pub(super) enum Message {
     Pane(PaneMessage),
     File(FileMessage),
     Viewer(ViewerMessage),
+    ScorePreviewReady(Result<ScorePreviewReady, String>),
     PianoRoll(PianoRollMessage),
     Editor(EditorMessage),
     Logger(LoggerMessage),
@@ -20,6 +22,14 @@ pub(super) enum Message {
     Tick,
     Frame(Instant),
     WindowResized(Size),
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ScorePreviewReady {
+    pub(super) page_index: usize,
+    pub(super) zoom: f32,
+    pub(super) tier: super::ScoreZoomPreviewTier,
+    pub(super) handle: image::Handle,
 }
 
 #[derive(Debug, Clone)]

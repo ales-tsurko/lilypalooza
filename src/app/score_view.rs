@@ -8,6 +8,7 @@ use iced::{
     Color, ContentFit, Element, Fill, Length, Point, Rectangle, Size, Theme, alignment, border,
     mouse,
 };
+use iced_core::image;
 
 use super::{
     DockDropRegion, LilyView, Message, PaneMessage, ScoreCursorPlacement, ViewerMessage,
@@ -33,6 +34,10 @@ const SCORE_BASE_SCALE: f32 = 5.6;
 pub(super) struct HeaderControlGroup<'a> {
     pub(super) min_width: f32,
     pub(super) content: Element<'a, Message>,
+}
+
+pub(super) fn score_base_scale() -> f32 {
+    SCORE_BASE_SCALE
 }
 
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
@@ -1157,12 +1162,29 @@ fn score_body(app: &LilyView) -> Element<'_, Message> {
             let width = (page_size.width * SCORE_BASE_SCALE * zoom).max(1.0);
             let height = (page_size.height * SCORE_BASE_SCALE * zoom).max(1.0);
 
-            let page_svg = svg(svg_handle.clone())
-                .width(Length::Fixed(width))
-                .height(Length::Fixed(height))
-                .content_fit(ContentFit::Fill);
+            let page_visual: Element<'_, Message> = if app.score_zoom_preview_active() {
+                if let Some(preview) = app
+                    .score_zoom_preview
+                    .as_ref()
+                    .filter(|preview| preview.page_index == current_page)
+                {
+                    rasterized_score_preview(preview.handle.clone(), width, height)
+                } else {
+                    svg(svg_handle.clone())
+                        .width(Length::Fixed(width))
+                        .height(Length::Fixed(height))
+                        .content_fit(ContentFit::Fill)
+                        .into()
+                }
+            } else {
+                svg(svg_handle.clone())
+                    .width(Length::Fixed(width))
+                    .height(Length::Fixed(height))
+                    .content_fit(ContentFit::Fill)
+                    .into()
+            };
             let overlay = score_cursor_overlay(cursor_overlay, page_size, width, height);
-            let layered_page = stack([page_svg.into(), overlay]);
+            let layered_page = stack([page_visual, overlay]);
             let page_surface = container(layered_page)
                 .width(Length::Shrink)
                 .height(Length::Shrink)
@@ -1223,6 +1245,17 @@ fn score_body(app: &LilyView) -> Element<'_, Message> {
     }
 }
 
+fn rasterized_score_preview(
+    handle: image::Handle,
+    width: f32,
+    height: f32,
+) -> Element<'static, Message> {
+    canvas(RasterizedScorePreviewCanvas { handle })
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(height))
+        .into()
+}
+
 fn score_cursor_overlay(
     placement: Option<ScoreCursorPlacement>,
     page_size: super::SvgSize,
@@ -1262,6 +1295,35 @@ fn score_scroll_position_marker(
 struct VerticalScrollMarkerCanvas {
     normalized: f32,
     viewport_size: Size,
+}
+
+struct RasterizedScorePreviewCanvas {
+    handle: image::Handle,
+}
+
+impl canvas::Program<Message> for RasterizedScorePreviewCanvas {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        frame.draw_image(
+            Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: bounds.width,
+                height: bounds.height,
+            },
+            canvas::Image::new(self.handle.clone()),
+        );
+        vec![frame.into_geometry()]
+    }
 }
 
 impl canvas::Program<Message> for VerticalScrollMarkerCanvas {

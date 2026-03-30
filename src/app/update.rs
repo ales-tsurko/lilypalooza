@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 
 use iced::widget::{pane_grid, svg};
+use iced_core::{Bytes, image};
 use notify::event::EventKind;
+use resvg::tiny_skia;
+use resvg::usvg;
 
 use super::score_cursor;
 use super::*;
@@ -12,6 +15,10 @@ use crate::midi;
 use crate::settings::{self, DockGroupSettings, DockNodeSettings, WorkspaceLayoutSettings};
 
 const DRAG_START_THRESHOLD: f32 = 8.0;
+const SCORE_PREVIEW_FALLBACK_MAX_DIMENSION: f32 = 2200.0;
+const SCORE_PREVIEW_PRIMARY_MAX_DIMENSION: f32 = 3600.0;
+const SCORE_PREVIEW_FALLBACK_MIN_ZOOM: f32 = 1.0;
+const SCORE_PREVIEW_PRIMARY_MIN_ZOOM: f32 = 1.8;
 
 pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
     match message {
@@ -19,6 +26,7 @@ pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
         Message::Pane(message) => app.handle_pane_message(message),
         Message::File(message) => app.handle_file_message(message),
         Message::Viewer(message) => app.handle_viewer_message(message),
+        Message::ScorePreviewReady(result) => app.handle_score_preview_ready(result),
         Message::PianoRoll(message) => app.handle_piano_roll_message(message),
         Message::Editor(message) => app.handle_editor_message(message),
         Message::Logger(message) => app.handle_logger_message(message),
@@ -66,6 +74,12 @@ impl LilyView {
                     && rendered_score.current_page > 0
                 {
                     rendered_score.current_page -= 1;
+                    self.score_zoom_preview = None;
+                    self.score_zoom_preview_pending = None;
+
+                    if let Some(task) = self.request_score_zoom_preview(self.svg_zoom) {
+                        return task;
+                    }
                 }
             }
             ViewerMessage::NextPage => {
@@ -73,14 +87,22 @@ impl LilyView {
                     && rendered_score.current_page + 1 < rendered_score.pages.len()
                 {
                     rendered_score.current_page += 1;
+                    self.score_zoom_preview = None;
+                    self.score_zoom_preview_pending = None;
+
+                    if let Some(task) = self.request_score_zoom_preview(self.svg_zoom) {
+                        return task;
+                    }
                 }
             }
             ViewerMessage::ZoomIn => {
                 self.svg_zoom = next_zoom_step_up(self.svg_zoom, SVG_ZOOM_STEP, MAX_SVG_ZOOM);
+                self.score_zoom_persist_pending = false;
                 self.persist_settings();
             }
             ViewerMessage::ZoomOut => {
                 self.svg_zoom = next_zoom_step_down(self.svg_zoom, SVG_ZOOM_STEP, MIN_SVG_ZOOM);
+                self.score_zoom_persist_pending = false;
                 self.persist_settings();
             }
             ViewerMessage::SmoothZoom(delta) => {
@@ -92,14 +114,22 @@ impl LilyView {
                 }
 
                 self.svg_zoom = next_zoom;
-                self.persist_settings();
+                self.score_zoom_last_interaction = Some(std::time::Instant::now());
+                self.score_zoom_persist_pending = true;
 
                 if let Some(cursor) = self.score_viewport_cursor {
                     let scale = next_zoom / previous_zoom.max(f32::EPSILON);
                     self.svg_scroll_x = anchored_scroll(self.svg_scroll_x, cursor.x, scale);
                     self.svg_scroll_y = anchored_scroll(self.svg_scroll_y, cursor.y, scale);
+                    let mut tasks = vec![self.restore_score_scroll()];
+                    if let Some(task) = self.request_score_zoom_preview(next_zoom) {
+                        tasks.push(task);
+                    }
+                    return Task::batch(tasks);
+                }
 
-                    return self.restore_score_scroll();
+                if let Some(task) = self.request_score_zoom_preview(next_zoom) {
+                    return task;
                 }
             }
             ViewerMessage::DecreasePageBrightness => {
@@ -117,11 +147,49 @@ impl LilyView {
             }
             ViewerMessage::ResetZoom => {
                 self.svg_zoom = self.default_settings.score_view.zoom;
+                self.score_zoom_persist_pending = false;
                 self.persist_settings();
             }
             ViewerMessage::ResetPageBrightness => {
                 self.svg_page_brightness = self.default_settings.score_view.page_brightness;
                 self.persist_settings();
+            }
+        }
+
+        Task::none()
+    }
+
+    fn handle_score_preview_ready(
+        &mut self,
+        result: Result<super::messages::ScorePreviewReady, String>,
+    ) -> Task<Message> {
+        let Some(pending) = self.score_zoom_preview_pending else {
+            return Task::none();
+        };
+
+        self.score_zoom_preview_pending = None;
+
+        match result {
+            Ok(preview)
+                if preview.page_index == pending.page_index
+                    && (preview.zoom - pending.zoom).abs() <= 1e-4
+                    && preview.tier == pending.tier =>
+            {
+                self.score_zoom_preview = Some(ScoreZoomPreview {
+                    page_index: preview.page_index,
+                    tier: preview.tier,
+                    handle: preview.handle,
+                });
+
+                if preview.tier == ScoreZoomPreviewTier::Fallback
+                    && let Some(task) = self.request_score_zoom_preview(self.svg_zoom)
+                {
+                    return task;
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                self.logger.push(format!("[score-preview] {error}"));
             }
         }
 
@@ -488,11 +556,29 @@ impl LilyView {
     }
 
     fn handle_tick(&mut self) -> Task<Message> {
-        self.spinner_step = self.spinner_step.wrapping_add(1);
-        self.poll_score_watcher();
-        self.poll_compile_logs();
-        self.start_compile_if_queued();
-        self.apply_initial_piano_roll_center_if_needed()
+        let mut tasks = Vec::new();
+
+        if self.compile_session.is_some() || self.score_watcher.is_some() {
+            self.spinner_step = self.spinner_step.wrapping_add(1);
+            self.poll_score_watcher();
+            self.poll_compile_logs();
+            self.start_compile_if_queued();
+            tasks.push(self.apply_initial_piano_roll_center_if_needed());
+        }
+
+        if self
+            .score_zoom_last_interaction
+            .is_some_and(|instant| instant.elapsed() >= SCORE_ZOOM_PREVIEW_SETTLE_DELAY)
+        {
+            self.score_zoom_last_interaction = None;
+        }
+
+        if self.score_zoom_last_interaction.is_none() && self.score_zoom_persist_pending {
+            self.score_zoom_persist_pending = false;
+            self.persist_settings();
+        }
+
+        Task::batch(tasks)
     }
 
     fn handle_frame(&mut self) -> Task<Message> {
@@ -688,6 +774,10 @@ impl LilyView {
 
         let Some(selected_score) = &self.current_score else {
             self.rendered_score = None;
+            self.score_zoom_preview = None;
+            self.score_zoom_preview_pending = None;
+            self.score_zoom_last_interaction = None;
+            self.score_zoom_persist_pending = false;
             return;
         };
 
@@ -713,9 +803,17 @@ impl LilyView {
                     pages,
                     current_page,
                 });
+                self.score_zoom_preview = None;
+                self.score_zoom_preview_pending = None;
+                self.score_zoom_last_interaction = None;
+                self.score_zoom_persist_pending = false;
                 self.logger.push(format!("Loaded {page_count} SVG page(s)"));
             }
             Err(error) => {
+                self.score_zoom_preview = None;
+                self.score_zoom_preview_pending = None;
+                self.score_zoom_last_interaction = None;
+                self.score_zoom_persist_pending = false;
                 self.show_prompt(
                     ErrorPrompt::new(
                         "SVG Output Error",
@@ -782,9 +880,11 @@ impl LilyView {
             let page_index = index.saturating_sub(1) as usize;
             let note_anchors = score_cursor::parse_svg_note_anchors(&source, page_index);
             let system_bands = score_cursor::parse_svg_system_bands(&source);
+            let svg_bytes = Bytes::from(bytes.clone());
 
             rendered_pages.push(RenderedPage {
                 handle: svg::Handle::from_memory(bytes),
+                svg_bytes,
                 size,
                 note_anchors,
                 system_bands,
@@ -1234,6 +1334,49 @@ impl LilyView {
                 y: Some(self.svg_scroll_y),
             },
         )
+    }
+
+    pub(super) fn score_zoom_preview_active(&self) -> bool {
+        self.score_zoom_last_interaction
+            .is_some_and(|instant| instant.elapsed() < SCORE_ZOOM_PREVIEW_SETTLE_DELAY)
+    }
+
+    fn request_score_zoom_preview(&mut self, zoom: f32) -> Option<Task<Message>> {
+        let rendered_score = self.rendered_score.as_ref()?;
+        let page = rendered_score.current_page()?;
+        let page_index = rendered_score.current_page;
+
+        if self.score_zoom_preview_pending.is_some() {
+            return None;
+        }
+
+        let request = match self.score_zoom_preview.as_ref() {
+            Some(preview)
+                if preview.page_index == page_index
+                    && preview.tier == ScoreZoomPreviewTier::Primary =>
+            {
+                return None;
+            }
+            Some(preview) if preview.page_index == page_index => ScoreZoomPreviewRequest {
+                page_index,
+                zoom: score_preview_target_zoom(zoom, ScoreZoomPreviewTier::Primary),
+                tier: ScoreZoomPreviewTier::Primary,
+            },
+            _ => ScoreZoomPreviewRequest {
+                page_index,
+                zoom: score_preview_target_zoom(zoom, ScoreZoomPreviewTier::Fallback),
+                tier: ScoreZoomPreviewTier::Fallback,
+            },
+        };
+
+        let svg_bytes = page.svg_bytes.clone();
+        let page_size = page.size;
+        self.score_zoom_preview_pending = Some(request);
+
+        Some(Task::perform(
+            async move { render_score_zoom_preview(svg_bytes, page_size, request) },
+            Message::ScorePreviewReady,
+        ))
     }
 
     fn apply_initial_piano_roll_center_if_needed(&mut self) -> Task<Message> {
@@ -2144,6 +2287,54 @@ fn smooth_zoom(
 
 fn anchored_scroll(current_scroll: f32, cursor_in_viewport: f32, scale: f32) -> f32 {
     ((current_scroll + cursor_in_viewport) * scale - cursor_in_viewport).max(0.0)
+}
+
+fn score_preview_target_zoom(zoom: f32, tier: ScoreZoomPreviewTier) -> f32 {
+    match tier {
+        ScoreZoomPreviewTier::Fallback => zoom.max(SCORE_PREVIEW_FALLBACK_MIN_ZOOM),
+        ScoreZoomPreviewTier::Primary => zoom.max(SCORE_PREVIEW_PRIMARY_MIN_ZOOM),
+    }
+}
+
+fn render_score_zoom_preview(
+    svg_bytes: Bytes,
+    page_size: SvgSize,
+    request: ScoreZoomPreviewRequest,
+) -> Result<super::messages::ScorePreviewReady, String> {
+    let options = usvg::Options::default();
+    let tree = usvg::Tree::from_data(svg_bytes.as_ref(), &options)
+        .map_err(|error| format!("Failed to parse score SVG: {error}"))?;
+
+    let logical_width =
+        (page_size.width * super::score_view::score_base_scale() * request.zoom).max(1.0);
+    let logical_height =
+        (page_size.height * super::score_view::score_base_scale() * request.zoom).max(1.0);
+    let longest_edge = logical_width.max(logical_height).max(1.0);
+    let max_dimension = match request.tier {
+        ScoreZoomPreviewTier::Fallback => SCORE_PREVIEW_FALLBACK_MAX_DIMENSION,
+        ScoreZoomPreviewTier::Primary => SCORE_PREVIEW_PRIMARY_MAX_DIMENSION,
+    };
+    let raster_scale = (max_dimension / longest_edge).min(1.0);
+    let raster_width = (logical_width * raster_scale).round().max(1.0) as u32;
+    let raster_height = (logical_height * raster_scale).round().max(1.0) as u32;
+
+    let mut pixmap = tiny_skia::Pixmap::new(raster_width, raster_height)
+        .ok_or_else(|| "Failed to allocate score preview pixmap".to_string())?;
+
+    let tree_size = tree.size().to_int_size().to_size();
+    let transform = tiny_skia::Transform::from_scale(
+        raster_width as f32 / tree_size.width(),
+        raster_height as f32 / tree_size.height(),
+    );
+
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    Ok(super::messages::ScorePreviewReady {
+        page_index: request.page_index,
+        zoom: request.zoom,
+        tier: request.tier,
+        handle: image::Handle::from_rgba(raster_width, raster_height, pixmap.take()),
+    })
 }
 
 fn is_relevant_score_change(event: &notify::Event, watched_path: &Path) -> bool {
