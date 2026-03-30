@@ -27,6 +27,7 @@ use score_cursor::{ScoreCursorMaps, ScoreCursorPlacement};
 use update::update;
 use view::view;
 
+mod dock_view;
 mod editor;
 mod messages;
 mod piano_roll;
@@ -554,7 +555,7 @@ impl LilyView {
 
     fn workspace_height(&self) -> f32 {
         let reserved_height =
-            crate::status_bar::HEIGHT + transport_bar::HEIGHT + score_view::TOOLBAR_HEIGHT;
+            crate::status_bar::HEIGHT + transport_bar::HEIGHT + dock_view::TOOLBAR_HEIGHT;
 
         (self.window_height - reserved_height).max(1.0)
     }

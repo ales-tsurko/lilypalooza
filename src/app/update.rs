@@ -1997,7 +1997,7 @@ fn dock_node_min_width(
     match node {
         pane_grid::Node::Pane(pane) => state
             .get(*pane)
-            .map(|group_id| super::score_view::workspace_group_min_width(app, *group_id))
+            .map(|group_id| super::dock_view::workspace_group_min_width(app, *group_id))
             .unwrap_or(0.0),
         pane_grid::Node::Split { axis, a, b, .. } => {
             let first = dock_node_min_width(a, state, app);

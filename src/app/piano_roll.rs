@@ -9,7 +9,7 @@ use iced::{
     Theme, alignment, mouse,
 };
 
-use super::{LilyView, Message, PianoRollMessage, score_view::HeaderControlGroup};
+use super::{LilyView, Message, PianoRollMessage, dock_view::HeaderControlGroup};
 use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
 use crate::settings::PianoRollViewSettings;
 use crate::{icons, ui_style};

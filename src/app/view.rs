@@ -1,7 +1,7 @@
 use iced::widget::{column, container, stack, text};
 use iced::{Element, Fill};
 
-use super::score_view;
+use super::dock_view;
 use super::{LilyView, Message, PromptMessage};
 use crate::error_prompt::PromptButtons;
 use crate::status_bar;
@@ -54,7 +54,7 @@ fn main_content(app: &LilyView) -> Element<'_, Message> {
             min_required,
         } => {
             let _ = (detected, min_required);
-            score_view::view(app)
+            dock_view::view(app)
         }
         super::LilypondStatus::Unavailable => {
             container(text("LilyPond unavailable.").size(crate::ui_style::FONT_SIZE_BODY_MD))
