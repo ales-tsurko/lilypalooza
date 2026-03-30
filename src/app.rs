@@ -68,7 +68,7 @@ struct LilyView {
     playback: Option<MidiPlayback>,
     soundfont_status: SoundfontStatus,
     workspace_panes: pane_grid::State<DockGroupId>,
-    dock_layout: DockNode,
+    dock_layout: Option<DockNode>,
     dock_groups: HashMap<DockGroupId, DockGroup>,
     next_dock_group_id: DockGroupId,
     folded_panes: Vec<FoldedPaneState>,
@@ -136,20 +136,22 @@ struct DockGroup {
     active: WorkspacePaneKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct FoldedPaneState {
     pane: WorkspacePaneKind,
     restore: FoldedPaneRestore,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum FoldedPaneRestore {
     Tab {
         anchor: WorkspacePaneKind,
     },
+    Standalone,
     Split {
         anchor: WorkspacePaneKind,
         axis: pane_grid::Axis,
+        ratio: f32,
         insert_first: bool,
         sibling_panes: Vec<WorkspacePaneKind>,
     },
@@ -232,7 +234,7 @@ fn new(
     );
 
     let (dock_layout, dock_groups, next_dock_group_id, workspace_panes) =
-        build_dock_runtime(&stored_settings.workspace_layout.root);
+        build_dock_runtime(stored_settings.workspace_layout.root.as_ref());
     let mut folded_panes: Vec<_> = stored_settings
         .workspace_layout
         .folded_panes
@@ -398,6 +400,30 @@ fn runtime_event_to_message(
                     keyboard::key::Physical::Code(keyboard::key::Code::Numpad0) => {
                         return Some(Message::Viewer(ViewerMessage::ResetZoom));
                     }
+                    keyboard::key::Physical::Code(keyboard::key::Code::Digit1)
+                    | keyboard::key::Physical::Code(keyboard::key::Code::Numpad1) => {
+                        return Some(Message::Pane(PaneMessage::ToggleWorkspacePane(
+                            WorkspacePaneKind::Editor,
+                        )));
+                    }
+                    keyboard::key::Physical::Code(keyboard::key::Code::Digit2)
+                    | keyboard::key::Physical::Code(keyboard::key::Code::Numpad2) => {
+                        return Some(Message::Pane(PaneMessage::ToggleWorkspacePane(
+                            WorkspacePaneKind::Score,
+                        )));
+                    }
+                    keyboard::key::Physical::Code(keyboard::key::Code::Digit3)
+                    | keyboard::key::Physical::Code(keyboard::key::Code::Numpad3) => {
+                        return Some(Message::Pane(PaneMessage::ToggleWorkspacePane(
+                            WorkspacePaneKind::PianoRoll,
+                        )));
+                    }
+                    keyboard::key::Physical::Code(keyboard::key::Code::Digit4)
+                    | keyboard::key::Physical::Code(keyboard::key::Code::Numpad4) => {
+                        return Some(Message::Pane(PaneMessage::ToggleWorkspacePane(
+                            WorkspacePaneKind::Logger,
+                        )));
+                    }
                     _ => {}
                 }
             }
@@ -454,19 +480,11 @@ impl LilyView {
             .find_map(|(group_id, group)| group.tabs.contains(&pane).then_some(*group_id))
     }
 
-    pub(super) fn folded_panes(&self) -> &[FoldedPaneState] {
-        &self.folded_panes
-    }
-
     pub(super) fn is_pane_folded(&self, pane: WorkspacePaneKind) -> bool {
         self.folded_panes.iter().any(|folded| folded.pane == pane)
     }
 
-    pub(super) fn can_fold_workspace_pane(&self, pane: WorkspacePaneKind) -> bool {
-        !self.is_pane_folded(pane) && self.workspace_visible_pane_count() > 1
-    }
-
-    fn workspace_visible_pane_count(&self) -> usize {
+    pub(super) fn workspace_visible_pane_count(&self) -> usize {
         self.dock_groups
             .values()
             .map(|group| group.tabs.len())
@@ -496,17 +514,17 @@ impl LilyView {
 }
 
 fn build_dock_runtime(
-    root: &DockNodeSettings,
+    root: Option<&DockNodeSettings>,
 ) -> (
-    DockNode,
+    Option<DockNode>,
     HashMap<DockGroupId, DockGroup>,
     DockGroupId,
     pane_grid::State<DockGroupId>,
 ) {
     let mut next_id = 1;
     let mut groups = HashMap::new();
-    let layout = dock_node_from_settings(root, &mut next_id, &mut groups);
-    let workspace_panes = build_workspace_panes(&layout);
+    let layout = root.map(|root| dock_node_from_settings(root, &mut next_id, &mut groups));
+    let workspace_panes = build_workspace_panes(layout.as_ref());
 
     (layout, groups, next_id, workspace_panes)
 }
@@ -546,7 +564,10 @@ fn dock_node_from_settings(
     }
 }
 
-fn build_workspace_panes(layout: &DockNode) -> pane_grid::State<DockGroupId> {
+fn build_workspace_panes(layout: Option<&DockNode>) -> pane_grid::State<DockGroupId> {
+    let Some(layout) = layout else {
+        return pane_grid::State::new(0).0;
+    };
     let configuration = configuration_from_dock_node(layout);
 
     match configuration {
@@ -605,14 +626,17 @@ fn folded_pane_from_settings(settings: FoldedPaneSettings) -> FoldedPaneState {
         pane: settings.pane,
         restore: match settings.restore {
             FoldedPaneRestoreSettings::Tab { anchor } => FoldedPaneRestore::Tab { anchor },
+            FoldedPaneRestoreSettings::Standalone => FoldedPaneRestore::Standalone,
             FoldedPaneRestoreSettings::Split {
                 anchor,
                 axis,
+                ratio,
                 insert_first,
                 sibling_panes,
             } => FoldedPaneRestore::Split {
                 anchor,
                 axis: pane_grid_axis_from_settings(axis),
+                ratio,
                 insert_first,
                 sibling_panes,
             },
@@ -625,14 +649,17 @@ fn folded_pane_to_settings(state: FoldedPaneState) -> FoldedPaneSettings {
         pane: state.pane,
         restore: match state.restore {
             FoldedPaneRestore::Tab { anchor } => FoldedPaneRestoreSettings::Tab { anchor },
+            FoldedPaneRestore::Standalone => FoldedPaneRestoreSettings::Standalone,
             FoldedPaneRestore::Split {
                 anchor,
                 axis,
+                ratio,
                 insert_first,
                 sibling_panes,
             } => FoldedPaneRestoreSettings::Split {
                 anchor,
                 axis: dock_axis_to_settings(axis),
+                ratio,
                 insert_first,
                 sibling_panes,
             },
@@ -640,8 +667,13 @@ fn folded_pane_to_settings(state: FoldedPaneState) -> FoldedPaneSettings {
     }
 }
 
-fn migrate_workspace_layout(root: &mut DockNodeSettings, folded_panes: &[FoldedPaneSettings]) {
-    if dock_node_settings_contains_pane(root, WorkspacePaneKind::Logger)
+fn migrate_workspace_layout(
+    root: &mut Option<DockNodeSettings>,
+    folded_panes: &[FoldedPaneSettings],
+) {
+    if root
+        .as_ref()
+        .is_some_and(|root| dock_node_settings_contains_pane(root, WorkspacePaneKind::Logger))
         || folded_panes
             .iter()
             .any(|folded| folded.pane == WorkspacePaneKind::Logger)
@@ -649,8 +681,8 @@ fn migrate_workspace_layout(root: &mut DockNodeSettings, folded_panes: &[FoldedP
         return;
     }
 
-    let previous_root = std::mem::take(root);
-    *root = DockNodeSettings::Split {
+    let previous_root = root.take().unwrap_or_default();
+    *root = Some(DockNodeSettings::Split {
         axis: DockAxis::Horizontal,
         ratio: 0.74,
         first: Box::new(previous_root),
@@ -658,7 +690,7 @@ fn migrate_workspace_layout(root: &mut DockNodeSettings, folded_panes: &[FoldedP
             tabs: vec![WorkspacePaneKind::Logger],
             active: WorkspacePaneKind::Logger,
         })),
-    };
+    });
 }
 
 fn dock_node_settings_contains_pane(node: &DockNodeSettings, pane: WorkspacePaneKind) -> bool {

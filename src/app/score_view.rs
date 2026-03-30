@@ -19,14 +19,13 @@ const SCROLL_MARKER_THICKNESS: f32 = 3.0;
 const SCROLL_MARKER_LENGTH: f32 = 16.0;
 const SCROLL_MARKER_EDGE_INSET: f32 = 3.0;
 const TOOLBAR_ICON_SIZE: f32 = 14.0;
-const FOLD_ICON_SIZE: f32 = 12.0;
-const FOLD_BUTTON_WIDTH: f32 = 26.0;
-const FOLD_BUTTON_HEIGHT: f32 = 22.0;
+const HEADER_CONTROL_HEIGHT: f32 = 22.0;
 const HEADER_MENU_ICON_SIZE: f32 = 12.0;
 const HEADER_MENU_BUTTON_WIDTH: f32 = 26.0;
 const TAB_ICON_GAP: u32 = 6;
 const HEADER_WIDTH_SAFETY: f32 = 24.0;
 pub(super) const TOOLBAR_HEIGHT: f32 = 32.0;
+const TOOLBAR_TOGGLE_ICON_SIZE: f32 = 13.0;
 
 pub(super) struct HeaderControlGroup<'a> {
     pub(super) min_width: f32,
@@ -45,24 +44,18 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
 }
 
 fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
-    let folded = app.folded_panes().iter().cloned().fold(
+    let pane_toggles = all_workspace_panes().into_iter().fold(
         row![]
             .spacing(ui_style::SPACE_XS)
             .align_y(alignment::Vertical::Center),
-        |row, folded| row.push(folded_pane_chip(folded.pane)),
+        |row, pane| row.push(toolbar_pane_toggle(app, pane)),
     );
 
     container(
-        row![
-            text("Dock")
-                .size(ui_style::FONT_SIZE_UI_XS)
-                .font(iced::Font::MONOSPACE),
-            folded,
-            container(text("")).width(Fill),
-        ]
-        .spacing(ui_style::SPACE_SM)
-        .align_y(alignment::Vertical::Center)
-        .width(Fill),
+        row![pane_toggles, container(text("")).width(Fill),]
+            .spacing(ui_style::SPACE_SM)
+            .align_y(alignment::Vertical::Center)
+            .width(Fill),
     )
     .height(Length::Fixed(TOOLBAR_HEIGHT))
     .padding([
@@ -75,6 +68,10 @@ fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
 }
 
 fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
+    if app.workspace_visible_pane_count() == 0 {
+        return empty_workspace_placeholder(app);
+    }
+
     responsive(move |size| {
         let group_bounds = workspace_group_bounds_map(&app.workspace_panes, size);
         let panes: Element<'_, Message> =
@@ -145,15 +142,9 @@ fn group_header<'a>(
         return container(text("")).width(Fill).into();
     };
     let active_pane = group.active;
-    let can_fold = app.can_fold_workspace_pane(active_pane);
     let control_groups = pane_header_control_groups(app, active_pane);
     let title_width = group_tabs_min_width(group);
-    let fold_width = if can_fold {
-        fold_button_reserved_width()
-    } else {
-        0.0
-    };
-    let available_controls_width = (group_width - title_width - fold_width).max(0.0);
+    let available_controls_width = (group_width - title_width).max(0.0);
     let (inline_controls, overflow_controls) =
         split_header_control_groups(control_groups, available_controls_width);
     let shows_menu_button = !overflow_controls.is_empty();
@@ -173,35 +164,6 @@ fn group_header<'a>(
     if shows_menu_button {
         header = header.push(header_overflow_trigger(group_id, is_menu_open));
     }
-
-    let header = if can_fold {
-        header
-            .push(container(text("")).width(Length::Fixed(0.0)))
-            .push(
-                container(text(""))
-                    .width(Length::Fixed(1.0))
-                    .height(Length::Fixed(20.0))
-                    .style(|theme: &Theme| {
-                        let palette = theme.extended_palette();
-                        container::Style {
-                            background: Some(
-                                Color::from_rgba(
-                                    palette.background.strong.color.r,
-                                    palette.background.strong.color.g,
-                                    palette.background.strong.color.b,
-                                    0.55,
-                                )
-                                .into(),
-                            ),
-                            ..container::Style::default()
-                        }
-                    }),
-            )
-            .push(fold_button(active_pane))
-    } else {
-        header
-    };
-
     header.into()
 }
 
@@ -216,15 +178,9 @@ fn pane_body_with_header_menu<'a>(
     };
 
     let active_pane = group.active;
-    let can_fold = app.can_fold_workspace_pane(active_pane);
     let control_groups = pane_header_control_groups(app, active_pane);
     let title_width = group_tabs_min_width(group);
-    let fold_width = if can_fold {
-        fold_button_reserved_width()
-    } else {
-        0.0
-    };
-    let available_controls_width = (group_width - title_width - fold_width).max(0.0);
+    let available_controls_width = (group_width - title_width).max(0.0);
     let (_inline_controls, overflow_controls) =
         split_header_control_groups(control_groups, available_controls_width);
     let show_menu =
@@ -265,19 +221,15 @@ fn group_tabs<'a>(app: &'a LilyView, group: &'a super::DockGroup) -> row::Row<'a
 }
 
 fn workspace_tab(app: &LilyView, pane: WorkspacePaneKind) -> Element<'_, Message> {
-    let is_active = app
+    let (is_active, is_stacked) = app
         .group_for_pane(pane)
         .and_then(|group_id| app.workspace_group(group_id))
-        .is_some_and(|group| group.active == pane);
+        .map(|group| (group.active == pane, group.tabs.len() > 1))
+        .unwrap_or((false, false));
     let is_hovered = app.hovered_workspace_pane == Some(pane);
     let is_dragging = app.dragged_workspace_pane == Some(pane);
     let title = workspace_pane_title(pane);
-    let icon = match pane {
-        WorkspacePaneKind::Score => icons::music_4(),
-        WorkspacePaneKind::PianoRoll => icons::piano(),
-        WorkspacePaneKind::Editor => icons::file_pen(),
-        WorkspacePaneKind::Logger => icons::scroll_text(),
-    };
+    let icon = workspace_pane_icon(pane);
     let icon_color = workspace_tab_foreground_color(is_active, is_hovered, is_dragging);
 
     let tab_body: Element<'_, Message> = container(
@@ -317,7 +269,7 @@ fn workspace_tab(app: &LilyView, pane: WorkspacePaneKind) -> Element<'_, Message
                     .color(palette.primary.base.color),
                 ..container::Style::default()
             }
-        } else if is_active {
+        } else if is_stacked && is_active {
             container::Style {
                 background: Some(Color::TRANSPARENT.into()),
                 text_color: Some(icon_color(theme)),
@@ -326,7 +278,7 @@ fn workspace_tab(app: &LilyView, pane: WorkspacePaneKind) -> Element<'_, Message
                     .color(palette.background.strong.color),
                 ..container::Style::default()
             }
-        } else if is_hovered {
+        } else if is_stacked && is_hovered {
             container::Style {
                 background: Some(palette.background.base.color.into()),
                 text_color: Some(icon_color(theme)),
@@ -384,6 +336,123 @@ fn workspace_pane_title(pane: WorkspacePaneKind) -> &'static str {
     }
 }
 
+fn workspace_pane_icon(pane: WorkspacePaneKind) -> svg::Handle {
+    match pane {
+        WorkspacePaneKind::Score => icons::music_4(),
+        WorkspacePaneKind::PianoRoll => icons::piano(),
+        WorkspacePaneKind::Editor => icons::file_pen(),
+        WorkspacePaneKind::Logger => icons::scroll_text(),
+    }
+}
+
+fn all_workspace_panes() -> [WorkspacePaneKind; 4] {
+    [
+        WorkspacePaneKind::Editor,
+        WorkspacePaneKind::Score,
+        WorkspacePaneKind::PianoRoll,
+        WorkspacePaneKind::Logger,
+    ]
+}
+
+fn pane_shortcut_label(pane: WorkspacePaneKind) -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        match pane {
+            WorkspacePaneKind::Editor => "Cmd+1",
+            WorkspacePaneKind::Score => "Cmd+2",
+            WorkspacePaneKind::PianoRoll => "Cmd+3",
+            WorkspacePaneKind::Logger => "Cmd+4",
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        match pane {
+            WorkspacePaneKind::Editor => "Ctrl+1",
+            WorkspacePaneKind::Score => "Ctrl+2",
+            WorkspacePaneKind::PianoRoll => "Ctrl+3",
+            WorkspacePaneKind::Logger => "Ctrl+4",
+        }
+    }
+}
+
+fn toolbar_pane_toggle(app: &LilyView, pane: WorkspacePaneKind) -> Element<'static, Message> {
+    let is_visible = app.group_for_pane(pane).is_some();
+    let title = workspace_pane_title(pane);
+    let icon = workspace_pane_icon(pane);
+
+    let icon = svg(icon)
+        .width(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
+        .height(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
+        .content_fit(ContentFit::Contain)
+        .style(move |theme: &Theme, status| {
+            let palette = theme.extended_palette();
+            svg::Style {
+                color: Some(if is_visible {
+                    match status {
+                        svg::Status::Idle => palette.background.weakest.text,
+                        svg::Status::Hovered => palette.background.base.text,
+                    }
+                } else {
+                    match status {
+                        svg::Status::Idle => palette.background.base.text,
+                        svg::Status::Hovered => palette.primary.weak.text,
+                    }
+                }),
+            }
+        });
+
+    let tooltip_label = format!("{title} ({})", pane_shortcut_label(pane));
+
+    Tooltip::new(
+        button(icon)
+            .style(if is_visible {
+                ui_style::button_toolbar_toggle_active
+            } else {
+                ui_style::button_toolbar_chip
+            })
+            .padding([6, 7])
+            .on_press(Message::Pane(PaneMessage::ToggleWorkspacePane(pane))),
+        text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Bottom,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup)
+    .into()
+}
+
+fn empty_workspace_placeholder(app: &LilyView) -> Element<'_, Message> {
+    let lilypond_label = match &app.lilypond_status {
+        super::LilypondStatus::Checking => "LilyPond: checking...".to_string(),
+        super::LilypondStatus::Ready { detected, .. } => {
+            format!("LilyPond: {detected}")
+        }
+        super::LilypondStatus::Unavailable => "LilyPond: unavailable".to_string(),
+    };
+
+    container(
+        Column::new()
+            .push(
+                text(format!("lily-view {}", env!("CARGO_PKG_VERSION")))
+                    .size(ui_style::FONT_SIZE_UI_SM)
+                    .font(iced::Font::MONOSPACE),
+            )
+            .push(
+                text(lilypond_label)
+                    .size(ui_style::FONT_SIZE_UI_SM)
+                    .font(iced::Font::MONOSPACE),
+            )
+            .spacing(ui_style::SPACE_SM)
+            .align_x(alignment::Horizontal::Center),
+    )
+    .width(Fill)
+    .height(Fill)
+    .center_x(Fill)
+    .center_y(Fill)
+    .into()
+}
+
 fn header_overflow_button(
     group_id: super::DockGroupId,
     is_open: bool,
@@ -400,7 +469,7 @@ fn header_overflow_button(
     .style(ui_style::button_window_control)
     .padding([4, 7])
     .width(Length::Fixed(HEADER_MENU_BUTTON_WIDTH))
-    .height(Length::Fixed(FOLD_BUTTON_HEIGHT))
+    .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
     .on_press(on_press);
 
     let tooltip = if is_open {
@@ -427,25 +496,6 @@ fn header_overflow_trigger(
     header_overflow_button(group_id, is_open)
 }
 
-fn fold_button(pane: WorkspacePaneKind) -> Element<'static, Message> {
-    let button = button(header_icon(icons::panel_top_close(), FOLD_ICON_SIZE))
-        .style(ui_style::button_window_control)
-        .padding([4, 7])
-        .width(Length::Fixed(FOLD_BUTTON_WIDTH))
-        .height(Length::Fixed(FOLD_BUTTON_HEIGHT))
-        .on_press(Message::Pane(PaneMessage::FoldWorkspacePane(pane)));
-
-    Tooltip::new(
-        container(button).padding([0, 2]),
-        text("Fold pane into toolbar").size(ui_style::FONT_SIZE_UI_XS),
-        tooltip::Position::Top,
-    )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup)
-    .into()
-}
-
 fn header_overflow_menu_panel<'a>(controls: Vec<Element<'a, Message>>) -> Element<'a, Message> {
     container(
         Column::with_children(controls)
@@ -467,13 +517,8 @@ pub(super) fn workspace_group_min_width(app: &LilyView, group_id: super::DockGro
     } else {
         0.0
     };
-    let fold_width = if app.can_fold_workspace_pane(group.active) {
-        fold_button_reserved_width()
-    } else {
-        0.0
-    };
 
-    tabs_width + menu_width + fold_width + HEADER_WIDTH_SAFETY
+    tabs_width + menu_width + HEADER_WIDTH_SAFETY
 }
 
 fn workspace_tab_min_width(pane: WorkspacePaneKind) -> f32 {
@@ -498,10 +543,6 @@ fn group_tabs_min_width(group: &super::DockGroup) -> f32 {
         .map(workspace_tab_min_width)
         .sum::<f32>()
         + ui_style::SPACE_XS as f32 * group.tabs.len().saturating_sub(1) as f32
-}
-
-fn fold_button_reserved_width() -> f32 {
-    ui_style::SPACE_MD as f32 + 1.0 + FOLD_BUTTON_WIDTH
 }
 
 fn split_header_control_groups<'a>(
@@ -578,34 +619,6 @@ fn pane_header_has_controls(app: &LilyView, pane: WorkspacePaneKind) -> bool {
         WorkspacePaneKind::Editor => false,
         WorkspacePaneKind::Logger => true,
     }
-}
-
-fn folded_pane_chip(pane: WorkspacePaneKind) -> Element<'static, Message> {
-    let icon = match pane {
-        WorkspacePaneKind::Score => icons::music_4(),
-        WorkspacePaneKind::PianoRoll => icons::piano(),
-        WorkspacePaneKind::Editor => icons::file_pen(),
-        WorkspacePaneKind::Logger => icons::scroll_text(),
-    };
-
-    Tooltip::new(
-        button(
-            svg(icon)
-                .width(Length::Fixed(TOOLBAR_ICON_SIZE))
-                .height(Length::Fixed(TOOLBAR_ICON_SIZE))
-                .content_fit(ContentFit::Contain)
-                .style(ui_style::svg_toolbar_chip),
-        )
-        .style(ui_style::button_toolbar_chip)
-        .padding([5, 8])
-        .on_press(Message::Pane(PaneMessage::UnfoldWorkspacePane(pane))),
-        text(workspace_pane_title(pane)).size(ui_style::FONT_SIZE_UI_XS),
-        tooltip::Position::Bottom,
-    )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup)
-    .into()
 }
 
 fn workspace_drag_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {

@@ -6,7 +6,6 @@ const BRUSH_CLEANING: &[u8] = include_bytes!("../assets/icons/brush-cleaning.svg
 const ELLIPSIS_VERTICAL: &[u8] = include_bytes!("../assets/icons/ellipsis-vertical.svg");
 const MUSIC_4: &[u8] = include_bytes!("../assets/icons/music-4.svg");
 const METRONOME: &[u8] = include_bytes!("../assets/icons/metronome.svg");
-const PANEL_TOP_CLOSE: &[u8] = include_bytes!("../assets/icons/panel-top-close.svg");
 const PIANO: &[u8] = include_bytes!("../assets/icons/piano.svg");
 const PLAY: &[u8] = include_bytes!("../assets/icons/play.svg");
 const PAUSE: &[u8] = include_bytes!("../assets/icons/pause.svg");
@@ -36,10 +35,6 @@ pub(crate) fn ellipsis_vertical() -> svg::Handle {
 
 pub(crate) fn metronome() -> svg::Handle {
     svg::Handle::from_memory(METRONOME)
-}
-
-pub(crate) fn panel_top_close() -> svg::Handle {
-    svg::Handle::from_memory(PANEL_TOP_CLOSE)
 }
 
 pub(crate) fn piano() -> svg::Handle {

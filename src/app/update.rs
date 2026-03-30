@@ -328,15 +328,14 @@ impl LilyView {
             PaneMessage::CloseHeaderOverflowMenu => {
                 self.open_header_overflow_menu = None;
             }
-            PaneMessage::FoldWorkspacePane(pane) => {
+            PaneMessage::ToggleWorkspacePane(pane) => {
                 self.open_header_overflow_menu = None;
-                if self.fold_workspace_pane(pane) {
-                    self.persist_settings();
-                }
-            }
-            PaneMessage::UnfoldWorkspacePane(pane) => {
-                self.open_header_overflow_menu = None;
-                if self.unfold_workspace_pane(pane) {
+                let changed = if self.is_pane_folded(pane) {
+                    self.unfold_workspace_pane(pane)
+                } else {
+                    self.fold_workspace_pane(pane)
+                };
+                if changed {
                     self.persist_settings();
                     if pane == WorkspacePaneKind::PianoRoll {
                         return self.restore_piano_roll_scroll();
@@ -813,12 +812,14 @@ impl LilyView {
     }
 
     fn rebuild_workspace_panes(&mut self) {
-        self.workspace_panes = build_workspace_panes(&self.dock_layout);
+        self.workspace_panes = build_workspace_panes(self.dock_layout.as_ref());
     }
 
     fn sync_dock_layout_from_workspace_state(&mut self) {
-        if let Some(layout) = dock_node_from_workspace_state(&self.workspace_panes) {
-            self.dock_layout = layout;
+        if self.dock_groups.is_empty() {
+            self.dock_layout = None;
+        } else if let Some(layout) = dock_node_from_workspace_state(&self.workspace_panes) {
+            self.dock_layout = Some(layout);
         }
     }
 
@@ -890,7 +891,7 @@ impl LilyView {
     }
 
     fn fold_workspace_pane(&mut self, pane: WorkspacePaneKind) -> bool {
-        if !self.can_fold_workspace_pane(pane) {
+        if self.is_pane_folded(pane) {
             return false;
         }
 
@@ -913,19 +914,24 @@ impl LilyView {
             let _ = remove_pane_from_group(&mut self.dock_groups, group_id, pane);
             FoldedPaneRestore::Tab { anchor }
         } else {
-            let Some((axis, insert_first, anchor, sibling_panes)) =
-                split_restore_target_for_group(&self.dock_layout, group_id, &self.dock_groups)
-            else {
-                return false;
-            };
             self.dock_groups.remove(&group_id);
-            let layout = std::mem::replace(&mut self.dock_layout, DockNode::Group(group_id));
-            self.dock_layout = prune_group_from_layout(layout, group_id);
-            FoldedPaneRestore::Split {
-                anchor,
-                axis,
-                insert_first,
-                sibling_panes,
+            if let Some((axis, ratio, insert_first, anchor, sibling_panes)) =
+                self.dock_layout.as_ref().and_then(|layout| {
+                    split_restore_target_for_group(layout, group_id, &self.dock_groups)
+                })
+            {
+                let layout = self.dock_layout.take().unwrap_or(DockNode::Group(group_id));
+                self.dock_layout = Some(prune_group_from_layout(layout, group_id));
+                FoldedPaneRestore::Split {
+                    anchor,
+                    axis,
+                    ratio,
+                    insert_first,
+                    sibling_panes,
+                }
+            } else {
+                self.dock_layout = None;
+                FoldedPaneRestore::Standalone
             }
         };
 
@@ -952,23 +958,35 @@ impl LilyView {
 
         let restored = match folded.restore {
             FoldedPaneRestore::Tab { anchor } => self.restore_folded_pane_as_tab(pane, anchor),
+            FoldedPaneRestore::Standalone => self.restore_folded_pane_as_standalone(pane),
             FoldedPaneRestore::Split {
                 anchor,
                 axis,
+                ratio,
                 insert_first,
                 sibling_panes,
-            } => {
-                self.restore_folded_pane_as_split(pane, anchor, axis, insert_first, &sibling_panes)
-            }
+            } => self.restore_folded_pane_as_split(
+                pane,
+                anchor,
+                axis,
+                ratio,
+                insert_first,
+                &sibling_panes,
+            ),
         };
 
         if !restored {
-            let Some(group_id) = first_group_id_in_layout(&self.dock_layout) else {
-                return false;
-            };
-            if let Some(group) = self.dock_groups.get_mut(&group_id) {
-                group.tabs.push(pane);
-                group.active = pane;
+            if self.dock_groups.is_empty() {
+                let _ = self.restore_folded_pane_as_standalone(pane);
+            } else if let Some(group_id) =
+                self.dock_layout.as_ref().and_then(first_group_id_in_layout)
+            {
+                if let Some(group) = self.dock_groups.get_mut(&group_id) {
+                    group.tabs.push(pane);
+                    group.active = pane;
+                } else {
+                    return false;
+                }
             } else {
                 return false;
             }
@@ -1000,11 +1018,34 @@ impl LilyView {
         true
     }
 
+    fn restore_folded_pane_as_standalone(&mut self, pane: WorkspacePaneKind) -> bool {
+        if let Some(group_id) = self.dock_layout.as_ref().and_then(first_group_id_in_layout)
+            && let Some(group) = self.dock_groups.get_mut(&group_id)
+        {
+            group.tabs.push(pane);
+            group.active = pane;
+            return true;
+        }
+
+        let new_group_id = self.next_dock_group_id;
+        self.next_dock_group_id = self.next_dock_group_id.saturating_add(1);
+        self.dock_groups.insert(
+            new_group_id,
+            DockGroup {
+                tabs: vec![pane],
+                active: pane,
+            },
+        );
+        self.dock_layout = Some(DockNode::Group(new_group_id));
+        true
+    }
+
     fn restore_folded_pane_as_split(
         &mut self,
         pane: WorkspacePaneKind,
         anchor: WorkspacePaneKind,
         axis: pane_grid::Axis,
+        ratio: f32,
         insert_first: bool,
         sibling_panes: &[WorkspacePaneKind],
     ) -> bool {
@@ -1018,15 +1059,17 @@ impl LilyView {
             },
         );
 
-        if replace_subtree_with_split(
-            &mut self.dock_layout,
-            axis,
-            0.5,
-            new_group_id,
-            insert_first,
-            sibling_panes,
-            &self.dock_groups,
-        ) {
+        if self.dock_layout.as_mut().is_some_and(|layout| {
+            replace_subtree_with_split(
+                layout,
+                axis,
+                ratio,
+                new_group_id,
+                insert_first,
+                sibling_panes,
+                &self.dock_groups,
+            )
+        }) {
             return true;
         }
 
@@ -1034,15 +1077,12 @@ impl LilyView {
             self.dock_groups.remove(&new_group_id);
             return false;
         };
+        let Some(layout) = self.dock_layout.as_mut() else {
+            self.dock_groups.remove(&new_group_id);
+            return false;
+        };
 
-        if replace_group_with_split(
-            &mut self.dock_layout,
-            group_id,
-            axis,
-            0.5,
-            new_group_id,
-            insert_first,
-        ) {
+        if replace_group_with_split(layout, group_id, axis, ratio, new_group_id, insert_first) {
             true
         } else {
             self.dock_groups.remove(&new_group_id);
@@ -1071,9 +1111,11 @@ impl LilyView {
 
                 if source_empty {
                     self.dock_groups.remove(&source_group_id);
-                    let layout =
-                        std::mem::replace(&mut self.dock_layout, DockNode::Group(target.group_id));
-                    self.dock_layout = prune_group_from_layout(layout, source_group_id);
+                    let layout = self
+                        .dock_layout
+                        .take()
+                        .unwrap_or(DockNode::Group(target.group_id));
+                    self.dock_layout = Some(prune_group_from_layout(layout, source_group_id));
                 }
 
                 if let Some(target_group) = self.dock_groups.get_mut(&target.group_id) {
@@ -1097,9 +1139,11 @@ impl LilyView {
 
                 if source_empty && source_group_id != target.group_id {
                     self.dock_groups.remove(&source_group_id);
-                    let layout =
-                        std::mem::replace(&mut self.dock_layout, DockNode::Group(target.group_id));
-                    self.dock_layout = prune_group_from_layout(layout, source_group_id);
+                    let layout = self
+                        .dock_layout
+                        .take()
+                        .unwrap_or(DockNode::Group(target.group_id));
+                    self.dock_layout = Some(prune_group_from_layout(layout, source_group_id));
                 }
 
                 let new_group_id = self.next_dock_group_id;
@@ -1120,14 +1164,18 @@ impl LilyView {
                     DockDropRegion::Center => unreachable!(),
                 };
 
-                replace_group_with_split(
-                    &mut self.dock_layout,
-                    target.group_id,
-                    axis,
-                    0.5,
-                    new_group_id,
-                    insert_first,
-                );
+                if let Some(layout) = self.dock_layout.as_mut() {
+                    replace_group_with_split(
+                        layout,
+                        target.group_id,
+                        axis,
+                        0.5,
+                        new_group_id,
+                        insert_first,
+                    );
+                } else {
+                    self.dock_layout = Some(DockNode::Group(new_group_id));
+                }
             }
         }
 
@@ -1145,7 +1193,10 @@ impl LilyView {
     fn persist_settings(&self) {
         let _ = settings::save(&settings::AppSettings {
             workspace_layout: WorkspaceLayoutSettings {
-                root: dock_node_to_settings(&self.dock_layout, &self.dock_groups),
+                root: self
+                    .dock_layout
+                    .as_ref()
+                    .map(|layout| dock_node_to_settings(layout, &self.dock_groups)),
                 folded_panes: self
                     .folded_panes
                     .iter()
@@ -1895,6 +1946,7 @@ fn split_restore_target_for_group(
     groups: &std::collections::HashMap<DockGroupId, DockGroup>,
 ) -> Option<(
     pane_grid::Axis,
+    f32,
     bool,
     WorkspacePaneKind,
     Vec<WorkspacePaneKind>,
@@ -1903,6 +1955,7 @@ fn split_restore_target_for_group(
         DockNode::Group(_) => None,
         DockNode::Split {
             axis,
+            ratio,
             first,
             second,
             ..
@@ -1911,6 +1964,7 @@ fn split_restore_target_for_group(
                 let sibling_panes = panes_in_node(second, groups);
                 Some((
                     *axis,
+                    *ratio,
                     true,
                     first_pane_in_node(second, groups)?,
                     sibling_panes,
@@ -1919,6 +1973,7 @@ fn split_restore_target_for_group(
                 let sibling_panes = panes_in_node(first, groups);
                 Some((
                     *axis,
+                    *ratio,
                     false,
                     first_pane_in_node(first, groups)?,
                     sibling_panes,

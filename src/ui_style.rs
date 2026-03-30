@@ -493,6 +493,55 @@ pub(crate) fn button_toolbar_chip(theme: &Theme, status: button::Status) -> butt
     }
 }
 
+pub(crate) fn button_toolbar_toggle_active(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let base = button::Style {
+        background: Some(palette.background.base.color.into()),
+        text_color: palette.background.base.text,
+        border: border::rounded(12)
+            .width(1)
+            .color(palette.background.strong.color),
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.12),
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 6.0,
+        },
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.background.base.color.into()),
+            text_color: palette.background.base.text,
+            border: border::rounded(12)
+                .width(1)
+                .color(palette.background.base.text),
+            shadow: base.shadow,
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.background.strong.color.into()),
+            text_color: palette.background.strong.text,
+            border: border::rounded(12)
+                .width(1)
+                .color(palette.background.base.color),
+            shadow: Shadow::default(),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(palette.background.weak.color.into()),
+            text_color: palette.background.weak.text,
+            border: border::rounded(12)
+                .width(1)
+                .color(palette.background.strong.color),
+            shadow: Shadow::default(),
+            ..base
+        },
+    }
+}
+
 pub(crate) fn button_window_control(theme: &Theme, status: button::Status) -> button::Style {
     let palette = theme.extended_palette();
 
@@ -534,17 +583,6 @@ pub(crate) fn button_window_control(theme: &Theme, status: button::Status) -> bu
             shadow: Shadow::default(),
             ..base
         },
-    }
-}
-
-pub(crate) fn svg_toolbar_chip(theme: &Theme, status: svg::Status) -> svg::Style {
-    let palette = theme.extended_palette();
-
-    svg::Style {
-        color: Some(match status {
-            svg::Status::Idle => palette.background.base.text,
-            svg::Status::Hovered => palette.primary.weak.text,
-        }),
     }
 }
 

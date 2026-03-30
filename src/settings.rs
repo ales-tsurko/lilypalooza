@@ -22,21 +22,23 @@ pub(crate) enum DockAxis {
     Vertical,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum FoldedPaneRestoreSettings {
     Tab {
         anchor: WorkspacePane,
     },
+    Standalone,
     Split {
         anchor: WorkspacePane,
         axis: DockAxis,
+        ratio: f32,
         insert_first: bool,
         #[serde(default)]
         sibling_panes: Vec<WorkspacePane>,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct FoldedPaneSettings {
     pub(crate) pane: WorkspacePane,
@@ -47,9 +49,7 @@ impl Default for FoldedPaneSettings {
     fn default() -> Self {
         Self {
             pane: WorkspacePane::PianoRoll,
-            restore: FoldedPaneRestoreSettings::Tab {
-                anchor: WorkspacePane::Score,
-            },
+            restore: FoldedPaneRestoreSettings::Standalone,
         }
     }
 }
@@ -109,7 +109,7 @@ impl Default for DockNodeSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct WorkspaceLayoutSettings {
-    pub(crate) root: DockNodeSettings,
+    pub(crate) root: Option<DockNodeSettings>,
     pub(crate) folded_panes: Vec<FoldedPaneSettings>,
     pub(crate) piano_visible: bool,
 }
@@ -117,7 +117,7 @@ pub(crate) struct WorkspaceLayoutSettings {
 impl Default for WorkspaceLayoutSettings {
     fn default() -> Self {
         Self {
-            root: DockNodeSettings::default(),
+            root: Some(DockNodeSettings::default()),
             folded_panes: Vec::new(),
             piano_visible: true,
         }
