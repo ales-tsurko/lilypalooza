@@ -440,6 +440,7 @@ impl LilyView {
                 self.workspace_drag_origin = None;
                 self.dock_drop_target = None;
                 self.persist_settings();
+                return self.restore_runtime_view_state(kind);
             }
             PaneMessage::WorkspaceTabHovered(kind) => {
                 self.hovered_workspace_pane = kind;
@@ -459,9 +460,7 @@ impl LilyView {
                 };
                 if changed {
                     self.persist_settings();
-                    if pane == WorkspacePaneKind::PianoRoll {
-                        return self.restore_piano_roll_scroll();
-                    }
+                    return self.restore_runtime_view_state(pane);
                 }
             }
             PaneMessage::WorkspaceDragMoved(position) => {
@@ -497,6 +496,8 @@ impl LilyView {
                 {
                     self.apply_dock_drop(dragged_pane, target);
                     self.persist_settings();
+                    self.clear_workspace_drag_state();
+                    return self.restore_runtime_view_state(dragged_pane);
                 }
 
                 self.clear_workspace_drag_state();
@@ -1397,6 +1398,18 @@ impl LilyView {
                 y: Some(self.piano_roll.vertical_scroll()),
             },
         )
+    }
+
+    fn restore_runtime_view_state(&self, pane: WorkspacePaneKind) -> Task<Message> {
+        if self.group_for_pane(pane).is_none() {
+            return Task::none();
+        }
+
+        match pane {
+            WorkspacePaneKind::PianoRoll => self.restore_piano_roll_scroll(),
+            WorkspacePaneKind::Score => self.restore_score_scroll(),
+            WorkspacePaneKind::Editor | WorkspacePaneKind::Logger => Task::none(),
+        }
     }
 
     fn restore_score_scroll(&self) -> Task<Message> {
