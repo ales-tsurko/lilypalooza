@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use iced::widget::{
-    Tooltip, button, canvas, column, container, mouse_area, pane_grid, row, scrollable, slider,
-    stack, text, text_input, tooltip,
+    Tooltip, button, canvas, column, container, mouse_area, row, scrollable, slider, stack, text,
+    text_input, tooltip,
 };
 use iced::{
     Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme, alignment,
@@ -11,7 +11,7 @@ use iced::{
 
 use super::{LilyView, Message, PianoRollMessage};
 use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
-use crate::settings::{PaneAxis, PianoRollViewSettings};
+use crate::settings::PianoRollViewSettings;
 use crate::ui_style;
 
 pub(super) const COLLAPSED_HEIGHT: f32 = 32.0;
@@ -24,6 +24,7 @@ const TRACK_BUTTON_WIDTH: f32 = 18.0;
 const TRACK_BUTTON_HEIGHT: f32 = 16.0;
 const TRACK_BUTTONS_GAP: f32 = 4.0;
 const TRACK_LABEL_BUTTON_GAP: f32 = 6.0;
+const DRAG_START_THRESHOLD: f32 = 8.0;
 const KEYBOARD_WIDTH: f32 = 30.0;
 const TEMPO_LANE_HEIGHT: f32 = 28.0;
 const REWIND_FLAG_HITBOX_WIDTH: f32 = 14.0;
@@ -390,34 +391,19 @@ fn next_zoom_step_down(current: f32, step: f32, min_zoom: f32) -> f32 {
     }
 }
 
+fn drag_distance(a: Point, b: Point) -> f32 {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    (dx * dx + dy * dy).sqrt()
+}
+
 pub(super) fn roll_scroll_id() -> iced::widget::Id {
     iced::widget::Id::new(ROLL_SCROLL_ID)
 }
 
-pub(super) fn title_bar<'a>(app: &'a LilyView) -> pane_grid::TitleBar<'a, Message> {
-    pane_grid::TitleBar::new(header_content(app))
-        .padding([
-            ui_style::PADDING_STATUS_BAR_V,
-            ui_style::PADDING_STATUS_BAR_H,
-        ])
-        .always_show_controls()
-        .style(ui_style::pane_title_bar_surface)
-}
-
-pub(super) fn header<'a>(app: &'a LilyView) -> Element<'a, Message> {
-    container(header_content(app))
-        .width(Fill)
-        .padding([
-            ui_style::PADDING_STATUS_BAR_V,
-            ui_style::PADDING_STATUS_BAR_H,
-        ])
-        .style(ui_style::pane_title_bar_surface)
-        .into()
-}
-
-fn header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
+pub(super) fn controls<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
     let state = &app.piano_roll;
-    let allow_folding = app.score_layout_axis != PaneAxis::Stacked;
+    let allow_folding = app.can_fold_piano_roll();
     let is_visible = !allow_folding || state.visible;
     let can_toggle_tracks = state
         .current_file()
@@ -441,7 +427,7 @@ fn header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
         track_toggle_button
     };
 
-    let mut title = row![text("Piano Roll").size(ui_style::FONT_SIZE_UI_SM)]
+    let mut controls = row![]
         .spacing(ui_style::SPACE_SM)
         .align_y(alignment::Vertical::Center);
 
@@ -459,7 +445,7 @@ fn header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
                 ])
                 .on_press(Message::PianoRoll(PianoRollMessage::ToggleVisible));
 
-        title = row![
+        let toggle_group = row![
             Tooltip::new(
                 toggle_button,
                 text(if is_visible {
@@ -471,14 +457,14 @@ fn header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
                 tooltip::Position::Top,
             )
             .gap(6),
-            text("Piano Roll").size(ui_style::FONT_SIZE_UI_SM),
         ]
         .spacing(ui_style::SPACE_SM)
         .align_y(alignment::Vertical::Center);
+        controls = controls.push(toggle_group);
     }
 
     if is_visible {
-        title = title.push(track_toggle_button);
+        controls = controls.push(track_toggle_button);
 
         let zoom_out_button = button(text("−").size(ui_style::FONT_SIZE_UI_SM))
             .style(ui_style::button_neutral)
@@ -523,7 +509,7 @@ fn header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
             .size(Pixels(ui_style::FONT_SIZE_UI_XS as f32))
             .width(Length::Fixed(44.0));
 
-        title = title.push(
+        controls = controls.push(
             row![
                 text("Zoom").size(ui_style::FONT_SIZE_UI_XS),
                 zoom_out_button,
@@ -551,7 +537,7 @@ fn header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
             .align_y(alignment::Vertical::Center),
         );
 
-        title = title.push(
+        controls = controls.push(
             row![
                 text("Beat Subdiv").size(ui_style::FONT_SIZE_UI_XS),
                 subdivision_slider,
@@ -583,7 +569,7 @@ fn header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
                 .map(|file| file.file_name.as_str())
                 .unwrap_or("No MIDI");
 
-            title = title.push(
+            controls = controls.push(
                 row![
                     text("MIDI").size(ui_style::FONT_SIZE_UI_XS),
                     prev_file_button,
@@ -598,11 +584,11 @@ fn header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
         }
     }
 
-    title
+    controls
 }
 
 pub(super) fn content(app: &LilyView) -> Element<'_, Message> {
-    if app.score_layout_axis != PaneAxis::Stacked && !app.piano_roll.visible {
+    if !app.piano_roll_effectively_visible() {
         return container(text(""))
             .width(Fill)
             .height(Length::Shrink)
@@ -1026,6 +1012,7 @@ struct TempoCanvas<'a> {
 
 #[derive(Debug, Default)]
 struct TempoCanvasState {
+    rewind_flag_press_origin: Option<Point>,
     dragging_rewind_flag: bool,
 }
 
@@ -1072,7 +1059,8 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
                 )
                 .contains(cursor_position)
                 {
-                    state.dragging_rewind_flag = true;
+                    state.rewind_flag_press_origin = Some(cursor_position);
+                    state.dragging_rewind_flag = false;
                     return Some(canvas::Action::capture());
                 }
 
@@ -1091,14 +1079,22 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
                 )
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                if !state.dragging_rewind_flag {
-                    return None;
-                }
-
                 let Some(cursor_position) = cursor.position_in(bounds) else {
+                    state.rewind_flag_press_origin = None;
                     state.dragging_rewind_flag = false;
                     return None;
                 };
+
+                if !state.dragging_rewind_flag {
+                    let origin = state.rewind_flag_press_origin?;
+
+                    if drag_distance(origin, cursor_position) < DRAG_START_THRESHOLD {
+                        return Some(canvas::Action::capture());
+                    }
+
+                    state.dragging_rewind_flag = true;
+                }
+
                 let tick = tick_from_tempo_lane_x(
                     cursor_position.x,
                     pixels_per_tick,
@@ -1116,6 +1112,7 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(_))
             | canvas::Event::Mouse(mouse::Event::CursorLeft) => {
+                state.rewind_flag_press_origin = None;
                 state.dragging_rewind_flag = false;
                 None
             }

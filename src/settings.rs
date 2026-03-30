@@ -6,46 +6,77 @@ use directories::ProjectDirs;
 use ron::ser::PrettyConfig;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub(crate) enum PaneOrder {
-    #[default]
-    ScoreFirst,
-    PianoFirst,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub(crate) enum PaneAxis {
-    #[default]
-    Horizontal,
-    Vertical,
-    Stacked,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub(crate) enum ActiveScorePane {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub(crate) enum WorkspacePane {
     #[default]
     Score,
     PianoRoll,
+    Editor,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub(crate) enum DockAxis {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct ScoreLayoutSettings {
-    pub(crate) pane_axis: PaneAxis,
-    pub(crate) pane_order: PaneOrder,
-    pub(crate) active_pane: ActiveScorePane,
-    pub(crate) piano_visible: bool,
-    pub(crate) piano_expanded_ratio: f32,
+pub(crate) struct DockGroupSettings {
+    pub(crate) tabs: Vec<WorkspacePane>,
+    pub(crate) active: WorkspacePane,
 }
 
-impl Default for ScoreLayoutSettings {
+impl Default for DockGroupSettings {
     fn default() -> Self {
         Self {
-            pane_axis: PaneAxis::Horizontal,
-            pane_order: PaneOrder::ScoreFirst,
-            active_pane: ActiveScorePane::Score,
+            tabs: vec![WorkspacePane::Score],
+            active: WorkspacePane::Score,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) enum DockNodeSettings {
+    Group(DockGroupSettings),
+    Split {
+        axis: DockAxis,
+        ratio: f32,
+        first: Box<DockNodeSettings>,
+        second: Box<DockNodeSettings>,
+    },
+}
+
+impl Default for DockNodeSettings {
+    fn default() -> Self {
+        Self::Split {
+            axis: DockAxis::Vertical,
+            ratio: 0.38,
+            first: Box::new(Self::Group(DockGroupSettings {
+                tabs: vec![WorkspacePane::Editor],
+                active: WorkspacePane::Editor,
+            })),
+            second: Box::new(Self::Group(DockGroupSettings {
+                tabs: vec![WorkspacePane::Score, WorkspacePane::PianoRoll],
+                active: WorkspacePane::Score,
+            })),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct WorkspaceLayoutSettings {
+    pub(crate) root: DockNodeSettings,
+    pub(crate) piano_visible: bool,
+}
+
+impl Default for WorkspaceLayoutSettings {
+    fn default() -> Self {
+        Self {
+            root: DockNodeSettings::default(),
             piano_visible: true,
-            piano_expanded_ratio: 0.70,
         }
     }
 }
@@ -85,7 +116,7 @@ impl Default for PianoRollViewSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct AppSettings {
-    pub(crate) score_layout: ScoreLayoutSettings,
+    pub(crate) workspace_layout: WorkspaceLayoutSettings,
     pub(crate) score_view: ScoreViewSettings,
     pub(crate) piano_roll_view: PianoRollViewSettings,
 }

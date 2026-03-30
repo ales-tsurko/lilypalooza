@@ -17,7 +17,7 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     })
     .width(Fill)
     .height(Fill)
-    .on_resize(8, |event| Message::Pane(PaneMessage::Resized(event)));
+    .on_resize(8, |event| Message::Pane(PaneMessage::LoggerResized(event)));
 
     let file_name = app
         .current_score

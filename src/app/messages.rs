@@ -4,7 +4,7 @@ use iced::time::Instant;
 use iced::widget::{pane_grid, text_editor};
 use iced::{Size, keyboard, mouse};
 
-use super::ScorePaneKind;
+use super::WorkspacePaneKind;
 
 #[derive(Debug, Clone)]
 pub(super) enum Message {
@@ -13,6 +13,7 @@ pub(super) enum Message {
     File(FileMessage),
     Viewer(ViewerMessage),
     PianoRoll(PianoRollMessage),
+    Editor(EditorMessage),
     Logger(LoggerMessage),
     Prompt(PromptMessage),
     ModifiersChanged(keyboard::Modifiers),
@@ -23,16 +24,13 @@ pub(super) enum Message {
 
 #[derive(Debug, Clone)]
 pub(super) enum PaneMessage {
-    Resized(pane_grid::ResizeEvent),
-    ScoreDragged(pane_grid::DragEvent),
-    SplitDragMoved(iced::Point),
-    SplitDragExited,
-    StackedTabPressed(ScorePaneKind),
-    StackedTabHovered(Option<ScorePaneKind>),
-    StackedTabDragStarted(ScorePaneKind),
-    StackedDragMoved(iced::Point),
-    StackedDragReleased,
-    StackedDragExited,
+    LoggerResized(pane_grid::ResizeEvent),
+    WorkspaceResized(pane_grid::ResizeEvent),
+    WorkspaceTabPressed(WorkspacePaneKind),
+    WorkspaceTabHovered(Option<WorkspacePaneKind>),
+    WorkspaceDragMoved(iced::Point),
+    WorkspaceDragReleased,
+    WorkspaceDragExited,
     ToggleLogger,
 }
 
@@ -42,6 +40,11 @@ pub(super) enum FileMessage {
     Picked(Option<PathBuf>),
     RequestSoundfont,
     SoundfontPicked(Option<PathBuf>),
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum EditorMessage {
+    Action(text_editor::Action),
 }
 
 #[derive(Debug, Clone)]
@@ -70,7 +73,6 @@ pub(super) enum ViewerMessage {
 
 #[derive(Debug, Clone)]
 pub(super) enum PianoRollMessage {
-    Resized(pane_grid::ResizeEvent),
     ToggleVisible,
     ViewportCursorMoved(iced::Point),
     ViewportCursorLeft,

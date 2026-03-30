@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use iced::widget::{
-    Tooltip, button, canvas, column, container, mouse_area, pane_grid, responsive, row, scrollable,
-    stack, svg, text, tooltip,
+    Tooltip, button, canvas, container, mouse_area, pane_grid, responsive, row, scrollable, stack,
+    svg, text, tooltip,
 };
 use iced::{
     Color, ContentFit, Element, Fill, Length, Point, Rectangle, Size, Theme, alignment, border,
@@ -8,11 +10,9 @@ use iced::{
 };
 
 use super::{
-    FileMessage, LilyView, Message, PianoRollMessage, ScoreCursorPlacement, ScorePaneKind,
-    StackedDropTarget, ViewerMessage,
+    DockDropRegion, LilyView, Message, PaneMessage, ScoreCursorPlacement, ViewerMessage,
+    WorkspacePaneKind, editor, piano_roll, transport_bar,
 };
-use super::{piano_roll, transport_bar};
-use crate::settings::PaneAxis;
 use crate::ui_style;
 
 const SCROLL_MARKER_THICKNESS: f32 = 3.0;
@@ -20,11 +20,7 @@ const SCROLL_MARKER_LENGTH: f32 = 16.0;
 const SCROLL_MARKER_EDGE_INSET: f32 = 3.0;
 
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
-    let workspace = if app.score_layout_axis == PaneAxis::Stacked {
-        stacked_panes(app)
-    } else {
-        split_panes(app)
-    };
+    let workspace = workspace_panes(app);
 
     iced::widget::column![workspace, transport_bar::view(app)]
         .width(Fill)
@@ -33,64 +29,170 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
         .into()
 }
 
-fn split_panes(app: &LilyView) -> Element<'_, Message> {
+fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
     responsive(move |size| {
         let panes: Element<'_, Message> =
-            pane_grid::PaneGrid::new(&app.score_panes, |_pane, kind, _is_maximized| match kind {
-                ScorePaneKind::Score => pane_grid::Content::new(score_body(app))
-                    .title_bar(score_title_bar(app))
-                    .style(ui_style::pane_main_surface),
-                ScorePaneKind::PianoRoll => pane_grid::Content::new(piano_roll::content(app))
-                    .title_bar(piano_roll::title_bar(app))
-                    .style(ui_style::piano_roll_surface),
+            pane_grid::PaneGrid::new(&app.workspace_panes, |_pane, group_id, _is_maximized| {
+                let body = match app
+                    .workspace_group(*group_id)
+                    .map(|group| group.active)
+                    .unwrap_or(WorkspacePaneKind::Score)
+                {
+                    WorkspacePaneKind::Score => score_body(app),
+                    WorkspacePaneKind::PianoRoll => piano_roll::content(app),
+                    WorkspacePaneKind::Editor => editor::content(&app.editor, |action| {
+                        Message::Editor(super::EditorMessage::Action(action))
+                    }),
+                };
+
+                pane_grid::Content::new(body)
+                    .title_bar(group_title_bar(app, *group_id))
+                    .style(ui_style::pane_main_surface)
             })
             .width(Fill)
             .height(Fill)
             .style(split_rearrange_style)
-            .on_drag(|event| Message::Pane(super::PaneMessage::ScoreDragged(event)))
             .on_resize(8, |event| {
-                Message::PianoRoll(PianoRollMessage::Resized(event))
+                Message::Pane(PaneMessage::WorkspaceResized(event))
             })
             .into();
 
-        let overlay = split_drag_overlay(app, size);
+        let overlay = workspace_drag_overlay(app, size);
 
         mouse_area(stack([panes, overlay]).width(Fill).height(Fill))
-            .on_move(|position| Message::Pane(super::PaneMessage::SplitDragMoved(position)))
-            .on_exit(Message::Pane(super::PaneMessage::SplitDragExited))
+            .on_move(|position| Message::Pane(PaneMessage::WorkspaceDragMoved(position)))
+            .on_release(Message::Pane(PaneMessage::WorkspaceDragReleased))
+            .on_exit(Message::Pane(PaneMessage::WorkspaceDragExited))
             .into()
     })
     .into()
 }
 
-fn split_drag_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
-    let Some(_dragging) = app.split_dragging_pane else {
-        return container(text("")).width(Fill).height(Fill).into();
-    };
-    let Some(cursor) = app.split_drag_cursor else {
-        return container(text("")).width(Fill).height(Fill).into();
+fn group_title_bar<'a>(
+    app: &'a LilyView,
+    group_id: super::DockGroupId,
+) -> pane_grid::TitleBar<'a, Message> {
+    pane_grid::TitleBar::new(group_header(app, group_id))
+        .padding([
+            ui_style::PADDING_STATUS_BAR_V,
+            ui_style::PADDING_STATUS_BAR_H,
+        ])
+        .style(ui_style::pane_title_bar_surface)
+}
+
+fn group_header<'a>(app: &'a LilyView, group_id: super::DockGroupId) -> Element<'a, Message> {
+    let Some(group) = app.workspace_group(group_id) else {
+        return container(text("")).width(Fill).into();
     };
 
-    let Some((score_bounds, piano_bounds)) = split_pane_bounds(app, size) else {
-        return container(text("")).width(Fill).height(Fill).into();
+    let controls = match group.active {
+        WorkspacePaneKind::Score => score_controls(app),
+        WorkspacePaneKind::PianoRoll => piano_roll::controls(app).into(),
+        WorkspacePaneKind::Editor => container(text("")).into(),
     };
 
-    let target_bounds = if score_bounds.contains(cursor) {
-        split_preview_bounds(score_bounds, cursor)
-    } else if piano_bounds.contains(cursor) {
-        split_preview_bounds(piano_bounds, cursor)
-    } else {
-        Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-        }
-    };
+    row![
+        group_tabs(app, group),
+        container(text("")).width(Fill),
+        controls,
+    ]
+    .align_y(alignment::Vertical::Center)
+    .width(Fill)
+    .into()
+}
 
-    if target_bounds.width <= 0.0 || target_bounds.height <= 0.0 {
-        return container(text("")).width(Fill).height(Fill).into();
+fn group_tabs<'a>(app: &'a LilyView, group: &'a super::DockGroup) -> row::Row<'a, Message> {
+    group.tabs.iter().copied().fold(
+        row![].spacing(0).align_y(alignment::Vertical::Bottom),
+        |tabs, pane| tabs.push(workspace_tab(app, pane)),
+    )
+}
+
+fn workspace_tab(app: &LilyView, pane: WorkspacePaneKind) -> Element<'_, Message> {
+    let is_active = app
+        .group_for_pane(pane)
+        .and_then(|group_id| app.workspace_group(group_id))
+        .is_some_and(|group| group.active == pane);
+    let is_hovered = app.hovered_workspace_pane == Some(pane);
+    let is_dragging = app.dragged_workspace_pane == Some(pane);
+    let title = workspace_pane_title(pane);
+
+    let tab_body = container(text(title).size(ui_style::FONT_SIZE_UI_SM))
+        .width(Length::Shrink)
+        .padding([
+            ui_style::PADDING_STATUS_BAR_V + 3,
+            ui_style::PADDING_STATUS_BAR_H + 10,
+        ])
+        .style(move |theme: &Theme| {
+            let palette = theme.extended_palette();
+            if is_dragging {
+                container::Style {
+                    background: Some(palette.primary.weak.color.into()),
+                    text_color: Some(palette.primary.weak.text),
+                    border: border::rounded(12)
+                        .width(1)
+                        .color(palette.primary.base.color),
+                    ..container::Style::default()
+                }
+            } else if is_active {
+                container::Style {
+                    background: Some(palette.background.base.color.into()),
+                    text_color: Some(palette.background.base.text),
+                    border: border::rounded(9)
+                        .width(1)
+                        .color(palette.background.strong.color),
+                    ..container::Style::default()
+                }
+            } else if is_hovered {
+                container::Style {
+                    background: Some(palette.background.weakest.color.into()),
+                    text_color: Some(palette.background.weakest.text),
+                    border: border::rounded(9)
+                        .width(1)
+                        .color(palette.background.strong.color),
+                    ..container::Style::default()
+                }
+            } else {
+                container::Style {
+                    background: Some(palette.background.weak.color.into()),
+                    text_color: Some(palette.background.weak.text),
+                    border: border::rounded(9)
+                        .width(1)
+                        .color(palette.background.strong.color),
+                    ..container::Style::default()
+                }
+            }
+        });
+
+    mouse_area(tab_body)
+        .on_press(Message::Pane(PaneMessage::WorkspaceTabPressed(pane)))
+        .on_enter(Message::Pane(PaneMessage::WorkspaceTabHovered(Some(pane))))
+        .on_exit(Message::Pane(PaneMessage::WorkspaceTabHovered(None)))
+        .interaction(if is_dragging {
+            mouse::Interaction::Grabbing
+        } else {
+            mouse::Interaction::Grab
+        })
+        .into()
+}
+
+fn workspace_pane_title(pane: WorkspacePaneKind) -> &'static str {
+    match pane {
+        WorkspacePaneKind::Score => "Score",
+        WorkspacePaneKind::PianoRoll => "Piano Roll",
+        WorkspacePaneKind::Editor => "Editor",
     }
+}
+
+fn workspace_drag_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
+    let Some(target) = app.dock_drop_target else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
+    let bounds_map = workspace_group_bounds_map(&app.workspace_panes, size);
+    let Some(group_bounds) = bounds_map.get(&target.group_id).copied() else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
+    let target_bounds = preview_bounds_for_region(group_bounds, target.region);
 
     canvas(DropOverlayCanvas { target_bounds })
         .width(Fill)
@@ -98,93 +200,106 @@ fn split_drag_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
         .into()
 }
 
-fn split_pane_bounds(app: &LilyView, size: Size) -> Option<(Rectangle, Rectangle)> {
-    let bounds = Rectangle {
+fn workspace_group_bounds_map(
+    state: &pane_grid::State<super::DockGroupId>,
+    size: Size,
+) -> HashMap<super::DockGroupId, Rectangle> {
+    let mut bounds = HashMap::new();
+    let root_bounds = Rectangle {
         x: 0.0,
         y: 0.0,
         width: size.width.max(1.0),
         height: size.height.max(1.0),
     };
-    let ratio = app.piano_ratio.clamp(0.05, 0.95);
+    collect_group_bounds(state, state.layout(), root_bounds, &mut bounds);
 
-    match (app.score_split_axis, app.score_pane_order) {
-        (pane_grid::Axis::Horizontal, crate::settings::PaneOrder::ScoreFirst) => Some((
-            Rectangle {
-                height: bounds.height * ratio,
-                ..bounds
-            },
-            Rectangle {
-                y: bounds.y + bounds.height * ratio,
-                height: bounds.height * (1.0 - ratio),
-                ..bounds
-            },
-        )),
-        (pane_grid::Axis::Horizontal, crate::settings::PaneOrder::PianoFirst) => Some((
-            Rectangle {
-                y: bounds.y + bounds.height * ratio,
-                height: bounds.height * (1.0 - ratio),
-                ..bounds
-            },
-            Rectangle {
-                height: bounds.height * ratio,
-                ..bounds
-            },
-        )),
-        (pane_grid::Axis::Vertical, crate::settings::PaneOrder::ScoreFirst) => Some((
-            Rectangle {
-                width: bounds.width * ratio,
-                ..bounds
-            },
-            Rectangle {
-                x: bounds.x + bounds.width * ratio,
-                width: bounds.width * (1.0 - ratio),
-                ..bounds
-            },
-        )),
-        (pane_grid::Axis::Vertical, crate::settings::PaneOrder::PianoFirst) => Some((
-            Rectangle {
-                x: bounds.x + bounds.width * ratio,
-                width: bounds.width * (1.0 - ratio),
-                ..bounds
-            },
-            Rectangle {
-                width: bounds.width * ratio,
-                ..bounds
-            },
-        )),
+    bounds
+}
+
+fn collect_group_bounds(
+    state: &pane_grid::State<super::DockGroupId>,
+    node: &pane_grid::Node,
+    bounds: Rectangle,
+    group_bounds: &mut HashMap<super::DockGroupId, Rectangle>,
+) {
+    match node {
+        pane_grid::Node::Pane(pane) => {
+            if let Some(group_id) = state.get(*pane) {
+                group_bounds.insert(*group_id, bounds);
+            }
+        }
+        pane_grid::Node::Split {
+            axis, ratio, a, b, ..
+        } => match axis {
+            pane_grid::Axis::Horizontal => {
+                let first_height = bounds.height * ratio;
+                collect_group_bounds(
+                    state,
+                    a,
+                    Rectangle {
+                        height: first_height,
+                        ..bounds
+                    },
+                    group_bounds,
+                );
+                collect_group_bounds(
+                    state,
+                    b,
+                    Rectangle {
+                        y: bounds.y + first_height,
+                        height: bounds.height - first_height,
+                        ..bounds
+                    },
+                    group_bounds,
+                );
+            }
+            pane_grid::Axis::Vertical => {
+                let first_width = bounds.width * ratio;
+                collect_group_bounds(
+                    state,
+                    a,
+                    Rectangle {
+                        width: first_width,
+                        ..bounds
+                    },
+                    group_bounds,
+                );
+                collect_group_bounds(
+                    state,
+                    b,
+                    Rectangle {
+                        x: bounds.x + first_width,
+                        width: bounds.width - first_width,
+                        ..bounds
+                    },
+                    group_bounds,
+                );
+            }
+        },
     }
 }
 
-fn split_preview_bounds(bounds: Rectangle, cursor: Point) -> Rectangle {
-    let left = bounds.x + bounds.width / 3.0;
-    let right = bounds.x + 2.0 * bounds.width / 3.0;
-    let top = bounds.y + bounds.height / 3.0;
-    let bottom = bounds.y + 2.0 * bounds.height / 3.0;
-
-    if cursor.x < left {
-        Rectangle {
+fn preview_bounds_for_region(bounds: Rectangle, region: DockDropRegion) -> Rectangle {
+    match region {
+        DockDropRegion::Left => Rectangle {
             width: bounds.width / 2.0,
             ..bounds
-        }
-    } else if cursor.x > right {
-        Rectangle {
+        },
+        DockDropRegion::Right => Rectangle {
             x: bounds.x + bounds.width / 2.0,
             width: bounds.width / 2.0,
             ..bounds
-        }
-    } else if cursor.y < top {
-        Rectangle {
+        },
+        DockDropRegion::Top => Rectangle {
             height: bounds.height / 2.0,
             ..bounds
-        }
-    } else if cursor.y > bottom {
-        Rectangle {
+        },
+        DockDropRegion::Bottom => Rectangle {
             y: bounds.y + bounds.height / 2.0,
             height: bounds.height / 2.0,
             ..bounds
-        }
-    } else {
-        bounds
+        },
+        DockDropRegion::Center => bounds,
     }
 }
 
@@ -193,37 +308,6 @@ fn split_rearrange_style(theme: &Theme) -> pane_grid::Style {
     style.hovered_region.background = Color::TRANSPARENT.into();
     style.hovered_region.border = border::rounded(0).width(0).color(Color::TRANSPARENT);
     style
-}
-
-fn stacked_preview_bounds(size: Size, target: StackedDropTarget) -> Option<Rectangle> {
-    let bounds = Rectangle {
-        x: 0.0,
-        y: 0.0,
-        width: size.width.max(1.0),
-        height: size.height.max(1.0),
-    };
-
-    Some(match target {
-        StackedDropTarget::Top => Rectangle {
-            height: bounds.height / 2.0,
-            ..bounds
-        },
-        StackedDropTarget::Right => Rectangle {
-            x: bounds.x + bounds.width / 2.0,
-            width: bounds.width / 2.0,
-            ..bounds
-        },
-        StackedDropTarget::Bottom => Rectangle {
-            y: bounds.y + bounds.height / 2.0,
-            height: bounds.height / 2.0,
-            ..bounds
-        },
-        StackedDropTarget::Left => Rectangle {
-            width: bounds.width / 2.0,
-            ..bounds
-        },
-        StackedDropTarget::Center => bounds,
-    })
 }
 
 struct DropOverlayCanvas {
@@ -273,192 +357,9 @@ impl<Message> canvas::Program<Message> for DropOverlayCanvas {
     }
 }
 
-fn stacked_panes(app: &LilyView) -> Element<'_, Message> {
-    responsive(move |size| {
-        let ordered_panes = match app.score_pane_order {
-            crate::settings::PaneOrder::ScoreFirst => {
-                [ScorePaneKind::Score, ScorePaneKind::PianoRoll]
-            }
-            crate::settings::PaneOrder::PianoFirst => {
-                [ScorePaneKind::PianoRoll, ScorePaneKind::Score]
-            }
-        };
-
-        let tab_bar = container(
-            row![
-                stacked_tab(app, ordered_panes[0]),
-                stacked_tab(app, ordered_panes[1]),
-            ]
-            .spacing(0)
-            .padding([0, ui_style::PADDING_STATUS_BAR_H])
-            .align_y(alignment::Vertical::Bottom),
-        )
-        .width(Fill)
-        .padding([ui_style::PADDING_STATUS_BAR_V + 2, 0])
-        .style(stacked_tab_bar_surface);
-
-        let stacked_view: Element<'_, Message> = match app.stacked_active_pane {
-            ScorePaneKind::Score => column![tab_bar, score_header(app), score_body(app)]
-                .width(Fill)
-                .height(Fill)
-                .spacing(0)
-                .into(),
-            ScorePaneKind::PianoRoll => {
-                column![tab_bar, piano_roll::header(app), piano_roll::content(app)]
-                    .width(Fill)
-                    .height(Fill)
-                    .spacing(0)
-                    .into()
-            }
-        };
-
-        let overlay = stacked_drop_overlay(app, size);
-
-        mouse_area(stack([stacked_view, overlay]).width(Fill).height(Fill))
-            .on_move(|position| Message::Pane(super::PaneMessage::StackedDragMoved(position)))
-            .on_release(Message::Pane(super::PaneMessage::StackedDragReleased))
-            .on_exit(Message::Pane(super::PaneMessage::StackedDragExited))
-            .into()
-    })
-    .into()
-}
-
-fn stacked_tab(app: &LilyView, kind: ScorePaneKind) -> Element<'_, Message> {
-    let is_active = app.stacked_active_pane == kind;
-    let is_hovered = app.stacked_hovered_pane == Some(kind);
-    let is_dragging = app.stacked_dragging_pane == Some(kind);
-    let title = match kind {
-        ScorePaneKind::Score => "Score",
-        ScorePaneKind::PianoRoll => "Piano Roll",
-    };
-
-    let mut label = row![text(title).size(ui_style::FONT_SIZE_UI_SM)]
-        .spacing(ui_style::SPACE_XS)
-        .align_y(alignment::Vertical::Center);
-
-    if kind == ScorePaneKind::PianoRoll && !app.piano_roll.visible {
-        label = label.push(
-            text("Folded")
-                .size(ui_style::FONT_SIZE_UI_XS)
-                .font(iced::Font::MONOSPACE),
-        );
-    }
-
-    let tab_body = container(label)
-        .width(Length::Shrink)
-        .padding([
-            ui_style::PADDING_STATUS_BAR_V + 3,
-            ui_style::PADDING_STATUS_BAR_H + 10,
-        ])
-        .style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
-            if is_dragging {
-                container::Style {
-                    background: Some(palette.primary.weak.color.into()),
-                    text_color: Some(palette.primary.weak.text),
-                    border: border::rounded(12)
-                        .width(1)
-                        .color(palette.primary.base.color),
-                    ..container::Style::default()
-                }
-            } else if is_active {
-                container::Style {
-                    background: Some(palette.background.base.color.into()),
-                    text_color: Some(palette.background.base.text),
-                    border: border::rounded(9)
-                        .width(1)
-                        .color(palette.background.strong.color),
-                    ..container::Style::default()
-                }
-            } else if is_hovered {
-                container::Style {
-                    background: Some(palette.background.weakest.color.into()),
-                    text_color: Some(palette.background.weakest.text),
-                    border: border::rounded(9)
-                        .width(1)
-                        .color(palette.background.strong.color),
-                    ..container::Style::default()
-                }
-            } else {
-                container::Style {
-                    background: Some(palette.background.weak.color.into()),
-                    text_color: Some(palette.background.weak.text),
-                    border: border::rounded(9)
-                        .width(1)
-                        .color(palette.background.strong.color),
-                    ..container::Style::default()
-                }
-            }
-        });
-
-    mouse_area(tab_body)
-        .on_press(Message::Pane(super::PaneMessage::StackedTabPressed(kind)))
-        .on_enter(Message::Pane(super::PaneMessage::StackedTabHovered(Some(
-            kind,
-        ))))
-        .on_move(move |_| Message::Pane(super::PaneMessage::StackedTabDragStarted(kind)))
-        .on_exit(Message::Pane(super::PaneMessage::StackedTabHovered(None)))
-        .interaction(if is_dragging {
-            mouse::Interaction::Grabbing
-        } else {
-            mouse::Interaction::Grab
-        })
-        .into()
-}
-
-fn stacked_tab_bar_surface(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(palette.background.strong.color.into()),
-        text_color: Some(palette.background.strong.text),
-        ..container::Style::default()
-    }
-}
-
-fn stacked_drop_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
-    let Some(target) = app.stacked_drop_target else {
-        return container(text("")).width(Fill).height(Fill).into();
-    };
-    let Some(bounds) = stacked_preview_bounds(size, target) else {
-        return container(text("")).width(Fill).height(Fill).into();
-    };
-
-    canvas(DropOverlayCanvas {
-        target_bounds: bounds,
-    })
-    .width(Fill)
-    .height(Fill)
-    .into()
-}
-
-fn score_title_bar<'a>(app: &'a LilyView) -> pane_grid::TitleBar<'a, Message> {
-    pane_grid::TitleBar::new(score_header_content(app))
-        .padding([
-            ui_style::PADDING_STATUS_BAR_V,
-            ui_style::PADDING_STATUS_BAR_H,
-        ])
-        .style(ui_style::pane_title_bar_surface)
-}
-
-fn score_header<'a>(app: &'a LilyView) -> Element<'a, Message> {
-    container(score_header_content(app))
-        .width(Fill)
-        .padding([
-            ui_style::PADDING_STATUS_BAR_V,
-            ui_style::PADDING_STATUS_BAR_H,
-        ])
-        .style(ui_style::pane_title_bar_surface)
-        .into()
-}
-
-fn score_header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
-    let mut header = row![text("Score").size(ui_style::FONT_SIZE_UI_SM)]
-        .spacing(ui_style::SPACE_SM)
-        .align_y(alignment::Vertical::Center);
-
+pub(super) fn score_controls<'a>(app: &'a LilyView) -> Element<'a, Message> {
     if app.current_score.is_none() {
-        return header;
+        return container(text("")).into();
     }
 
     let page_label = app
@@ -592,17 +493,13 @@ fn score_header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
     )
     .gap(6);
 
-    header = header.push(
+    row![
         text(page_label)
             .size(ui_style::FONT_SIZE_UI_XS)
             .font(iced::Font::MONOSPACE),
-    );
-    header = header.push(
         row![prev_button, next_button]
             .spacing(ui_style::SPACE_XS)
             .align_y(alignment::Vertical::Center),
-    );
-    header = header.push(
         row![
             text("⌕")
                 .size(ui_style::FONT_SIZE_BODY_SM)
@@ -613,8 +510,6 @@ fn score_header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
         ]
         .spacing(ui_style::SPACE_XS)
         .align_y(alignment::Vertical::Center),
-    );
-    header.push(
         row![
             text("◐")
                 .size(ui_style::FONT_SIZE_UI_SM)
@@ -625,7 +520,10 @@ fn score_header_content<'a>(app: &'a LilyView) -> row::Row<'a, Message> {
         ]
         .spacing(ui_style::SPACE_XS)
         .align_y(alignment::Vertical::Center),
-    )
+    ]
+    .spacing(ui_style::SPACE_SM)
+    .align_y(alignment::Vertical::Center)
+    .into()
 }
 
 fn score_body(app: &LilyView) -> Element<'_, Message> {
@@ -640,7 +538,7 @@ fn score_body(app: &LilyView) -> Element<'_, Message> {
         )
         .style(ui_style::button_neutral)
         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
-        .on_press(Message::File(FileMessage::RequestOpen));
+        .on_press(Message::File(super::FileMessage::RequestOpen));
 
         return container(open_button)
             .width(Fill)

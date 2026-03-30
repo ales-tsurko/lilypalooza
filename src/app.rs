@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use iced::event;
 use iced::keyboard;
 use iced::widget::{pane_grid, svg};
-use iced::{Size, Subscription, Task, window};
+use iced::{Point, Rectangle, Size, Subscription, Task, window};
 use tempfile::TempDir;
 
 use crate::error_prompt::ErrorPrompt;
@@ -12,19 +13,18 @@ use crate::lilypond;
 use crate::logger::Logger;
 use crate::playback::MidiPlayback;
 use crate::score_watcher::ScoreWatcher;
-use crate::settings::{
-    self, ActiveScorePane, AppSettings, PaneAxis, PaneOrder, ScoreLayoutSettings,
-};
+use crate::settings::{self, AppSettings, DockAxis, DockNodeSettings};
 
 use messages::{
-    FileMessage, LoggerMessage, Message, PaneMessage, PianoRollMessage, PromptMessage,
-    ViewerMessage,
+    EditorMessage, FileMessage, LoggerMessage, Message, PaneMessage, PianoRollMessage,
+    PromptMessage, ViewerMessage,
 };
 use piano_roll::PianoRollState;
 use score_cursor::{ScoreCursorMaps, ScoreCursorPlacement};
 use update::update;
 use view::view;
 
+mod editor;
 mod messages;
 mod piano_roll;
 mod score_cursor;
@@ -49,6 +49,10 @@ const MAX_SVG_PAGE_BRIGHTNESS: u8 = 100;
 const SVG_PAGE_BRIGHTNESS_STEP: u8 = 10;
 pub(super) const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
+pub(super) type WorkspacePaneKind = crate::settings::WorkspacePane;
+
+type DockGroupId = u64;
+
 struct LilyView {
     panes: pane_grid::State<PaneKind>,
     main_pane: pane_grid::Pane,
@@ -69,24 +73,21 @@ struct LilyView {
     compile_session: Option<lilypond::CompileSession>,
     playback: Option<MidiPlayback>,
     soundfont_status: SoundfontStatus,
-    score_panes: pane_grid::State<ScorePaneKind>,
-    score_split: pane_grid::Split,
-    score_split_axis: pane_grid::Axis,
-    score_layout_axis: PaneAxis,
-    score_pane_order: PaneOrder,
-    split_dragging_pane: Option<ScorePaneKind>,
-    split_drag_cursor: Option<iced::Point>,
-    stacked_active_pane: ScorePaneKind,
-    stacked_hovered_pane: Option<ScorePaneKind>,
-    stacked_pressed_pane: Option<ScorePaneKind>,
-    stacked_dragging_pane: Option<ScorePaneKind>,
-    stacked_drop_target: Option<StackedDropTarget>,
-    piano_ratio: f32,
-    piano_expanded_ratio: f32,
+    workspace_panes: pane_grid::State<DockGroupId>,
+    dock_layout: DockNode,
+    dock_groups: HashMap<DockGroupId, DockGroup>,
+    next_dock_group_id: DockGroupId,
+    hovered_workspace_pane: Option<WorkspacePaneKind>,
+    pressed_workspace_pane: Option<WorkspacePaneKind>,
+    workspace_drag_origin: Option<Point>,
+    dragged_workspace_pane: Option<WorkspacePaneKind>,
+    dock_drop_target: Option<DockDropTarget>,
+    editor: editor::EditorState,
     rendered_score: Option<RenderedScore>,
     score_cursor_maps: Option<ScoreCursorMaps>,
     score_cursor_overlay: Option<ScoreCursorPlacement>,
     piano_roll: PianoRollState,
+    piano_roll_expanded_ratio: f32,
     svg_zoom: f32,
     svg_page_brightness: u8,
     svg_scroll_x: f32,
@@ -140,19 +141,36 @@ enum PaneKind {
     Logger,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScorePaneKind {
-    Score,
-    PianoRoll,
+#[derive(Debug, Clone)]
+struct DockGroup {
+    tabs: Vec<WorkspacePaneKind>,
+    active: WorkspacePaneKind,
+}
+
+#[derive(Debug, Clone)]
+enum DockNode {
+    Group(DockGroupId),
+    Split {
+        axis: pane_grid::Axis,
+        ratio: f32,
+        first: Box<DockNode>,
+        second: Box<DockNode>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StackedDropTarget {
+pub(super) enum DockDropRegion {
     Top,
     Right,
     Bottom,
     Left,
     Center,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DockDropTarget {
+    pub(super) group_id: DockGroupId,
+    pub(super) region: DockDropRegion,
 }
 
 enum LilypondStatus {
@@ -202,16 +220,18 @@ fn new(
         Ok(settings) => (settings, None),
         Err(error) => (default_settings.clone(), Some(error)),
     };
-    let stored_layout = stored_settings.score_layout;
-    let score_height = estimated_score_area_height(MIN_WINDOW_HEIGHT, false, logger_ratio);
-    let (score_panes, score_split, score_split_axis, piano_ratio, piano_expanded_ratio) =
-        build_score_panes(stored_layout, score_height);
+
+    let (dock_layout, dock_groups, next_dock_group_id, workspace_panes) =
+        build_dock_runtime(&stored_settings.workspace_layout.root);
+    let piano_roll_visible =
+        if workspace_pane_is_tabbed_in_groups(&dock_groups, WorkspacePaneKind::PianoRoll) {
+            true
+        } else {
+            stored_settings.workspace_layout.piano_visible
+        };
+
     let mut piano_roll = PianoRollState::new(default_settings.piano_roll_view);
-    piano_roll.visible = if stored_layout.pane_axis == PaneAxis::Stacked {
-        true
-    } else {
-        stored_layout.piano_visible
-    };
+    piano_roll.visible = piano_roll_visible;
     piano_roll.apply_view_settings(
         stored_settings.piano_roll_view.zoom_x,
         stored_settings.piano_roll_view.beat_subdivision,
@@ -237,24 +257,21 @@ fn new(
         compile_session: None,
         playback: None,
         soundfont_status: SoundfontStatus::NotSelected,
-        score_panes,
-        score_split,
-        score_split_axis,
-        score_layout_axis: stored_layout.pane_axis,
-        score_pane_order: stored_layout.pane_order,
-        split_dragging_pane: None,
-        split_drag_cursor: None,
-        stacked_active_pane: score_pane_kind_from_settings(stored_layout.active_pane),
-        stacked_hovered_pane: None,
-        stacked_pressed_pane: None,
-        stacked_dragging_pane: None,
-        stacked_drop_target: None,
-        piano_ratio,
-        piano_expanded_ratio,
+        workspace_panes,
+        dock_layout,
+        dock_groups,
+        next_dock_group_id,
+        hovered_workspace_pane: None,
+        pressed_workspace_pane: None,
+        workspace_drag_origin: None,
+        dragged_workspace_pane: None,
+        dock_drop_target: None,
+        editor: editor::EditorState::new(),
         rendered_score: None,
         score_cursor_maps: None,
         score_cursor_overlay: None,
         piano_roll,
+        piano_roll_expanded_ratio: 0.70,
         svg_zoom: stored_settings
             .score_view
             .zoom
@@ -270,6 +287,13 @@ fn new(
         keyboard_modifiers: keyboard::Modifiers::default(),
         default_settings,
     };
+
+    if app.piano_roll.visible
+        && let Some(group_id) = app.group_for_pane(WorkspacePaneKind::PianoRoll)
+        && let Some((_, _, ratio)) = app.parent_split_for_group(group_id)
+    {
+        app.piano_roll_expanded_ratio = ratio;
+    }
 
     app.logger.push("Checking LilyPond availability");
     if let Some(path) = startup_soundfont.as_ref() {
@@ -408,88 +432,216 @@ impl LilyView {
     pub(super) fn zoom_modifier_active(&self) -> bool {
         self.keyboard_modifiers.command() || self.keyboard_modifiers.control()
     }
+
+    pub(super) fn workspace_group(&self, group_id: DockGroupId) -> Option<&DockGroup> {
+        self.dock_groups.get(&group_id)
+    }
+
+    pub(super) fn group_for_pane(&self, pane: WorkspacePaneKind) -> Option<DockGroupId> {
+        self.dock_groups
+            .iter()
+            .find_map(|(group_id, group)| group.tabs.contains(&pane).then_some(*group_id))
+    }
+
+    pub(super) fn workspace_pane_is_tabbed(&self, pane: WorkspacePaneKind) -> bool {
+        self.group_for_pane(pane)
+            .and_then(|group_id| self.workspace_group(group_id))
+            .is_some_and(|group| group.tabs.len() > 1)
+    }
+
+    pub(super) fn piano_roll_effectively_visible(&self) -> bool {
+        !self.can_fold_piano_roll() || self.piano_roll.visible
+    }
+
+    pub(super) fn can_fold_piano_roll(&self) -> bool {
+        !self.workspace_pane_is_tabbed(WorkspacePaneKind::PianoRoll)
+            && self
+                .group_for_pane(WorkspacePaneKind::PianoRoll)
+                .and_then(|group_id| self.parent_split_for_group(group_id))
+                .is_some()
+    }
+
+    pub(super) fn workspace_area_size(&self) -> Size {
+        Size::new(self.window_width.max(1.0), self.score_area_height())
+    }
+
+    pub(super) fn workspace_bounds(&self) -> Rectangle {
+        let size = self.workspace_area_size();
+        Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: size.width,
+            height: size.height,
+        }
+    }
+
+    fn score_area_height(&self) -> f32 {
+        estimated_score_area_height(
+            self.window_height,
+            self.logger_pane.is_some(),
+            self.logger_ratio,
+        )
+    }
+
+    fn parent_split_for_group(
+        &self,
+        group_id: DockGroupId,
+    ) -> Option<(pane_grid::Axis, bool, f32)> {
+        parent_split_for_group(&self.dock_layout, group_id)
+    }
 }
 
-fn build_score_panes(
-    layout: ScoreLayoutSettings,
-    score_area_height: f32,
+fn build_dock_runtime(
+    root: &DockNodeSettings,
 ) -> (
-    pane_grid::State<ScorePaneKind>,
-    pane_grid::Split,
-    pane_grid::Axis,
-    f32,
-    f32,
+    DockNode,
+    HashMap<DockGroupId, DockGroup>,
+    DockGroupId,
+    pane_grid::State<DockGroupId>,
 ) {
-    let split_axis = match layout.pane_axis {
-        PaneAxis::Horizontal => pane_grid::Axis::Horizontal,
-        PaneAxis::Vertical => pane_grid::Axis::Vertical,
-        PaneAxis::Stacked => pane_grid::Axis::Horizontal,
-    };
-    let available_extent = score_extent_for_axis(MIN_WINDOW_WIDTH, score_area_height, split_axis);
-    let piano_expanded_ratio =
-        constrained_piano_ratio(available_extent, layout.piano_expanded_ratio);
-    let piano_ratio = if layout.piano_visible {
-        piano_expanded_ratio
-    } else {
-        collapsed_piano_ratio_for_layout(available_extent, layout.pane_order)
-    };
+    let mut next_id = 1;
+    let mut groups = HashMap::new();
+    let layout = dock_node_from_settings(root, &mut next_id, &mut groups);
+    let workspace_panes = build_workspace_panes(&layout);
 
-    let configuration = match layout.pane_order {
-        PaneOrder::ScoreFirst => pane_grid::Configuration::Split {
-            axis: split_axis,
-            ratio: piano_ratio,
-            a: Box::new(pane_grid::Configuration::Pane(ScorePaneKind::Score)),
-            b: Box::new(pane_grid::Configuration::Pane(ScorePaneKind::PianoRoll)),
+    (layout, groups, next_id, workspace_panes)
+}
+
+fn dock_node_from_settings(
+    node: &DockNodeSettings,
+    next_id: &mut DockGroupId,
+    groups: &mut HashMap<DockGroupId, DockGroup>,
+) -> DockNode {
+    match node {
+        DockNodeSettings::Group(group) => {
+            let group_id = *next_id;
+            *next_id = next_id.saturating_add(1);
+            let mut tabs = group.tabs.clone();
+            if tabs.is_empty() {
+                tabs.push(WorkspacePaneKind::Score);
+            }
+            let active = if tabs.contains(&group.active) {
+                group.active
+            } else {
+                tabs[0]
+            };
+            groups.insert(group_id, DockGroup { tabs, active });
+            DockNode::Group(group_id)
+        }
+        DockNodeSettings::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => DockNode::Split {
+            axis: pane_grid_axis_from_settings(*axis),
+            ratio: ratio.clamp(0.05, 0.95),
+            first: Box::new(dock_node_from_settings(first, next_id, groups)),
+            second: Box::new(dock_node_from_settings(second, next_id, groups)),
         },
-        PaneOrder::PianoFirst => pane_grid::Configuration::Split {
-            axis: split_axis,
-            ratio: piano_ratio,
-            a: Box::new(pane_grid::Configuration::Pane(ScorePaneKind::PianoRoll)),
-            b: Box::new(pane_grid::Configuration::Pane(ScorePaneKind::Score)),
+    }
+}
+
+fn build_workspace_panes(layout: &DockNode) -> pane_grid::State<DockGroupId> {
+    let configuration = configuration_from_dock_node(layout);
+
+    match configuration {
+        pane_grid::Configuration::Pane(group_id) => pane_grid::State::new(group_id).0,
+        configuration => pane_grid::State::with_configuration(configuration),
+    }
+}
+
+fn configuration_from_dock_node(layout: &DockNode) -> pane_grid::Configuration<DockGroupId> {
+    match layout {
+        DockNode::Group(group_id) => pane_grid::Configuration::Pane(*group_id),
+        DockNode::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => pane_grid::Configuration::Split {
+            axis: *axis,
+            ratio: *ratio,
+            a: Box::new(configuration_from_dock_node(first)),
+            b: Box::new(configuration_from_dock_node(second)),
         },
-    };
-
-    let score_panes = pane_grid::State::with_configuration(configuration);
-    let score_split = *score_panes
-        .layout()
-        .splits()
-        .next()
-        .expect("score pane split must initialize");
-
-    (
-        score_panes,
-        score_split,
-        split_axis,
-        piano_ratio,
-        piano_expanded_ratio,
-    )
-}
-
-fn score_pane_kind_from_settings(pane: ActiveScorePane) -> ScorePaneKind {
-    match pane {
-        ActiveScorePane::Score => ScorePaneKind::Score,
-        ActiveScorePane::PianoRoll => ScorePaneKind::PianoRoll,
     }
 }
 
-fn score_pane_kind_to_settings(pane: ScorePaneKind) -> ActiveScorePane {
-    match pane {
-        ScorePaneKind::Score => ActiveScorePane::Score,
-        ScorePaneKind::PianoRoll => ActiveScorePane::PianoRoll,
+fn dock_node_from_workspace_state(state: &pane_grid::State<DockGroupId>) -> Option<DockNode> {
+    dock_node_from_layout_node(state, state.layout())
+}
+
+fn dock_node_from_layout_node(
+    state: &pane_grid::State<DockGroupId>,
+    node: &pane_grid::Node,
+) -> Option<DockNode> {
+    match node {
+        pane_grid::Node::Pane(pane) => Some(DockNode::Group(*state.get(*pane)?)),
+        pane_grid::Node::Split {
+            axis, ratio, a, b, ..
+        } => Some(DockNode::Split {
+            axis: *axis,
+            ratio: *ratio,
+            first: Box::new(dock_node_from_layout_node(state, a.as_ref())?),
+            second: Box::new(dock_node_from_layout_node(state, b.as_ref())?),
+        }),
     }
 }
 
-fn pane_order_from_first(first: ScorePaneKind) -> PaneOrder {
-    match first {
-        ScorePaneKind::Score => PaneOrder::ScoreFirst,
-        ScorePaneKind::PianoRoll => PaneOrder::PianoFirst,
+fn pane_grid_axis_from_settings(axis: DockAxis) -> pane_grid::Axis {
+    match axis {
+        DockAxis::Horizontal => pane_grid::Axis::Horizontal,
+        DockAxis::Vertical => pane_grid::Axis::Vertical,
     }
 }
 
-fn pane_order_for_split(dragged: ScorePaneKind, dragged_first: bool) -> PaneOrder {
-    match (dragged, dragged_first) {
-        (ScorePaneKind::Score, true) | (ScorePaneKind::PianoRoll, false) => PaneOrder::ScoreFirst,
-        (ScorePaneKind::PianoRoll, true) | (ScorePaneKind::Score, false) => PaneOrder::PianoFirst,
+pub(super) fn dock_axis_to_settings(axis: pane_grid::Axis) -> DockAxis {
+    match axis {
+        pane_grid::Axis::Horizontal => DockAxis::Horizontal,
+        pane_grid::Axis::Vertical => DockAxis::Vertical,
+    }
+}
+
+fn workspace_pane_is_tabbed_in_groups(
+    groups: &HashMap<DockGroupId, DockGroup>,
+    pane: WorkspacePaneKind,
+) -> bool {
+    groups
+        .values()
+        .any(|group| group.tabs.contains(&pane) && group.tabs.len() > 1)
+}
+
+fn parent_split_for_group(
+    node: &DockNode,
+    group_id: DockGroupId,
+) -> Option<(pane_grid::Axis, bool, f32)> {
+    match node {
+        DockNode::Group(_) => None,
+        DockNode::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => {
+            if contains_group(first, group_id) {
+                Some((*axis, true, *ratio))
+            } else if contains_group(second, group_id) {
+                Some((*axis, false, *ratio))
+            } else {
+                parent_split_for_group(first, group_id)
+                    .or_else(|| parent_split_for_group(second, group_id))
+            }
+        }
+    }
+}
+
+fn contains_group(node: &DockNode, group_id: DockGroupId) -> bool {
+    match node {
+        DockNode::Group(candidate) => *candidate == group_id,
+        DockNode::Split { first, second, .. } => {
+            contains_group(first, group_id) || contains_group(second, group_id)
+        }
     }
 }
 
@@ -502,11 +654,11 @@ fn constrained_logger_ratio(window_height: f32, requested_ratio: f32) -> f32 {
     requested_ratio.clamp(0.05, max_ratio_for_min_logger.clamp(0.05, 0.95))
 }
 
-fn constrained_piano_ratio(score_area_height: f32, requested_ratio: f32) -> f32 {
+pub(super) fn constrained_piano_ratio(score_area_height: f32, requested_ratio: f32) -> f32 {
     constrained_bottom_panel_ratio(score_area_height, requested_ratio, MIN_LOGGER_PANEL_HEIGHT)
 }
 
-fn collapsed_piano_ratio(score_area_height: f32) -> f32 {
+pub(super) fn collapsed_piano_ratio(score_area_height: f32) -> f32 {
     constrained_bottom_panel_ratio(
         score_area_height,
         1.0 - (PIANO_COLLAPSED_PANEL_HEIGHT / score_area_height.max(1.0)),
@@ -514,19 +666,12 @@ fn collapsed_piano_ratio(score_area_height: f32) -> f32 {
     )
 }
 
-fn collapsed_first_pane_ratio(available_extent: f32) -> f32 {
+pub(super) fn collapsed_first_pane_ratio(available_extent: f32) -> f32 {
     constrained_top_panel_ratio(
         available_extent,
         PIANO_COLLAPSED_PANEL_HEIGHT / available_extent.max(1.0),
         PIANO_COLLAPSED_PANEL_HEIGHT,
     )
-}
-
-fn collapsed_piano_ratio_for_layout(available_extent: f32, order: PaneOrder) -> f32 {
-    match order {
-        PaneOrder::ScoreFirst => collapsed_piano_ratio(available_extent),
-        PaneOrder::PianoFirst => collapsed_first_pane_ratio(available_extent),
-    }
 }
 
 fn constrained_bottom_panel_ratio(
@@ -563,13 +708,6 @@ fn estimated_score_area_height(window_height: f32, logger_visible: bool, logger_
     }
 
     height.max(1.0)
-}
-
-fn score_extent_for_axis(window_width: f32, score_area_height: f32, axis: pane_grid::Axis) -> f32 {
-    match axis {
-        pane_grid::Axis::Horizontal => score_area_height,
-        pane_grid::Axis::Vertical => window_width.max(1.0),
-    }
 }
 
 fn selected_score_from_path(path: PathBuf) -> Result<SelectedScore, String> {

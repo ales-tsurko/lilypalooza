@@ -9,7 +9,9 @@ use super::score_cursor;
 use super::*;
 use crate::error_prompt::{ErrorFatality, ErrorPrompt, PromptButtons};
 use crate::midi;
-use crate::settings::{self, PaneAxis, PaneOrder, ScoreLayoutSettings};
+use crate::settings::{self, DockGroupSettings, DockNodeSettings, WorkspaceLayoutSettings};
+
+const DRAG_START_THRESHOLD: f32 = 8.0;
 
 pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
     match message {
@@ -18,6 +20,7 @@ pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
         Message::File(message) => app.handle_file_message(message),
         Message::Viewer(message) => app.handle_viewer_message(message),
         Message::PianoRoll(message) => app.handle_piano_roll_message(message),
+        Message::Editor(message) => app.handle_editor_message(message),
         Message::Logger(message) => app.handle_logger_message(message),
         Message::Prompt(message) => app.handle_prompt_message(message),
         Message::ModifiersChanged(modifiers) => app.handle_modifiers_changed(modifiers),
@@ -129,42 +132,25 @@ impl LilyView {
         let mut task = Task::none();
 
         match message {
-            PianoRollMessage::Resized(event) => {
-                if !self.piano_roll.visible {
-                    self.piano_roll.visible = true;
-                    task = self.restore_piano_roll_scroll();
-                }
-                let ratio =
-                    constrained_piano_ratio(self.score_extent_for_split_axis(), event.ratio);
-                self.piano_ratio = ratio;
-                self.piano_expanded_ratio = ratio;
-                self.score_panes.resize(event.split, ratio);
-                self.persist_settings();
-            }
             PianoRollMessage::ToggleVisible => {
-                if self.score_layout_axis == PaneAxis::Stacked {
+                if !self.can_fold_piano_roll() {
                     return Task::none();
                 }
 
+                if let Some(group_id) = self.group_for_pane(WorkspacePaneKind::PianoRoll)
+                    && let Some((_, _, ratio)) = self.parent_split_for_group(group_id)
+                    && self.piano_roll.visible
+                {
+                    self.piano_roll_expanded_ratio = ratio;
+                }
+
+                self.piano_roll.visible = !self.piano_roll.visible;
+                self.apply_piano_roll_fold_constraints();
+
                 if self.piano_roll.visible {
-                    self.piano_roll.visible = false;
-                    self.piano_expanded_ratio = self.piano_ratio;
-                    self.piano_ratio = collapsed_piano_ratio_for_layout(
-                        self.score_extent_for_split_axis(),
-                        self.score_pane_order,
-                    );
-                } else {
-                    self.piano_roll.visible = true;
-                    let ratio = constrained_piano_ratio(
-                        self.score_extent_for_split_axis(),
-                        self.piano_expanded_ratio,
-                    );
-                    self.piano_ratio = ratio;
-                    self.piano_expanded_ratio = ratio;
                     task = self.restore_piano_roll_scroll();
                 }
 
-                self.score_panes.resize(self.score_split, self.piano_ratio);
                 self.persist_settings();
             }
             PianoRollMessage::ViewportCursorMoved(position) => {
@@ -294,6 +280,15 @@ impl LilyView {
         task
     }
 
+    fn handle_editor_message(&mut self, message: EditorMessage) -> Task<Message> {
+        match message {
+            EditorMessage::Action(action) => {
+                self.editor.handle_action(action);
+                Task::none()
+            }
+        }
+    }
+
     fn handle_startup_checked(
         &mut self,
         result: Result<lilypond::VersionCheck, String>,
@@ -330,92 +325,72 @@ impl LilyView {
 
     fn handle_pane_message(&mut self, message: PaneMessage) -> Task<Message> {
         match message {
-            PaneMessage::Resized(event) => {
+            PaneMessage::LoggerResized(event) => {
                 let ratio = constrained_logger_ratio(self.window_height, event.ratio);
                 self.logger_ratio = ratio;
                 self.panes.resize(event.split, ratio);
-                self.apply_piano_layout_constraints();
+                self.apply_piano_roll_fold_constraints();
             }
-            PaneMessage::SplitDragMoved(position) => {
-                if self.split_dragging_pane.is_some() {
-                    self.split_drag_cursor = Some(position);
+            PaneMessage::WorkspaceResized(event) => {
+                self.workspace_panes.resize(event.split, event.ratio);
+                self.sync_dock_layout_from_workspace_state();
+                if self.piano_roll.visible {
+                    self.sync_piano_roll_expanded_ratio();
+                } else {
+                    self.apply_piano_roll_fold_constraints();
                 }
-            }
-            PaneMessage::SplitDragExited => {
-                if self.split_dragging_pane.is_some() {
-                    self.split_drag_cursor = None;
-                }
-            }
-            PaneMessage::ScoreDragged(event) => match event {
-                pane_grid::DragEvent::Picked { pane } => {
-                    self.split_dragging_pane = self.score_pane_kind(pane);
-                    self.split_drag_cursor = None;
-                }
-                pane_grid::DragEvent::Dropped { pane, target } => {
-                    self.split_dragging_pane = None;
-                    self.split_drag_cursor = None;
-
-                    if let pane_grid::Target::Pane(target_pane, pane_grid::Region::Center) = target
-                    {
-                        let Some(dragged_kind) = self.score_pane_kind(pane) else {
-                            return Task::none();
-                        };
-                        let Some(target_kind) = self.score_pane_kind(target_pane) else {
-                            return Task::none();
-                        };
-
-                        self.enter_stacked_layout(target_kind, dragged_kind);
-                    } else {
-                        self.score_panes.drop(pane, target);
-                        self.sync_score_layout_from_state();
-                        self.score_layout_axis = match self.score_split_axis {
-                            pane_grid::Axis::Horizontal => PaneAxis::Horizontal,
-                            pane_grid::Axis::Vertical => PaneAxis::Vertical,
-                        };
-                        self.apply_piano_layout_constraints();
-                    }
-
-                    self.persist_settings();
-                }
-                pane_grid::DragEvent::Canceled { .. } => {
-                    self.split_dragging_pane = None;
-                    self.split_drag_cursor = None;
-                }
-            },
-            PaneMessage::StackedTabPressed(kind) => {
-                self.stacked_active_pane = kind;
-                self.stacked_pressed_pane = Some(kind);
-                self.stacked_drop_target = None;
                 self.persist_settings();
             }
-            PaneMessage::StackedTabHovered(kind) => {
-                self.stacked_hovered_pane = kind;
+            PaneMessage::WorkspaceTabPressed(kind) => {
+                self.set_active_workspace_pane(kind);
+                self.pressed_workspace_pane = Some(kind);
+                self.workspace_drag_origin = None;
+                self.dock_drop_target = None;
+                self.persist_settings();
             }
-            PaneMessage::StackedTabDragStarted(kind) => {
-                if self.stacked_pressed_pane == Some(kind) {
-                    self.stacked_dragging_pane = Some(kind);
-                }
+            PaneMessage::WorkspaceTabHovered(kind) => {
+                self.hovered_workspace_pane = kind;
             }
-            PaneMessage::StackedDragMoved(position) => {
-                if self.stacked_dragging_pane.is_some() {
-                    self.stacked_drop_target = self.stacked_drop_target_for(position);
-                }
-            }
-            PaneMessage::StackedDragReleased => {
-                self.stacked_pressed_pane = None;
-
-                if self.stacked_dragging_pane.is_some() {
-                    if let Some(target) = self.stacked_drop_target {
-                        self.exit_stacked_layout(target);
-                        self.persist_settings();
+            PaneMessage::WorkspaceDragMoved(position) => {
+                if self.dragged_workspace_pane.is_none()
+                    && let Some(pressed_pane) = self.pressed_workspace_pane
+                {
+                    match self.workspace_drag_origin {
+                        Some(origin) if drag_distance(origin, position) >= DRAG_START_THRESHOLD => {
+                            self.dragged_workspace_pane = Some(pressed_pane);
+                            self.dock_drop_target =
+                                self.group_for_pane(pressed_pane)
+                                    .map(|group_id| DockDropTarget {
+                                        group_id,
+                                        region: DockDropRegion::Center,
+                                    });
+                        }
+                        Some(_) => {}
+                        None => {
+                            self.workspace_drag_origin = Some(position);
+                        }
                     }
+                }
 
-                    self.clear_stacked_drag_state();
+                if self.dragged_workspace_pane.is_some() {
+                    self.dock_drop_target = self.dock_drop_target_for(position);
                 }
             }
-            PaneMessage::StackedDragExited => {
-                if self.stacked_dragging_pane.is_some() {
-                    self.stacked_drop_target = None;
+            PaneMessage::WorkspaceDragReleased => {
+                self.pressed_workspace_pane = None;
+
+                if let Some(dragged_pane) = self.dragged_workspace_pane
+                    && let Some(target) = self.dock_drop_target
+                {
+                    self.apply_dock_drop(dragged_pane, target);
+                    self.persist_settings();
+                }
+
+                self.clear_workspace_drag_state();
+            }
+            PaneMessage::WorkspaceDragExited => {
+                if self.dragged_workspace_pane.is_some() {
+                    self.dock_drop_target = None;
                 }
             }
             PaneMessage::ToggleLogger => {
@@ -446,7 +421,7 @@ impl LilyView {
                     );
                 }
 
-                self.apply_piano_layout_constraints();
+                self.apply_piano_roll_fold_constraints();
             }
         }
 
@@ -868,7 +843,7 @@ impl LilyView {
             self.panes.resize(split, ratio);
         }
 
-        self.apply_piano_layout_constraints();
+        self.apply_piano_roll_fold_constraints();
 
         Task::none()
     }
@@ -883,168 +858,200 @@ impl LilyView {
         self.prompt_ok_action = ok_action;
     }
 
-    fn score_area_height(&self) -> f32 {
-        estimated_score_area_height(
-            self.window_height,
-            self.logger_pane.is_some(),
-            self.logger_ratio,
-        )
+    fn rebuild_workspace_panes(&mut self) {
+        self.workspace_panes = build_workspace_panes(&self.dock_layout);
     }
 
-    fn apply_piano_layout_constraints(&mut self) {
-        if self.score_layout_axis == PaneAxis::Stacked {
+    fn sync_dock_layout_from_workspace_state(&mut self) {
+        if let Some(layout) = dock_node_from_workspace_state(&self.workspace_panes) {
+            self.dock_layout = layout;
+        }
+    }
+
+    fn sync_piano_roll_expanded_ratio(&mut self) {
+        if !self.piano_roll.visible {
             return;
+        }
+
+        if let Some(group_id) = self.group_for_pane(WorkspacePaneKind::PianoRoll)
+            && let Some((_, _, ratio)) = self.parent_split_for_group(group_id)
+        {
+            self.piano_roll_expanded_ratio = ratio;
+        }
+    }
+
+    fn apply_piano_roll_fold_constraints(&mut self) {
+        let Some(group_id) = self.group_for_pane(WorkspacePaneKind::PianoRoll) else {
+            return;
+        };
+        let Some((axis, is_first, current_ratio)) = self.parent_split_for_group(group_id) else {
+            return;
+        };
+        let Some(group_bounds) = self.workspace_group_bounds().get(&group_id).copied() else {
+            return;
+        };
+
+        let extent =
+            parent_split_extent_for_group_bounds(group_bounds, axis, is_first, current_ratio);
+
+        let ratio = if self.piano_roll.visible {
+            constrain_split_ratio_for_piano_parent(extent, is_first, self.piano_roll_expanded_ratio)
+        } else if is_first {
+            collapsed_first_pane_ratio(extent)
+        } else {
+            collapsed_piano_ratio(extent)
+        };
+
+        if set_parent_split_ratio(&mut self.dock_layout, group_id, ratio) {
+            self.rebuild_workspace_panes();
         }
 
         if self.piano_roll.visible {
-            let ratio =
-                constrained_piano_ratio(self.score_extent_for_split_axis(), self.piano_ratio);
-            self.piano_ratio = ratio;
-            self.piano_expanded_ratio = ratio;
-        } else {
-            self.piano_ratio = collapsed_piano_ratio_for_layout(
-                self.score_extent_for_split_axis(),
-                self.score_pane_order,
-            );
+            self.sync_piano_roll_expanded_ratio();
         }
-
-        self.score_panes.resize(self.score_split, self.piano_ratio);
     }
 
-    fn score_extent_for_split_axis(&self) -> f32 {
-        score_extent_for_axis(
-            self.window_width,
-            self.score_area_height(),
-            self.score_split_axis,
-        )
-    }
-
-    fn sync_score_layout_from_state(&mut self) {
-        let pane_grid::Node::Split {
-            id,
-            axis,
-            ratio,
-            a,
-            b,
-        } = self.score_panes.layout()
-        else {
+    fn set_active_workspace_pane(&mut self, pane: WorkspacePaneKind) {
+        let Some(group_id) = self.group_for_pane(pane) else {
+            return;
+        };
+        let Some(group) = self.dock_groups.get_mut(&group_id) else {
             return;
         };
 
-        self.score_split = *id;
-        self.score_split_axis = *axis;
-        self.piano_ratio = *ratio;
+        if group.tabs.contains(&pane) {
+            group.active = pane;
+        }
+    }
 
-        self.score_pane_order = match (a.as_ref(), b.as_ref()) {
-            (pane_grid::Node::Pane(a_pane), pane_grid::Node::Pane(b_pane)) => {
-                match (self.score_panes.get(*a_pane), self.score_panes.get(*b_pane)) {
-                    (Some(ScorePaneKind::Score), Some(ScorePaneKind::PianoRoll)) => {
-                        PaneOrder::ScoreFirst
-                    }
-                    (Some(ScorePaneKind::PianoRoll), Some(ScorePaneKind::Score)) => {
-                        PaneOrder::PianoFirst
-                    }
-                    _ => self.score_pane_order,
+    fn dock_drop_target_for(&self, position: iced::Point) -> Option<DockDropTarget> {
+        let bounds_map = self.workspace_group_bounds();
+        let (group_id, bounds) = bounds_map
+            .into_iter()
+            .find(|(_, bounds)| bounds.contains(position))?;
+
+        Some(DockDropTarget {
+            group_id,
+            region: dock_drop_region(bounds, position),
+        })
+    }
+
+    fn workspace_group_bounds(&self) -> std::collections::HashMap<DockGroupId, iced::Rectangle> {
+        let mut bounds = std::collections::HashMap::new();
+        let root_bounds = self.workspace_bounds();
+        collect_workspace_group_bounds(
+            &self.workspace_panes,
+            self.workspace_panes.layout(),
+            root_bounds,
+            &mut bounds,
+        );
+        bounds
+    }
+
+    fn apply_dock_drop(&mut self, dragged: WorkspacePaneKind, target: DockDropTarget) {
+        let Some(source_group_id) = self.group_for_pane(dragged) else {
+            return;
+        };
+        if !self.dock_groups.contains_key(&target.group_id) {
+            return;
+        }
+
+        match target.region {
+            DockDropRegion::Center if source_group_id == target.group_id => {
+                if let Some(group) = self.dock_groups.get_mut(&source_group_id) {
+                    move_tab_to_front(&mut group.tabs, dragged);
+                    group.active = dragged;
                 }
             }
-            _ => self.score_pane_order,
-        };
-    }
+            DockDropRegion::Center => {
+                let source_empty =
+                    remove_pane_from_group(&mut self.dock_groups, source_group_id, dragged);
 
-    fn score_pane_kind(&self, pane: pane_grid::Pane) -> Option<ScorePaneKind> {
-        self.score_panes.get(pane).copied()
-    }
+                if source_empty {
+                    self.dock_groups.remove(&source_group_id);
+                    let layout =
+                        std::mem::replace(&mut self.dock_layout, DockNode::Group(target.group_id));
+                    self.dock_layout = prune_group_from_layout(layout, source_group_id);
+                }
 
-    fn enter_stacked_layout(&mut self, first_tab: ScorePaneKind, active_tab: ScorePaneKind) {
-        self.score_layout_axis = PaneAxis::Stacked;
-        self.score_pane_order = pane_order_from_first(first_tab);
-        self.stacked_active_pane = active_tab;
-        self.piano_roll.visible = true;
-        self.clear_stacked_drag_state();
-    }
+                if let Some(target_group) = self.dock_groups.get_mut(&target.group_id) {
+                    target_group.tabs.retain(|pane| *pane != dragged);
+                    target_group.tabs.push(dragged);
+                    target_group.active = dragged;
+                }
+            }
+            region => {
+                if source_group_id == target.group_id
+                    && self
+                        .dock_groups
+                        .get(&source_group_id)
+                        .is_some_and(|group| group.tabs.len() <= 1)
+                {
+                    return;
+                }
 
-    fn exit_stacked_layout(&mut self, target: StackedDropTarget) {
-        let Some(dragged_pane) = self.stacked_dragging_pane else {
-            return;
-        };
+                let source_empty =
+                    remove_pane_from_group(&mut self.dock_groups, source_group_id, dragged);
 
-        if target == StackedDropTarget::Center {
-            self.score_pane_order = pane_order_from_first(dragged_pane);
-            self.clear_stacked_drag_state();
-            return;
+                if source_empty && source_group_id != target.group_id {
+                    self.dock_groups.remove(&source_group_id);
+                    let layout =
+                        std::mem::replace(&mut self.dock_layout, DockNode::Group(target.group_id));
+                    self.dock_layout = prune_group_from_layout(layout, source_group_id);
+                }
+
+                let new_group_id = self.next_dock_group_id;
+                self.next_dock_group_id = self.next_dock_group_id.saturating_add(1);
+                self.dock_groups.insert(
+                    new_group_id,
+                    DockGroup {
+                        tabs: vec![dragged],
+                        active: dragged,
+                    },
+                );
+
+                let (axis, insert_first) = match region {
+                    DockDropRegion::Top => (pane_grid::Axis::Horizontal, true),
+                    DockDropRegion::Bottom => (pane_grid::Axis::Horizontal, false),
+                    DockDropRegion::Left => (pane_grid::Axis::Vertical, true),
+                    DockDropRegion::Right => (pane_grid::Axis::Vertical, false),
+                    DockDropRegion::Center => unreachable!(),
+                };
+
+                replace_group_with_split(
+                    &mut self.dock_layout,
+                    target.group_id,
+                    axis,
+                    0.5,
+                    new_group_id,
+                    insert_first,
+                );
+            }
         }
 
-        self.score_layout_axis = match target {
-            StackedDropTarget::Top | StackedDropTarget::Bottom => PaneAxis::Horizontal,
-            StackedDropTarget::Left | StackedDropTarget::Right => PaneAxis::Vertical,
-            StackedDropTarget::Center => PaneAxis::Stacked,
-        };
-        self.score_pane_order = pane_order_for_split(
-            dragged_pane,
-            matches!(target, StackedDropTarget::Top | StackedDropTarget::Left),
-        );
-        self.rebuild_split_score_panes();
-    }
-
-    fn rebuild_split_score_panes(&mut self) {
-        let (score_panes, score_split, score_split_axis, piano_ratio, piano_expanded_ratio) =
-            build_score_panes(
-                ScoreLayoutSettings {
-                    pane_axis: self.score_layout_axis,
-                    pane_order: self.score_pane_order,
-                    active_pane: score_pane_kind_to_settings(self.stacked_active_pane),
-                    piano_visible: self.piano_roll.visible,
-                    piano_expanded_ratio: self.piano_expanded_ratio,
-                },
-                self.score_area_height(),
-            );
-
-        self.score_panes = score_panes;
-        self.score_split = score_split;
-        self.score_split_axis = score_split_axis;
-        self.piano_ratio = piano_ratio;
-        self.piano_expanded_ratio = piano_expanded_ratio;
-    }
-
-    fn stacked_drop_target_for(&self, position: iced::Point) -> Option<StackedDropTarget> {
-        if self.score_layout_axis != PaneAxis::Stacked {
-            return None;
+        if self.workspace_pane_is_tabbed(WorkspacePaneKind::PianoRoll) {
+            self.piano_roll.visible = true;
         }
 
-        let width = self.window_width.max(1.0);
-        let height = self.score_area_height().max(1.0);
-        let horizontal_band = (width * 0.18).clamp(88.0, 160.0);
-        let vertical_band = (height * 0.18).clamp(88.0, 160.0);
-
-        if position.y <= vertical_band {
-            Some(StackedDropTarget::Top)
-        } else if position.y >= height - vertical_band {
-            Some(StackedDropTarget::Bottom)
-        } else if position.x <= horizontal_band {
-            Some(StackedDropTarget::Left)
-        } else if position.x >= width - horizontal_band {
-            Some(StackedDropTarget::Right)
-        } else {
-            Some(StackedDropTarget::Center)
-        }
+        self.rebuild_workspace_panes();
+        self.apply_piano_roll_fold_constraints();
+        self.sync_piano_roll_expanded_ratio();
     }
 
-    fn clear_stacked_drag_state(&mut self) {
-        self.stacked_hovered_pane = None;
-        self.stacked_pressed_pane = None;
-        self.stacked_dragging_pane = None;
-        self.stacked_drop_target = None;
+    fn clear_workspace_drag_state(&mut self) {
+        self.hovered_workspace_pane = None;
+        self.pressed_workspace_pane = None;
+        self.workspace_drag_origin = None;
+        self.dragged_workspace_pane = None;
+        self.dock_drop_target = None;
     }
 
     fn persist_settings(&self) {
         let _ = settings::save(&settings::AppSettings {
-            score_layout: ScoreLayoutSettings {
-                pane_axis: self.score_layout_axis,
-                pane_order: self.score_pane_order,
-                active_pane: score_pane_kind_to_settings(self.stacked_active_pane),
-                piano_visible: self.score_layout_axis == PaneAxis::Stacked
-                    || self.piano_roll.visible,
-                piano_expanded_ratio: self.piano_expanded_ratio,
+            workspace_layout: WorkspaceLayoutSettings {
+                root: dock_node_to_settings(&self.dock_layout, &self.dock_groups),
+                piano_visible: self.piano_roll.visible
+                    || self.workspace_pane_is_tabbed(WorkspacePaneKind::PianoRoll),
             },
             score_view: settings::ScoreViewSettings {
                 zoom: self.svg_zoom,
@@ -1505,6 +1512,303 @@ impl LilyView {
             .map(|file| file.data.total_ticks)
             .unwrap_or(0)
     }
+}
+
+fn dock_node_to_settings(
+    node: &DockNode,
+    groups: &std::collections::HashMap<DockGroupId, DockGroup>,
+) -> DockNodeSettings {
+    match node {
+        DockNode::Group(group_id) => DockNodeSettings::Group(
+            groups
+                .get(group_id)
+                .map(|group| DockGroupSettings {
+                    tabs: group.tabs.clone(),
+                    active: group.active,
+                })
+                .unwrap_or_default(),
+        ),
+        DockNode::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => DockNodeSettings::Split {
+            axis: dock_axis_to_settings(*axis),
+            ratio: *ratio,
+            first: Box::new(dock_node_to_settings(first, groups)),
+            second: Box::new(dock_node_to_settings(second, groups)),
+        },
+    }
+}
+
+fn collect_workspace_group_bounds(
+    state: &pane_grid::State<DockGroupId>,
+    node: &pane_grid::Node,
+    bounds: iced::Rectangle,
+    group_bounds: &mut std::collections::HashMap<DockGroupId, iced::Rectangle>,
+) {
+    match node {
+        pane_grid::Node::Pane(pane) => {
+            if let Some(group_id) = state.get(*pane) {
+                group_bounds.insert(*group_id, bounds);
+            }
+        }
+        pane_grid::Node::Split {
+            axis, ratio, a, b, ..
+        } => match axis {
+            pane_grid::Axis::Horizontal => {
+                let first_height = bounds.height * ratio;
+                collect_workspace_group_bounds(
+                    state,
+                    a,
+                    iced::Rectangle {
+                        height: first_height,
+                        ..bounds
+                    },
+                    group_bounds,
+                );
+                collect_workspace_group_bounds(
+                    state,
+                    b,
+                    iced::Rectangle {
+                        y: bounds.y + first_height,
+                        height: bounds.height - first_height,
+                        ..bounds
+                    },
+                    group_bounds,
+                );
+            }
+            pane_grid::Axis::Vertical => {
+                let first_width = bounds.width * ratio;
+                collect_workspace_group_bounds(
+                    state,
+                    a,
+                    iced::Rectangle {
+                        width: first_width,
+                        ..bounds
+                    },
+                    group_bounds,
+                );
+                collect_workspace_group_bounds(
+                    state,
+                    b,
+                    iced::Rectangle {
+                        x: bounds.x + first_width,
+                        width: bounds.width - first_width,
+                        ..bounds
+                    },
+                    group_bounds,
+                );
+            }
+        },
+    }
+}
+
+fn dock_drop_region(bounds: iced::Rectangle, position: iced::Point) -> DockDropRegion {
+    let relative_x = ((position.x - bounds.x) / bounds.width.max(1.0)).clamp(0.0, 1.0);
+    let relative_y = ((position.y - bounds.y) / bounds.height.max(1.0)).clamp(0.0, 1.0);
+    let center_min = 1.0 / 3.0;
+    let center_max = 2.0 / 3.0;
+
+    if (center_min..=center_max).contains(&relative_x)
+        && (center_min..=center_max).contains(&relative_y)
+    {
+        return DockDropRegion::Center;
+    }
+
+    let top_distance = relative_y;
+    let right_distance = 1.0 - relative_x;
+    let bottom_distance = 1.0 - relative_y;
+    let left_distance = relative_x;
+    let mut closest = (DockDropRegion::Top, top_distance);
+
+    for candidate in [
+        (DockDropRegion::Right, right_distance),
+        (DockDropRegion::Bottom, bottom_distance),
+        (DockDropRegion::Left, left_distance),
+    ] {
+        if candidate.1 < closest.1 {
+            closest = candidate;
+        }
+    }
+
+    closest.0
+}
+
+fn move_tab_to_front(tabs: &mut Vec<WorkspacePaneKind>, pane: WorkspacePaneKind) {
+    if let Some(index) = tabs.iter().position(|candidate| *candidate == pane) {
+        let pane = tabs.remove(index);
+        tabs.insert(0, pane);
+    }
+}
+
+fn drag_distance(a: iced::Point, b: iced::Point) -> f32 {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    (dx * dx + dy * dy).sqrt()
+}
+
+fn remove_pane_from_group(
+    groups: &mut std::collections::HashMap<DockGroupId, DockGroup>,
+    group_id: DockGroupId,
+    pane: WorkspacePaneKind,
+) -> bool {
+    let Some(group) = groups.get_mut(&group_id) else {
+        return false;
+    };
+
+    group.tabs.retain(|candidate| *candidate != pane);
+
+    if group.active == pane {
+        group.active = group
+            .tabs
+            .first()
+            .copied()
+            .unwrap_or(WorkspacePaneKind::Score);
+    }
+
+    group.tabs.is_empty()
+}
+
+fn prune_group_from_layout(layout: DockNode, group_id: DockGroupId) -> DockNode {
+    prune_group_from_layout_inner(layout, group_id).unwrap_or(DockNode::Group(group_id))
+}
+
+fn prune_group_from_layout_inner(layout: DockNode, group_id: DockGroupId) -> Option<DockNode> {
+    match layout {
+        DockNode::Group(candidate) => (candidate != group_id).then_some(DockNode::Group(candidate)),
+        DockNode::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => {
+            let first = prune_group_from_layout_inner(*first, group_id);
+            let second = prune_group_from_layout_inner(*second, group_id);
+
+            match (first, second) {
+                (Some(first), Some(second)) => Some(DockNode::Split {
+                    axis,
+                    ratio,
+                    first: Box::new(first),
+                    second: Box::new(second),
+                }),
+                (Some(node), None) | (None, Some(node)) => Some(node),
+                (None, None) => None,
+            }
+        }
+    }
+}
+
+fn replace_group_with_split(
+    node: &mut DockNode,
+    target_group_id: DockGroupId,
+    axis: pane_grid::Axis,
+    ratio: f32,
+    new_group_id: DockGroupId,
+    insert_first: bool,
+) -> bool {
+    match node {
+        DockNode::Group(group_id) if *group_id == target_group_id => {
+            let existing_group = DockNode::Group(*group_id);
+            let new_group = DockNode::Group(new_group_id);
+            *node = DockNode::Split {
+                axis,
+                ratio,
+                first: Box::new(if insert_first {
+                    new_group.clone()
+                } else {
+                    existing_group.clone()
+                }),
+                second: Box::new(if insert_first {
+                    existing_group
+                } else {
+                    new_group
+                }),
+            };
+            true
+        }
+        DockNode::Group(_) => false,
+        DockNode::Split { first, second, .. } => {
+            replace_group_with_split(
+                first,
+                target_group_id,
+                axis,
+                ratio,
+                new_group_id,
+                insert_first,
+            ) || replace_group_with_split(
+                second,
+                target_group_id,
+                axis,
+                ratio,
+                new_group_id,
+                insert_first,
+            )
+        }
+    }
+}
+
+fn set_parent_split_ratio(node: &mut DockNode, group_id: DockGroupId, ratio: f32) -> bool {
+    match node {
+        DockNode::Group(_) => false,
+        DockNode::Split {
+            ratio: current_ratio,
+            first,
+            second,
+            ..
+        } => {
+            if set_parent_split_ratio(first, group_id, ratio)
+                || set_parent_split_ratio(second, group_id, ratio)
+            {
+                return true;
+            }
+
+            if contains_group(first, group_id) || contains_group(second, group_id) {
+                if (*current_ratio - ratio).abs() > 1e-4 {
+                    *current_ratio = ratio;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+    }
+}
+
+fn constrain_split_ratio_for_piano_parent(
+    available_extent: f32,
+    piano_is_first: bool,
+    requested_ratio: f32,
+) -> f32 {
+    if piano_is_first {
+        constrained_top_panel_ratio(
+            available_extent,
+            requested_ratio,
+            super::MIN_LOGGER_PANEL_HEIGHT,
+        )
+    } else {
+        constrained_piano_ratio(available_extent, requested_ratio)
+    }
+}
+
+fn parent_split_extent_for_group_bounds(
+    group_bounds: iced::Rectangle,
+    axis: pane_grid::Axis,
+    group_is_first: bool,
+    ratio: f32,
+) -> f32 {
+    let child_extent = match axis {
+        pane_grid::Axis::Horizontal => group_bounds.height,
+        pane_grid::Axis::Vertical => group_bounds.width,
+    }
+    .max(1.0);
+    let share = if group_is_first { ratio } else { 1.0 - ratio }.max(0.05);
+
+    (child_extent / share).max(1.0)
 }
 
 fn snap_zoom_to_step(value: f32, step: f32) -> f32 {
