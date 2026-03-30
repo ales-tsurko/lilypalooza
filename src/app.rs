@@ -37,8 +37,6 @@ mod view;
 
 const MIN_WINDOW_WIDTH: f32 = 960.0;
 const MIN_WINDOW_HEIGHT: f32 = 640.0;
-const LOGGER_DEFAULT_SPLIT_RATIO: f32 = 0.74;
-const MIN_LOGGER_PANEL_HEIGHT: f32 = 140.0;
 const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_millis(120);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
 pub(super) const KEYBOARD_SCROLL_STEP: f32 = 84.0;
@@ -55,11 +53,6 @@ pub(super) type WorkspacePaneKind = crate::settings::WorkspacePane;
 type DockGroupId = u64;
 
 struct LilyView {
-    panes: pane_grid::State<PaneKind>,
-    main_pane: pane_grid::Pane,
-    logger_pane: Option<pane_grid::Pane>,
-    logger_split: Option<pane_grid::Split>,
-    logger_ratio: f32,
     window_width: f32,
     window_height: f32,
     lilypond_status: LilypondStatus,
@@ -137,25 +130,19 @@ impl RenderedScore {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum PaneKind {
-    Main,
-    Logger,
-}
-
 #[derive(Debug, Clone)]
 struct DockGroup {
     tabs: Vec<WorkspacePaneKind>,
     active: WorkspacePaneKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct FoldedPaneState {
     pane: WorkspacePaneKind,
     restore: FoldedPaneRestore,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum FoldedPaneRestore {
     Tab {
         anchor: WorkspacePaneKind,
@@ -164,6 +151,7 @@ enum FoldedPaneRestore {
         anchor: WorkspacePaneKind,
         axis: pane_grid::Axis,
         insert_first: bool,
+        sibling_panes: Vec<WorkspacePaneKind>,
     },
 }
 
@@ -233,13 +221,15 @@ fn new(
     startup_soundfont: Option<PathBuf>,
     startup_score: Option<PathBuf>,
 ) -> (LilyView, Task<Message>) {
-    let (panes, main_pane) = pane_grid::State::new(PaneKind::Main);
-    let logger_ratio = constrained_logger_ratio(MIN_WINDOW_HEIGHT, LOGGER_DEFAULT_SPLIT_RATIO);
     let default_settings = AppSettings::default();
-    let (stored_settings, settings_error) = match settings::load() {
+    let (mut stored_settings, settings_error) = match settings::load() {
         Ok(settings) => (settings, None),
         Err(error) => (default_settings.clone(), Some(error)),
     };
+    migrate_workspace_layout(
+        &mut stored_settings.workspace_layout.root,
+        &stored_settings.workspace_layout.folded_panes,
+    );
 
     let (dock_layout, dock_groups, next_dock_group_id, workspace_panes) =
         build_dock_runtime(&stored_settings.workspace_layout.root);
@@ -247,7 +237,7 @@ fn new(
         .workspace_layout
         .folded_panes
         .iter()
-        .copied()
+        .cloned()
         .map(folded_pane_from_settings)
         .collect();
     if folded_panes.is_empty() && !stored_settings.workspace_layout.piano_visible {
@@ -270,11 +260,6 @@ fn new(
     );
 
     let mut app = LilyView {
-        panes,
-        main_pane,
-        logger_pane: None,
-        logger_split: None,
-        logger_ratio,
         window_width: MIN_WINDOW_WIDTH,
         window_height: MIN_WINDOW_HEIGHT,
         lilypond_status: LilypondStatus::Checking,
@@ -489,7 +474,7 @@ impl LilyView {
     }
 
     pub(super) fn workspace_area_size(&self) -> Size {
-        Size::new(self.window_width.max(1.0), self.score_area_height())
+        Size::new(self.window_width.max(1.0), self.workspace_height())
     }
 
     pub(super) fn workspace_bounds(&self) -> Rectangle {
@@ -502,12 +487,11 @@ impl LilyView {
         }
     }
 
-    fn score_area_height(&self) -> f32 {
-        estimated_score_area_height(
-            self.window_height,
-            self.logger_pane.is_some(),
-            self.logger_ratio,
-        )
+    fn workspace_height(&self) -> f32 {
+        let reserved_height =
+            crate::status_bar::HEIGHT + transport_bar::HEIGHT + score_view::TOOLBAR_HEIGHT;
+
+        (self.window_height - reserved_height).max(1.0)
     }
 }
 
@@ -625,10 +609,12 @@ fn folded_pane_from_settings(settings: FoldedPaneSettings) -> FoldedPaneState {
                 anchor,
                 axis,
                 insert_first,
+                sibling_panes,
             } => FoldedPaneRestore::Split {
                 anchor,
                 axis: pane_grid_axis_from_settings(axis),
                 insert_first,
+                sibling_panes,
             },
         },
     }
@@ -643,12 +629,45 @@ fn folded_pane_to_settings(state: FoldedPaneState) -> FoldedPaneSettings {
                 anchor,
                 axis,
                 insert_first,
+                sibling_panes,
             } => FoldedPaneRestoreSettings::Split {
                 anchor,
                 axis: dock_axis_to_settings(axis),
                 insert_first,
+                sibling_panes,
             },
         },
+    }
+}
+
+fn migrate_workspace_layout(root: &mut DockNodeSettings, folded_panes: &[FoldedPaneSettings]) {
+    if dock_node_settings_contains_pane(root, WorkspacePaneKind::Logger)
+        || folded_panes
+            .iter()
+            .any(|folded| folded.pane == WorkspacePaneKind::Logger)
+    {
+        return;
+    }
+
+    let previous_root = std::mem::take(root);
+    *root = DockNodeSettings::Split {
+        axis: DockAxis::Horizontal,
+        ratio: 0.74,
+        first: Box::new(previous_root),
+        second: Box::new(DockNodeSettings::Group(settings::DockGroupSettings {
+            tabs: vec![WorkspacePaneKind::Logger],
+            active: WorkspacePaneKind::Logger,
+        })),
+    };
+}
+
+fn dock_node_settings_contains_pane(node: &DockNodeSettings, pane: WorkspacePaneKind) -> bool {
+    match node {
+        DockNodeSettings::Group(group) => group.tabs.contains(&pane),
+        DockNodeSettings::Split { first, second, .. } => {
+            dock_node_settings_contains_pane(first, pane)
+                || dock_node_settings_contains_pane(second, pane)
+        }
     }
 }
 
@@ -666,25 +685,6 @@ fn contains_group(node: &DockNode, group_id: DockGroupId) -> bool {
             contains_group(first, group_id) || contains_group(second, group_id)
         }
     }
-}
-
-fn constrained_logger_ratio(window_height: f32, requested_ratio: f32) -> f32 {
-    if window_height <= 0.0 {
-        return requested_ratio.clamp(0.05, 0.95);
-    }
-
-    let max_ratio_for_min_logger = 1.0 - (MIN_LOGGER_PANEL_HEIGHT / window_height);
-    requested_ratio.clamp(0.05, max_ratio_for_min_logger.clamp(0.05, 0.95))
-}
-
-fn estimated_score_area_height(window_height: f32, logger_visible: bool, logger_ratio: f32) -> f32 {
-    let mut height = (window_height - crate::status_bar::HEIGHT).max(1.0);
-
-    if logger_visible {
-        height *= logger_ratio;
-    }
-
-    height.max(1.0)
 }
 
 fn selected_score_from_path(path: PathBuf) -> Result<SelectedScore, String> {

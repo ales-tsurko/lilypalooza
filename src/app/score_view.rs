@@ -26,6 +26,7 @@ const HEADER_MENU_ICON_SIZE: f32 = 12.0;
 const HEADER_MENU_BUTTON_WIDTH: f32 = 26.0;
 const TAB_ICON_GAP: u32 = 6;
 const HEADER_WIDTH_SAFETY: f32 = 24.0;
+pub(super) const TOOLBAR_HEIGHT: f32 = 32.0;
 
 pub(super) struct HeaderControlGroup<'a> {
     pub(super) min_width: f32,
@@ -44,17 +45,11 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
 }
 
 fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
-    let folded = app.folded_panes().iter().copied().fold(
+    let folded = app.folded_panes().iter().cloned().fold(
         row![]
             .spacing(ui_style::SPACE_XS)
             .align_y(alignment::Vertical::Center),
         |row, folded| row.push(folded_pane_chip(folded.pane)),
-    );
-    let logger_button = toolbar_icon_button(
-        icons::scroll_text(),
-        "Toggle logger",
-        app.logger_pane.is_some(),
-        Message::Pane(PaneMessage::ToggleLogger),
     );
 
     container(
@@ -64,12 +59,12 @@ fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
                 .font(iced::Font::MONOSPACE),
             folded,
             container(text("")).width(Fill),
-            logger_button,
         ]
         .spacing(ui_style::SPACE_SM)
         .align_y(alignment::Vertical::Center)
         .width(Fill),
     )
+    .height(Length::Fixed(TOOLBAR_HEIGHT))
     .padding([
         ui_style::PADDING_STATUS_BAR_V,
         ui_style::PADDING_STATUS_BAR_H,
@@ -98,6 +93,9 @@ fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
                     WorkspacePaneKind::Editor => editor::content(&app.editor, |action| {
                         Message::Editor(super::EditorMessage::Action(action))
                     }),
+                    WorkspacePaneKind::Logger => app
+                        .logger
+                        .view(|action| Message::Logger(super::LoggerMessage::TextAction(action))),
                 };
 
                 let body = pane_body_with_header_menu(app, *group_id, group_width, body);
@@ -278,6 +276,7 @@ fn workspace_tab(app: &LilyView, pane: WorkspacePaneKind) -> Element<'_, Message
         WorkspacePaneKind::Score => icons::music_4(),
         WorkspacePaneKind::PianoRoll => icons::piano(),
         WorkspacePaneKind::Editor => icons::file_pen(),
+        WorkspacePaneKind::Logger => icons::scroll_text(),
     };
     let icon_color = workspace_tab_foreground_color(is_active, is_hovered, is_dragging);
 
@@ -381,6 +380,7 @@ fn workspace_pane_title(pane: WorkspacePaneKind) -> &'static str {
         WorkspacePaneKind::Score => "Score",
         WorkspacePaneKind::PianoRoll => "Piano Roll",
         WorkspacePaneKind::Editor => "Editor",
+        WorkspacePaneKind::Logger => "Logger",
     }
 }
 
@@ -481,6 +481,7 @@ fn workspace_tab_min_width(pane: WorkspacePaneKind) -> f32 {
         WorkspacePaneKind::Score => 36.0,
         WorkspacePaneKind::PianoRoll => 66.0,
         WorkspacePaneKind::Editor => 38.0,
+        WorkspacePaneKind::Logger => 42.0,
     };
 
     TOOLBAR_ICON_SIZE
@@ -566,6 +567,7 @@ fn pane_header_control_groups<'a>(
         WorkspacePaneKind::Score => score_controls(app),
         WorkspacePaneKind::PianoRoll => piano_roll::controls(app),
         WorkspacePaneKind::Editor => Vec::new(),
+        WorkspacePaneKind::Logger => logger_controls(app),
     }
 }
 
@@ -574,6 +576,7 @@ fn pane_header_has_controls(app: &LilyView, pane: WorkspacePaneKind) -> bool {
         WorkspacePaneKind::Score => app.current_score.is_some(),
         WorkspacePaneKind::PianoRoll => true,
         WorkspacePaneKind::Editor => false,
+        WorkspacePaneKind::Logger => true,
     }
 }
 
@@ -582,6 +585,7 @@ fn folded_pane_chip(pane: WorkspacePaneKind) -> Element<'static, Message> {
         WorkspacePaneKind::Score => icons::music_4(),
         WorkspacePaneKind::PianoRoll => icons::piano(),
         WorkspacePaneKind::Editor => icons::file_pen(),
+        WorkspacePaneKind::Logger => icons::scroll_text(),
     };
 
     Tooltip::new(
@@ -596,48 +600,6 @@ fn folded_pane_chip(pane: WorkspacePaneKind) -> Element<'static, Message> {
         .padding([5, 8])
         .on_press(Message::Pane(PaneMessage::UnfoldWorkspacePane(pane))),
         text(workspace_pane_title(pane)).size(ui_style::FONT_SIZE_UI_XS),
-        tooltip::Position::Bottom,
-    )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup)
-    .into()
-}
-
-fn toolbar_icon_button(
-    icon: svg::Handle,
-    tooltip_label: &'static str,
-    is_active: bool,
-    on_press: Message,
-) -> Element<'static, Message> {
-    let icon = svg(icon)
-        .width(Length::Fixed(TOOLBAR_ICON_SIZE))
-        .height(Length::Fixed(TOOLBAR_ICON_SIZE))
-        .content_fit(ContentFit::Contain)
-        .style(move |theme: &Theme, status| {
-            let palette = theme.extended_palette();
-            svg::Style {
-                color: Some(if is_active {
-                    palette.primary.base.text
-                } else {
-                    match status {
-                        svg::Status::Idle => palette.background.base.text,
-                        svg::Status::Hovered => palette.primary.weak.text,
-                    }
-                }),
-            }
-        });
-
-    Tooltip::new(
-        button(icon)
-            .style(if is_active {
-                ui_style::button_active
-            } else {
-                ui_style::button_toolbar_chip
-            })
-            .padding([5, 8])
-            .on_press(on_press),
-        text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS),
         tooltip::Position::Bottom,
     )
     .gap(6)
@@ -1003,6 +965,33 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
             .into(),
         },
     ]
+}
+
+fn logger_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
+    let clear_button = button(compact_control_icon(icons::brush_cleaning()))
+        .style(ui_style::button_neutral)
+        .padding([
+            ui_style::PADDING_BUTTON_COMPACT_V,
+            ui_style::PADDING_BUTTON_COMPACT_H,
+        ]);
+    let clear_button = if app.logger.is_empty() {
+        clear_button
+    } else {
+        clear_button.on_press(Message::Logger(super::LoggerMessage::RequestClear))
+    };
+
+    vec![HeaderControlGroup {
+        min_width: 32.0,
+        content: Tooltip::new(
+            clear_button,
+            text("Clear logger").size(ui_style::FONT_SIZE_UI_XS),
+            tooltip::Position::Top,
+        )
+        .gap(6)
+        .padding(8)
+        .style(ui_style::tooltip_popup)
+        .into(),
+    }]
 }
 
 fn compact_control_icon(icon: svg::Handle) -> Element<'static, Message> {

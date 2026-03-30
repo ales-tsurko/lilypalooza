@@ -12,6 +12,7 @@ pub(crate) enum WorkspacePane {
     Score,
     PianoRoll,
     Editor,
+    Logger,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -21,7 +22,7 @@ pub(crate) enum DockAxis {
     Vertical,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum FoldedPaneRestoreSettings {
     Tab {
         anchor: WorkspacePane,
@@ -30,10 +31,12 @@ pub(crate) enum FoldedPaneRestoreSettings {
         anchor: WorkspacePane,
         axis: DockAxis,
         insert_first: bool,
+        #[serde(default)]
+        sibling_panes: Vec<WorkspacePane>,
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct FoldedPaneSettings {
     pub(crate) pane: WorkspacePane,
@@ -81,15 +84,23 @@ pub(crate) enum DockNodeSettings {
 impl Default for DockNodeSettings {
     fn default() -> Self {
         Self::Split {
-            axis: DockAxis::Vertical,
-            ratio: 0.38,
-            first: Box::new(Self::Group(DockGroupSettings {
-                tabs: vec![WorkspacePane::Editor],
-                active: WorkspacePane::Editor,
-            })),
+            axis: DockAxis::Horizontal,
+            ratio: 0.74,
+            first: Box::new(Self::Split {
+                axis: DockAxis::Vertical,
+                ratio: 0.38,
+                first: Box::new(Self::Group(DockGroupSettings {
+                    tabs: vec![WorkspacePane::Editor],
+                    active: WorkspacePane::Editor,
+                })),
+                second: Box::new(Self::Group(DockGroupSettings {
+                    tabs: vec![WorkspacePane::Score, WorkspacePane::PianoRoll],
+                    active: WorkspacePane::Score,
+                })),
+            }),
             second: Box::new(Self::Group(DockGroupSettings {
-                tabs: vec![WorkspacePane::Score, WorkspacePane::PianoRoll],
-                active: WorkspacePane::Score,
+                tabs: vec![WorkspacePane::Logger],
+                active: WorkspacePane::Logger,
             })),
         }
     }

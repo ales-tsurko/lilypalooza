@@ -24,7 +24,6 @@ pub(super) enum Message {
 
 #[derive(Debug, Clone)]
 pub(super) enum PaneMessage {
-    LoggerResized(pane_grid::ResizeEvent),
     WorkspaceResized(pane_grid::ResizeEvent),
     WorkspaceTabPressed(WorkspacePaneKind),
     WorkspaceTabHovered(Option<WorkspacePaneKind>),
@@ -35,7 +34,6 @@ pub(super) enum PaneMessage {
     WorkspaceDragMoved(iced::Point),
     WorkspaceDragReleased,
     WorkspaceDragExited,
-    ToggleLogger,
 }
 
 #[derive(Debug, Clone)]

@@ -71,7 +71,7 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     .style(if is_playing {
         ui_style::button_active
     } else {
-        ui_style::button_neutral
+        ui_style::button_window_control
     })
     .padding(0)
     .width(Length::Fixed(ICON_BUTTON_WIDTH))
@@ -89,7 +89,7 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
             .center_x(Fill)
             .center_y(Fill),
     )
-    .style(ui_style::button_neutral)
+    .style(ui_style::button_window_control)
     .padding(0)
     .width(Length::Fixed(ICON_BUTTON_WIDTH))
     .height(Length::Fixed(ICON_BUTTON_HEIGHT));

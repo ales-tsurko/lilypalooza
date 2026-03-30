@@ -304,11 +304,6 @@ impl LilyView {
 
     fn handle_pane_message(&mut self, message: PaneMessage) -> Task<Message> {
         match message {
-            PaneMessage::LoggerResized(event) => {
-                let ratio = constrained_logger_ratio(self.window_height, event.ratio);
-                self.logger_ratio = ratio;
-                self.panes.resize(event.split, ratio);
-            }
             PaneMessage::WorkspaceResized(event) => {
                 let ratio = self.constrained_workspace_split_ratio(event.split, event.ratio);
                 self.workspace_panes.resize(event.split, ratio);
@@ -388,34 +383,6 @@ impl LilyView {
             PaneMessage::WorkspaceDragExited => {
                 if self.dragged_workspace_pane.is_some() {
                     self.dock_drop_target = None;
-                }
-            }
-            PaneMessage::ToggleLogger => {
-                if let Some(logger_pane) = self.logger_pane.take() {
-                    if let Some((_state, sibling)) = self.panes.close(logger_pane) {
-                        self.main_pane = sibling;
-                    }
-                    self.logger_split = None;
-                } else if let Some((pane, split)) = self.panes.split(
-                    pane_grid::Axis::Horizontal,
-                    self.main_pane,
-                    PaneKind::Logger,
-                ) {
-                    let ratio = constrained_logger_ratio(self.window_height, self.logger_ratio);
-                    self.panes.resize(split, ratio);
-                    self.logger_pane = Some(pane);
-                    self.logger_split = Some(split);
-                    self.logger_ratio = ratio;
-                } else {
-                    self.show_prompt(
-                        ErrorPrompt::new(
-                            "Logger Panel Error",
-                            "Failed to open the logger panel",
-                            ErrorFatality::Recoverable,
-                            PromptButtons::Ok,
-                        ),
-                        None,
-                    );
                 }
             }
         }
@@ -832,12 +799,6 @@ impl LilyView {
         self.window_width = size.width.max(1.0);
         self.window_height = size.height.max(1.0);
 
-        if let Some(split) = self.logger_split {
-            let ratio = constrained_logger_ratio(self.window_height, self.logger_ratio);
-            self.logger_ratio = ratio;
-            self.panes.resize(split, ratio);
-        }
-
         Task::none()
     }
 
@@ -952,7 +913,7 @@ impl LilyView {
             let _ = remove_pane_from_group(&mut self.dock_groups, group_id, pane);
             FoldedPaneRestore::Tab { anchor }
         } else {
-            let Some((axis, insert_first, anchor)) =
+            let Some((axis, insert_first, anchor, sibling_panes)) =
                 split_restore_target_for_group(&self.dock_layout, group_id, &self.dock_groups)
             else {
                 return false;
@@ -964,6 +925,7 @@ impl LilyView {
                 anchor,
                 axis,
                 insert_first,
+                sibling_panes,
             }
         };
 
@@ -994,7 +956,10 @@ impl LilyView {
                 anchor,
                 axis,
                 insert_first,
-            } => self.restore_folded_pane_as_split(pane, anchor, axis, insert_first),
+                sibling_panes,
+            } => {
+                self.restore_folded_pane_as_split(pane, anchor, axis, insert_first, &sibling_panes)
+            }
         };
 
         if !restored {
@@ -1041,11 +1006,8 @@ impl LilyView {
         anchor: WorkspacePaneKind,
         axis: pane_grid::Axis,
         insert_first: bool,
+        sibling_panes: &[WorkspacePaneKind],
     ) -> bool {
-        let Some(group_id) = self.group_for_pane(anchor) else {
-            return false;
-        };
-
         let new_group_id = self.next_dock_group_id;
         self.next_dock_group_id = self.next_dock_group_id.saturating_add(1);
         self.dock_groups.insert(
@@ -1056,14 +1018,36 @@ impl LilyView {
             },
         );
 
-        replace_group_with_split(
+        if replace_subtree_with_split(
+            &mut self.dock_layout,
+            axis,
+            0.5,
+            new_group_id,
+            insert_first,
+            sibling_panes,
+            &self.dock_groups,
+        ) {
+            return true;
+        }
+
+        let Some(group_id) = self.group_for_pane(anchor) else {
+            self.dock_groups.remove(&new_group_id);
+            return false;
+        };
+
+        if replace_group_with_split(
             &mut self.dock_layout,
             group_id,
             axis,
             0.5,
             new_group_id,
             insert_first,
-        )
+        ) {
+            true
+        } else {
+            self.dock_groups.remove(&new_group_id);
+            false
+        }
     }
 
     fn apply_dock_drop(&mut self, dragged: WorkspacePaneKind, target: DockDropTarget) {
@@ -1165,7 +1149,7 @@ impl LilyView {
                 folded_panes: self
                     .folded_panes
                     .iter()
-                    .copied()
+                    .cloned()
                     .map(folded_pane_to_settings)
                     .collect(),
                 piano_visible: !self.is_pane_folded(WorkspacePaneKind::PianoRoll),
@@ -1909,7 +1893,12 @@ fn split_restore_target_for_group(
     node: &DockNode,
     group_id: DockGroupId,
     groups: &std::collections::HashMap<DockGroupId, DockGroup>,
-) -> Option<(pane_grid::Axis, bool, WorkspacePaneKind)> {
+) -> Option<(
+    pane_grid::Axis,
+    bool,
+    WorkspacePaneKind,
+    Vec<WorkspacePaneKind>,
+)> {
     match node {
         DockNode::Group(_) => None,
         DockNode::Split {
@@ -1919,9 +1908,21 @@ fn split_restore_target_for_group(
             ..
         } => {
             if contains_group(first, group_id) {
-                Some((*axis, true, first_pane_in_node(second, groups)?))
+                let sibling_panes = panes_in_node(second, groups);
+                Some((
+                    *axis,
+                    true,
+                    first_pane_in_node(second, groups)?,
+                    sibling_panes,
+                ))
             } else if contains_group(second, group_id) {
-                Some((*axis, false, first_pane_in_node(first, groups)?))
+                let sibling_panes = panes_in_node(first, groups);
+                Some((
+                    *axis,
+                    false,
+                    first_pane_in_node(first, groups)?,
+                    sibling_panes,
+                ))
             } else {
                 split_restore_target_for_group(first, group_id, groups)
                     .or_else(|| split_restore_target_for_group(second, group_id, groups))
@@ -1941,6 +1942,93 @@ fn first_pane_in_node(
         DockNode::Split { first, second, .. } => {
             first_pane_in_node(first, groups).or_else(|| first_pane_in_node(second, groups))
         }
+    }
+}
+
+fn panes_in_node(
+    node: &DockNode,
+    groups: &std::collections::HashMap<DockGroupId, DockGroup>,
+) -> Vec<WorkspacePaneKind> {
+    let mut panes = Vec::new();
+    collect_panes_in_node(node, groups, &mut panes);
+    panes.sort_by_key(|pane| pane_sort_key(*pane));
+    panes.dedup();
+    panes
+}
+
+fn collect_panes_in_node(
+    node: &DockNode,
+    groups: &std::collections::HashMap<DockGroupId, DockGroup>,
+    panes: &mut Vec<WorkspacePaneKind>,
+) {
+    match node {
+        DockNode::Group(group_id) => {
+            if let Some(group) = groups.get(group_id) {
+                panes.extend(group.tabs.iter().copied());
+            }
+        }
+        DockNode::Split { first, second, .. } => {
+            collect_panes_in_node(first, groups, panes);
+            collect_panes_in_node(second, groups, panes);
+        }
+    }
+}
+
+fn replace_subtree_with_split(
+    node: &mut DockNode,
+    axis: pane_grid::Axis,
+    ratio: f32,
+    new_group_id: DockGroupId,
+    insert_first: bool,
+    target_panes: &[WorkspacePaneKind],
+    groups: &std::collections::HashMap<DockGroupId, DockGroup>,
+) -> bool {
+    if panes_in_node(node, groups) == target_panes {
+        let existing = node.clone();
+        let new_group = DockNode::Group(new_group_id);
+        *node = DockNode::Split {
+            axis,
+            ratio,
+            first: Box::new(if insert_first {
+                new_group.clone()
+            } else {
+                existing.clone()
+            }),
+            second: Box::new(if insert_first { existing } else { new_group }),
+        };
+        return true;
+    }
+
+    match node {
+        DockNode::Group(_) => false,
+        DockNode::Split { first, second, .. } => {
+            replace_subtree_with_split(
+                first,
+                axis,
+                ratio,
+                new_group_id,
+                insert_first,
+                target_panes,
+                groups,
+            ) || replace_subtree_with_split(
+                second,
+                axis,
+                ratio,
+                new_group_id,
+                insert_first,
+                target_panes,
+                groups,
+            )
+        }
+    }
+}
+
+fn pane_sort_key(pane: WorkspacePaneKind) -> u8 {
+    match pane {
+        WorkspacePaneKind::Score => 0,
+        WorkspacePaneKind::PianoRoll => 1,
+        WorkspacePaneKind::Editor => 2,
+        WorkspacePaneKind::Logger => 3,
     }
 }
 
