@@ -6,11 +6,15 @@ edition = "2024"
 [workspace]
 members = ["crates/iced-code-editor"]
 
+[workspace.dependencies]
+iced = "0.14"
+iced_core = "0.14.0"
+
 [dependencies]
 cpal = "0.16.0"
 directories = "5.0.1"
-iced = { version = "0.14", features = ["canvas", "image", "tokio", "svg"] }
-iced_core = "0.14.0"
+iced = { workspace = true, features = ["canvas", "image", "tokio", "svg"] }
+iced_core = { workspace = true }
 iced-code-editor = { path = "crates/iced-code-editor" }
 midi-player = "0.2.3"
 notify = "8.2.0"

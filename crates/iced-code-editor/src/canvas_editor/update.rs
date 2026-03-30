@@ -1106,6 +1106,31 @@ impl CodeEditor {
         Task::none()
     }
 
+    /// Handles horizontal wheel or trackpad scrolling in the code area.
+    fn handle_horizontal_wheel_scrolled_msg(&mut self, delta_x: f32) -> Task<Message> {
+        if self.wrap_enabled || delta_x.abs() <= 0.1 {
+            return Task::none();
+        }
+
+        let code_viewport_width = (self.viewport_width - self.gutter_width()).max(0.0);
+        let max_offset =
+            (self.max_content_width() - self.gutter_width() - code_viewport_width).max(0.0);
+        let new_x = (self.horizontal_scroll_offset + delta_x).clamp(0.0, max_offset);
+
+        if (self.horizontal_scroll_offset - new_x).abs() > 0.1 {
+            self.horizontal_scroll_offset = new_x;
+            self.content_cache.clear();
+            self.overlay_cache.clear();
+
+            return iced::widget::operation::scroll_to(
+                self.horizontal_scrollable_id.clone(),
+                iced::widget::scrollable::AbsoluteOffset { x: new_x, y: 0.0 },
+            );
+        }
+
+        Task::none()
+    }
+
     // =========================================================================
     // Main Update Method
     // =========================================================================
@@ -1184,6 +1209,9 @@ impl CodeEditor {
             Message::Tick => self.handle_tick_msg(),
             Message::Scrolled(viewport) => self.handle_scrolled_msg(*viewport),
             Message::HorizontalScrolled(viewport) => self.handle_horizontal_scrolled_msg(*viewport),
+            Message::HorizontalWheelScrolled(delta_x) => {
+                self.handle_horizontal_wheel_scrolled_msg(*delta_x)
+            }
 
             // Handle the "Jump to Definition" action triggered by Ctrl+Click.
             // Currently, this returns `Task::none()` as the actual navigation logic

@@ -4,7 +4,7 @@ use iced::Size;
 use iced::advanced::input_method;
 use iced::widget::canvas::Canvas;
 use iced::widget::{Column, Row, Scrollable, Space, container, scrollable};
-use iced::{Background, Border, Color, Element, Length, Rectangle, Shadow};
+use iced::{Background, Color, Element, Length, Rectangle, Shadow, Vector};
 
 use super::ime_requester::ImeRequester;
 use super::search_dialog;
@@ -12,7 +12,44 @@ use super::wrapping::{self, WrappingCalculator};
 use super::{CodeEditor, GUTTER_WIDTH, Message};
 use std::rc::Rc;
 
+const NATIVE_SCROLLBAR_SIZE: f32 = 10.0;
+
 impl CodeEditor {
+    /// Creates the gutter surface style.
+    fn create_gutter_surface_style(
+        &self,
+    ) -> impl Fn(&iced::Theme) -> container::Style + Clone + 'static {
+        let background = self.style.background;
+
+        move |_| container::Style {
+            background: Some(Background::Color(background)),
+            shadow: Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.10),
+                offset: Vector::new(2.0, 0.0),
+                blur_radius: 6.0,
+            },
+            ..container::Style::default()
+        }
+    }
+
+    /// Creates the scrollable style matching the host application workspace scrollables.
+    fn create_scrollable_style(
+        theme: &iced::Theme,
+        status: scrollable::Status,
+    ) -> scrollable::Style {
+        let palette = theme.extended_palette();
+
+        let mut style = scrollable::default(theme, status);
+        style.container.background = Some(palette.background.base.color.into());
+        style.container.text_color = Some(palette.background.base.text);
+        style.vertical_rail.background = Some(palette.background.weak.color.into());
+        style.vertical_rail.scroller.background = palette.background.strong.color.into();
+        style.horizontal_rail.background = Some(palette.background.weak.color.into());
+        style.horizontal_rail.scroller.background = palette.background.strong.color.into();
+
+        style
+    }
+
     /// Calculates visual lines and canvas height for the editor.
     ///
     /// Returns a tuple of (visual_lines, canvas_height) where:
@@ -31,62 +68,6 @@ impl CodeEditor {
         let canvas_height = content_height.max(self.viewport_height);
 
         (visual_lines, canvas_height)
-    }
-
-    /// Creates the scrollable style function with custom colors.
-    ///
-    /// Returns a style function that configures the scrollbar appearance.
-    fn create_scrollable_style(
-        &self,
-    ) -> impl Fn(&iced::Theme, scrollable::Status) -> scrollable::Style {
-        let scrollbar_bg = self.style.scrollbar_background;
-        let scroller_color = self.style.scroller_color;
-
-        move |_theme, _status| scrollable::Style {
-            container: container::Style {
-                background: Some(Background::Color(Color::TRANSPARENT)),
-                ..container::Style::default()
-            },
-            vertical_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            horizontal_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            gap: None,
-            auto_scroll: scrollable::AutoScroll {
-                background: Color::TRANSPARENT.into(),
-                border: Border::default(),
-                shadow: Shadow::default(),
-                icon: Color::TRANSPARENT,
-            },
-        }
     }
 
     /// Creates the canvas widget wrapped in a scrollable container.
@@ -108,7 +89,7 @@ impl CodeEditor {
             .width(Length::Fill)
             .height(Length::Fill)
             .on_scroll(Message::Scrolled)
-            .style(self.create_scrollable_style())
+            .style(Self::create_scrollable_style)
     }
 
     /// Creates the horizontal scrollbar element when wrap is disabled and content overflows.
@@ -120,73 +101,55 @@ impl CodeEditor {
     /// # Returns
     ///
     /// `Some(element)` if a horizontal scrollbar is needed, `None` otherwise
-    fn create_horizontal_scrollbar(&self, max_content_width: f32) -> Option<Element<'_, Message>> {
-        if self.wrap_enabled || max_content_width <= self.viewport_width {
+    fn create_horizontal_scrollbar(
+        &self,
+        max_content_width: f32,
+        has_vertical_scrollbar: bool,
+    ) -> Option<Element<'_, Message>> {
+        let gutter_width = self.gutter_width();
+        let code_content_width = (max_content_width - gutter_width).max(0.0);
+        let corner_gap = if has_vertical_scrollbar {
+            NATIVE_SCROLLBAR_SIZE
+        } else {
+            0.0
+        };
+        let code_viewport_width = (self.viewport_width - gutter_width - corner_gap).max(0.0);
+
+        if self.wrap_enabled || code_content_width <= code_viewport_width {
             return None;
         }
 
-        let scrollbar_bg = self.style.scrollbar_background;
-        let scroller_color = self.style.scroller_color;
-
         let h_scrollable = Scrollable::new(
             Space::new()
-                .width(Length::Fixed(max_content_width))
+                .width(Length::Fixed(code_content_width))
                 .height(0.0),
         )
         .id(self.horizontal_scrollable_id.clone())
         .width(Length::Fill)
-        .height(Length::Fixed(12.0))
+        .height(Length::Fixed(NATIVE_SCROLLBAR_SIZE))
         .direction(scrollable::Direction::Horizontal(
             scrollable::Scrollbar::new(),
         ))
         .on_scroll(Message::HorizontalScrolled)
-        .style(move |_theme, _status| scrollable::Style {
-            container: container::Style {
-                background: Some(Background::Color(Color::TRANSPARENT)),
-                ..container::Style::default()
-            },
-            vertical_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            horizontal_rail: scrollable::Rail {
-                background: Some(scrollbar_bg.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                scroller: scrollable::Scroller {
-                    background: scroller_color.into(),
-                    border: Border {
-                        radius: 4.0.into(),
-                        width: 0.0,
-                        color: Color::TRANSPARENT,
-                    },
-                },
-            },
-            gap: None,
-            auto_scroll: scrollable::AutoScroll {
-                background: Color::TRANSPARENT.into(),
-                border: Border::default(),
-                shadow: Shadow::default(),
-                icon: Color::TRANSPARENT,
-            },
-        });
+        .style(Self::create_scrollable_style);
 
-        Some(h_scrollable.into())
+        let gutter_fill = container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fixed(gutter_width))
+            .height(Length::Fixed(NATIVE_SCROLLBAR_SIZE))
+            .style(self.create_gutter_surface_style());
+
+        let corner_fill = container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fixed(corner_gap))
+            .height(Length::Fixed(NATIVE_SCROLLBAR_SIZE));
+
+        Some(
+            Row::new()
+                .push(gutter_fill)
+                .push(h_scrollable)
+                .push(corner_fill)
+                .width(Length::Fill)
+                .into(),
+        )
     }
 
     /// Creates the gutter background container if line numbers are enabled.
@@ -196,15 +159,11 @@ impl CodeEditor {
     /// Some(container) if line numbers are enabled, None otherwise
     fn create_gutter_container(&self) -> Option<container::Container<'_, Message>> {
         if self.line_numbers_enabled {
-            let gutter_background = self.style.gutter_background;
             Some(
                 container(Space::new().width(Length::Fill).height(Length::Fill))
                     .width(Length::Fixed(GUTTER_WIDTH))
                     .height(Length::Fill)
-                    .style(move |_| container::Style {
-                        background: Some(Background::Color(gutter_background)),
-                        ..container::Style::default()
-                    }),
+                    .style(self.create_gutter_surface_style()),
             )
         } else {
             None
@@ -362,7 +321,12 @@ impl CodeEditor {
 
         // When wrap is disabled, add a horizontal scrollbar below the editor
         let max_content_width = self.max_content_width();
-        if let Some(h_scrollbar) = self.create_horizontal_scrollbar(max_content_width) {
+        let content_height = visual_lines.len() as f32 * self.line_height;
+        let has_vertical_scrollbar = content_height > self.viewport_height;
+
+        if let Some(h_scrollbar) =
+            self.create_horizontal_scrollbar(max_content_width, has_vertical_scrollbar)
+        {
             Column::new()
                 .push(editor_container)
                 .push(h_scrollbar)

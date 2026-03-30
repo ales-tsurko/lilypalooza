@@ -16,7 +16,7 @@ categories = ["gui"]
 lsp-process = ["dep:serde_json"]
 
 [dependencies]
-iced = { version = "0.14", features = ["advanced", "highlighter", "canvas", "markdown"] }
+iced = { workspace = true, features = ["advanced", "highlighter", "canvas", "markdown"] }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 web-time = "1"
 iced_font_awesome = "0.4"

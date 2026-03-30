@@ -335,6 +335,8 @@ pub enum Message {
     Scrolled(iced::widget::scrollable::Viewport),
     /// Horizontal scrollbar scrolled (only when wrap is disabled)
     HorizontalScrolled(iced::widget::scrollable::Viewport),
+    /// Horizontal wheel or trackpad scroll within the code area.
+    HorizontalWheelScrolled(f32),
     /// Undo last operation (Ctrl+Z)
     Undo,
     /// Redo last undone operation (Ctrl+Y)
@@ -423,7 +425,7 @@ impl CodeEditor {
             buffer: TextBuffer::new(content),
             cursor: (0, 0),
             horizontal_scroll_offset: 0.0,
-            style: crate::theme::from_iced_theme(&iced::Theme::TokyoNightStorm),
+            style: crate::theme::from_iced_theme(&iced::Theme::Dark),
             syntax: syntax.to_string(),
             last_blink: Instant::now(),
             cursor_visible: true,

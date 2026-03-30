@@ -101,7 +101,7 @@ impl EditorState {
 
 fn build_editor(content: &str, syntax: &str) -> CodeEditor {
     let mut editor = CodeEditor::new(content, syntax).with_wrap_enabled(false);
-    editor.set_font_size(ui_style::FONT_SIZE_BODY_SM as f32, true);
+    editor.set_font_size(ui_style::FONT_SIZE_BODY_SM.saturating_sub(2) as f32, true);
     editor.set_lsp_enabled(false);
     editor
 }

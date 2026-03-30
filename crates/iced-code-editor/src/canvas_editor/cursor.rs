@@ -260,6 +260,7 @@ impl CodeEditor {
 
         // Horizontal scroll: only when wrap is disabled
         let h_task = if !self.wrap_enabled {
+            let code_viewport_width = (self.viewport_width - self.gutter_width()).max(0.0);
             // Compute cursor content-space X position
             let cursor_content_x = if let Some(visual_idx) = cursor_visual {
                 let vl = &visual_lines[visual_idx];
@@ -269,15 +270,13 @@ impl CodeEditor {
                     .skip(vl.start_col)
                     .take(self.cursor.1.saturating_sub(vl.start_col))
                     .collect();
-                self.gutter_width()
-                    + 5.0
-                    + measure_text_width(&prefix, self.full_char_width, self.char_width)
+                5.0 + measure_text_width(&prefix, self.full_char_width, self.char_width)
             } else {
-                self.gutter_width() + 5.0
+                5.0
             };
 
-            let left_boundary = self.gutter_width() + self.char_width;
-            let right_boundary = self.viewport_width - self.char_width * 2.0;
+            let left_boundary = self.char_width;
+            let right_boundary = code_viewport_width - self.char_width * 2.0;
             let cursor_viewport_x = cursor_content_x - self.horizontal_scroll_offset;
 
             let new_h_offset = if cursor_viewport_x < left_boundary {

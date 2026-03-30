@@ -164,6 +164,35 @@ impl CodeEditor {
         }
     }
 
+    /// Draws the active line number in the gutter.
+    fn draw_active_line_number(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext<'_>,
+        visual_line: &VisualLine,
+        y: f32,
+    ) {
+        if !self.line_numbers_enabled
+            || !visual_line.is_first_segment()
+            || visual_line.logical_line != self.cursor.0
+        {
+            return;
+        }
+
+        let line_num_text = format!("{}", visual_line.logical_line + 1);
+        let text_width = measure_text_width(&line_num_text, ctx.full_char_width, ctx.char_width);
+        let x_pos = (ctx.gutter_width - text_width) / 2.0;
+
+        frame.fill_text(canvas::Text {
+            content: line_num_text,
+            position: Point::new(x_pos, y + 2.0),
+            color: self.style.active_line_number_color,
+            size: ctx.font_size.into(),
+            font: ctx.font,
+            ..canvas::Text::default()
+        });
+    }
+
     /// Draws the background highlight for the current line.
     ///
     /// # Arguments
@@ -1101,6 +1130,41 @@ impl CodeEditor {
         cursor: &mouse::Cursor,
     ) -> Option<Action<Message>> {
         match event {
+            mouse::Event::WheelScrolled { delta } => {
+                if !cursor.is_over(bounds) || self.wrap_enabled {
+                    return None;
+                }
+
+                let horizontal_delta = match delta {
+                    mouse::ScrollDelta::Lines { x, y } => {
+                        if x.abs() > f32::EPSILON {
+                            -x * 40.0
+                        } else if self.modifiers.get().shift() {
+                            -y * 40.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    mouse::ScrollDelta::Pixels { x, y } => {
+                        if x.abs() > f32::EPSILON {
+                            -*x
+                        } else if self.modifiers.get().shift() {
+                            -*y
+                        } else {
+                            0.0
+                        }
+                    }
+                };
+
+                if horizontal_delta.abs() > 0.1 {
+                    Some(
+                        Action::publish(Message::HorizontalWheelScrolled(horizontal_delta))
+                            .and_capture(),
+                    )
+                } else {
+                    None
+                }
+            }
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 cursor.position_in(bounds).map(|position| {
                     // Check for Ctrl (or Command on macOS) + Click
@@ -1419,6 +1483,12 @@ impl canvas::Program<Message> for CodeEditor {
                 font: self.font,
                 horizontal_scroll_offset: self.horizontal_scroll_offset,
             };
+            let code_clip = Rectangle {
+                x: ctx.gutter_width,
+                y: 0.0,
+                width: (bounds.width - ctx.gutter_width).max(0.0),
+                height: bounds.height,
+            };
 
             for (idx, visual_line) in visual_lines_for_overlay
                 .iter()
@@ -1427,13 +1497,25 @@ impl canvas::Program<Message> for CodeEditor {
                 .take(end_idx.saturating_sub(start_idx))
             {
                 let y = idx as f32 * self.line_height;
-                self.draw_current_line_highlight(frame, &ctx, visual_line, y);
+                self.draw_active_line_number(frame, &ctx, visual_line, y);
             }
 
-            self.draw_search_highlights(frame, &ctx, start_idx, end_idx);
-            self.draw_selection_highlight(frame, &ctx);
-            self.draw_jump_link_highlight(frame, &ctx, bounds, _cursor);
-            self.draw_cursor(frame, &ctx);
+            frame.with_clip(code_clip, |f| {
+                for (idx, visual_line) in visual_lines_for_overlay
+                    .iter()
+                    .enumerate()
+                    .skip(start_idx)
+                    .take(end_idx.saturating_sub(start_idx))
+                {
+                    let y = idx as f32 * self.line_height;
+                    self.draw_current_line_highlight(f, &ctx, visual_line, y);
+                }
+
+                self.draw_search_highlights(f, &ctx, start_idx, end_idx);
+                self.draw_selection_highlight(f, &ctx);
+                self.draw_jump_link_highlight(f, &ctx, bounds, _cursor);
+                self.draw_cursor(f, &ctx);
+            });
         });
 
         vec![content_geometry, overlay_geometry]

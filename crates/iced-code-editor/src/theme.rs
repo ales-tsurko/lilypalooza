@@ -13,6 +13,8 @@ pub struct Style {
     pub gutter_border: Color,
     /// Color for line numbers text
     pub line_number_color: Color,
+    /// Color for the current line number in the gutter
+    pub active_line_number_color: Color,
     /// Scrollbar background color
     pub scrollbar_background: Color,
     /// Scrollbar scroller (thumb) color
@@ -89,39 +91,15 @@ impl Catalog for iced::Theme {
 /// ```
 pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let palette = theme.extended_palette();
-    let is_dark = palette.is_dark;
-
-    // Base colors from theme palette
     let background = palette.background.base.color;
     let text_color = palette.background.base.text;
-
-    // Gutter colors: slightly offset from background for subtle distinction
-    let gutter_background = palette.background.weak.color;
-    let gutter_border = if is_dark {
-        darken(palette.background.strong.color, 0.1)
-    } else {
-        lighten(palette.background.strong.color, 0.1)
-    };
-
-    // Line numbers: dimmed text color for subtlety
-    // For dark themes: dim the bright text (make it darker)
-    // For light themes: blend text towards background (make it lighter/grayer)
-    let line_number_color = if is_dark {
-        dim_color(text_color, 0.5)
-    } else {
-        // For light themes, blend text color towards background
-        blend_colors(text_color, background, 0.5)
-    };
-
-    // Scrollbar colors: blend with background
-    let scrollbar_background = background;
-    let scroller_color = palette.secondary.weak.color;
-
-    // Current line highlight: very subtle with primary color
-    let current_line_highlight = with_alpha(
-        palette.primary.weak.color,
-        if is_dark { 0.15 } else { 0.25 },
-    );
+    let gutter_background = palette.background.weakest.color;
+    let gutter_border = palette.background.strong.color;
+    let active_line_number_color = blend_colors(text_color, gutter_background, 0.45);
+    let line_number_color = blend_colors(text_color, gutter_background, 0.88);
+    let scrollbar_background = palette.background.weak.color;
+    let scroller_color = palette.background.strong.color;
+    let current_line_highlight = gutter_background;
 
     Style {
         background,
@@ -129,39 +107,10 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         gutter_background,
         gutter_border,
         line_number_color,
+        active_line_number_color,
         scrollbar_background,
         scroller_color,
         current_line_highlight,
-    }
-}
-
-/// Darkens a color by a given factor (0.0 to 1.0).
-fn darken(color: Color, factor: f32) -> Color {
-    Color {
-        r: color.r * (1.0 - factor),
-        g: color.g * (1.0 - factor),
-        b: color.b * (1.0 - factor),
-        a: color.a,
-    }
-}
-
-/// Lightens a color by a given factor (0.0 to 1.0).
-fn lighten(color: Color, factor: f32) -> Color {
-    Color {
-        r: color.r + (1.0 - color.r) * factor,
-        g: color.g + (1.0 - color.g) * factor,
-        b: color.b + (1.0 - color.b) * factor,
-        a: color.a,
-    }
-}
-
-/// Dims a color by reducing its intensity.
-fn dim_color(color: Color, factor: f32) -> Color {
-    Color {
-        r: color.r * factor,
-        g: color.g * factor,
-        b: color.b * factor,
-        a: color.a,
     }
 }
 
@@ -175,7 +124,37 @@ fn blend_colors(color1: Color, color2: Color, factor: f32) -> Color {
     }
 }
 
-/// Applies an alpha transparency to a color.
+#[cfg(test)]
+fn darken(color: Color, factor: f32) -> Color {
+    Color {
+        r: color.r * (1.0 - factor),
+        g: color.g * (1.0 - factor),
+        b: color.b * (1.0 - factor),
+        a: color.a,
+    }
+}
+
+#[cfg(test)]
+fn lighten(color: Color, factor: f32) -> Color {
+    Color {
+        r: color.r + (1.0 - color.r) * factor,
+        g: color.g + (1.0 - color.g) * factor,
+        b: color.b + (1.0 - color.b) * factor,
+        a: color.a,
+    }
+}
+
+#[cfg(test)]
+fn dim_color(color: Color, factor: f32) -> Color {
+    Color {
+        r: color.r * factor,
+        g: color.g * factor,
+        b: color.b * factor,
+        a: color.a,
+    }
+}
+
+#[cfg(test)]
 fn with_alpha(color: Color, alpha: f32) -> Color {
     Color {
         r: color.r,
