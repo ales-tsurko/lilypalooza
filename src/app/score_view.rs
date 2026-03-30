@@ -50,6 +50,12 @@ fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
             .align_y(alignment::Vertical::Center),
         |row, folded| row.push(folded_pane_chip(folded.pane)),
     );
+    let logger_button = toolbar_icon_button(
+        icons::scroll_text(),
+        "Toggle logger",
+        app.logger_pane.is_some(),
+        Message::Pane(PaneMessage::ToggleLogger),
+    );
 
     container(
         row![
@@ -58,6 +64,7 @@ fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
                 .font(iced::Font::MONOSPACE),
             folded,
             container(text("")).width(Fill),
+            logger_button,
         ]
         .spacing(ui_style::SPACE_SM)
         .align_y(alignment::Vertical::Center)
@@ -421,7 +428,7 @@ fn header_overflow_trigger(
 }
 
 fn fold_button(pane: WorkspacePaneKind) -> Element<'static, Message> {
-    let button = button(header_icon(icons::arrow_up_to_line(), FOLD_ICON_SIZE))
+    let button = button(header_icon(icons::panel_top_close(), FOLD_ICON_SIZE))
         .style(ui_style::button_window_control)
         .padding([4, 7])
         .width(Length::Fixed(FOLD_BUTTON_WIDTH))
@@ -589,6 +596,48 @@ fn folded_pane_chip(pane: WorkspacePaneKind) -> Element<'static, Message> {
         .padding([5, 8])
         .on_press(Message::Pane(PaneMessage::UnfoldWorkspacePane(pane))),
         text(workspace_pane_title(pane)).size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Bottom,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup)
+    .into()
+}
+
+fn toolbar_icon_button(
+    icon: svg::Handle,
+    tooltip_label: &'static str,
+    is_active: bool,
+    on_press: Message,
+) -> Element<'static, Message> {
+    let icon = svg(icon)
+        .width(Length::Fixed(TOOLBAR_ICON_SIZE))
+        .height(Length::Fixed(TOOLBAR_ICON_SIZE))
+        .content_fit(ContentFit::Contain)
+        .style(move |theme: &Theme, status| {
+            let palette = theme.extended_palette();
+            svg::Style {
+                color: Some(if is_active {
+                    palette.primary.base.text
+                } else {
+                    match status {
+                        svg::Status::Idle => palette.background.base.text,
+                        svg::Status::Hovered => palette.primary.weak.text,
+                    }
+                }),
+            }
+        });
+
+    Tooltip::new(
+        button(icon)
+            .style(if is_active {
+                ui_style::button_active
+            } else {
+                ui_style::button_toolbar_chip
+            })
+            .padding([5, 8])
+            .on_press(on_press),
+        text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS),
         tooltip::Position::Bottom,
     )
     .gap(6)
@@ -803,7 +852,7 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
     let can_reset_page_brightness =
         app.svg_page_brightness != app.default_settings.score_view.page_brightness;
 
-    let prev_button = button(text("←").size(ui_style::FONT_SIZE_UI_SM))
+    let prev_button = button(compact_control_icon(icons::arrow_left()))
         .style(ui_style::button_neutral)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
@@ -815,7 +864,7 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
         prev_button
     };
 
-    let next_button = button(text("→").size(ui_style::FONT_SIZE_UI_SM))
+    let next_button = button(compact_control_icon(icons::arrow_right()))
         .style(ui_style::button_neutral)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
@@ -954,6 +1003,21 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
             .into(),
         },
     ]
+}
+
+fn compact_control_icon(icon: svg::Handle) -> Element<'static, Message> {
+    container(
+        svg(icon)
+            .width(Length::Fixed(12.0))
+            .height(Length::Fixed(12.0))
+            .content_fit(ContentFit::Contain)
+            .style(ui_style::svg_window_control),
+    )
+    .width(Length::Fixed(12.0))
+    .height(Length::Fixed(12.0))
+    .center_x(Length::Fixed(12.0))
+    .center_y(Length::Fixed(12.0))
+    .into()
 }
 
 fn score_body(app: &LilyView) -> Element<'_, Message> {

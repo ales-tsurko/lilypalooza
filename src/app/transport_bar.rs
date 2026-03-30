@@ -1,16 +1,17 @@
 use std::time::Duration;
 
-use iced::widget::{button, canvas, container, row, slider, text};
-use iced::{Color, Element, Fill, Font, Length, Point, Rectangle, Renderer, Theme, alignment};
+use iced::widget::{button, container, row, slider, svg, text};
+use iced::{ContentFit, Element, Fill, Font, Length, alignment};
 
 use super::{FileMessage, LilyView, Message, PianoRollMessage, SoundfontStatus};
+use crate::icons;
 use crate::midi::{MidiRollData, TimeSignatureChange};
 use crate::ui_style;
 
 pub(super) const HEIGHT: f32 = 34.0;
 const ICON_BUTTON_WIDTH: f32 = 34.0;
 const ICON_BUTTON_HEIGHT: f32 = 22.0;
-const ICON_CANVAS_SIZE: f32 = 14.0;
+const ICON_SIZE: f32 = 14.0;
 
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     let is_playing = app.piano_roll.playback_is_playing();
@@ -37,7 +38,7 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
             normalized,
             format!("{current_time} / {total_time}"),
             musical_clock,
-            format!("♩={current_bpm:.1}"),
+            format!("{current_bpm:.1}"),
             format!(
                 "{}/{}",
                 time_signature.numerator, time_signature.denominator
@@ -49,29 +50,23 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
             0.0,
             "00:00.000 / 00:00.000".to_string(),
             "--:--".to_string(),
-            "♩=--.-".to_string(),
+            "--.-".to_string(),
             "--/--".to_string(),
         )
     };
 
     let can_transport = app.playback.is_some() && total_ticks > 0;
 
-    let play_pause_icon = canvas(TransportIcon {
-        kind: if is_playing {
-            TransportIconKind::Pause
-        } else {
-            TransportIconKind::Play
-        },
-    })
-    .width(Length::Fixed(ICON_CANVAS_SIZE))
-    .height(Length::Fixed(ICON_CANVAS_SIZE));
-
     let play_pause_button = button(
-        container(play_pause_icon)
-            .width(Fill)
-            .height(Fill)
-            .center_x(Fill)
-            .center_y(Fill),
+        container(transport_icon(if is_playing {
+            icons::pause()
+        } else {
+            icons::play()
+        }))
+        .width(Fill)
+        .height(Fill)
+        .center_x(Fill)
+        .center_y(Fill),
     )
     .style(if is_playing {
         ui_style::button_active
@@ -87,14 +82,8 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
         play_pause_button
     };
 
-    let rewind_icon = canvas(TransportIcon {
-        kind: TransportIconKind::RewindToStart,
-    })
-    .width(Length::Fixed(ICON_CANVAS_SIZE))
-    .height(Length::Fixed(ICON_CANVAS_SIZE));
-
     let rewind_button = button(
-        container(rewind_icon)
+        container(transport_icon(icons::skip_back()))
             .width(Fill)
             .height(Fill)
             .center_x(Fill)
@@ -161,9 +150,14 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
                 .size(ui_style::FONT_SIZE_UI_XS)
                 .font(Font::MONOSPACE),
             seek_slider,
-            text(tempo_label)
-                .size(ui_style::FONT_SIZE_UI_XS)
-                .font(Font::MONOSPACE),
+            row![
+                transport_icon(icons::metronome()),
+                text(tempo_label)
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .font(Font::MONOSPACE),
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center),
             text(meter_label)
                 .size(ui_style::FONT_SIZE_UI_XS)
                 .font(Font::MONOSPACE),
@@ -183,80 +177,13 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     .into()
 }
 
-#[derive(Debug, Clone, Copy)]
-enum TransportIconKind {
-    Play,
-    Pause,
-    RewindToStart,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TransportIcon {
-    kind: TransportIconKind,
-}
-
-impl<Message> canvas::Program<Message> for TransportIcon {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        theme: &Theme,
-        bounds: Rectangle,
-        _cursor: iced::mouse::Cursor,
-    ) -> Vec<canvas::Geometry> {
-        let palette = theme.extended_palette();
-        let icon_color = Color::from_rgba(
-            palette.background.base.text.r,
-            palette.background.base.text.g,
-            palette.background.base.text.b,
-            0.92,
-        );
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let center_x = bounds.width * 0.5;
-        let center_y = bounds.height * 0.5;
-
-        match self.kind {
-            TransportIconKind::Play => {
-                let triangle = canvas::Path::new(|builder| {
-                    builder.move_to(Point::new(center_x - 2.8, center_y - 4.0));
-                    builder.line_to(Point::new(center_x - 2.8, center_y + 4.0));
-                    builder.line_to(Point::new(center_x + 4.2, center_y));
-                    builder.close();
-                });
-                frame.fill(&triangle, icon_color);
-            }
-            TransportIconKind::Pause => {
-                frame.fill_rectangle(
-                    Point::new(center_x - 3.2, center_y - 4.0),
-                    iced::Size::new(2.0, 8.0),
-                    icon_color,
-                );
-                frame.fill_rectangle(
-                    Point::new(center_x + 1.2, center_y - 4.0),
-                    iced::Size::new(2.0, 8.0),
-                    icon_color,
-                );
-            }
-            TransportIconKind::RewindToStart => {
-                frame.fill_rectangle(
-                    Point::new(center_x - 4.8, center_y - 4.0),
-                    iced::Size::new(1.6, 8.0),
-                    icon_color,
-                );
-                let triangle = canvas::Path::new(|builder| {
-                    builder.move_to(Point::new(center_x - 2.2, center_y));
-                    builder.line_to(Point::new(center_x + 3.8, center_y - 4.0));
-                    builder.line_to(Point::new(center_x + 3.8, center_y + 4.0));
-                    builder.close();
-                });
-                frame.fill(&triangle, icon_color);
-            }
-        }
-
-        vec![frame.into_geometry()]
-    }
+fn transport_icon(icon: svg::Handle) -> Element<'static, Message> {
+    svg(icon)
+        .width(Length::Fixed(ICON_SIZE))
+        .height(Length::Fixed(ICON_SIZE))
+        .content_fit(ContentFit::Contain)
+        .style(ui_style::svg_window_control)
+        .into()
 }
 
 fn tempo_bpm_at_tick(data: &MidiRollData, tick: u64) -> f32 {

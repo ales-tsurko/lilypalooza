@@ -9,22 +9,16 @@ pub(crate) struct Data<'a> {
     pub(crate) file_name: &'a str,
     pub(crate) spinner: &'a str,
     pub(crate) tail_message: &'a str,
-    pub(crate) logger_open: bool,
-    pub(crate) can_clear_logs: bool,
 }
 
 pub(crate) struct Actions<Message> {
     pub(crate) open_file: Message,
-    pub(crate) toggle_logger: Message,
-    pub(crate) clear_logger: Message,
 }
 
 pub(crate) fn view<'a, Message>(data: Data<'a>, actions: Actions<Message>) -> Element<'a, Message>
 where
     Message: Clone + 'a,
 {
-    let toggle_icon = "≣";
-
     let file_button = button(
         row![
             text("🗎").size(ui_style::FONT_SIZE_UI_XS),
@@ -83,73 +77,8 @@ where
     .padding([0, ui_style::PADDING_STATUS_BAR_H])
     .style(ui_style::status_block_surface);
 
-    let toggle_button = button(
-        text(toggle_icon)
-            .font(Font::MONOSPACE)
-            .size(ui_style::FONT_SIZE_UI_XS),
-    )
-    .style(if data.logger_open {
-        ui_style::button_active
-    } else {
-        ui_style::button_neutral
-    })
-    .padding([
-        ui_style::PADDING_BUTTON_COMPACT_V,
-        ui_style::PADDING_BUTTON_COMPACT_H,
-    ])
-    .on_press(actions.toggle_logger);
-
-    let clear_button = button(
-        text("⌫")
-            .font(Font::MONOSPACE)
-            .size(ui_style::FONT_SIZE_UI_XS),
-    )
-    .style(ui_style::button_neutral)
-    .padding([
-        ui_style::PADDING_BUTTON_COMPACT_V,
-        ui_style::PADDING_BUTTON_COMPACT_H,
-    ]);
-
-    let clear_button = if data.can_clear_logs {
-        clear_button.on_press(actions.clear_logger)
-    } else {
-        clear_button
-    };
-
-    let buttons = row![
-        Tooltip::new(
-            toggle_button,
-            text(if data.logger_open {
-                "Hide logger"
-            } else {
-                "Show logger"
-            })
-            .size(ui_style::FONT_SIZE_UI_XS),
-            tooltip::Position::Top,
-        )
-        .gap(6)
-        .padding(8)
-        .style(ui_style::tooltip_popup),
-        Tooltip::new(
-            clear_button,
-            text("Clear logger").size(ui_style::FONT_SIZE_UI_XS),
-            tooltip::Position::Top,
-        )
-        .gap(6)
-        .padding(8)
-        .style(ui_style::tooltip_popup),
-    ]
-    .spacing(ui_style::SPACE_XS)
-    .align_y(alignment::Vertical::Center);
-
-    let button_block = container(buttons)
-        .height(Fill)
-        .center_y(Fill)
-        .padding([0, ui_style::PADDING_STATUS_BAR_H])
-        .style(ui_style::status_block_surface);
-
     container(
-        row![file_block, spinner_block, log_block, button_block]
+        row![file_block, spinner_block, log_block]
             .spacing(0)
             .width(Fill)
             .height(Fill)
