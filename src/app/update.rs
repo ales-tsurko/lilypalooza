@@ -2104,6 +2104,10 @@ fn split_restore_target_for_group(
             ..
         } => {
             if contains_group(first, group_id) {
+                if let Some(target) = split_restore_target_for_group(first, group_id, groups) {
+                    return Some(target);
+                }
+
                 let sibling_panes = panes_in_node(second, groups);
                 Some((
                     *axis,
@@ -2113,6 +2117,10 @@ fn split_restore_target_for_group(
                     sibling_panes,
                 ))
             } else if contains_group(second, group_id) {
+                if let Some(target) = split_restore_target_for_group(second, group_id, groups) {
+                    return Some(target);
+                }
+
                 let sibling_panes = panes_in_node(first, groups);
                 Some((
                     *axis,
@@ -2122,8 +2130,7 @@ fn split_restore_target_for_group(
                     sibling_panes,
                 ))
             } else {
-                split_restore_target_for_group(first, group_id, groups)
-                    .or_else(|| split_restore_target_for_group(second, group_id, groups))
+                None
             }
         }
     }
