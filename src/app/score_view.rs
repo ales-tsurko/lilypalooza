@@ -26,6 +26,8 @@ const TAB_ICON_GAP: u32 = 6;
 const HEADER_WIDTH_SAFETY: f32 = 24.0;
 pub(super) const TOOLBAR_HEIGHT: f32 = 32.0;
 const TOOLBAR_TOGGLE_ICON_SIZE: f32 = 13.0;
+const TOOLBAR_BUTTON_HEIGHT: f32 = 25.0;
+const TOOLBAR_FILE_NAME_MAX_CHARS: usize = 24;
 
 pub(super) struct HeaderControlGroup<'a> {
     pub(super) min_width: f32,
@@ -52,10 +54,15 @@ fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
     );
 
     container(
-        row![pane_toggles, container(text("")).width(Fill),]
-            .spacing(ui_style::SPACE_SM)
-            .align_y(alignment::Vertical::Center)
-            .width(Fill),
+        row![
+            toolbar_file_button(app),
+            toolbar_separator(),
+            pane_toggles,
+            container(text("")).width(Fill),
+        ]
+        .spacing(ui_style::SPACE_SM)
+        .align_y(alignment::Vertical::Center)
+        .width(Fill),
     )
     .height(Length::Fixed(TOOLBAR_HEIGHT))
     .padding([
@@ -65,6 +72,89 @@ fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
     .style(ui_style::workspace_toolbar_surface)
     .width(Fill)
     .into()
+}
+
+fn toolbar_separator() -> Element<'static, Message> {
+    container(text(""))
+        .width(Length::Fixed(1.0))
+        .height(Length::Fixed(16.0))
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.strong.color.into()),
+                ..container::Style::default()
+            }
+        })
+        .into()
+}
+
+fn toolbar_file_button(app: &LilyView) -> Element<'_, Message> {
+    let file_name = app
+        .current_score
+        .as_ref()
+        .map(|selected_score| selected_score.file_name.as_str())
+        .unwrap_or("No file");
+    let button_label = truncate_toolbar_file_name(file_name, TOOLBAR_FILE_NAME_MAX_CHARS);
+
+    let icon = svg(icons::file_music())
+        .width(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
+        .height(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
+        .content_fit(ContentFit::Contain)
+        .style(|theme: &Theme, status| {
+            let palette = theme.extended_palette();
+            svg::Style {
+                color: Some(match status {
+                    svg::Status::Idle => palette.background.base.text,
+                    svg::Status::Hovered => palette.primary.weak.text,
+                }),
+            }
+        });
+
+    Tooltip::new(
+        button(
+            row![
+                container(icon)
+                    .width(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
+                    .height(Fill)
+                    .center_x(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
+                    .center_y(Fill),
+                text(button_label)
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .font(iced::Font::MONOSPACE)
+                    .line_height(1.0)
+                    .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
+                    .align_y(alignment::Vertical::Center),
+            ]
+            .height(Fill)
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center),
+        )
+        .style(ui_style::button_toolbar_chip)
+        .padding([6, 8])
+        .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
+        .on_press(Message::File(super::FileMessage::RequestOpen)),
+        text("Open file").size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Bottom,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup)
+    .into()
+}
+
+fn truncate_toolbar_file_name(file_name: &str, max_chars: usize) -> String {
+    let count = file_name.chars().count();
+    if count <= max_chars {
+        return file_name.to_string();
+    }
+
+    if max_chars <= 3 {
+        return "...".chars().take(max_chars).collect();
+    }
+
+    let visible_chars = max_chars - 3;
+    let truncated: String = file_name.chars().take(visible_chars).collect();
+    format!("{truncated}...")
 }
 
 fn workspace_panes(app: &LilyView) -> Element<'_, Message> {

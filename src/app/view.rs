@@ -2,17 +2,11 @@ use iced::widget::{column, container, stack, text};
 use iced::{Element, Fill};
 
 use super::score_view;
-use super::{FileMessage, LilyView, Message, PromptMessage};
+use super::{LilyView, Message, PromptMessage};
 use crate::error_prompt::PromptButtons;
 use crate::status_bar;
 
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
-    let file_name = app
-        .current_score
-        .as_ref()
-        .map(|selected_score| selected_score.file_name.as_str())
-        .unwrap_or("No file");
-
     let tail_message = app.logger.last_line().unwrap_or("No log messages");
     let spinner = if app.compile_session.is_some() {
         super::SPINNER_FRAMES[app.spinner_step % super::SPINNER_FRAMES.len()]
@@ -22,16 +16,10 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
 
     let base: Element<'_, Message> = column![
         main_content(app),
-        status_bar::view(
-            status_bar::Data {
-                file_name,
-                spinner,
-                tail_message,
-            },
-            status_bar::Actions {
-                open_file: Message::File(FileMessage::RequestOpen),
-            },
-        ),
+        status_bar::view(status_bar::Data {
+            spinner,
+            tail_message,
+        }),
     ]
     .height(Fill)
     .into();

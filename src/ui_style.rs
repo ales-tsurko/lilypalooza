@@ -242,44 +242,6 @@ pub(crate) fn status_block_surface(theme: &Theme) -> container::Style {
     }
 }
 
-pub(crate) fn status_block_button(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
-
-    let base = button::Style {
-        background: Some(palette.background.weakest.color.into()),
-        text_color: palette.background.weakest.text,
-        border: border::rounded(6)
-            .width(1)
-            .color(palette.background.strong.color),
-        ..button::Style::default()
-    };
-
-    match status {
-        button::Status::Active => base,
-        button::Status::Hovered => button::Style {
-            background: Some(palette.primary.weak.color.into()),
-            text_color: palette.primary.weak.text,
-            border: border::rounded(6)
-                .width(1)
-                .color(palette.primary.base.color),
-            ..base
-        },
-        button::Status::Pressed => button::Style {
-            background: Some(palette.primary.base.color.into()),
-            text_color: palette.primary.base.text,
-            border: border::rounded(6)
-                .width(1)
-                .color(palette.primary.strong.color),
-            ..base
-        },
-        button::Status::Disabled => button::Style {
-            background: Some(palette.background.weakest.color.into()),
-            text_color: palette.background.strong.text,
-            ..base
-        },
-    }
-}
-
 pub(crate) fn button_neutral(theme: &Theme, status: button::Status) -> button::Style {
     let palette = theme.extended_palette();
 
