@@ -131,7 +131,7 @@ fn toolbar_file_button(app: &LilyView) -> Element<'_, Message> {
         .padding([6, 8])
         .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
         .on_press(Message::File(super::FileMessage::RequestOpen)),
-        text("Open file").size(ui_style::FONT_SIZE_UI_XS),
+        text("Open main score").size(ui_style::FONT_SIZE_UI_XS),
         tooltip::Position::Bottom,
     )
     .gap(6)
