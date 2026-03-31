@@ -15,6 +15,7 @@ mod midi;
 mod playback;
 mod score_watcher;
 mod settings;
+mod shortcuts;
 mod status_bar;
 mod ui_style;
 

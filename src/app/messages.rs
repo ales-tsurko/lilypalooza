@@ -31,7 +31,6 @@ pub(super) enum Message {
 pub(super) struct KeyPress {
     pub(super) status: event::Status,
     pub(super) key: keyboard::Key,
-    pub(super) modified_key: keyboard::Key,
     pub(super) physical_key: keyboard::key::Physical,
     pub(super) modifiers: keyboard::Modifiers,
 }

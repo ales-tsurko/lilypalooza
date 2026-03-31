@@ -180,6 +180,119 @@ impl Default for EditorThemeSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ShortcutKeyCode {
+    KeyS,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Numpad1,
+    Numpad2,
+    Numpad3,
+    Numpad4,
+    Equal,
+    Minus,
+    Digit0,
+    NumpadAdd,
+    NumpadSubtract,
+    Numpad0,
+    BracketLeft,
+    BracketRight,
+    NumpadEnter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ShortcutNamedKey {
+    Space,
+    Enter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ShortcutKey {
+    Code(ShortcutKeyCode),
+    Named(ShortcutNamedKey),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct ShortcutBinding {
+    pub(crate) key: ShortcutKey,
+    pub(crate) primary: bool,
+    pub(crate) alt: bool,
+    pub(crate) shift: bool,
+}
+
+impl Default for ShortcutBinding {
+    fn default() -> Self {
+        Self {
+            key: ShortcutKey::Code(ShortcutKeyCode::KeyS),
+            primary: false,
+            alt: false,
+            shift: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ShortcutBindingOverride {
+    Assigned(ShortcutBinding),
+    Unassigned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ShortcutActionId {
+    SaveEditor,
+    ToggleEditorPane,
+    ToggleScorePane,
+    TogglePianoRollPane,
+    ToggleLoggerPane,
+    PreviousTab,
+    NextTab,
+    PreviousPane,
+    NextPane,
+    ScoreZoomIn,
+    ScoreZoomOut,
+    ScoreZoomReset,
+    PianoRollZoomIn,
+    PianoRollZoomOut,
+    PianoRollZoomReset,
+    TransportPlayPause,
+    TransportRewind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct ShortcutOverride {
+    pub(crate) action: ShortcutActionId,
+    pub(crate) binding: ShortcutBindingOverride,
+}
+
+impl Default for ShortcutOverride {
+    fn default() -> Self {
+        Self {
+            action: ShortcutActionId::SaveEditor,
+            binding: ShortcutBindingOverride::Unassigned,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct ShortcutSettings {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) overrides: Vec<ShortcutOverride>,
+}
+
+impl ShortcutSettings {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.overrides.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct AppSettings {
@@ -187,6 +300,8 @@ pub(crate) struct AppSettings {
     pub(crate) score_view: ScoreViewSettings,
     pub(crate) piano_roll_view: PianoRollViewSettings,
     pub(crate) editor_theme: EditorThemeSettings,
+    #[serde(skip_serializing_if = "ShortcutSettings::is_empty")]
+    pub(crate) shortcuts: ShortcutSettings,
 }
 
 pub(crate) fn load() -> Result<AppSettings, String> {

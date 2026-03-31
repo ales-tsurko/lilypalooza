@@ -6,6 +6,7 @@ use iced::{ContentFit, Element, Fill, Font, Length, alignment};
 use super::{FileMessage, LilyView, Message, PianoRollMessage, SoundfontStatus};
 use crate::icons;
 use crate::midi::{MidiRollData, TimeSignatureChange};
+use crate::shortcuts::{self, ShortcutAction};
 use crate::ui_style;
 
 pub(super) const HEIGHT: f32 = 34.0;
@@ -88,7 +89,12 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     };
     let play_pause_button = Tooltip::new(
         play_pause_button,
-        text("Play (Space)").size(ui_style::FONT_SIZE_UI_XS),
+        text(
+            shortcuts::label_for_action(&app.shortcut_settings, ShortcutAction::TransportPlayPause)
+                .map(|shortcut| format!("Play ({shortcut})"))
+                .unwrap_or_else(|| "Play".to_string()),
+        )
+        .size(ui_style::FONT_SIZE_UI_XS),
         tooltip::Position::Top,
     )
     .gap(6)
@@ -113,7 +119,12 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     };
     let rewind_button = Tooltip::new(
         rewind_button,
-        text("Rewind (Enter)").size(ui_style::FONT_SIZE_UI_XS),
+        text(
+            shortcuts::label_for_action(&app.shortcut_settings, ShortcutAction::TransportRewind)
+                .map(|shortcut| format!("Rewind ({shortcut})"))
+                .unwrap_or_else(|| "Rewind".to_string()),
+        )
+        .size(ui_style::FONT_SIZE_UI_XS),
         tooltip::Position::Top,
     )
     .gap(6)

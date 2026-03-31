@@ -102,6 +102,7 @@ struct LilyView {
     piano_roll_viewport_cursor: Option<iced::Point>,
     transport_seek_preview: Option<f32>,
     keyboard_modifiers: keyboard::Modifiers,
+    shortcut_settings: settings::ShortcutSettings,
     default_settings: AppSettings,
 }
 
@@ -352,6 +353,7 @@ fn new(
         piano_roll_viewport_cursor: None,
         transport_seek_preview: None,
         keyboard_modifiers: keyboard::Modifiers::default(),
+        shortcut_settings: stored_settings.shortcuts.clone(),
         default_settings,
     };
 
@@ -417,14 +419,12 @@ fn runtime_event_to_message(
         }
         iced::Event::Keyboard(keyboard::Event::KeyPressed {
             key,
-            modified_key,
             physical_key,
             modifiers,
             ..
         }) => Some(Message::KeyPressed(KeyPress {
             status,
             key,
-            modified_key,
             physical_key,
             modifiers,
         })),

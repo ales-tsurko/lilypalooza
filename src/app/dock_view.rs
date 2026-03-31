@@ -13,7 +13,7 @@ use super::{
     DockDropRegion, LilyView, Message, PaneMessage, WorkspacePaneKind, piano_roll, score_view,
     transport_bar,
 };
-use crate::{icons, ui_style};
+use crate::{icons, shortcuts, ui_style};
 
 const TOOLBAR_ICON_SIZE: f32 = 14.0;
 const HEADER_CONTROL_HEIGHT: f32 = 22.0;
@@ -499,28 +499,6 @@ fn all_workspace_panes() -> [WorkspacePaneKind; 4] {
     ]
 }
 
-fn pane_shortcut_label(pane: WorkspacePaneKind) -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        match pane {
-            WorkspacePaneKind::Editor => "Cmd+1",
-            WorkspacePaneKind::Score => "Cmd+2",
-            WorkspacePaneKind::PianoRoll => "Cmd+3",
-            WorkspacePaneKind::Logger => "Cmd+4",
-        }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        match pane {
-            WorkspacePaneKind::Editor => "Ctrl+1",
-            WorkspacePaneKind::Score => "Ctrl+2",
-            WorkspacePaneKind::PianoRoll => "Ctrl+3",
-            WorkspacePaneKind::Logger => "Ctrl+4",
-        }
-    }
-}
-
 fn toolbar_pane_toggle(app: &LilyView, pane: WorkspacePaneKind) -> Element<'static, Message> {
     let is_visible = app.group_for_pane(pane).is_some();
     let title = workspace_pane_title(pane);
@@ -547,7 +525,12 @@ fn toolbar_pane_toggle(app: &LilyView, pane: WorkspacePaneKind) -> Element<'stat
             }
         });
 
-    let tooltip_label = format!("{title} ({})", pane_shortcut_label(pane));
+    let tooltip_label = shortcuts::label_for_action(
+        &app.shortcut_settings,
+        shortcuts::ShortcutAction::ToggleWorkspacePane(pane),
+    )
+    .map(|shortcut| format!("{title} ({shortcut})"))
+    .unwrap_or_else(|| title.to_string());
 
     Tooltip::new(
         button(icon)
@@ -1063,8 +1046,15 @@ fn editor_controls<'a>(
                 .style(ui_style::tooltip_popup),
                 Tooltip::new(
                     save_button,
-                    text(format!("Save ({})", editor_save_shortcut_label()))
-                        .size(ui_style::FONT_SIZE_UI_XS),
+                    text(
+                        shortcuts::label_for_action(
+                            &app.shortcut_settings,
+                            shortcuts::ShortcutAction::SaveEditor,
+                        )
+                        .map(|shortcut| format!("Save ({shortcut})"))
+                        .unwrap_or_else(|| "Save".to_string()),
+                    )
+                    .size(ui_style::FONT_SIZE_UI_XS),
                     tooltip::Position::Top,
                 )
                 .gap(6)
@@ -1181,16 +1171,4 @@ fn editor_theme_slider<'a>(
                 .shift_step(step * 10.0),
         )
         .into()
-}
-
-fn editor_save_shortcut_label() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        "Cmd+S"
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        "Ctrl+S"
-    }
 }

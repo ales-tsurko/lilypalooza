@@ -14,6 +14,7 @@ use super::*;
 use crate::error_prompt::{ErrorFatality, ErrorPrompt, PromptButtons};
 use crate::midi;
 use crate::settings::{self, DockGroupSettings, DockNodeSettings, WorkspaceLayoutSettings};
+use crate::shortcuts::{self, ShortcutAction, ShortcutInput};
 
 const DRAG_START_THRESHOLD: f32 = 8.0;
 const SCORE_PREVIEW_FALLBACK_MAX_DIMENSION: f32 = 2200.0;
@@ -62,16 +63,16 @@ impl LilyView {
     }
 
     fn handle_key_pressed(&mut self, key_press: KeyPress) -> Task<Message> {
-        if let Some(message) = global_shortcut_message(
-            &key_press.modified_key,
-            key_press.physical_key,
-            key_press.modifiers,
-        ) {
-            return update(self, message);
+        let shortcut_input =
+            ShortcutInput::new(&key_press.key, key_press.physical_key, key_press.modifiers);
+
+        if let Some(action) = shortcuts::resolve_global(&self.shortcut_settings, shortcut_input) {
+            return self.handle_shortcut_action(action);
         }
 
-        if self.handle_workspace_navigation_shortcut(key_press.physical_key, key_press.modifiers) {
-            return Task::none();
+        if let Some(action) = shortcuts::resolve_navigation(&self.shortcut_settings, shortcut_input)
+        {
+            return self.handle_shortcut_action(action);
         }
 
         if matches!(key_press.status, iced::event::Status::Captured) {
@@ -82,44 +83,66 @@ impl LilyView {
             return Task::none();
         };
 
-        if let Some(message) = contextual_shortcut_message(
-            focused_pane,
-            &key_press.key,
-            &key_press.modified_key,
-            key_press.physical_key,
-            key_press.modifiers,
-        ) {
-            return update(self, message);
+        if let Some(action) =
+            shortcuts::resolve_contextual(&self.shortcut_settings, focused_pane, shortcut_input)
+        {
+            return self.handle_shortcut_action(action);
         }
 
         Task::none()
     }
 
-    fn handle_workspace_navigation_shortcut(
-        &mut self,
-        physical_key: keyboard::key::Physical,
-        modifiers: keyboard::Modifiers,
-    ) -> bool {
-        let has_primary_modifier = modifiers.command() || modifiers.control();
-
-        if !has_primary_modifier {
-            return false;
-        }
-
-        match (physical_key, modifiers.alt(), modifiers.shift()) {
-            (keyboard::key::Physical::Code(keyboard::key::Code::BracketLeft), false, true) => {
-                self.switch_focused_workspace_tab(TabDirection::Previous)
+    fn handle_shortcut_action(&mut self, action: ShortcutAction) -> Task<Message> {
+        match action {
+            ShortcutAction::SaveEditor => {
+                update(self, Message::Editor(EditorMessage::SaveRequested))
             }
-            (keyboard::key::Physical::Code(keyboard::key::Code::BracketRight), false, true) => {
-                self.switch_focused_workspace_tab(TabDirection::Next)
+            ShortcutAction::ToggleWorkspacePane(pane) => {
+                update(self, Message::Pane(PaneMessage::ToggleWorkspacePane(pane)))
             }
-            (keyboard::key::Physical::Code(keyboard::key::Code::BracketLeft), true, false) => {
-                self.cycle_workspace_pane_focus(PaneCycleDirection::Previous)
+            ShortcutAction::SwitchWorkspaceTabPrevious => {
+                self.switch_focused_workspace_tab(TabDirection::Previous);
+                Task::none()
             }
-            (keyboard::key::Physical::Code(keyboard::key::Code::BracketRight), true, false) => {
-                self.cycle_workspace_pane_focus(PaneCycleDirection::Next)
+            ShortcutAction::SwitchWorkspaceTabNext => {
+                self.switch_focused_workspace_tab(TabDirection::Next);
+                Task::none()
             }
-            _ => false,
+            ShortcutAction::FocusWorkspacePanePrevious => {
+                self.cycle_workspace_pane_focus(PaneCycleDirection::Previous);
+                Task::none()
+            }
+            ShortcutAction::FocusWorkspacePaneNext => {
+                self.cycle_workspace_pane_focus(PaneCycleDirection::Next);
+                Task::none()
+            }
+            ShortcutAction::ScoreZoomIn => update(self, Message::Viewer(ViewerMessage::ZoomIn)),
+            ShortcutAction::ScoreZoomOut => update(self, Message::Viewer(ViewerMessage::ZoomOut)),
+            ShortcutAction::ScoreZoomReset => {
+                update(self, Message::Viewer(ViewerMessage::ResetZoom))
+            }
+            ShortcutAction::PianoRollZoomIn => {
+                update(self, Message::PianoRoll(PianoRollMessage::ZoomIn))
+            }
+            ShortcutAction::PianoRollZoomOut => {
+                update(self, Message::PianoRoll(PianoRollMessage::ZoomOut))
+            }
+            ShortcutAction::PianoRollZoomReset => {
+                update(self, Message::PianoRoll(PianoRollMessage::ResetZoom))
+            }
+            ShortcutAction::TransportPlayPause => update(
+                self,
+                Message::PianoRoll(PianoRollMessage::TransportPlayPause),
+            ),
+            ShortcutAction::TransportRewind => {
+                update(self, Message::PianoRoll(PianoRollMessage::TransportRewind))
+            }
+            ShortcutAction::ScoreScrollUp => update(self, Message::Viewer(ViewerMessage::ScrollUp)),
+            ShortcutAction::ScoreScrollDown => {
+                update(self, Message::Viewer(ViewerMessage::ScrollDown))
+            }
+            ShortcutAction::ScorePrevPage => update(self, Message::Viewer(ViewerMessage::PrevPage)),
+            ShortcutAction::ScoreNextPage => update(self, Message::Viewer(ViewerMessage::NextPage)),
         }
     }
 
@@ -1728,6 +1751,7 @@ impl LilyView {
                 beat_subdivision: self.piano_roll.beat_subdivision,
             },
             editor_theme: self.editor.theme_settings(),
+            shortcuts: self.shortcut_settings.clone(),
         });
     }
 
@@ -2235,194 +2259,6 @@ impl LilyView {
             .current_file()
             .map(|file| file.data.total_ticks)
             .unwrap_or(0)
-    }
-}
-
-fn global_shortcut_message(
-    modified_key: &keyboard::Key,
-    physical_key: keyboard::key::Physical,
-    modifiers: keyboard::Modifiers,
-) -> Option<Message> {
-    let has_primary_modifier = modifiers.command() || modifiers.control();
-    if !has_primary_modifier {
-        return None;
-    }
-
-    if matches!(
-        physical_key,
-        keyboard::key::Physical::Code(keyboard::key::Code::KeyS)
-    ) {
-        return Some(Message::Editor(EditorMessage::SaveRequested));
-    }
-
-    match physical_key {
-        keyboard::key::Physical::Code(keyboard::key::Code::Digit1)
-        | keyboard::key::Physical::Code(keyboard::key::Code::Numpad1) => Some(Message::Pane(
-            PaneMessage::ToggleWorkspacePane(WorkspacePaneKind::Editor),
-        )),
-        keyboard::key::Physical::Code(keyboard::key::Code::Digit2)
-        | keyboard::key::Physical::Code(keyboard::key::Code::Numpad2) => Some(Message::Pane(
-            PaneMessage::ToggleWorkspacePane(WorkspacePaneKind::Score),
-        )),
-        keyboard::key::Physical::Code(keyboard::key::Code::Digit3)
-        | keyboard::key::Physical::Code(keyboard::key::Code::Numpad3) => Some(Message::Pane(
-            PaneMessage::ToggleWorkspacePane(WorkspacePaneKind::PianoRoll),
-        )),
-        keyboard::key::Physical::Code(keyboard::key::Code::Digit4)
-        | keyboard::key::Physical::Code(keyboard::key::Code::Numpad4) => Some(Message::Pane(
-            PaneMessage::ToggleWorkspacePane(WorkspacePaneKind::Logger),
-        )),
-        _ => match modified_key.as_ref() {
-            keyboard::Key::Character("1")
-            | keyboard::Key::Character("2")
-            | keyboard::Key::Character("3")
-            | keyboard::Key::Character("4") => None,
-            _ => None,
-        },
-    }
-}
-
-fn contextual_shortcut_message(
-    focused_pane: WorkspacePaneKind,
-    key: &keyboard::Key,
-    modified_key: &keyboard::Key,
-    physical_key: keyboard::key::Physical,
-    modifiers: keyboard::Modifiers,
-) -> Option<Message> {
-    match focused_pane {
-        WorkspacePaneKind::Score => {
-            score_contextual_shortcut_message(key, modified_key, physical_key, modifiers)
-        }
-        WorkspacePaneKind::PianoRoll => {
-            piano_roll_contextual_shortcut_message(key, modified_key, physical_key, modifiers)
-        }
-        WorkspacePaneKind::Editor | WorkspacePaneKind::Logger => None,
-    }
-}
-
-fn score_contextual_shortcut_message(
-    key: &keyboard::Key,
-    modified_key: &keyboard::Key,
-    physical_key: keyboard::key::Physical,
-    modifiers: keyboard::Modifiers,
-) -> Option<Message> {
-    let has_primary_modifier = modifiers.command() || modifiers.control();
-
-    if has_primary_modifier {
-        match modified_key.as_ref() {
-            keyboard::Key::Character("+") | keyboard::Key::Character("=") => {
-                return Some(Message::Viewer(ViewerMessage::ZoomIn));
-            }
-            keyboard::Key::Character("-") | keyboard::Key::Character("_") => {
-                return Some(Message::Viewer(ViewerMessage::ZoomOut));
-            }
-            keyboard::Key::Character("0") => {
-                return Some(Message::Viewer(ViewerMessage::ResetZoom));
-            }
-            _ => {}
-        }
-
-        match physical_key {
-            keyboard::key::Physical::Code(keyboard::key::Code::NumpadAdd) => {
-                return Some(Message::Viewer(ViewerMessage::ZoomIn));
-            }
-            keyboard::key::Physical::Code(keyboard::key::Code::NumpadSubtract) => {
-                return Some(Message::Viewer(ViewerMessage::ZoomOut));
-            }
-            keyboard::key::Physical::Code(keyboard::key::Code::Numpad0) => {
-                return Some(Message::Viewer(ViewerMessage::ResetZoom));
-            }
-            _ => {}
-        }
-    }
-
-    match key.as_ref() {
-        keyboard::Key::Named(keyboard::key::Named::Space)
-            if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
-        {
-            Some(Message::PianoRoll(PianoRollMessage::TransportPlayPause))
-        }
-        keyboard::Key::Named(keyboard::key::Named::Enter)
-            if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
-        {
-            Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
-        }
-        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-            Some(Message::Viewer(ViewerMessage::ScrollUp))
-        }
-        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-            Some(Message::Viewer(ViewerMessage::ScrollDown))
-        }
-        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
-            Some(Message::Viewer(ViewerMessage::PrevPage))
-        }
-        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
-            Some(Message::Viewer(ViewerMessage::NextPage))
-        }
-        _ => match physical_key {
-            keyboard::key::Physical::Code(keyboard::key::Code::NumpadEnter)
-                if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
-            {
-                Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
-            }
-            _ => None,
-        },
-    }
-}
-
-fn piano_roll_contextual_shortcut_message(
-    key: &keyboard::Key,
-    modified_key: &keyboard::Key,
-    physical_key: keyboard::key::Physical,
-    modifiers: keyboard::Modifiers,
-) -> Option<Message> {
-    let has_primary_modifier = modifiers.command() || modifiers.control();
-
-    if has_primary_modifier {
-        match modified_key.as_ref() {
-            keyboard::Key::Character("+") | keyboard::Key::Character("=") => {
-                return Some(Message::PianoRoll(PianoRollMessage::ZoomIn));
-            }
-            keyboard::Key::Character("-") | keyboard::Key::Character("_") => {
-                return Some(Message::PianoRoll(PianoRollMessage::ZoomOut));
-            }
-            keyboard::Key::Character("0") => {
-                return Some(Message::PianoRoll(PianoRollMessage::ResetZoom));
-            }
-            _ => {}
-        }
-
-        match physical_key {
-            keyboard::key::Physical::Code(keyboard::key::Code::NumpadAdd) => {
-                return Some(Message::PianoRoll(PianoRollMessage::ZoomIn));
-            }
-            keyboard::key::Physical::Code(keyboard::key::Code::NumpadSubtract) => {
-                return Some(Message::PianoRoll(PianoRollMessage::ZoomOut));
-            }
-            keyboard::key::Physical::Code(keyboard::key::Code::Numpad0) => {
-                return Some(Message::PianoRoll(PianoRollMessage::ResetZoom));
-            }
-            _ => {}
-        }
-    }
-
-    if modifiers.command() || modifiers.control() || modifiers.alt() {
-        return None;
-    }
-
-    match key.as_ref() {
-        keyboard::Key::Named(keyboard::key::Named::Space) => {
-            Some(Message::PianoRoll(PianoRollMessage::TransportPlayPause))
-        }
-        keyboard::Key::Named(keyboard::key::Named::Enter) => {
-            Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
-        }
-        _ => match physical_key {
-            keyboard::key::Physical::Code(keyboard::key::Code::NumpadEnter) => {
-                Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
-            }
-            _ => None,
-        },
     }
 }
 
