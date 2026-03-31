@@ -527,6 +527,7 @@ impl CodeEditor {
 
         self.content_cache.clear();
         self.overlay_cache.clear();
+        *self.max_content_width_cache.borrow_mut() = None;
     }
 
     /// Measures the width of a single character string using the current font settings.
@@ -1976,6 +1977,20 @@ mod tests {
         assert!(
             w3 > w1,
             "After revision bump with longer content, width should increase"
+        );
+    }
+
+    #[test]
+    fn test_max_content_width_updates_after_font_size_change() {
+        let mut editor = CodeEditor::new("hello world with extra content", "rs");
+        let w1 = editor.max_content_width();
+
+        editor.set_font_size(28.0, true);
+        let w2 = editor.max_content_width();
+
+        assert!(
+            w2 > w1,
+            "Increasing font size should increase max_content_width"
         );
     }
 

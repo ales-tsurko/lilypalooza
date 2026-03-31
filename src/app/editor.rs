@@ -117,8 +117,8 @@ impl EditorState {
         self.view_settings
     }
 
-    pub(super) fn zoom_percent(&self) -> u32 {
-        ((self.widget.font_size() / self.default_view_settings.font_size) * 100.0).round() as u32
+    pub(super) fn font_size_points(&self) -> u32 {
+        self.widget.font_size().round() as u32
     }
 
     pub(super) fn can_zoom_in(&self) -> bool {

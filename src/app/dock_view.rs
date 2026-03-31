@@ -1162,20 +1162,29 @@ fn editor_appearance_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
                 ui_style::PADDING_BUTTON_COMPACT_H,
             ])
     };
-    let zoom_value = text(format!("{}%", app.editor.zoom_percent()))
+    let zoom_value_label = text(format!("{}pt", app.editor.font_size_points()))
         .size(ui_style::FONT_SIZE_UI_XS)
         .font(iced::Font::MONOSPACE);
     let zoom_value = if app.editor.can_reset_zoom() {
-        mouse_area(zoom_value).on_double_click(Message::Editor(super::EditorMessage::ResetZoom))
+        mouse_area(zoom_value_label)
+            .on_double_click(Message::Editor(super::EditorMessage::ResetZoom))
     } else {
-        mouse_area(zoom_value)
+        mouse_area(zoom_value_label)
     };
+    let zoom_value = Tooltip::new(
+        zoom_value,
+        text("Double-click to reset").size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Top,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup);
 
     Column::new()
         .spacing(ui_style::SPACE_SM)
         .push(
             row![
-                text("Zoom").size(ui_style::FONT_SIZE_UI_XS),
+                text("Font Size").size(ui_style::FONT_SIZE_UI_XS),
                 zoom_out_button,
                 zoom_value,
                 zoom_in_button
