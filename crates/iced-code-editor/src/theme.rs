@@ -34,16 +34,26 @@ pub struct Style {
     pub escape_color: Color,
     /// Keyword syntax color
     pub keyword_color: Color,
+    /// Directive syntax color
+    pub directive_color: Color,
     /// Number syntax color
     pub number_color: Color,
     /// Function syntax color
     pub function_color: Color,
+    /// Builtin function syntax color
+    pub builtin_color: Color,
     /// Variable syntax color
     pub variable_color: Color,
     /// Operator syntax color
     pub operator_color: Color,
     /// Processing/directive syntax color
     pub processing_color: Color,
+    /// Type/context syntax color
+    pub type_color: Color,
+    /// Property/assignment syntax color
+    pub property_color: Color,
+    /// Parameter/keyword argument syntax color
+    pub parameter_color: Color,
     /// Constant/global syntax color
     pub constant_color: Color,
     /// Punctuation syntax color
@@ -203,6 +213,16 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         0.22,
         1.0,
     );
+    let directive_color = derive_accent_from_hue(
+        mix_hues(
+            usable_hue(primary_oklch, 285.0),
+            usable_hue(danger_oklch, 20.0),
+            0.42,
+        ),
+        if is_dark { 0.8 } else { 0.44 },
+        (((primary_oklch.chroma + danger_oklch.chroma) * 0.5) * 1.05).clamp(0.12, 0.24),
+        1.0,
+    );
     let operator_color = derive_accent(
         primary_oklch,
         fg_oklch,
@@ -223,6 +243,16 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         0.22,
         1.0,
     );
+    let builtin_color = derive_accent_from_hue(
+        mix_hues(
+            usable_hue(success_oklch, 145.0),
+            usable_hue(primary_oklch, 285.0),
+            0.35,
+        ),
+        if is_dark { 0.8 } else { 0.42 },
+        (((success_oklch.chroma + primary_oklch.chroma) * 0.5) * 1.05).clamp(0.1, 0.22),
+        1.0,
+    );
     let processing_color = derive_accent_from_hue(
         mix_hues(
             usable_hue(primary_oklch, 285.0),
@@ -231,6 +261,36 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         ),
         if is_dark { 0.82 } else { 0.48 },
         (((primary_oklch.chroma + secondary_oklch.chroma) * 0.5) * 1.1).clamp(0.11, 0.24),
+        1.0,
+    );
+    let type_color = derive_accent_from_hue(
+        mix_hues(
+            usable_hue(secondary_oklch, 235.0),
+            usable_hue(warning_oklch, 85.0),
+            0.28,
+        ),
+        if is_dark { 0.82 } else { 0.44 },
+        (((secondary_oklch.chroma + warning_oklch.chroma) * 0.5) * 1.0).clamp(0.1, 0.21),
+        1.0,
+    );
+    let property_color = derive_accent(
+        warning_oklch,
+        fg_oklch,
+        85.0,
+        if is_dark { 0.78 } else { 0.42 },
+        0.95,
+        0.09,
+        0.2,
+        1.0,
+    );
+    let parameter_color = derive_accent(
+        success_oklch,
+        fg_oklch,
+        145.0,
+        if is_dark { 0.76 } else { 0.4 },
+        0.9,
+        0.08,
+        0.19,
         1.0,
     );
     let string_color = derive_accent_from_hue(
@@ -310,11 +370,16 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         string_delimiter_color,
         escape_color,
         keyword_color,
+        directive_color,
         number_color,
         function_color,
+        builtin_color,
         variable_color,
         operator_color,
         processing_color,
+        type_color,
+        property_color,
+        parameter_color,
         constant_color,
         punctuation_color,
         bracket_color,

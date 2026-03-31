@@ -11,7 +11,29 @@
   )
 )
 
+(assignment_lhs
+  (symbol) @property
+)
+
+(assignment_lhs
+  (property_expression) @property
+)
+
 (named_context
+  [
+    (escaped_word)
+    (embedded_scheme)
+  ]
+  .
+  (symbol) @type
+)
+
+(named_context
+  [
+    (escaped_word)
+    (embedded_scheme)
+  ]
+  .
   (symbol)
   .
   (
@@ -19,7 +41,7 @@
     (#match? @operator "^=$")
   )
   .
-  [(symbol) (string)]
+  [(symbol) (string)] @variable
 )
 
 (chord
@@ -31,11 +53,19 @@
 
 (
   (escaped_word) @identifier.variable
-  (#not-match? @identifier.variable "^\\\\(?:include|maininput|version)$") ; This is needed for Panic Nova
+  (#not-match? @identifier.variable "^\\\\(?:accepts|alias|book|bookpart|clef|column|consists|context|fill-line|fromproperty|header|if|include|language|layout|maininput|markup|markuplist|midi|new|paper|remove|score|set|tweak|unless|unset|version|vspace|with)$")
 )
 (
-  (escaped_word) @processing
-  (#match? @processing "^\\\\(?:include|maininput|version)$") ; These are handled directly by LilyPond’s lexer.
+  (escaped_word) @keyword.directive
+  (#match? @keyword.directive "^\\\\(?:include|language|maininput|version)$")
+)
+(
+  (escaped_word) @keyword
+  (#match? @keyword "^\\\\(?:book|bookpart|context|header|layout|markup|markuplist|midi|new|paper|score|with)$")
+)
+(
+  (escaped_word) @function.builtin
+  (#match? @function.builtin "^\\\\(?:accepts|alias|bar|clef|column|consists|fill-line|fromproperty|if|numericTimeSignature|once|override|remove|repeat|revert|set|tempo|time|tweak|unless|unset|vspace)$")
 )
 (
   (escaped_word) @value.number
@@ -54,6 +84,8 @@
   (symbol) @keyword
   (#match? @keyword "^q$")
 )
+
+(property_expression) @property
 
 [
   (fraction)
@@ -87,3 +119,27 @@
 )
 
 (embedded_scheme_prefix) @processing
+
+(
+  (embedded_scheme
+    (embedded_scheme_prefix) @processing
+    (embedded_scheme_text) @value.boolean
+  )
+  (#match? @value.boolean "^#(?:[tT](?:[rR][uU][eE])?|[fF](?:[aA][lL][sS][eE])?)$")
+)
+
+(
+  (embedded_scheme
+    (embedded_scheme_prefix) @processing
+    (embedded_scheme_text) @function.builtin
+  )
+  (#match? @function.builtin "^(?:ly:[^\\s()]+|notehead-link-engraver)$")
+)
+
+(
+  (embedded_scheme
+    (embedded_scheme_prefix) @processing
+    (embedded_scheme_text) @property
+  )
+  (#match? @property "^'?[A-Za-z][A-Za-z0-9-]*:[A-Za-z0-9-]+$")
+)

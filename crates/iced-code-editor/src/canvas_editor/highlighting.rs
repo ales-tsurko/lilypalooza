@@ -10,9 +10,11 @@ const TREE_SITTER_HIGHLIGHT_NAMES: &[&str] = &[
     "string.delimiter.right",
     "escape",
     "keyword",
+    "keyword.directive",
     "number",
     "value.number",
     "function",
+    "function.builtin",
     "identifier.core.function",
     "variable",
     "identifier",
@@ -26,6 +28,9 @@ const TREE_SITTER_HIGHLIGHT_NAMES: &[&str] = &[
     "value.boolean",
     "entity",
     "value.entity",
+    "type",
+    "property",
+    "parameter",
     "punctuation",
     "punctuation.bracket",
     "bracket",
@@ -77,37 +82,20 @@ impl HighlightBackend {
 
 fn highlight_lilypond(source: &str, style: &Style) -> Result<HighlightedDocument, String> {
     let lilypond_language = tree_sitter_lilypond::LANGUAGE_LILYPOND.into();
-    let scheme_language = tree_sitter_lilypond::LANGUAGE_LILYPOND_SCHEME.into();
-
-    let mut lilypond_config = HighlightConfiguration::new(
-        lilypond_language,
-        "lilypond",
+    let combined_query = format!(
+        "{}\n{}",
         tree_sitter_lilypond::HIGHLIGHTS_QUERY,
-        tree_sitter_lilypond::INJECTIONS_QUERY,
-        "",
-    )
-    .map_err(|error| format!("Tree-sitter LilyPond config error: {error}"))?;
-    lilypond_config.configure(TREE_SITTER_HIGHLIGHT_NAMES);
+        tree_sitter_lilypond::HIGHLIGHTS_SCHEME_QUERY
+    );
 
-    let mut scheme_config = HighlightConfiguration::new(
-        scheme_language,
-        "lilypond_scheme",
-        tree_sitter_lilypond::HIGHLIGHTS_SCHEME_QUERY,
-        "",
-        "",
-    )
-    .map_err(|error| format!("Tree-sitter LilyPond Scheme config error: {error}"))?;
-    scheme_config.configure(TREE_SITTER_HIGHLIGHT_NAMES);
+    let mut lilypond_config =
+        HighlightConfiguration::new(lilypond_language, "lilypond", &combined_query, "", "")
+            .map_err(|error| format!("Tree-sitter LilyPond config error: {error}"))?;
+    lilypond_config.configure(TREE_SITTER_HIGHLIGHT_NAMES);
 
     let mut highlighter = Highlighter::new();
     let events = highlighter
-        .highlight(&lilypond_config, source.as_bytes(), None, |language_name| {
-            if language_name == "lilypond_scheme" {
-                Some(&scheme_config)
-            } else {
-                None
-            }
-        })
+        .highlight(&lilypond_config, source.as_bytes(), None, |_| None)
         .map_err(|error| format!("Tree-sitter highlight error: {error}"))?;
 
     let line_infos = line_infos(source);
@@ -320,8 +308,10 @@ fn highlight_color(highlight: Highlight, style: &Style) -> Color {
         "string.delimiter.left" | "string.delimiter.right" => style.string_delimiter_color,
         "escape" => style.escape_color,
         "keyword" => style.keyword_color,
+        "keyword.directive" => style.directive_color,
         "number" | "value.number" => style.number_color,
         "function" | "identifier.core.function" => style.function_color,
+        "function.builtin" => style.builtin_color,
         "identifier.variable" => style.command_color,
         "variable" | "identifier" => style.variable_color,
         "operator" => style.operator_color,
@@ -330,9 +320,69 @@ fn highlight_color(highlight: Highlight, style: &Style) -> Color {
         "constant" | "boolean" | "value.boolean" | "entity" | "value.entity" => {
             style.constant_color
         }
+        "type" => style.type_color,
+        "property" => style.property_color,
+        "parameter" => style.parameter_color,
         "punctuation.bracket" | "bracket" => style.bracket_color,
         "punctuation" => style.punctuation_color,
         "invalid" => style.invalid_color,
         _ => style.text_color,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn highlights_embedded_scheme_in_lilypond() {
+        let style = crate::theme::from_iced_theme(&iced::Theme::Dark);
+        let highlighted = highlight_document(
+            "lilypond",
+            "#(define fonts (set-global-fonts #:roman \"TeX Gyre Pagella\"))",
+            &style,
+        )
+        .expect("highlighted");
+        let spans = &highlighted.lines[0];
+
+        for expected_color in [
+            style.keyword_color,
+            style.builtin_color,
+            style.parameter_color,
+        ] {
+            assert!(
+                spans.iter().any(|span| span.color == expected_color),
+                "expected rich embedded Scheme highlighting; spans = {:?}",
+                spans
+            );
+        }
+
+        for source in [
+            "##t",
+            "#ly:optimal-breaking",
+            "#'header:instrument",
+            "#notehead-link-engraver",
+        ] {
+            let highlighted = highlight_document("lilypond", source, &style).expect("highlighted");
+            let spans = &highlighted.lines[0];
+
+            assert!(
+                spans
+                    .iter()
+                    .any(|span| span.start_col >= 1 && span.color != style.text_color),
+                "expected embedded Scheme text after `#` to be highlighted for `{source}`; tree = {}; spans = {:?}",
+                lilypond_sexp(source),
+                spans
+            );
+        }
+    }
+
+    fn lilypond_sexp(source: &str) -> String {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_lilypond::LANGUAGE_LILYPOND.into())
+            .expect("language");
+        let tree = parser.parse(source, None).expect("tree");
+        tree.root_node().to_sexp()
     }
 }
