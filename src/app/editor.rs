@@ -13,14 +13,16 @@ const EMPTY_EDITOR_MESSAGE: &str = "Open a LilyPond score to edit its source her
 pub(super) struct EditorState {
     widget: CodeEditor,
     path: Option<PathBuf>,
+    app_theme: iced::Theme,
     theme_settings: EditorThemeSettings,
 }
 
 impl EditorState {
-    pub(super) fn new(theme_settings: EditorThemeSettings) -> Self {
+    pub(super) fn new(app_theme: iced::Theme, theme_settings: EditorThemeSettings) -> Self {
         Self {
-            widget: build_editor("", "text", theme_settings),
+            widget: build_editor("", "text", &app_theme, theme_settings),
             path: None,
+            app_theme,
             theme_settings,
         }
     }
@@ -36,7 +38,12 @@ impl EditorState {
         let text = fs::read_to_string(path)
             .map_err(|error| format!("Failed to read editor file {}: {error}", path.display()))?;
 
-        self.widget = build_editor(&text, syntax_for_path(path), self.theme_settings);
+        self.widget = build_editor(
+            &text,
+            syntax_for_path(path),
+            &self.app_theme,
+            self.theme_settings,
+        );
         self.widget.mark_saved();
         self.path = Some(path.to_path_buf());
 
@@ -133,18 +140,23 @@ impl EditorState {
     fn apply_theme(&mut self) {
         self.widget
             .set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
-                &iced::Theme::Dark,
+                &self.app_theme,
                 to_editor_theme_tuning(self.theme_settings),
             ));
     }
 }
 
-fn build_editor(content: &str, syntax: &str, theme_settings: EditorThemeSettings) -> CodeEditor {
+fn build_editor(
+    content: &str,
+    syntax: &str,
+    app_theme: &iced::Theme,
+    theme_settings: EditorThemeSettings,
+) -> CodeEditor {
     let mut editor = CodeEditor::new(content, syntax).with_wrap_enabled(false);
     editor.set_font_size(ui_style::FONT_SIZE_BODY_SM.saturating_sub(2) as f32, true);
     editor.set_lsp_enabled(false);
     editor.set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
-        &iced::Theme::Dark,
+        app_theme,
         to_editor_theme_tuning(theme_settings),
     ));
     editor

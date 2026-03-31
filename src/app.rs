@@ -57,6 +57,7 @@ pub(super) type WorkspacePaneKind = crate::settings::WorkspacePane;
 type DockGroupId = u64;
 
 struct LilyView {
+    theme: iced::Theme,
     window_width: f32,
     window_height: f32,
     lilypond_status: LilypondStatus,
@@ -240,6 +241,7 @@ pub fn run(startup_soundfont: Option<PathBuf>, startup_score: Option<PathBuf>) -
         update,
         view,
     )
+    .theme(|state: &LilyView| state.theme.clone())
     .title("lily-view")
     .window(window::Settings {
         min_size: Some(Size::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)),
@@ -292,6 +294,7 @@ fn new(
     );
 
     let mut app = LilyView {
+        theme: iced::Theme::Dark,
         window_width: MIN_WINDOW_WIDTH,
         window_height: MIN_WINDOW_HEIGHT,
         lilypond_status: LilypondStatus::Checking,
@@ -318,7 +321,7 @@ fn new(
         dock_drop_target: None,
         open_header_overflow_menu: None,
         open_editor_theme_menu: None,
-        editor: editor::EditorState::new(stored_settings.editor_theme),
+        editor: editor::EditorState::new(iced::Theme::Dark, stored_settings.editor_theme),
         rendered_score: None,
         score_cursor_maps: None,
         score_cursor_overlay: None,
