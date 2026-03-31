@@ -896,8 +896,11 @@ impl CodeEditor {
     /// // Give focus to editor2
     /// editor2.request_focus();
     /// ```
-    pub fn request_focus(&self) {
+    pub fn request_focus(&mut self) {
         FOCUSED_EDITOR_ID.store(self.editor_id, Ordering::Relaxed);
+        self.has_canvas_focus = true;
+        self.focus_locked = false;
+        self.show_cursor = true;
     }
 
     /// Checks if this editor currently has focus.

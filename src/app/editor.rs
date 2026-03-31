@@ -78,6 +78,10 @@ impl EditorState {
         self.widget.lose_focus();
     }
 
+    pub(super) fn request_focus(&mut self) {
+        self.widget.request_focus();
+    }
+
     pub(super) fn is_dirty(&self) -> bool {
         self.widget.is_modified()
     }

@@ -21,6 +21,18 @@ const SCORE_PREVIEW_PRIMARY_MAX_DIMENSION: f32 = 3600.0;
 const SCORE_PREVIEW_FALLBACK_MIN_ZOOM: f32 = 1.0;
 const SCORE_PREVIEW_PRIMARY_MIN_ZOOM: f32 = 1.8;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TabDirection {
+    Previous,
+    Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneCycleDirection {
+    Previous,
+    Next,
+}
+
 pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
     match message {
         Message::StartupChecked(result) => app.handle_startup_checked(result),
@@ -42,7 +54,9 @@ pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
 
 impl LilyView {
     fn sync_editor_widget_focus(&mut self) {
-        if self.focused_workspace_pane != Some(WorkspacePaneKind::Editor) {
+        if self.focused_workspace_pane == Some(WorkspacePaneKind::Editor) {
+            self.editor.request_focus();
+        } else {
             self.editor.lose_focus();
         }
     }
@@ -54,6 +68,10 @@ impl LilyView {
             key_press.modifiers,
         ) {
             return update(self, message);
+        }
+
+        if self.handle_workspace_navigation_shortcut(key_press.physical_key, key_press.modifiers) {
+            return Task::none();
         }
 
         if matches!(key_press.status, iced::event::Status::Captured) {
@@ -75,6 +93,34 @@ impl LilyView {
         }
 
         Task::none()
+    }
+
+    fn handle_workspace_navigation_shortcut(
+        &mut self,
+        physical_key: keyboard::key::Physical,
+        modifiers: keyboard::Modifiers,
+    ) -> bool {
+        let has_primary_modifier = modifiers.command() || modifiers.control();
+
+        if !has_primary_modifier {
+            return false;
+        }
+
+        match (physical_key, modifiers.alt(), modifiers.shift()) {
+            (keyboard::key::Physical::Code(keyboard::key::Code::BracketLeft), false, true) => {
+                self.switch_focused_workspace_tab(TabDirection::Previous)
+            }
+            (keyboard::key::Physical::Code(keyboard::key::Code::BracketRight), false, true) => {
+                self.switch_focused_workspace_tab(TabDirection::Next)
+            }
+            (keyboard::key::Physical::Code(keyboard::key::Code::BracketLeft), true, false) => {
+                self.cycle_workspace_pane_focus(PaneCycleDirection::Previous)
+            }
+            (keyboard::key::Physical::Code(keyboard::key::Code::BracketRight), true, false) => {
+                self.cycle_workspace_pane_focus(PaneCycleDirection::Next)
+            }
+            _ => false,
+        }
     }
 
     fn set_focused_workspace_pane(&mut self, pane: WorkspacePaneKind) {
@@ -1238,6 +1284,99 @@ impl LilyView {
         }
     }
 
+    fn switch_focused_workspace_tab(&mut self, direction: TabDirection) -> bool {
+        let Some(focused_pane) = self.focused_workspace_pane() else {
+            return false;
+        };
+        let Some(group_id) = self.group_for_pane(focused_pane) else {
+            return false;
+        };
+        let Some(group) = self.workspace_group(group_id) else {
+            return false;
+        };
+
+        if group.tabs.len() <= 1 {
+            return false;
+        }
+
+        let Some(active_index) = group.tabs.iter().position(|pane| *pane == group.active) else {
+            return false;
+        };
+
+        let next_index = match direction {
+            TabDirection::Previous => {
+                if active_index == 0 {
+                    group.tabs.len() - 1
+                } else {
+                    active_index - 1
+                }
+            }
+            TabDirection::Next => (active_index + 1) % group.tabs.len(),
+        };
+
+        let next_pane = group.tabs[next_index];
+        self.set_active_workspace_pane(next_pane);
+        self.set_focused_workspace_pane(next_pane);
+        true
+    }
+
+    fn cycle_workspace_pane_focus(&mut self, direction: PaneCycleDirection) -> bool {
+        let Some(focused_pane) = self.focused_workspace_pane() else {
+            return false;
+        };
+        let Some(current_group_id) = self.group_for_pane(focused_pane) else {
+            return false;
+        };
+
+        let ordered_groups = self.visible_workspace_group_order();
+        if ordered_groups.len() <= 1 {
+            return false;
+        }
+
+        let Some(current_index) = ordered_groups
+            .iter()
+            .position(|group_id| *group_id == current_group_id)
+        else {
+            return false;
+        };
+
+        let next_index = match direction {
+            PaneCycleDirection::Previous => {
+                if current_index == 0 {
+                    ordered_groups.len() - 1
+                } else {
+                    current_index - 1
+                }
+            }
+            PaneCycleDirection::Next => (current_index + 1) % ordered_groups.len(),
+        };
+
+        let Some(target_pane) = self
+            .workspace_group(ordered_groups[next_index])
+            .map(|group| group.active)
+        else {
+            return false;
+        };
+
+        self.set_focused_workspace_pane(target_pane);
+        true
+    }
+
+    fn visible_workspace_group_order(&self) -> Vec<DockGroupId> {
+        let mut group_ids = Vec::new();
+
+        if let Some(layout) = self.dock_layout.as_ref() {
+            collect_visible_group_order(layout, &mut group_ids);
+        } else {
+            group_ids.extend(self.dock_groups.keys().copied());
+            group_ids.sort_unstable();
+        }
+
+        group_ids.retain(|group_id| self.dock_groups.contains_key(group_id));
+        group_ids.dedup();
+        group_ids
+    }
+
     fn dock_drop_target_for(&self, position: iced::Point) -> Option<DockDropTarget> {
         let bounds_map = self.workspace_group_bounds();
         let (group_id, bounds) = bounds_map
@@ -2375,6 +2514,16 @@ fn collect_workspace_group_bounds(
                 );
             }
         },
+    }
+}
+
+fn collect_visible_group_order(node: &DockNode, group_ids: &mut Vec<DockGroupId>) {
+    match node {
+        DockNode::Group(group_id) => group_ids.push(*group_id),
+        DockNode::Split { first, second, .. } => {
+            collect_visible_group_order(first, group_ids);
+            collect_visible_group_order(second, group_ids);
+        }
     }
 }
 
