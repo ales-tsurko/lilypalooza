@@ -130,6 +130,56 @@ impl LilyView {
             ShortcutAction::PianoRollZoomReset => {
                 update(self, Message::PianoRoll(PianoRollMessage::ResetZoom))
             }
+            ShortcutAction::PianoRollCursorSubdivisionPrevious => {
+                if self.piano_roll.playback_is_playing() {
+                    return Task::none();
+                }
+                let Some(file) = self.piano_roll.current_file() else {
+                    return Task::none();
+                };
+                let tick = piano_roll::adjacent_subdivision_tick(
+                    &file.data,
+                    self.piano_roll.beat_subdivision,
+                    self.piano_roll.playback_tick(),
+                    false,
+                );
+                update(
+                    self,
+                    Message::PianoRoll(PianoRollMessage::SetCursorTicks(tick)),
+                )
+            }
+            ShortcutAction::PianoRollCursorSubdivisionNext => {
+                if self.piano_roll.playback_is_playing() {
+                    return Task::none();
+                }
+                let Some(file) = self.piano_roll.current_file() else {
+                    return Task::none();
+                };
+                let tick = piano_roll::adjacent_subdivision_tick(
+                    &file.data,
+                    self.piano_roll.beat_subdivision,
+                    self.piano_roll.playback_tick(),
+                    true,
+                );
+                update(
+                    self,
+                    Message::PianoRoll(PianoRollMessage::SetCursorTicks(tick)),
+                )
+            }
+            ShortcutAction::PianoRollScrollUp => iced::widget::operation::scroll_by(
+                piano_roll::roll_scroll_id(),
+                iced::widget::operation::AbsoluteOffset {
+                    x: 0.0,
+                    y: -KEYBOARD_SCROLL_STEP,
+                },
+            ),
+            ShortcutAction::PianoRollScrollDown => iced::widget::operation::scroll_by(
+                piano_roll::roll_scroll_id(),
+                iced::widget::operation::AbsoluteOffset {
+                    x: 0.0,
+                    y: KEYBOARD_SCROLL_STEP,
+                },
+            ),
             ShortcutAction::TransportPlayPause => update(
                 self,
                 Message::PianoRoll(PianoRollMessage::TransportPlayPause),

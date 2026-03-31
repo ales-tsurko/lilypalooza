@@ -1980,6 +1980,81 @@ fn snap_tick_to_subdivision_grid(data: &MidiRollData, beat_subdivision: u8, tick
     }
 }
 
+pub(super) fn adjacent_subdivision_tick(
+    data: &MidiRollData,
+    beat_subdivision: u8,
+    tick: u64,
+    forward: bool,
+) -> u64 {
+    let beat_subdivision = beat_subdivision.clamp(BEAT_SUBDIVISION_MIN, BEAT_SUBDIVISION_MAX);
+    let clamped_tick = tick.min(data.total_ticks);
+    let default_signature = TimeSignatureChange {
+        tick: 0,
+        numerator: 4,
+        denominator: 4,
+    };
+    let signatures: &[TimeSignatureChange] = if data.time_signatures.is_empty() {
+        std::slice::from_ref(&default_signature)
+    } else {
+        &data.time_signatures
+    };
+
+    let mut best = None;
+
+    for (index, signature) in signatures.iter().enumerate() {
+        let start_tick = signature.tick.min(data.total_ticks);
+        let next_signature_tick = signatures
+            .get(index + 1)
+            .map(|next| next.tick)
+            .unwrap_or(data.total_ticks.saturating_add(1));
+        let end_tick = next_signature_tick.min(data.total_ticks.saturating_add(1));
+        let beat_step = beat_step_ticks(data.ppq, *signature).max(1) as f64;
+        let subdivision_step = (beat_step / f64::from(beat_subdivision)).max(f64::EPSILON);
+        let relative_tick = clamped_tick.saturating_sub(start_tick) as f64;
+        let base_index = if forward {
+            (relative_tick / subdivision_step).floor() as i64 + 1
+        } else {
+            (relative_tick / subdivision_step).ceil() as i64 - 1
+        };
+
+        for candidate_index in [base_index - 1, base_index, base_index + 1] {
+            if candidate_index < 0 {
+                continue;
+            }
+
+            let candidate_tick =
+                (start_tick as f64 + candidate_index as f64 * subdivision_step).round() as u64;
+
+            if candidate_tick < start_tick
+                || candidate_tick > data.total_ticks
+                || candidate_tick >= end_tick
+            {
+                continue;
+            }
+
+            if forward {
+                if candidate_tick <= clamped_tick {
+                    continue;
+                }
+
+                if best.is_none_or(|best_tick| candidate_tick < best_tick) {
+                    best = Some(candidate_tick);
+                }
+            } else {
+                if candidate_tick >= clamped_tick {
+                    continue;
+                }
+
+                if best.is_none_or(|best_tick| candidate_tick > best_tick) {
+                    best = Some(candidate_tick);
+                }
+            }
+        }
+    }
+
+    best.unwrap_or(clamped_tick)
+}
+
 fn draw_bar_numbers(
     frame: &mut canvas::Frame,
     data: &MidiRollData,

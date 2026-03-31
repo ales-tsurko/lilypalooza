@@ -21,6 +21,10 @@ pub(crate) enum ShortcutAction {
     PianoRollZoomReset,
     TransportPlayPause,
     TransportRewind,
+    PianoRollCursorSubdivisionPrevious,
+    PianoRollCursorSubdivisionNext,
+    PianoRollScrollUp,
+    PianoRollScrollDown,
     ScoreScrollUp,
     ScoreScrollDown,
     ScorePrevPage,
@@ -149,7 +153,22 @@ fn fixed_contextual_action(
             }
             _ => None,
         },
-        WorkspacePane::PianoRoll | WorkspacePane::Editor | WorkspacePane::Logger => None,
+        WorkspacePane::PianoRoll => match input.key.as_ref() {
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                Some(ShortcutAction::PianoRollCursorSubdivisionPrevious)
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                Some(ShortcutAction::PianoRollCursorSubdivisionNext)
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                Some(ShortcutAction::PianoRollScrollUp)
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                Some(ShortcutAction::PianoRollScrollDown)
+            }
+            _ => None,
+        },
+        WorkspacePane::Editor | WorkspacePane::Logger => None,
     }
 }
 
@@ -266,7 +285,11 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
             binding_named(ShortcutNamedKey::Enter, false, false, false),
             binding_code(ShortcutKeyCode::NumpadEnter, false, false, false),
         ],
-        ShortcutAction::ScoreScrollUp
+        ShortcutAction::PianoRollCursorSubdivisionPrevious
+        | ShortcutAction::PianoRollCursorSubdivisionNext
+        | ShortcutAction::PianoRollScrollUp
+        | ShortcutAction::PianoRollScrollDown
+        | ShortcutAction::ScoreScrollUp
         | ShortcutAction::ScoreScrollDown
         | ShortcutAction::ScorePrevPage
         | ShortcutAction::ScoreNextPage => Vec::new(),
@@ -445,7 +468,11 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::PianoRollZoomReset => Some(ShortcutActionId::PianoRollZoomReset),
         ShortcutAction::TransportPlayPause => Some(ShortcutActionId::TransportPlayPause),
         ShortcutAction::TransportRewind => Some(ShortcutActionId::TransportRewind),
-        ShortcutAction::ScoreScrollUp
+        ShortcutAction::PianoRollCursorSubdivisionPrevious
+        | ShortcutAction::PianoRollCursorSubdivisionNext
+        | ShortcutAction::PianoRollScrollUp
+        | ShortcutAction::PianoRollScrollDown
+        | ShortcutAction::ScoreScrollUp
         | ShortcutAction::ScoreScrollDown
         | ShortcutAction::ScorePrevPage
         | ShortcutAction::ScoreNextPage => None,
