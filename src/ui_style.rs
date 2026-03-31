@@ -71,15 +71,26 @@ pub(crate) fn prompt_backdrop(_theme: &Theme) -> container::Style {
 
 pub(crate) fn tooltip_popup(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
+    let background = mix_color(
+        Color::from_rgb(0.74, 0.75, 0.78),
+        palette.background.weakest.color,
+        0.24,
+    );
+    let border_color = mix_color(background, palette.background.strong.color, 0.18);
+    let text_color = Color::from_rgb(0.10, 0.10, 0.12);
 
     container::Style {
-        background: Some(palette.background.base.color.into()),
-        text_color: Some(palette.background.base.text),
-        border: border::rounded(8)
-            .width(1)
-            .color(palette.background.strong.color),
+        background: Some(
+            Color {
+                a: 0.94,
+                ..background
+            }
+            .into(),
+        ),
+        text_color: Some(text_color),
+        border: border::rounded(8).width(1).color(border_color),
         shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.18),
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.16),
             offset: Vector::new(0.0, 4.0),
             blur_radius: 12.0,
         },
@@ -512,6 +523,9 @@ pub(crate) fn button_menu_item(
     active: bool,
 ) -> button::Style {
     let palette = theme.extended_palette();
+    let foreground = Color::from_rgb(0.12, 0.12, 0.14);
+    let foreground_muted = Color::from_rgb(0.30, 0.31, 0.34);
+    let foreground_hovered = palette.background.weakest.text;
 
     let base_background = if active {
         Some(
@@ -527,7 +541,11 @@ pub(crate) fn button_menu_item(
     };
     let base = button::Style {
         background: base_background,
-        text_color: palette.background.base.text,
+        text_color: if active {
+            foreground_hovered
+        } else {
+            foreground
+        },
         border: border::rounded(6).width(0).color(Color::TRANSPARENT),
         shadow: Shadow::default(),
         ..button::Style::default()
@@ -537,7 +555,7 @@ pub(crate) fn button_menu_item(
         button::Status::Active => base,
         button::Status::Hovered => button::Style {
             background: Some(palette.background.strong.color.into()),
-            text_color: palette.background.base.text,
+            text_color: foreground_hovered,
             ..base
         },
         button::Status::Pressed => button::Style {
@@ -549,12 +567,12 @@ pub(crate) fn button_menu_item(
                 )
                 .into(),
             ),
-            text_color: palette.background.base.text,
+            text_color: foreground_hovered,
             ..base
         },
         button::Status::Disabled => button::Style {
             background: None,
-            text_color: palette.background.strong.text,
+            text_color: foreground_muted,
             ..base
         },
     }

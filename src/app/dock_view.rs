@@ -1053,10 +1053,11 @@ fn editor_root_menu_item<'a>(
                 .width(Length::Fixed(10.0))
                 .height(Length::Fixed(10.0))
                 .content_fit(ContentFit::Contain)
-                .style(|theme: &Theme, status| svg::Style {
-                    color: Some(match status {
-                        svg::Status::Idle => theme.extended_palette().background.base.text,
-                        svg::Status::Hovered => theme.extended_palette().background.base.text,
+                .style(move |theme: &Theme, _status| svg::Style {
+                    color: Some(if active {
+                        theme.extended_palette().background.weakest.text
+                    } else {
+                        Color::from_rgb(0.12, 0.12, 0.14)
                     }),
                 }),
             text(label).size(ui_style::FONT_SIZE_UI_XS),
@@ -1213,10 +1214,8 @@ fn editor_menu_item<'a>(
     ])
     .style(|theme: &Theme, status| ui_style::button_menu_item(theme, status, false));
 
-    if enabled {
-        if let Some(message) = on_press {
-            item = item.on_press(message);
-        }
+    if enabled && let Some(message) = on_press {
+        item = item.on_press(message);
     }
 
     item.into()

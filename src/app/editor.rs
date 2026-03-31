@@ -69,7 +69,7 @@ impl EditorState {
     }
 
     pub(super) fn save_to_path(&mut self, path: &Path) -> Result<(), String> {
-        fs::write(&path, self.widget.content())
+        fs::write(path, self.widget.content())
             .map_err(|error| format!("Failed to save editor file {}: {error}", path.display()))?;
         let content = self.widget.content().to_string();
         self.load_document(&content, Some(path.to_path_buf()), false)?;
