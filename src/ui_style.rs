@@ -134,12 +134,18 @@ pub(crate) fn pane_title_bar_surface_focused(theme: &Theme, focused: bool) -> co
         let tinted = mix_color(
             palette.background.weak.color,
             palette.primary.base.color,
-            0.08,
+            0.18,
+        );
+        let mid_tint = mix_color(
+            palette.background.weak.color,
+            palette.primary.base.color,
+            0.09,
         );
 
         gradient::Linear::new(Radians::PI / 2.0)
             .add_stop(0.0, tinted)
-            .add_stop(0.55, palette.background.weak.color)
+            .add_stop(0.42, mid_tint)
+            .add_stop(0.78, palette.background.weak.color)
             .add_stop(1.0, palette.background.weak.color)
             .into()
     } else {
@@ -199,7 +205,7 @@ pub(crate) fn chrome_separator(theme: &Theme) -> container::Style {
             mix_color(
                 palette.background.weak.color,
                 palette.background.strong.color,
-                0.28,
+                0.40,
             )
             .into(),
         ),
