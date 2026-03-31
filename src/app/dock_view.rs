@@ -1137,7 +1137,7 @@ fn editor_theme_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
         .spacing(ui_style::SPACE_SM),
     )
     .width(Length::Fixed(EDITOR_THEME_MENU_WIDTH))
-    .padding(ui_style::PADDING_XS)
+    .padding(ui_style::PADDING_SM)
     .style(ui_style::tooltip_popup)
     .into()
 }
