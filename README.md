@@ -4,8 +4,8 @@
 visual feedback. Open a `.ly` file, keep it under watch, and the app updates its
 generated output in one place while you edit.
 
-![Screenshot 1](screenshots/screenshot_1.jpg)
-![Screenshot 2](screenshots/screenshot_2.jpg)
+![Screenshot 1](assets/screenshots/screenshot_1.jpg)
+![Screenshot 2](assets/screenshots/screenshot_2.jpg)
 
 Features:
 
