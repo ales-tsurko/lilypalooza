@@ -8,6 +8,7 @@ use notify::event::EventKind;
 use resvg::tiny_skia;
 use resvg::usvg;
 
+use super::messages::KeyPress;
 use super::score_cursor;
 use super::*;
 use crate::error_prompt::{ErrorFatality, ErrorPrompt, PromptButtons};
@@ -31,6 +32,7 @@ pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
         Message::Editor(message) => app.handle_editor_message(message),
         Message::Logger(message) => app.handle_logger_message(message),
         Message::Prompt(message) => app.handle_prompt_message(message),
+        Message::KeyPressed(key_press) => app.handle_key_pressed(key_press),
         Message::ModifiersChanged(modifiers) => app.handle_modifiers_changed(modifiers),
         Message::Tick => app.handle_tick(),
         Message::Frame(_now) => app.handle_frame(),
@@ -39,9 +41,46 @@ pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
 }
 
 impl LilyView {
+    fn sync_editor_widget_focus(&mut self) {
+        if self.focused_workspace_pane != Some(WorkspacePaneKind::Editor) {
+            self.editor.lose_focus();
+        }
+    }
+
+    fn handle_key_pressed(&mut self, key_press: KeyPress) -> Task<Message> {
+        if let Some(message) = global_shortcut_message(
+            &key_press.modified_key,
+            key_press.physical_key,
+            key_press.modifiers,
+        ) {
+            return update(self, message);
+        }
+
+        if matches!(key_press.status, iced::event::Status::Captured) {
+            return Task::none();
+        }
+
+        let Some(focused_pane) = self.focused_workspace_pane() else {
+            return Task::none();
+        };
+
+        if let Some(message) = contextual_shortcut_message(
+            focused_pane,
+            &key_press.key,
+            &key_press.modified_key,
+            key_press.physical_key,
+            key_press.modifiers,
+        ) {
+            return update(self, message);
+        }
+
+        Task::none()
+    }
+
     fn set_focused_workspace_pane(&mut self, pane: WorkspacePaneKind) {
         if self.group_for_pane(pane).is_some() {
             self.focused_workspace_pane = Some(pane);
+            self.sync_editor_widget_focus();
         }
     }
 
@@ -58,6 +97,7 @@ impl LilyView {
             .as_ref()
             .and_then(|layout| first_active_workspace_pane(layout, &self.dock_groups))
             .or_else(|| self.dock_groups.values().next().map(|group| group.active));
+        self.sync_editor_widget_focus();
     }
 
     fn handle_viewer_message(&mut self, message: ViewerMessage) -> Task<Message> {
@@ -253,12 +293,13 @@ impl LilyView {
             | PianoRollMessage::TrackPanelToggle
             | PianoRollMessage::TrackPanelResizedBy(_)
             | PianoRollMessage::TrackMuteToggled(_)
-            | PianoRollMessage::TrackSoloToggled(_)
-            | PianoRollMessage::TransportSeekNormalized(_)
-            | PianoRollMessage::TransportPlayPause
-            | PianoRollMessage::TransportRewind => {
+            | PianoRollMessage::TrackSoloToggled(_) => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::PianoRoll);
             }
+            PianoRollMessage::TransportSeekNormalized(_)
+            | PianoRollMessage::TransportSeekReleased
+            | PianoRollMessage::TransportPlayPause
+            | PianoRollMessage::TransportRewind => {}
             PianoRollMessage::ViewportCursorMoved(_)
             | PianoRollMessage::ViewportCursorLeft
             | PianoRollMessage::RollScrolled { .. } => {}
@@ -350,9 +391,15 @@ impl LilyView {
                 self.piano_roll.set_rewind_flag_tick(tick);
             }
             PianoRollMessage::TransportSeekNormalized(position) => {
-                self.seek_playback_normalized(position);
+                self.transport_seek_preview = Some(position.clamp(0.0, 1.0));
+            }
+            PianoRollMessage::TransportSeekReleased => {
+                if let Some(position) = self.transport_seek_preview.take() {
+                    self.seek_playback_normalized(position);
+                }
             }
             PianoRollMessage::TransportPlayPause => {
+                self.transport_seek_preview = None;
                 if let Some(playback) = self.playback.as_mut() {
                     if playback.is_playing() {
                         playback.pause();
@@ -374,6 +421,7 @@ impl LilyView {
                 }
             }
             PianoRollMessage::TransportRewind => {
+                self.transport_seek_preview = None;
                 let target_tick = self.rewind_target_tick();
 
                 if let Some(playback) = self.playback.as_mut() {
@@ -2007,6 +2055,8 @@ impl LilyView {
     }
 
     fn seek_playback_ticks(&mut self, tick: u64) {
+        self.transport_seek_preview = None;
+
         if let Some(playback) = self.playback.as_mut() {
             playback.jump_to_tick(tick);
             self.refresh_playback_position();
@@ -2046,6 +2096,194 @@ impl LilyView {
             .current_file()
             .map(|file| file.data.total_ticks)
             .unwrap_or(0)
+    }
+}
+
+fn global_shortcut_message(
+    modified_key: &keyboard::Key,
+    physical_key: keyboard::key::Physical,
+    modifiers: keyboard::Modifiers,
+) -> Option<Message> {
+    let has_primary_modifier = modifiers.command() || modifiers.control();
+    if !has_primary_modifier {
+        return None;
+    }
+
+    if matches!(
+        physical_key,
+        keyboard::key::Physical::Code(keyboard::key::Code::KeyS)
+    ) {
+        return Some(Message::Editor(EditorMessage::SaveRequested));
+    }
+
+    match physical_key {
+        keyboard::key::Physical::Code(keyboard::key::Code::Digit1)
+        | keyboard::key::Physical::Code(keyboard::key::Code::Numpad1) => Some(Message::Pane(
+            PaneMessage::ToggleWorkspacePane(WorkspacePaneKind::Editor),
+        )),
+        keyboard::key::Physical::Code(keyboard::key::Code::Digit2)
+        | keyboard::key::Physical::Code(keyboard::key::Code::Numpad2) => Some(Message::Pane(
+            PaneMessage::ToggleWorkspacePane(WorkspacePaneKind::Score),
+        )),
+        keyboard::key::Physical::Code(keyboard::key::Code::Digit3)
+        | keyboard::key::Physical::Code(keyboard::key::Code::Numpad3) => Some(Message::Pane(
+            PaneMessage::ToggleWorkspacePane(WorkspacePaneKind::PianoRoll),
+        )),
+        keyboard::key::Physical::Code(keyboard::key::Code::Digit4)
+        | keyboard::key::Physical::Code(keyboard::key::Code::Numpad4) => Some(Message::Pane(
+            PaneMessage::ToggleWorkspacePane(WorkspacePaneKind::Logger),
+        )),
+        _ => match modified_key.as_ref() {
+            keyboard::Key::Character("1")
+            | keyboard::Key::Character("2")
+            | keyboard::Key::Character("3")
+            | keyboard::Key::Character("4") => None,
+            _ => None,
+        },
+    }
+}
+
+fn contextual_shortcut_message(
+    focused_pane: WorkspacePaneKind,
+    key: &keyboard::Key,
+    modified_key: &keyboard::Key,
+    physical_key: keyboard::key::Physical,
+    modifiers: keyboard::Modifiers,
+) -> Option<Message> {
+    match focused_pane {
+        WorkspacePaneKind::Score => {
+            score_contextual_shortcut_message(key, modified_key, physical_key, modifiers)
+        }
+        WorkspacePaneKind::PianoRoll => {
+            piano_roll_contextual_shortcut_message(key, modified_key, physical_key, modifiers)
+        }
+        WorkspacePaneKind::Editor | WorkspacePaneKind::Logger => None,
+    }
+}
+
+fn score_contextual_shortcut_message(
+    key: &keyboard::Key,
+    modified_key: &keyboard::Key,
+    physical_key: keyboard::key::Physical,
+    modifiers: keyboard::Modifiers,
+) -> Option<Message> {
+    let has_primary_modifier = modifiers.command() || modifiers.control();
+
+    if has_primary_modifier {
+        match modified_key.as_ref() {
+            keyboard::Key::Character("+") | keyboard::Key::Character("=") => {
+                return Some(Message::Viewer(ViewerMessage::ZoomIn));
+            }
+            keyboard::Key::Character("-") | keyboard::Key::Character("_") => {
+                return Some(Message::Viewer(ViewerMessage::ZoomOut));
+            }
+            keyboard::Key::Character("0") => {
+                return Some(Message::Viewer(ViewerMessage::ResetZoom));
+            }
+            _ => {}
+        }
+
+        match physical_key {
+            keyboard::key::Physical::Code(keyboard::key::Code::NumpadAdd) => {
+                return Some(Message::Viewer(ViewerMessage::ZoomIn));
+            }
+            keyboard::key::Physical::Code(keyboard::key::Code::NumpadSubtract) => {
+                return Some(Message::Viewer(ViewerMessage::ZoomOut));
+            }
+            keyboard::key::Physical::Code(keyboard::key::Code::Numpad0) => {
+                return Some(Message::Viewer(ViewerMessage::ResetZoom));
+            }
+            _ => {}
+        }
+    }
+
+    match key.as_ref() {
+        keyboard::Key::Named(keyboard::key::Named::Space)
+            if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
+        {
+            Some(Message::PianoRoll(PianoRollMessage::TransportPlayPause))
+        }
+        keyboard::Key::Named(keyboard::key::Named::Enter)
+            if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
+        {
+            Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
+        }
+        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+            Some(Message::Viewer(ViewerMessage::ScrollUp))
+        }
+        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+            Some(Message::Viewer(ViewerMessage::ScrollDown))
+        }
+        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+            Some(Message::Viewer(ViewerMessage::PrevPage))
+        }
+        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+            Some(Message::Viewer(ViewerMessage::NextPage))
+        }
+        _ => match physical_key {
+            keyboard::key::Physical::Code(keyboard::key::Code::NumpadEnter)
+                if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
+            {
+                Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
+            }
+            _ => None,
+        },
+    }
+}
+
+fn piano_roll_contextual_shortcut_message(
+    key: &keyboard::Key,
+    modified_key: &keyboard::Key,
+    physical_key: keyboard::key::Physical,
+    modifiers: keyboard::Modifiers,
+) -> Option<Message> {
+    let has_primary_modifier = modifiers.command() || modifiers.control();
+
+    if has_primary_modifier {
+        match modified_key.as_ref() {
+            keyboard::Key::Character("+") | keyboard::Key::Character("=") => {
+                return Some(Message::PianoRoll(PianoRollMessage::ZoomIn));
+            }
+            keyboard::Key::Character("-") | keyboard::Key::Character("_") => {
+                return Some(Message::PianoRoll(PianoRollMessage::ZoomOut));
+            }
+            keyboard::Key::Character("0") => {
+                return Some(Message::PianoRoll(PianoRollMessage::ResetZoom));
+            }
+            _ => {}
+        }
+
+        match physical_key {
+            keyboard::key::Physical::Code(keyboard::key::Code::NumpadAdd) => {
+                return Some(Message::PianoRoll(PianoRollMessage::ZoomIn));
+            }
+            keyboard::key::Physical::Code(keyboard::key::Code::NumpadSubtract) => {
+                return Some(Message::PianoRoll(PianoRollMessage::ZoomOut));
+            }
+            keyboard::key::Physical::Code(keyboard::key::Code::Numpad0) => {
+                return Some(Message::PianoRoll(PianoRollMessage::ResetZoom));
+            }
+            _ => {}
+        }
+    }
+
+    if modifiers.command() || modifiers.control() || modifiers.alt() {
+        return None;
+    }
+
+    match key.as_ref() {
+        keyboard::Key::Named(keyboard::key::Named::Space) => {
+            Some(Message::PianoRoll(PianoRollMessage::TransportPlayPause))
+        }
+        keyboard::Key::Named(keyboard::key::Named::Enter) => {
+            Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
+        }
+        _ => match physical_key {
+            keyboard::key::Physical::Code(keyboard::key::Code::NumpadEnter) => {
+                Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
+            }
+            _ => None,
+        },
     }
 }
 

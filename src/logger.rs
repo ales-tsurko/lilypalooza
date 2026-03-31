@@ -52,18 +52,23 @@ impl Logger {
 
     pub(crate) fn view<'a, Message>(
         &'a self,
+        enabled: bool,
         on_action: impl Fn(text_editor::Action) -> Message + 'a,
     ) -> Element<'a, Message>
     where
         Message: Clone + 'a,
     {
         let editor = text_editor(&self.text)
-            .on_action(on_action)
             .font(Font::MONOSPACE)
             .size(ui_style::FONT_SIZE_UI_XS)
             .padding(0)
             .height(Shrink)
             .style(ui_style::logger_text_editor);
+        let editor = if enabled {
+            editor.on_action(on_action)
+        } else {
+            editor
+        };
 
         container(
             scrollable(editor)

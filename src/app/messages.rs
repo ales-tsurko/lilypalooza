@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use iced::event;
 use iced::time::Instant;
 use iced::widget::{pane_grid, text_editor};
 use iced::{Size, keyboard, mouse};
@@ -19,10 +20,20 @@ pub(super) enum Message {
     Editor(EditorMessage),
     Logger(LoggerMessage),
     Prompt(PromptMessage),
+    KeyPressed(KeyPress),
     ModifiersChanged(keyboard::Modifiers),
     Tick,
     Frame(Instant),
     WindowResized(Size),
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct KeyPress {
+    pub(super) status: event::Status,
+    pub(super) key: keyboard::Key,
+    pub(super) modified_key: keyboard::Key,
+    pub(super) physical_key: keyboard::key::Physical,
+    pub(super) modifiers: keyboard::Modifiers,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +125,7 @@ pub(super) enum PianoRollMessage {
     TrackMuteToggled(usize),
     TrackSoloToggled(usize),
     TransportSeekNormalized(f32),
+    TransportSeekReleased,
     TransportPlayPause,
     TransportRewind,
 }

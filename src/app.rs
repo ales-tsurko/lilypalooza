@@ -19,7 +19,7 @@ use crate::settings::{
 };
 
 use messages::{
-    EditorMessage, FileMessage, LoggerMessage, Message, PaneMessage, PianoRollMessage,
+    EditorMessage, FileMessage, KeyPress, LoggerMessage, Message, PaneMessage, PianoRollMessage,
     PromptMessage, ViewerMessage,
 };
 use piano_roll::PianoRollState;
@@ -100,6 +100,7 @@ struct LilyView {
     score_zoom_preview: Option<ScoreZoomPreview>,
     score_zoom_preview_pending: Option<ScoreZoomPreviewRequest>,
     piano_roll_viewport_cursor: Option<iced::Point>,
+    transport_seek_preview: Option<f32>,
     keyboard_modifiers: keyboard::Modifiers,
     default_settings: AppSettings,
 }
@@ -349,6 +350,7 @@ fn new(
         score_zoom_preview: None,
         score_zoom_preview_pending: None,
         piano_roll_viewport_cursor: None,
+        transport_seek_preview: None,
         keyboard_modifiers: keyboard::Modifiers::default(),
         default_settings,
     };
@@ -419,108 +421,13 @@ fn runtime_event_to_message(
             physical_key,
             modifiers,
             ..
-        }) => {
-            let has_primary_modifier = modifiers.command() || modifiers.control();
-
-            if has_primary_modifier
-                && matches!(
-                    physical_key,
-                    keyboard::key::Physical::Code(keyboard::key::Code::KeyS)
-                )
-            {
-                return Some(Message::Editor(EditorMessage::SaveRequested));
-            }
-
-            if matches!(status, event::Status::Captured) {
-                return None;
-            }
-
-            let has_zoom_modifier = has_primary_modifier;
-            if has_zoom_modifier {
-                match modified_key.as_ref() {
-                    keyboard::Key::Character("+") | keyboard::Key::Character("=") => {
-                        return Some(Message::Viewer(ViewerMessage::ZoomIn));
-                    }
-                    keyboard::Key::Character("-") | keyboard::Key::Character("_") => {
-                        return Some(Message::Viewer(ViewerMessage::ZoomOut));
-                    }
-                    keyboard::Key::Character("0") => {
-                        return Some(Message::Viewer(ViewerMessage::ResetZoom));
-                    }
-                    _ => {}
-                }
-
-                match physical_key {
-                    keyboard::key::Physical::Code(keyboard::key::Code::NumpadAdd) => {
-                        return Some(Message::Viewer(ViewerMessage::ZoomIn));
-                    }
-                    keyboard::key::Physical::Code(keyboard::key::Code::NumpadSubtract) => {
-                        return Some(Message::Viewer(ViewerMessage::ZoomOut));
-                    }
-                    keyboard::key::Physical::Code(keyboard::key::Code::Numpad0) => {
-                        return Some(Message::Viewer(ViewerMessage::ResetZoom));
-                    }
-                    keyboard::key::Physical::Code(keyboard::key::Code::Digit1)
-                    | keyboard::key::Physical::Code(keyboard::key::Code::Numpad1) => {
-                        return Some(Message::Pane(PaneMessage::ToggleWorkspacePane(
-                            WorkspacePaneKind::Editor,
-                        )));
-                    }
-                    keyboard::key::Physical::Code(keyboard::key::Code::Digit2)
-                    | keyboard::key::Physical::Code(keyboard::key::Code::Numpad2) => {
-                        return Some(Message::Pane(PaneMessage::ToggleWorkspacePane(
-                            WorkspacePaneKind::Score,
-                        )));
-                    }
-                    keyboard::key::Physical::Code(keyboard::key::Code::Digit3)
-                    | keyboard::key::Physical::Code(keyboard::key::Code::Numpad3) => {
-                        return Some(Message::Pane(PaneMessage::ToggleWorkspacePane(
-                            WorkspacePaneKind::PianoRoll,
-                        )));
-                    }
-                    keyboard::key::Physical::Code(keyboard::key::Code::Digit4)
-                    | keyboard::key::Physical::Code(keyboard::key::Code::Numpad4) => {
-                        return Some(Message::Pane(PaneMessage::ToggleWorkspacePane(
-                            WorkspacePaneKind::Logger,
-                        )));
-                    }
-                    _ => {}
-                }
-            }
-
-            match key.as_ref() {
-                keyboard::Key::Named(keyboard::key::Named::Space)
-                    if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
-                {
-                    Some(Message::PianoRoll(PianoRollMessage::TransportPlayPause))
-                }
-                keyboard::Key::Named(keyboard::key::Named::Enter)
-                    if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
-                {
-                    Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
-                }
-                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                    Some(Message::Viewer(ViewerMessage::ScrollUp))
-                }
-                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                    Some(Message::Viewer(ViewerMessage::ScrollDown))
-                }
-                keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
-                    Some(Message::Viewer(ViewerMessage::PrevPage))
-                }
-                keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
-                    Some(Message::Viewer(ViewerMessage::NextPage))
-                }
-                _ => match physical_key {
-                    keyboard::key::Physical::Code(keyboard::key::Code::NumpadEnter)
-                        if !modifiers.command() && !modifiers.control() && !modifiers.alt() =>
-                    {
-                        Some(Message::PianoRoll(PianoRollMessage::TransportRewind))
-                    }
-                    _ => None,
-                },
-            }
-        }
+        }) => Some(Message::KeyPressed(KeyPress {
+            status,
+            key,
+            modified_key,
+            physical_key,
+            modifiers,
+        })),
         _ => None,
     }
 }

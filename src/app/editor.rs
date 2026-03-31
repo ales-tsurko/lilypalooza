@@ -74,6 +74,10 @@ impl EditorState {
         self.path.is_some()
     }
 
+    pub(super) fn lose_focus(&mut self) {
+        self.widget.lose_focus();
+    }
+
     pub(super) fn is_dirty(&self) -> bool {
         self.widget.is_modified()
     }

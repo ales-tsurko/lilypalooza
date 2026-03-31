@@ -190,7 +190,9 @@ fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
                         .view(|message| Message::Editor(super::EditorMessage::Widget(message))),
                     WorkspacePaneKind::Logger => app
                         .logger
-                        .view(|action| Message::Logger(super::LoggerMessage::TextAction(action))),
+                        .view(app.is_workspace_group_focused(*group_id), |action| {
+                            Message::Logger(super::LoggerMessage::TextAction(action))
+                        }),
                 };
 
                 let body = workspace_pane_focus_body(active_pane, body);

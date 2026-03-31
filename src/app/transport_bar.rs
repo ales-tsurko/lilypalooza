@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use iced::widget::{button, container, row, slider, svg, text};
+use iced::widget::{Tooltip, button, container, row, slider, svg, text, tooltip};
 use iced::{ContentFit, Element, Fill, Font, Length, alignment};
 
 use super::{FileMessage, LilyView, Message, PianoRollMessage, SoundfontStatus};
@@ -15,6 +15,9 @@ const ICON_SIZE: f32 = 14.0;
 
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     let is_playing = app.piano_roll.playback_is_playing();
+    let seek_preview = app
+        .transport_seek_preview
+        .map(|value| value.clamp(0.0, 1.0));
 
     let (
         total_ticks,
@@ -25,8 +28,10 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
         meter_label,
     ) = if let Some(file) = app.piano_roll.current_file() {
         let total_ticks = file.data.total_ticks;
-        let tick = app.piano_roll.playback_tick().min(total_ticks);
-        let normalized = app.piano_roll.playback_position_normalized();
+        let normalized =
+            seek_preview.unwrap_or_else(|| app.piano_roll.playback_position_normalized());
+        let tick = ((total_ticks as f32) * normalized).round() as u64;
+        let tick = tick.min(total_ticks);
         let current_time = format_duration(ticks_to_duration(&file.data, tick));
         let total_time = format_duration(ticks_to_duration(&file.data, total_ticks));
         let musical_clock = musical_clock_short(&file.data, tick);
@@ -81,6 +86,14 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     } else {
         play_pause_button
     };
+    let play_pause_button = Tooltip::new(
+        play_pause_button,
+        text("Play (Space)").size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Top,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup);
 
     let rewind_button = button(
         container(transport_icon(icons::skip_back()))
@@ -98,10 +111,19 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     } else {
         rewind_button
     };
+    let rewind_button = Tooltip::new(
+        rewind_button,
+        text("Rewind (Enter)").size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Top,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup);
 
     let seek_slider = slider(0.0..=1.0, normalized_position, |value| {
         Message::PianoRoll(PianoRollMessage::TransportSeekNormalized(value))
     })
+    .on_release(Message::PianoRoll(PianoRollMessage::TransportSeekReleased))
     .step(0.001)
     .width(Fill);
 
