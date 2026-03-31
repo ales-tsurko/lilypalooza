@@ -79,7 +79,9 @@ impl CodeEditor {
     ///
     /// `true` if a selection was deleted, `false` if no selection existed
     fn delete_selection_if_present(&mut self) -> bool {
-        if self.selection_start.is_some() && self.selection_end.is_some() {
+        if let Some((start, end)) = self.get_selection_range()
+            && start != end
+        {
             self.delete_selection();
             self.finish_edit_operation();
             true
@@ -487,6 +489,7 @@ impl CodeEditor {
 
         // Set internal canvas focus state
         self.has_canvas_focus = true;
+        self.focus_locked = false;
 
         // End grouping on mouse click
         self.end_grouping_if_active();
