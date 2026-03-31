@@ -63,7 +63,7 @@ pub(super) enum EditorMessage {
     CloseThemeMenu,
     SetThemeHueOffsetDegrees(f32),
     SetThemeSaturation(f32),
-    SetThemeContrast(f32),
+    SetThemeBrightness(f32),
     SetThemeTextDim(f32),
     SetThemeCommentDim(f32),
 }

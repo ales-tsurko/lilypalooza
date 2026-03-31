@@ -411,8 +411,8 @@ impl LilyView {
                 self.persist_settings();
                 Task::none()
             }
-            EditorMessage::SetThemeContrast(value) => {
-                self.editor.set_contrast(value);
+            EditorMessage::SetThemeBrightness(value) => {
+                self.editor.set_brightness(value);
                 self.persist_settings();
                 Task::none()
             }

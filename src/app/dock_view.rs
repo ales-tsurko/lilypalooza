@@ -1066,27 +1066,31 @@ fn editor_theme_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
                 format!("{:+.0}°", settings.hue_offset_degrees),
                 -180.0..=180.0,
                 settings.hue_offset_degrees,
+                1.0,
                 |value| Message::Editor(super::EditorMessage::SetThemeHueOffsetDegrees(value)),
             ),
             editor_theme_slider(
                 "Saturation",
                 format!("{:.2}", settings.saturation),
-                0.5..=1.8,
+                0.0..=1.8,
                 settings.saturation,
+                0.01,
                 |value| Message::Editor(super::EditorMessage::SetThemeSaturation(value)),
             ),
             editor_theme_slider(
-                "Contrast",
-                format!("{:.2}", settings.contrast),
+                "Brightness",
+                format!("{:.2}", settings.brightness),
                 0.5..=1.8,
-                settings.contrast,
-                |value| Message::Editor(super::EditorMessage::SetThemeContrast(value)),
+                settings.brightness,
+                0.01,
+                |value| Message::Editor(super::EditorMessage::SetThemeBrightness(value)),
             ),
             editor_theme_slider(
                 "Text Dim",
                 format!("{:.2}", settings.text_dim),
-                0.5..=1.8,
+                0.5..=3.0,
                 settings.text_dim,
+                0.01,
                 |value| Message::Editor(super::EditorMessage::SetThemeTextDim(value)),
             ),
             editor_theme_slider(
@@ -1094,6 +1098,7 @@ fn editor_theme_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
                 format!("{:.2}", settings.comment_dim),
                 0.5..=1.8,
                 settings.comment_dim,
+                0.01,
                 |value| Message::Editor(super::EditorMessage::SetThemeCommentDim(value)),
             ),
         ])
@@ -1110,6 +1115,7 @@ fn editor_theme_slider<'a>(
     value: String,
     range: std::ops::RangeInclusive<f32>,
     current: f32,
+    step: f32,
     on_change: impl Fn(f32) -> Message + 'a,
 ) -> Element<'a, Message> {
     Column::new()
@@ -1127,7 +1133,11 @@ fn editor_theme_slider<'a>(
             ]
             .align_y(alignment::Vertical::Center),
         )
-        .push(slider(range, current, on_change))
+        .push(
+            slider(range, current, on_change)
+                .step(step)
+                .shift_step(step * 10.0),
+        )
         .into()
 }
 
