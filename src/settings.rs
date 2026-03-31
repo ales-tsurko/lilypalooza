@@ -156,12 +156,35 @@ impl Default for PianoRollViewSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct EditorThemeSettings {
+    pub(crate) hue_offset_degrees: f32,
+    pub(crate) saturation: f32,
+    pub(crate) contrast: f32,
+    pub(crate) text_dim: f32,
+    pub(crate) comment_dim: f32,
+}
+
+impl Default for EditorThemeSettings {
+    fn default() -> Self {
+        Self {
+            hue_offset_degrees: 0.0,
+            saturation: 1.0,
+            contrast: 1.0,
+            text_dim: 1.0,
+            comment_dim: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct AppSettings {
     pub(crate) workspace_layout: WorkspaceLayoutSettings,
     pub(crate) score_view: ScoreViewSettings,
     pub(crate) piano_roll_view: PianoRollViewSettings,
+    pub(crate) editor_theme: EditorThemeSettings,
 }
 
 pub(crate) fn load() -> Result<AppSettings, String> {

@@ -387,6 +387,45 @@ impl LilyView {
 
                 Task::none()
             }
+            EditorMessage::ToggleThemeMenu(group_id) => {
+                self.open_header_overflow_menu = None;
+                self.open_editor_theme_menu = if self.open_editor_theme_menu == Some(group_id) {
+                    None
+                } else {
+                    Some(group_id)
+                };
+
+                Task::none()
+            }
+            EditorMessage::CloseThemeMenu => {
+                self.open_editor_theme_menu = None;
+                Task::none()
+            }
+            EditorMessage::SetThemeHueOffsetDegrees(value) => {
+                self.editor.set_hue_offset_degrees(value);
+                self.persist_settings();
+                Task::none()
+            }
+            EditorMessage::SetThemeSaturation(value) => {
+                self.editor.set_saturation(value);
+                self.persist_settings();
+                Task::none()
+            }
+            EditorMessage::SetThemeContrast(value) => {
+                self.editor.set_contrast(value);
+                self.persist_settings();
+                Task::none()
+            }
+            EditorMessage::SetThemeTextDim(value) => {
+                self.editor.set_text_dim(value);
+                self.persist_settings();
+                Task::none()
+            }
+            EditorMessage::SetThemeCommentDim(value) => {
+                self.editor.set_comment_dim(value);
+                self.persist_settings();
+                Task::none()
+            }
         }
     }
 
@@ -430,12 +469,14 @@ impl LilyView {
                 let ratio = self.constrained_workspace_split_ratio(event.split, event.ratio);
                 self.workspace_panes.resize(event.split, ratio);
                 self.open_header_overflow_menu = None;
+                self.open_editor_theme_menu = None;
                 self.sync_dock_layout_from_workspace_state();
                 self.persist_settings();
             }
             PaneMessage::WorkspaceTabPressed(kind) => {
                 self.set_active_workspace_pane(kind);
                 self.open_header_overflow_menu = None;
+                self.open_editor_theme_menu = None;
                 self.pressed_workspace_pane = Some(kind);
                 self.workspace_drag_origin = None;
                 self.dock_drop_target = None;
@@ -446,6 +487,7 @@ impl LilyView {
                 self.hovered_workspace_pane = kind;
             }
             PaneMessage::OpenHeaderOverflowMenu(group_id) => {
+                self.open_editor_theme_menu = None;
                 self.open_header_overflow_menu = Some(group_id);
             }
             PaneMessage::CloseHeaderOverflowMenu => {
@@ -453,6 +495,7 @@ impl LilyView {
             }
             PaneMessage::ToggleWorkspacePane(pane) => {
                 self.open_header_overflow_menu = None;
+                self.open_editor_theme_menu = None;
                 let changed = if self.is_pane_folded(pane) {
                     self.unfold_workspace_pane(pane)
                 } else {
@@ -497,6 +540,7 @@ impl LilyView {
                     self.apply_dock_drop(dragged_pane, target);
                     self.persist_settings();
                     self.clear_workspace_drag_state();
+                    self.open_editor_theme_menu = None;
                     return self.restore_runtime_view_state(dragged_pane);
                 }
 
@@ -1387,6 +1431,7 @@ impl LilyView {
                 zoom_x: self.piano_roll.zoom_x,
                 beat_subdivision: self.piano_roll.beat_subdivision,
             },
+            editor_theme: self.editor.theme_settings(),
         });
     }
 

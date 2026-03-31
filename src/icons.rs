@@ -16,6 +16,7 @@ const REFRESH_CW: &[u8] = include_bytes!("../assets/icons/refresh-cw.svg");
 const SAVE: &[u8] = include_bytes!("../assets/icons/save.svg");
 const SCROLL_TEXT: &[u8] = include_bytes!("../assets/icons/scroll-text.svg");
 const SKIP_BACK: &[u8] = include_bytes!("../assets/icons/skip-back.svg");
+const SLIDERS_HORIZONTAL: &[u8] = include_bytes!("../assets/icons/sliders-horizontal.svg");
 
 pub(crate) fn arrow_left() -> svg::Handle {
     svg::Handle::from_memory(ARROW_LEFT)
@@ -79,4 +80,8 @@ pub(crate) fn scroll_text() -> svg::Handle {
 
 pub(crate) fn skip_back() -> svg::Handle {
     svg::Handle::from_memory(SKIP_BACK)
+}
+
+pub(crate) fn sliders_horizontal() -> svg::Handle {
+    svg::Handle::from_memory(SLIDERS_HORIZONTAL)
 }

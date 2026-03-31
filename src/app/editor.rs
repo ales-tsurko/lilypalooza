@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 
 use iced::widget::{container, text};
 use iced::{Element, Fill};
-use iced_code_editor::{CodeEditor, Message as EditorWidgetMessage};
+use iced_code_editor::{CodeEditor, Message as EditorWidgetMessage, theme::ThemeTuning};
 
+use crate::settings::EditorThemeSettings;
 use crate::ui_style;
 
 const EMPTY_EDITOR_MESSAGE: &str = "Open a LilyPond score to edit its source here.";
@@ -12,13 +13,15 @@ const EMPTY_EDITOR_MESSAGE: &str = "Open a LilyPond score to edit its source her
 pub(super) struct EditorState {
     widget: CodeEditor,
     path: Option<PathBuf>,
+    theme_settings: EditorThemeSettings,
 }
 
 impl EditorState {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(theme_settings: EditorThemeSettings) -> Self {
         Self {
-            widget: build_editor("", "text"),
+            widget: build_editor("", "text", theme_settings),
             path: None,
+            theme_settings,
         }
     }
 
@@ -33,7 +36,7 @@ impl EditorState {
         let text = fs::read_to_string(path)
             .map_err(|error| format!("Failed to read editor file {}: {error}", path.display()))?;
 
-        self.widget = build_editor(&text, syntax_for_path(path));
+        self.widget = build_editor(&text, syntax_for_path(path), self.theme_settings);
         self.widget.mark_saved();
         self.path = Some(path.to_path_buf());
 
@@ -75,6 +78,35 @@ impl EditorState {
             .and_then(|file_name| file_name.to_str())
     }
 
+    pub(super) fn theme_settings(&self) -> EditorThemeSettings {
+        self.theme_settings
+    }
+
+    pub(super) fn set_hue_offset_degrees(&mut self, value: f32) {
+        self.theme_settings.hue_offset_degrees = value;
+        self.apply_theme();
+    }
+
+    pub(super) fn set_saturation(&mut self, value: f32) {
+        self.theme_settings.saturation = value;
+        self.apply_theme();
+    }
+
+    pub(super) fn set_contrast(&mut self, value: f32) {
+        self.theme_settings.contrast = value;
+        self.apply_theme();
+    }
+
+    pub(super) fn set_text_dim(&mut self, value: f32) {
+        self.theme_settings.text_dim = value;
+        self.apply_theme();
+    }
+
+    pub(super) fn set_comment_dim(&mut self, value: f32) {
+        self.theme_settings.comment_dim = value;
+        self.apply_theme();
+    }
+
     pub(super) fn view<'a, Message>(
         &'a self,
         map_message: impl Fn(EditorWidgetMessage) -> Message + 'a,
@@ -97,13 +129,35 @@ impl EditorState {
             .style(ui_style::pane_main_surface)
             .into()
     }
+
+    fn apply_theme(&mut self) {
+        self.widget
+            .set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
+                &iced::Theme::Dark,
+                to_editor_theme_tuning(self.theme_settings),
+            ));
+    }
 }
 
-fn build_editor(content: &str, syntax: &str) -> CodeEditor {
+fn build_editor(content: &str, syntax: &str, theme_settings: EditorThemeSettings) -> CodeEditor {
     let mut editor = CodeEditor::new(content, syntax).with_wrap_enabled(false);
     editor.set_font_size(ui_style::FONT_SIZE_BODY_SM.saturating_sub(2) as f32, true);
     editor.set_lsp_enabled(false);
+    editor.set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
+        &iced::Theme::Dark,
+        to_editor_theme_tuning(theme_settings),
+    ));
     editor
+}
+
+fn to_editor_theme_tuning(settings: EditorThemeSettings) -> ThemeTuning {
+    ThemeTuning {
+        hue_offset_degrees: settings.hue_offset_degrees,
+        saturation: settings.saturation,
+        contrast: settings.contrast,
+        text_dim: settings.text_dim,
+        comment_dim: settings.comment_dim,
+    }
 }
 
 fn syntax_for_path(path: &Path) -> &str {

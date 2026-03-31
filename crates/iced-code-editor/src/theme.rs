@@ -1,6 +1,33 @@
 use iced::Color;
 use palette::{FromColor, LinSrgb, OklabHue, Oklch, Srgb};
 
+/// Global tuning parameters applied to editor syntax colors derived from an Iced theme.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThemeTuning {
+    /// Rotates all accent syntax hues together in degrees.
+    pub hue_offset_degrees: f32,
+    /// Scales accent chroma to make syntax more muted or more vivid.
+    pub saturation: f32,
+    /// Pushes accent lightness farther from normal text or pulls it closer.
+    pub contrast: f32,
+    /// Controls how dim the default code text is relative to the host theme text.
+    pub text_dim: f32,
+    /// Controls how quiet comments and punctuation are.
+    pub comment_dim: f32,
+}
+
+impl Default for ThemeTuning {
+    fn default() -> Self {
+        Self {
+            hue_offset_degrees: 0.0,
+            saturation: 1.0,
+            contrast: 1.0,
+            text_dim: 1.0,
+            comment_dim: 1.0,
+        }
+    }
+}
+
 /// The appearance of a code editor.
 #[derive(Debug, Clone, Copy)]
 pub struct Style {
@@ -131,6 +158,11 @@ impl Catalog for iced::Theme {
 /// let style = theme::from_iced_theme(&dracula);
 /// ```
 pub fn from_iced_theme(theme: &iced::Theme) -> Style {
+    from_iced_theme_with_tuning(theme, ThemeTuning::default())
+}
+
+/// Creates an editor style from an Iced theme plus global syntax tuning controls.
+pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> Style {
     let palette = theme.extended_palette();
     let background = palette.background.base.color;
     let base_text_color = palette.background.base.text;
@@ -144,10 +176,11 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let warning_oklch = to_oklch(palette.warning.strong.color);
     let danger_oklch = to_oklch(palette.danger.strong.color);
     let is_dark = palette.is_dark;
+    let hue_offset = tuning.hue_offset_degrees;
 
     let text_color = from_oklch(
         Oklch::new(
-            (fg_oklch.l - if is_dark { 0.06 } else { 0.03 }).clamp(0.0, 1.0),
+            (fg_oklch.l - (if is_dark { 0.06 } else { 0.03 }) * tuning.text_dim).clamp(0.0, 1.0),
             (fg_oklch.chroma * 0.55).clamp(0.0, 0.03),
             usable_hue(fg_oklch, 260.0),
         ),
@@ -162,23 +195,27 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let comment_color = derive_neutral(
         bg_oklch,
         fg_oklch,
-        if is_dark { 0.42 } else { 0.34 },
-        0.18,
+        (if is_dark { 0.42 } else { 0.34 }) / tuning.comment_dim.clamp(0.4, 1.8),
+        0.18 / tuning.comment_dim.clamp(0.4, 1.8),
         1.0,
     );
     let punctuation_color = derive_neutral(
         bg_oklch,
         fg_oklch,
-        if is_dark { 0.60 } else { 0.5 },
-        0.12,
+        (if is_dark { 0.60 } else { 0.5 }) / tuning.comment_dim.clamp(0.4, 1.8),
+        0.12 / tuning.comment_dim.clamp(0.4, 1.8),
         1.0,
     );
     let bracket_color = derive_accent(
         primary_oklch,
         fg_oklch,
-        285.0,
-        if is_dark { 0.72 } else { 0.46 },
-        0.55,
+        285.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.72 } else { 0.46 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        0.55 * tuning.saturation,
         0.04,
         0.12,
         1.0,
@@ -186,9 +223,13 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let variable_color = derive_accent(
         secondary_oklch,
         fg_oklch,
-        220.0,
-        if is_dark { 0.84 } else { 0.28 },
-        0.45,
+        220.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.84 } else { 0.28 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        0.45 * tuning.saturation,
         0.04,
         0.1,
         1.0,
@@ -196,9 +237,13 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let command_color = derive_accent(
         secondary_oklch,
         fg_oklch,
-        240.0,
-        if is_dark { 0.8 } else { 0.42 },
-        1.0,
+        240.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.8 } else { 0.42 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        1.0 * tuning.saturation,
         0.08,
         0.2,
         1.0,
@@ -206,29 +251,45 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let keyword_color = derive_accent(
         primary_oklch,
         fg_oklch,
-        285.0,
-        if is_dark { 0.74 } else { 0.48 },
-        1.05,
+        285.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.74 } else { 0.48 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        1.05 * tuning.saturation,
         0.1,
         0.22,
         1.0,
     );
     let directive_color = derive_accent_from_hue(
-        mix_hues(
-            usable_hue(primary_oklch, 285.0),
-            usable_hue(danger_oklch, 20.0),
-            0.42,
+        rotate_hue(
+            mix_hues(
+                usable_hue(primary_oklch, 285.0),
+                usable_hue(danger_oklch, 20.0),
+                0.42,
+            ),
+            hue_offset,
         ),
-        if is_dark { 0.8 } else { 0.44 },
-        (((primary_oklch.chroma + danger_oklch.chroma) * 0.5) * 1.05).clamp(0.12, 0.24),
+        contrasted_lightness(
+            if is_dark { 0.8 } else { 0.44 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        (((primary_oklch.chroma + danger_oklch.chroma) * 0.5) * 1.05 * tuning.saturation)
+            .clamp(0.12, 0.24),
         1.0,
     );
     let operator_color = derive_accent(
         primary_oklch,
         fg_oklch,
-        285.0,
-        if is_dark { 0.76 } else { 0.46 },
-        0.75,
+        285.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.76 } else { 0.46 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        0.75 * tuning.saturation,
         0.08,
         0.18,
         1.0,
@@ -236,49 +297,81 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let function_color = derive_accent(
         secondary_oklch,
         fg_oklch,
-        235.0,
-        if is_dark { 0.78 } else { 0.46 },
-        1.0,
+        235.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.78 } else { 0.46 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        1.0 * tuning.saturation,
         0.1,
         0.22,
         1.0,
     );
     let builtin_color = derive_accent_from_hue(
-        mix_hues(
-            usable_hue(success_oklch, 145.0),
-            usable_hue(primary_oklch, 285.0),
-            0.35,
+        rotate_hue(
+            mix_hues(
+                usable_hue(success_oklch, 145.0),
+                usable_hue(primary_oklch, 285.0),
+                0.35,
+            ),
+            hue_offset,
         ),
-        if is_dark { 0.8 } else { 0.42 },
-        (((success_oklch.chroma + primary_oklch.chroma) * 0.5) * 1.05).clamp(0.1, 0.22),
+        contrasted_lightness(
+            if is_dark { 0.8 } else { 0.42 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        (((success_oklch.chroma + primary_oklch.chroma) * 0.5) * 1.05 * tuning.saturation)
+            .clamp(0.1, 0.22),
         1.0,
     );
     let processing_color = derive_accent_from_hue(
-        mix_hues(
-            usable_hue(primary_oklch, 285.0),
-            usable_hue(secondary_oklch, 235.0),
-            0.35,
+        rotate_hue(
+            mix_hues(
+                usable_hue(primary_oklch, 285.0),
+                usable_hue(secondary_oklch, 235.0),
+                0.35,
+            ),
+            hue_offset,
         ),
-        if is_dark { 0.82 } else { 0.48 },
-        (((primary_oklch.chroma + secondary_oklch.chroma) * 0.5) * 1.1).clamp(0.11, 0.24),
+        contrasted_lightness(
+            if is_dark { 0.82 } else { 0.48 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        (((primary_oklch.chroma + secondary_oklch.chroma) * 0.5) * 1.1 * tuning.saturation)
+            .clamp(0.11, 0.24),
         1.0,
     );
     let type_color = derive_accent_from_hue(
-        mix_hues(
-            usable_hue(secondary_oklch, 235.0),
-            usable_hue(warning_oklch, 85.0),
-            0.28,
+        rotate_hue(
+            mix_hues(
+                usable_hue(secondary_oklch, 235.0),
+                usable_hue(warning_oklch, 85.0),
+                0.28,
+            ),
+            hue_offset,
         ),
-        if is_dark { 0.82 } else { 0.44 },
-        (((secondary_oklch.chroma + warning_oklch.chroma) * 0.5) * 1.0).clamp(0.1, 0.21),
+        contrasted_lightness(
+            if is_dark { 0.82 } else { 0.44 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        (((secondary_oklch.chroma + warning_oklch.chroma) * 0.5) * 1.0 * tuning.saturation)
+            .clamp(0.1, 0.21),
         1.0,
     );
     let property_color = derive_accent(
         warning_oklch,
         fg_oklch,
-        85.0,
-        if is_dark { 0.78 } else { 0.42 },
-        0.95,
+        85.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.78 } else { 0.42 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        0.95 * tuning.saturation,
         0.09,
         0.2,
         1.0,
@@ -286,29 +379,45 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let parameter_color = derive_accent(
         success_oklch,
         fg_oklch,
-        145.0,
-        if is_dark { 0.76 } else { 0.4 },
-        0.9,
+        145.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.76 } else { 0.4 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        0.9 * tuning.saturation,
         0.08,
         0.19,
         1.0,
     );
     let string_color = derive_accent_from_hue(
-        mix_hues(
-            usable_hue(success_oklch, 145.0),
-            usable_hue(warning_oklch, 85.0),
-            0.3,
+        rotate_hue(
+            mix_hues(
+                usable_hue(success_oklch, 145.0),
+                usable_hue(warning_oklch, 85.0),
+                0.3,
+            ),
+            hue_offset,
         ),
-        if is_dark { 0.84 } else { 0.42 },
-        (((success_oklch.chroma + warning_oklch.chroma) * 0.5) * 1.05).clamp(0.1, 0.22),
+        contrasted_lightness(
+            if is_dark { 0.84 } else { 0.42 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        (((success_oklch.chroma + warning_oklch.chroma) * 0.5) * 1.05 * tuning.saturation)
+            .clamp(0.1, 0.22),
         1.0,
     );
     let string_delimiter_color = derive_accent(
         success_oklch,
         fg_oklch,
-        145.0,
-        if is_dark { 0.72 } else { 0.36 },
-        0.8,
+        145.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.72 } else { 0.36 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        0.8 * tuning.saturation,
         0.06,
         0.16,
         1.0,
@@ -316,9 +425,13 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let escape_color = derive_accent(
         success_oklch,
         fg_oklch,
-        145.0,
-        if is_dark { 0.9 } else { 0.34 },
-        1.1,
+        145.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.9 } else { 0.34 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        1.1 * tuning.saturation,
         0.1,
         0.22,
         1.0,
@@ -326,29 +439,45 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let number_color = derive_accent(
         warning_oklch,
         fg_oklch,
-        85.0,
-        if is_dark { 0.86 } else { 0.46 },
-        1.1,
+        85.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.86 } else { 0.46 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        1.1 * tuning.saturation,
         0.11,
         0.24,
         1.0,
     );
     let constant_color = derive_accent_from_hue(
-        mix_hues(
-            usable_hue(warning_oklch, 85.0),
-            usable_hue(secondary_oklch, 235.0),
-            0.22,
+        rotate_hue(
+            mix_hues(
+                usable_hue(warning_oklch, 85.0),
+                usable_hue(secondary_oklch, 235.0),
+                0.22,
+            ),
+            hue_offset,
         ),
-        if is_dark { 0.8 } else { 0.42 },
-        (((warning_oklch.chroma + secondary_oklch.chroma) * 0.5) * 1.0).clamp(0.1, 0.2),
+        contrasted_lightness(
+            if is_dark { 0.8 } else { 0.42 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        (((warning_oklch.chroma + secondary_oklch.chroma) * 0.5) * 1.0 * tuning.saturation)
+            .clamp(0.1, 0.2),
         1.0,
     );
     let invalid_color = derive_accent(
         danger_oklch,
         fg_oklch,
-        25.0,
-        if is_dark { 0.74 } else { 0.52 },
-        1.1,
+        25.0 + hue_offset,
+        contrasted_lightness(
+            if is_dark { 0.74 } else { 0.52 },
+            fg_oklch.l,
+            tuning.contrast,
+        ),
+        1.1 * tuning.saturation,
         0.12,
         0.26,
         1.0,
@@ -446,6 +575,10 @@ fn derive_accent_from_hue(hue: OklabHue<f32>, lightness: f32, chroma: f32, alpha
     )
 }
 
+fn contrasted_lightness(base: f32, text_lightness: f32, contrast: f32) -> f32 {
+    (text_lightness + (base - text_lightness) * contrast.clamp(0.4, 1.8)).clamp(0.0, 1.0)
+}
+
 fn usable_hue(color: Oklch, fallback_hue_degrees: f32) -> OklabHue<f32> {
     if color.chroma > 0.02 {
         color.hue
@@ -465,6 +598,10 @@ fn mix_hues(start: OklabHue<f32>, end: OklabHue<f32>, factor: f32) -> OklabHue<f
     }
 
     OklabHue::from_degrees(start + delta * factor.clamp(0.0, 1.0))
+}
+
+fn rotate_hue(hue: OklabHue<f32>, offset_degrees: f32) -> OklabHue<f32> {
+    OklabHue::from_degrees(hue.into_degrees() + offset_degrees)
 }
 
 fn mix_scalar(start: f32, end: f32, factor: f32) -> f32 {

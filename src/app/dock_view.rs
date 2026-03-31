@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use iced::widget::{
     Column, Tooltip, button, canvas, container, mouse_area, opaque, pane_grid, responsive, row,
-    stack, svg, text, tooltip,
+    slider, stack, svg, text, tooltip,
 };
 use iced::{
     Color, ContentFit, Element, Fill, Length, Point, Rectangle, Size, Theme, alignment, border,
@@ -19,6 +19,7 @@ const TOOLBAR_ICON_SIZE: f32 = 14.0;
 const HEADER_CONTROL_HEIGHT: f32 = 22.0;
 const HEADER_MENU_ICON_SIZE: f32 = 12.0;
 const HEADER_MENU_BUTTON_WIDTH: f32 = 26.0;
+const EDITOR_THEME_MENU_WIDTH: f32 = 280.0;
 const TAB_ICON_GAP: u32 = 6;
 const HEADER_WIDTH_SAFETY: f32 = 24.0;
 pub(super) const TOOLBAR_HEIGHT: f32 = 32.0;
@@ -234,7 +235,7 @@ fn group_header<'a>(
         return container(text("")).width(Fill).into();
     };
     let active_pane = group.active;
-    let control_groups = pane_header_control_groups(app, active_pane);
+    let control_groups = pane_header_control_groups(app, group_id, active_pane);
     let title_width = group_tabs_min_width(group);
     let available_controls_width = (group_width - title_width).max(0.0);
     let (inline_controls, overflow_controls) =
@@ -270,7 +271,7 @@ fn pane_body_with_header_menu<'a>(
     };
 
     let active_pane = group.active;
-    let control_groups = pane_header_control_groups(app, active_pane);
+    let control_groups = pane_header_control_groups(app, group_id, active_pane);
     let title_width = group_tabs_min_width(group);
     let available_controls_width = (group_width - title_width).max(0.0);
     let (_inline_controls, overflow_controls) =
@@ -278,9 +279,16 @@ fn pane_body_with_header_menu<'a>(
     let show_menu =
         !overflow_controls.is_empty() && app.open_header_overflow_menu == Some(group_id);
 
+    let show_editor_theme_menu =
+        active_pane == WorkspacePaneKind::Editor && app.open_editor_theme_menu == Some(group_id);
+
     let close_backdrop: Element<'a, Message> = if show_menu {
         mouse_area(container(text("")).width(Fill).height(Fill))
             .on_press(Message::Pane(PaneMessage::CloseHeaderOverflowMenu))
+            .into()
+    } else if show_editor_theme_menu {
+        mouse_area(container(text("")).width(Fill).height(Fill))
+            .on_press(Message::Editor(super::EditorMessage::CloseThemeMenu))
             .into()
     } else {
         container(text("")).width(Fill).height(Fill).into()
@@ -299,8 +307,19 @@ fn pane_body_with_header_menu<'a>(
     } else {
         container(text("")).width(Fill).height(Fill).into()
     };
+    let theme_menu: Element<'a, Message> = if show_editor_theme_menu {
+        container(opaque(editor_theme_menu_panel(app)))
+            .width(Fill)
+            .height(Fill)
+            .align_x(alignment::Horizontal::Right)
+            .align_y(alignment::Vertical::Top)
+            .padding([ui_style::SPACE_XS as u16, ui_style::SPACE_XS as u16])
+            .into()
+    } else {
+        container(text("")).width(Fill).height(Fill).into()
+    };
 
-    stack([body, close_backdrop, menu]).into()
+    stack([body, close_backdrop, menu, theme_menu]).into()
 }
 
 fn group_tabs<'a>(app: &'a LilyView, group: &'a super::DockGroup) -> row::Row<'a, Message> {
@@ -709,12 +728,13 @@ fn header_icon(icon: svg::Handle, size: f32) -> Element<'static, Message> {
 
 fn pane_header_control_groups<'a>(
     app: &'a LilyView,
+    group_id: super::DockGroupId,
     pane: WorkspacePaneKind,
 ) -> Vec<HeaderControlGroup<'a>> {
     match pane {
         WorkspacePaneKind::Score => score_view::score_controls(app),
         WorkspacePaneKind::PianoRoll => piano_roll::controls(app),
-        WorkspacePaneKind::Editor => editor_controls(app),
+        WorkspacePaneKind::Editor => editor_controls(app, group_id),
         WorkspacePaneKind::Logger => logger_controls(app),
     }
 }
@@ -940,7 +960,10 @@ fn logger_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
     }]
 }
 
-fn editor_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
+fn editor_controls<'a>(
+    app: &'a LilyView,
+    group_id: super::DockGroupId,
+) -> Vec<HeaderControlGroup<'a>> {
     if !app.editor.has_document() {
         return Vec::new();
     }
@@ -975,6 +998,15 @@ fn editor_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
     } else {
         save_button
     };
+    let theme_button = button(compact_control_icon(icons::sliders_horizontal()))
+        .style(ui_style::button_neutral)
+        .padding([
+            ui_style::PADDING_BUTTON_COMPACT_V,
+            ui_style::PADDING_BUTTON_COMPACT_H,
+        ])
+        .on_press(Message::Editor(super::EditorMessage::ToggleThemeMenu(
+            group_id,
+        )));
 
     vec![
         HeaderControlGroup {
@@ -1009,7 +1041,94 @@ fn editor_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
             .align_y(alignment::Vertical::Center)
             .into(),
         },
+        HeaderControlGroup {
+            min_width: 32.0,
+            content: Tooltip::new(
+                theme_button,
+                text("Editor theme").size(ui_style::FONT_SIZE_UI_XS),
+                tooltip::Position::Top,
+            )
+            .gap(6)
+            .padding(8)
+            .style(ui_style::tooltip_popup)
+            .into(),
+        },
     ]
+}
+
+fn editor_theme_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
+    let settings = app.editor.theme_settings();
+
+    container(
+        Column::with_children(vec![
+            editor_theme_slider(
+                "Hue",
+                format!("{:+.0}°", settings.hue_offset_degrees),
+                -180.0..=180.0,
+                settings.hue_offset_degrees,
+                |value| Message::Editor(super::EditorMessage::SetThemeHueOffsetDegrees(value)),
+            ),
+            editor_theme_slider(
+                "Saturation",
+                format!("{:.2}", settings.saturation),
+                0.5..=1.8,
+                settings.saturation,
+                |value| Message::Editor(super::EditorMessage::SetThemeSaturation(value)),
+            ),
+            editor_theme_slider(
+                "Contrast",
+                format!("{:.2}", settings.contrast),
+                0.5..=1.8,
+                settings.contrast,
+                |value| Message::Editor(super::EditorMessage::SetThemeContrast(value)),
+            ),
+            editor_theme_slider(
+                "Text Dim",
+                format!("{:.2}", settings.text_dim),
+                0.5..=1.8,
+                settings.text_dim,
+                |value| Message::Editor(super::EditorMessage::SetThemeTextDim(value)),
+            ),
+            editor_theme_slider(
+                "Comment Dim",
+                format!("{:.2}", settings.comment_dim),
+                0.5..=1.8,
+                settings.comment_dim,
+                |value| Message::Editor(super::EditorMessage::SetThemeCommentDim(value)),
+            ),
+        ])
+        .spacing(ui_style::SPACE_SM),
+    )
+    .width(Length::Fixed(EDITOR_THEME_MENU_WIDTH))
+    .padding(ui_style::PADDING_XS)
+    .style(ui_style::tooltip_popup)
+    .into()
+}
+
+fn editor_theme_slider<'a>(
+    label: &'a str,
+    value: String,
+    range: std::ops::RangeInclusive<f32>,
+    current: f32,
+    on_change: impl Fn(f32) -> Message + 'a,
+) -> Element<'a, Message> {
+    Column::new()
+        .spacing(ui_style::SPACE_XS)
+        .push(
+            row![
+                text(label).size(ui_style::FONT_SIZE_UI_XS),
+                container(
+                    text(value)
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .font(iced::Font::MONOSPACE)
+                )
+                .width(Fill)
+                .align_x(alignment::Horizontal::Right),
+            ]
+            .align_y(alignment::Vertical::Center),
+        )
+        .push(slider(range, current, on_change))
+        .into()
 }
 
 fn editor_save_shortcut_label() -> &'static str {

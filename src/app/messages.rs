@@ -59,6 +59,13 @@ pub(super) enum EditorMessage {
     Widget(EditorWidgetMessage),
     SaveRequested,
     ReloadRequested,
+    ToggleThemeMenu(u64),
+    CloseThemeMenu,
+    SetThemeHueOffsetDegrees(f32),
+    SetThemeSaturation(f32),
+    SetThemeContrast(f32),
+    SetThemeTextDim(f32),
+    SetThemeCommentDim(f32),
 }
 
 #[derive(Debug, Clone)]
