@@ -1116,6 +1116,7 @@ impl CodeEditor {
         if let Some(text_content) = text
             && !text_content.is_empty()
             && !modifiers.control()
+            && !modifiers.command()
             && !modifiers.alt()
         {
             // Check if it's a printable character (not a control character)
@@ -1173,6 +1174,7 @@ impl CodeEditor {
             // This handles edge cases where text field is not populated
             _ => {
                 if !modifiers.control()
+                    && !modifiers.command()
                     && !modifiers.alt()
                     && let keyboard::Key::Character(c) = key
                     && !c.is_empty()

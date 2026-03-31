@@ -448,7 +448,7 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
     .padding(8)
     .style(ui_style::tooltip_popup);
 
-    let zoom_out_button = button(text("−").size(ui_style::FONT_SIZE_UI_SM))
+    let zoom_out_button = button(super::dock_view::compact_control_icon(icons::zoom_out()))
         .style(ui_style::button_neutral)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
@@ -460,7 +460,7 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
         zoom_out_button
     };
 
-    let zoom_in_button = button(text("+").size(ui_style::FONT_SIZE_UI_SM))
+    let zoom_in_button = button(super::dock_view::compact_control_icon(icons::zoom_in()))
         .style(ui_style::button_neutral)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
@@ -490,9 +490,8 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
         .width(Length::Fixed(44.0));
 
     let zoom_group = HeaderControlGroup {
-        min_width: 154.0,
+        min_width: 132.0,
         content: row![
-            text("Zoom").size(ui_style::FONT_SIZE_UI_XS),
             zoom_out_button,
             {
                 let zoom_value = text(format!("{:.0}%", state.zoom_x * 100.0))

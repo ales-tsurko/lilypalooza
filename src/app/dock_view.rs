@@ -1015,6 +1015,28 @@ fn editor_controls<'a>(
     } else {
         save_button
     };
+    let zoom_out_button = button(compact_control_icon(icons::zoom_out()))
+        .style(ui_style::button_neutral)
+        .padding([
+            ui_style::PADDING_BUTTON_COMPACT_V,
+            ui_style::PADDING_BUTTON_COMPACT_H,
+        ]);
+    let zoom_out_button = if app.editor.can_zoom_out() {
+        zoom_out_button.on_press(Message::Editor(super::EditorMessage::ZoomOut))
+    } else {
+        zoom_out_button
+    };
+    let zoom_in_button = button(compact_control_icon(icons::zoom_in()))
+        .style(ui_style::button_neutral)
+        .padding([
+            ui_style::PADDING_BUTTON_COMPACT_V,
+            ui_style::PADDING_BUTTON_COMPACT_H,
+        ]);
+    let zoom_in_button = if app.editor.can_zoom_in() {
+        zoom_in_button.on_press(Message::Editor(super::EditorMessage::ZoomIn))
+    } else {
+        zoom_in_button
+    };
     let theme_button = button(compact_control_icon(icons::sliders_horizontal()))
         .style(ui_style::button_neutral)
         .padding([
@@ -1034,11 +1056,71 @@ fn editor_controls<'a>(
                 .into(),
         },
         HeaderControlGroup {
-            min_width: 72.0,
+            min_width: 182.0,
             content: row![
                 Tooltip::new(
                     reload_button,
                     text("Reload from disk").size(ui_style::FONT_SIZE_UI_XS),
+                    tooltip::Position::Top,
+                )
+                .gap(6)
+                .padding(8)
+                .style(ui_style::tooltip_popup),
+                Tooltip::new(
+                    zoom_out_button,
+                    text(
+                        shortcuts::label_for_action(
+                            &app.shortcut_settings,
+                            shortcuts::ShortcutAction::EditorZoomOut,
+                        )
+                        .map(|shortcut| format!("Zoom out ({shortcut})"))
+                        .unwrap_or_else(|| "Zoom out".to_string()),
+                    )
+                    .size(ui_style::FONT_SIZE_UI_XS),
+                    tooltip::Position::Top,
+                )
+                .gap(6)
+                .padding(8)
+                .style(ui_style::tooltip_popup),
+                {
+                    let zoom_value = text(format!("{}%", app.editor.zoom_percent()))
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .font(iced::Font::MONOSPACE);
+                    let zoom_value = if app.editor.can_reset_zoom() {
+                        mouse_area(zoom_value)
+                            .on_double_click(Message::Editor(super::EditorMessage::ResetZoom))
+                    } else {
+                        mouse_area(zoom_value)
+                    };
+
+                    Tooltip::new(
+                        zoom_value,
+                        text(
+                            shortcuts::label_for_action(
+                                &app.shortcut_settings,
+                                shortcuts::ShortcutAction::EditorZoomReset,
+                            )
+                            .map(|shortcut| format!("Reset zoom ({shortcut})"))
+                            .unwrap_or_else(|| "Reset zoom".to_string()),
+                        )
+                        .size(ui_style::FONT_SIZE_UI_XS),
+                        tooltip::Position::Top,
+                    )
+                    .gap(6)
+                    .padding(8)
+                    .style(ui_style::tooltip_popup)
+                },
+                Tooltip::new(
+                    zoom_in_button,
+                    text(
+                        shortcuts::label_for_action(
+                            &app.shortcut_settings,
+                            shortcuts::ShortcutAction::EditorZoomIn,
+                        )
+                        .map(|shortcut| format!("Zoom in ({shortcut})"))
+                        .unwrap_or_else(|| "Zoom in".to_string()),
+                    )
+                    .size(ui_style::FONT_SIZE_UI_XS),
                     tooltip::Position::Top,
                 )
                 .gap(6)

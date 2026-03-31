@@ -17,6 +17,10 @@ const SAVE: &[u8] = include_bytes!("../assets/icons/save.svg");
 const SCROLL_TEXT: &[u8] = include_bytes!("../assets/icons/scroll-text.svg");
 const SKIP_BACK: &[u8] = include_bytes!("../assets/icons/skip-back.svg");
 const SLIDERS_HORIZONTAL: &[u8] = include_bytes!("../assets/icons/sliders-horizontal.svg");
+const SUN_DIM: &[u8] = include_bytes!("../assets/icons/sun-dim.svg");
+const SUN: &[u8] = include_bytes!("../assets/icons/sun.svg");
+const ZOOM_IN: &[u8] = include_bytes!("../assets/icons/zoom-in.svg");
+const ZOOM_OUT: &[u8] = include_bytes!("../assets/icons/zoom-out.svg");
 
 pub(crate) fn arrow_left() -> svg::Handle {
     svg::Handle::from_memory(ARROW_LEFT)
@@ -84,4 +88,20 @@ pub(crate) fn skip_back() -> svg::Handle {
 
 pub(crate) fn sliders_horizontal() -> svg::Handle {
     svg::Handle::from_memory(SLIDERS_HORIZONTAL)
+}
+
+pub(crate) fn sun_dim() -> svg::Handle {
+    svg::Handle::from_memory(SUN_DIM)
+}
+
+pub(crate) fn sun() -> svg::Handle {
+    svg::Handle::from_memory(SUN)
+}
+
+pub(crate) fn zoom_in() -> svg::Handle {
+    svg::Handle::from_memory(ZOOM_IN)
+}
+
+pub(crate) fn zoom_out() -> svg::Handle {
+    svg::Handle::from_memory(ZOOM_OUT)
 }

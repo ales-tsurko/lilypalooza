@@ -78,7 +78,7 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
         next_button
     };
 
-    let zoom_out_button = button(text("−").size(ui_style::FONT_SIZE_UI_SM))
+    let zoom_out_button = button(super::dock_view::compact_control_icon(icons::zoom_out()))
         .style(ui_style::button_neutral)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
@@ -90,7 +90,7 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
         zoom_out_button
     };
 
-    let zoom_in_button = button(text("+").size(ui_style::FONT_SIZE_UI_SM))
+    let zoom_in_button = button(super::dock_view::compact_control_icon(icons::zoom_in()))
         .style(ui_style::button_neutral)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
@@ -102,7 +102,7 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
         zoom_in_button
     };
 
-    let brightness_down_button = button(text("−").size(ui_style::FONT_SIZE_UI_SM))
+    let brightness_down_button = button(super::dock_view::compact_control_icon(icons::sun_dim()))
         .style(ui_style::button_neutral)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
@@ -114,7 +114,7 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
         brightness_down_button
     };
 
-    let brightness_up_button = button(text("+").size(ui_style::FONT_SIZE_UI_SM))
+    let brightness_up_button = button(super::dock_view::compact_control_icon(icons::sun()))
         .style(ui_style::button_neutral)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
@@ -177,25 +177,15 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
                 .into(),
         },
         HeaderControlGroup {
-            min_width: 156.0,
-            content: row![
-                text("⌕")
-                    .size(ui_style::FONT_SIZE_BODY_SM)
-                    .font(iced::Font::MONOSPACE),
-                zoom_out_button,
-                zoom_value,
-                zoom_in_button
-            ]
-            .spacing(ui_style::SPACE_XS)
-            .align_y(alignment::Vertical::Center)
-            .into(),
+            min_width: 134.0,
+            content: row![zoom_out_button, zoom_value, zoom_in_button]
+                .spacing(ui_style::SPACE_XS)
+                .align_y(alignment::Vertical::Center)
+                .into(),
         },
         HeaderControlGroup {
-            min_width: 164.0,
+            min_width: 138.0,
             content: row![
-                text("◐")
-                    .size(ui_style::FONT_SIZE_UI_SM)
-                    .font(iced::Font::MONOSPACE),
                 brightness_down_button,
                 brightness_value,
                 brightness_up_button

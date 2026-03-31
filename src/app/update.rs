@@ -75,13 +75,20 @@ impl LilyView {
             return self.handle_shortcut_action(action);
         }
 
-        if matches!(key_press.status, iced::event::Status::Captured) {
-            return Task::none();
-        }
-
         let Some(focused_pane) = self.focused_workspace_pane() else {
             return Task::none();
         };
+
+        if (key_press.modifiers.command() || key_press.modifiers.control())
+            && let Some(action) =
+                shortcuts::resolve_contextual(&self.shortcut_settings, focused_pane, shortcut_input)
+        {
+            return self.handle_shortcut_action(action);
+        }
+
+        if matches!(key_press.status, iced::event::Status::Captured) {
+            return Task::none();
+        }
 
         if let Some(action) =
             shortcuts::resolve_contextual(&self.shortcut_settings, focused_pane, shortcut_input)
@@ -120,6 +127,21 @@ impl LilyView {
             ShortcutAction::ScoreZoomOut => update(self, Message::Viewer(ViewerMessage::ZoomOut)),
             ShortcutAction::ScoreZoomReset => {
                 update(self, Message::Viewer(ViewerMessage::ResetZoom))
+            }
+            ShortcutAction::EditorZoomIn => {
+                self.editor.zoom_in();
+                self.persist_settings();
+                Task::none()
+            }
+            ShortcutAction::EditorZoomOut => {
+                self.editor.zoom_out();
+                self.persist_settings();
+                Task::none()
+            }
+            ShortcutAction::EditorZoomReset => {
+                self.editor.reset_zoom();
+                self.persist_settings();
+                Task::none()
             }
             ShortcutAction::PianoRollZoomIn => {
                 update(self, Message::PianoRoll(PianoRollMessage::ZoomIn))
@@ -630,6 +652,24 @@ impl LilyView {
                     }
                 }
 
+                Task::none()
+            }
+            EditorMessage::ZoomIn => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.editor.zoom_in();
+                self.persist_settings();
+                Task::none()
+            }
+            EditorMessage::ZoomOut => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.editor.zoom_out();
+                self.persist_settings();
+                Task::none()
+            }
+            EditorMessage::ResetZoom => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.editor.reset_zoom();
+                self.persist_settings();
                 Task::none()
             }
             EditorMessage::ToggleThemeMenu(group_id) => {
@@ -1800,6 +1840,7 @@ impl LilyView {
                 zoom_x: self.piano_roll.zoom_x,
                 beat_subdivision: self.piano_roll.beat_subdivision,
             },
+            editor_view: self.editor.view_settings(),
             editor_theme: self.editor.theme_settings(),
             shortcuts: self.shortcut_settings.clone(),
         });

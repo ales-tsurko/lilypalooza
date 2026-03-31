@@ -16,6 +16,9 @@ pub(crate) enum ShortcutAction {
     ScoreZoomIn,
     ScoreZoomOut,
     ScoreZoomReset,
+    EditorZoomIn,
+    EditorZoomOut,
+    EditorZoomReset,
     PianoRollZoomIn,
     PianoRollZoomOut,
     PianoRollZoomReset,
@@ -84,6 +87,12 @@ const PIANO_ROLL_CONTEXTUAL_ACTIONS: [ShortcutAction; 5] = [
     ShortcutAction::TransportRewind,
 ];
 
+const EDITOR_CONTEXTUAL_ACTIONS: [ShortcutAction; 3] = [
+    ShortcutAction::EditorZoomIn,
+    ShortcutAction::EditorZoomOut,
+    ShortcutAction::EditorZoomReset,
+];
+
 pub(crate) fn resolve_global(
     settings: &ShortcutSettings,
     input: ShortcutInput<'_>,
@@ -116,7 +125,11 @@ pub(crate) fn resolve_contextual(
             .iter()
             .copied()
             .find(|action| action_matches(settings, *action, input)),
-        WorkspacePane::Editor | WorkspacePane::Logger => None,
+        WorkspacePane::Editor => EDITOR_CONTEXTUAL_ACTIONS
+            .iter()
+            .copied()
+            .find(|action| action_matches(settings, *action, input)),
+        WorkspacePane::Logger => None,
     };
 
     remappable_match.or_else(|| fixed_contextual_action(pane, input))
@@ -264,17 +277,23 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
                 false,
             )]
         }
-        ShortcutAction::ScoreZoomIn | ShortcutAction::PianoRollZoomIn => vec![
+        ShortcutAction::ScoreZoomIn
+        | ShortcutAction::EditorZoomIn
+        | ShortcutAction::PianoRollZoomIn => vec![
             binding_code(ShortcutKeyCode::Equal, true, false, false),
             binding_code(ShortcutKeyCode::Equal, true, false, true),
             binding_code(ShortcutKeyCode::NumpadAdd, true, false, false),
         ],
-        ShortcutAction::ScoreZoomOut | ShortcutAction::PianoRollZoomOut => vec![
+        ShortcutAction::ScoreZoomOut
+        | ShortcutAction::EditorZoomOut
+        | ShortcutAction::PianoRollZoomOut => vec![
             binding_code(ShortcutKeyCode::Minus, true, false, false),
             binding_code(ShortcutKeyCode::Minus, true, false, true),
             binding_code(ShortcutKeyCode::NumpadSubtract, true, false, false),
         ],
-        ShortcutAction::ScoreZoomReset | ShortcutAction::PianoRollZoomReset => vec![
+        ShortcutAction::ScoreZoomReset
+        | ShortcutAction::EditorZoomReset
+        | ShortcutAction::PianoRollZoomReset => vec![
             binding_code(ShortcutKeyCode::Digit0, true, false, false),
             binding_code(ShortcutKeyCode::Numpad0, true, false, false),
         ],
@@ -463,6 +482,9 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::ScoreZoomIn => Some(ShortcutActionId::ScoreZoomIn),
         ShortcutAction::ScoreZoomOut => Some(ShortcutActionId::ScoreZoomOut),
         ShortcutAction::ScoreZoomReset => Some(ShortcutActionId::ScoreZoomReset),
+        ShortcutAction::EditorZoomIn => Some(ShortcutActionId::EditorZoomIn),
+        ShortcutAction::EditorZoomOut => Some(ShortcutActionId::EditorZoomOut),
+        ShortcutAction::EditorZoomReset => Some(ShortcutActionId::EditorZoomReset),
         ShortcutAction::PianoRollZoomIn => Some(ShortcutActionId::PianoRollZoomIn),
         ShortcutAction::PianoRollZoomOut => Some(ShortcutActionId::PianoRollZoomOut),
         ShortcutAction::PianoRollZoomReset => Some(ShortcutActionId::PianoRollZoomReset),

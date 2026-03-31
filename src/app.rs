@@ -330,7 +330,11 @@ fn new(
         dock_drop_target: None,
         open_header_overflow_menu: None,
         open_editor_theme_menu: None,
-        editor: editor::EditorState::new(iced::Theme::Dark, stored_settings.editor_theme),
+        editor: editor::EditorState::new(
+            iced::Theme::Dark,
+            stored_settings.editor_view,
+            stored_settings.editor_theme,
+        ),
         rendered_score: None,
         score_cursor_maps: None,
         score_cursor_overlay: None,

@@ -180,6 +180,18 @@ impl Default for EditorThemeSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct EditorViewSettings {
+    pub(crate) font_size: f32,
+}
+
+impl Default for EditorViewSettings {
+    fn default() -> Self {
+        Self { font_size: 13.0 }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ShortcutKeyCode {
@@ -257,6 +269,9 @@ pub(crate) enum ShortcutActionId {
     ScoreZoomIn,
     ScoreZoomOut,
     ScoreZoomReset,
+    EditorZoomIn,
+    EditorZoomOut,
+    EditorZoomReset,
     PianoRollZoomIn,
     PianoRollZoomOut,
     PianoRollZoomReset,
@@ -299,6 +314,7 @@ pub(crate) struct AppSettings {
     pub(crate) workspace_layout: WorkspaceLayoutSettings,
     pub(crate) score_view: ScoreViewSettings,
     pub(crate) piano_roll_view: PianoRollViewSettings,
+    pub(crate) editor_view: EditorViewSettings,
     pub(crate) editor_theme: EditorThemeSettings,
     #[serde(skip_serializing_if = "ShortcutSettings::is_empty")]
     pub(crate) shortcuts: ShortcutSettings,
