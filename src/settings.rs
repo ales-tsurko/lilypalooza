@@ -195,6 +195,8 @@ impl Default for EditorViewSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ShortcutKeyCode {
+    KeyN,
+    KeyO,
     KeyS,
     Digit1,
     Digit2,
@@ -257,6 +259,8 @@ pub(crate) enum ShortcutBindingOverride {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ShortcutActionId {
+    NewEditor,
+    OpenEditorFile,
     SaveEditor,
     ToggleEditorPane,
     ToggleScorePane,

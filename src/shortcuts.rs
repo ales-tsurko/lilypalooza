@@ -7,6 +7,8 @@ use crate::settings::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShortcutAction {
+    NewEditor,
+    OpenEditorFile,
     SaveEditor,
     ToggleWorkspacePane(WorkspacePane),
     SwitchWorkspaceTabPrevious,
@@ -87,7 +89,9 @@ const PIANO_ROLL_CONTEXTUAL_ACTIONS: [ShortcutAction; 5] = [
     ShortcutAction::TransportRewind,
 ];
 
-const EDITOR_CONTEXTUAL_ACTIONS: [ShortcutAction; 3] = [
+const EDITOR_CONTEXTUAL_ACTIONS: [ShortcutAction; 5] = [
+    ShortcutAction::NewEditor,
+    ShortcutAction::OpenEditorFile,
     ShortcutAction::EditorZoomIn,
     ShortcutAction::EditorZoomOut,
     ShortcutAction::EditorZoomReset,
@@ -228,6 +232,10 @@ fn binding_override(
 
 fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
     match action {
+        ShortcutAction::NewEditor => vec![binding_code(ShortcutKeyCode::KeyN, true, false, false)],
+        ShortcutAction::OpenEditorFile => {
+            vec![binding_code(ShortcutKeyCode::KeyO, true, false, false)]
+        }
         ShortcutAction::SaveEditor => vec![binding_code(ShortcutKeyCode::KeyS, true, false, false)],
         ShortcutAction::ToggleWorkspacePane(WorkspacePane::Editor) => vec![
             binding_code(ShortcutKeyCode::Digit1, true, false, false),
@@ -381,6 +389,8 @@ fn platform_alt_label() -> &'static str {
 
 fn code_label(code: ShortcutKeyCode) -> &'static str {
     match code {
+        ShortcutKeyCode::KeyN => "N",
+        ShortcutKeyCode::KeyO => "O",
         ShortcutKeyCode::KeyS => "S",
         ShortcutKeyCode::Digit1 | ShortcutKeyCode::Numpad1 => "1",
         ShortcutKeyCode::Digit2 | ShortcutKeyCode::Numpad2 => "2",
@@ -432,6 +442,8 @@ const fn binding_named(
 
 fn to_iced_key_code(code: ShortcutKeyCode) -> keyboard::key::Code {
     match code {
+        ShortcutKeyCode::KeyN => keyboard::key::Code::KeyN,
+        ShortcutKeyCode::KeyO => keyboard::key::Code::KeyO,
         ShortcutKeyCode::KeyS => keyboard::key::Code::KeyS,
         ShortcutKeyCode::Digit1 => keyboard::key::Code::Digit1,
         ShortcutKeyCode::Digit2 => keyboard::key::Code::Digit2,
@@ -462,6 +474,8 @@ fn to_iced_named_key(named: ShortcutNamedKey) -> keyboard::key::Named {
 
 fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
     match action {
+        ShortcutAction::NewEditor => Some(ShortcutActionId::NewEditor),
+        ShortcutAction::OpenEditorFile => Some(ShortcutActionId::OpenEditorFile),
         ShortcutAction::SaveEditor => Some(ShortcutActionId::SaveEditor),
         ShortcutAction::ToggleWorkspacePane(WorkspacePane::Editor) => {
             Some(ShortcutActionId::ToggleEditorPane)

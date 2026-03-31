@@ -506,6 +506,60 @@ pub(crate) fn button_toolbar_chip(theme: &Theme, status: button::Status) -> butt
     }
 }
 
+pub(crate) fn button_menu_item(
+    theme: &Theme,
+    status: button::Status,
+    active: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let base_background = if active {
+        Some(
+            mix_color(
+                palette.background.strong.color,
+                palette.primary.base.color,
+                0.08,
+            )
+            .into(),
+        )
+    } else {
+        None
+    };
+    let base = button::Style {
+        background: base_background,
+        text_color: palette.background.base.text,
+        border: border::rounded(6).width(0).color(Color::TRANSPARENT),
+        shadow: Shadow::default(),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.background.strong.color.into()),
+            text_color: palette.background.base.text,
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(
+                mix_color(
+                    palette.background.strong.color,
+                    palette.primary.base.color,
+                    0.14,
+                )
+                .into(),
+            ),
+            text_color: palette.background.base.text,
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: None,
+            text_color: palette.background.strong.text,
+            ..base
+        },
+    }
+}
+
 pub(crate) fn button_toolbar_toggle_active(theme: &Theme, status: button::Status) -> button::Style {
     let palette = theme.extended_palette();
 

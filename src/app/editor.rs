@@ -15,6 +15,7 @@ const EDITOR_FONT_SIZE_STEP: f32 = 1.0;
 
 pub(super) struct EditorState {
     widget: CodeEditor,
+    document_open: bool,
     path: Option<PathBuf>,
     app_theme: iced::Theme,
     view_settings: EditorViewSettings,
@@ -30,6 +31,7 @@ impl EditorState {
     ) -> Self {
         Self {
             widget: build_editor("", "text", &app_theme, view_settings, theme_settings),
+            document_open: false,
             path: None,
             app_theme,
             view_settings,
@@ -49,25 +51,11 @@ impl EditorState {
         let text = fs::read_to_string(path)
             .map_err(|error| format!("Failed to read editor file {}: {error}", path.display()))?;
 
-        self.widget = build_editor(
-            &text,
-            syntax_for_path(path),
-            &self.app_theme,
-            self.view_settings,
-            self.theme_settings,
-        );
-        self.widget.mark_saved();
-        self.path = Some(path.to_path_buf());
-
-        Ok(())
+        self.load_document(&text, Some(path.to_path_buf()), false)
     }
 
-    pub(super) fn reload_from_disk(&mut self) -> Result<(), String> {
-        let Some(path) = self.path.clone() else {
-            return Err("No editor file is currently loaded".to_string());
-        };
-
-        self.load_file(&path)
+    pub(super) fn new_document(&mut self) {
+        let _ = self.load_document("", None, false);
     }
 
     pub(super) fn save_to_disk(&mut self) -> Result<PathBuf, String> {
@@ -75,15 +63,30 @@ impl EditorState {
             return Err("No editor file is currently loaded".to_string());
         };
 
-        fs::write(&path, self.widget.content())
-            .map_err(|error| format!("Failed to save editor file {}: {error}", path.display()))?;
-        self.widget.mark_saved();
+        self.save_to_path(&path)?;
 
         Ok(path)
     }
 
+    pub(super) fn save_to_path(&mut self, path: &Path) -> Result<(), String> {
+        fs::write(&path, self.widget.content())
+            .map_err(|error| format!("Failed to save editor file {}: {error}", path.display()))?;
+        let content = self.widget.content().to_string();
+        self.load_document(&content, Some(path.to_path_buf()), false)?;
+        self.widget.mark_saved();
+        Ok(())
+    }
+
     pub(super) fn has_document(&self) -> bool {
+        self.document_open
+    }
+
+    pub(super) fn has_path(&self) -> bool {
         self.path.is_some()
+    }
+
+    pub(super) fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     pub(super) fn lose_focus(&mut self) {
@@ -94,15 +97,16 @@ impl EditorState {
         self.widget.request_focus();
     }
 
-    pub(super) fn is_dirty(&self) -> bool {
-        self.widget.is_modified()
-    }
-
     pub(super) fn file_name(&self) -> Option<&str> {
         self.path
             .as_deref()
             .and_then(Path::file_name)
             .and_then(|file_name| file_name.to_str())
+            .or_else(|| self.document_open.then_some("Untitled"))
+    }
+
+    pub(super) fn suggested_save_name(&self) -> String {
+        self.file_name().unwrap_or("untitled.ly").to_string()
     }
 
     pub(super) fn theme_settings(&self) -> EditorThemeSettings {
@@ -208,6 +212,30 @@ impl EditorState {
         let clamped = size.clamp(MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE);
         self.view_settings.font_size = clamped;
         self.widget.set_font_size(clamped, true);
+    }
+
+    fn load_document(
+        &mut self,
+        content: &str,
+        path: Option<PathBuf>,
+        modified: bool,
+    ) -> Result<(), String> {
+        let syntax = path.as_deref().map(syntax_for_path).unwrap_or("lilypond");
+
+        self.widget = build_editor(
+            content,
+            syntax,
+            &self.app_theme,
+            self.view_settings,
+            self.theme_settings,
+        );
+        if !modified {
+            self.widget.mark_saved();
+        }
+        self.document_open = true;
+        self.path = path;
+
+        Ok(())
     }
 }
 

@@ -5,13 +5,13 @@ use iced::widget::{
     slider, stack, svg, text, tooltip,
 };
 use iced::{
-    Color, ContentFit, Element, Fill, Length, Point, Rectangle, Size, Theme, alignment, border,
-    mouse,
+    Color, ContentFit, Element, Fill, Length, Padding, Point, Rectangle, Size, Theme, alignment,
+    border, mouse,
 };
 
 use super::{
-    DockDropRegion, LilyView, Message, PaneMessage, WorkspacePaneKind, piano_roll, score_view,
-    transport_bar,
+    DockDropRegion, EditorHeaderMenuSection, LilyView, Message, PaneMessage, WorkspacePaneKind,
+    piano_roll, score_view, transport_bar,
 };
 use crate::{icons, shortcuts, ui_style};
 
@@ -19,7 +19,10 @@ const TOOLBAR_ICON_SIZE: f32 = 14.0;
 const HEADER_CONTROL_HEIGHT: f32 = 22.0;
 const HEADER_MENU_ICON_SIZE: f32 = 12.0;
 const HEADER_MENU_BUTTON_WIDTH: f32 = 26.0;
-const EDITOR_THEME_MENU_WIDTH: f32 = 280.0;
+const EDITOR_MENU_ROOT_WIDTH: f32 = 126.0;
+const EDITOR_FILE_SUBMENU_WIDTH: f32 = 320.0;
+const EDITOR_APPEARANCE_SUBMENU_WIDTH: f32 = 272.0;
+const EDITOR_MENU_ITEM_HEIGHT: f32 = 24.0;
 const TAB_ICON_GAP: u32 = 6;
 const HEADER_WIDTH_SAFETY: f32 = 24.0;
 pub(super) const TOOLBAR_HEIGHT: f32 = 32.0;
@@ -260,9 +263,13 @@ fn group_header<'a>(
     let control_groups = pane_header_control_groups(app, group_id, active_pane);
     let title_width = group_tabs_min_width(group);
     let available_controls_width = (group_width - title_width).max(0.0);
-    let (inline_controls, overflow_controls) =
-        split_header_control_groups(control_groups, available_controls_width);
-    let shows_menu_button = !overflow_controls.is_empty();
+    let (inline_controls, overflow_controls) = if active_pane == WorkspacePaneKind::Editor {
+        (Vec::new(), vec![text("").into()])
+    } else {
+        split_header_control_groups(control_groups, available_controls_width)
+    };
+    let shows_menu_button =
+        active_pane == WorkspacePaneKind::Editor || !overflow_controls.is_empty();
     let is_menu_open = shows_menu_button && app.open_header_overflow_menu == Some(group_id);
     let mut header = row![group_tabs(app, group), container(text("")).width(Fill)]
         .align_y(alignment::Vertical::Center)
@@ -305,31 +312,28 @@ fn pane_body_with_header_menu<'a>(
     };
 
     let active_pane = group.active;
-    let control_groups = pane_header_control_groups(app, group_id, active_pane);
-    let title_width = group_tabs_min_width(group);
-    let available_controls_width = (group_width - title_width).max(0.0);
-    let (_inline_controls, overflow_controls) =
-        split_header_control_groups(control_groups, available_controls_width);
-    let show_menu =
-        !overflow_controls.is_empty() && app.open_header_overflow_menu == Some(group_id);
-
-    let show_editor_theme_menu =
-        active_pane == WorkspacePaneKind::Editor && app.open_editor_theme_menu == Some(group_id);
+    let show_menu = app.open_header_overflow_menu == Some(group_id)
+        && (active_pane == WorkspacePaneKind::Editor || pane_header_has_controls(app, active_pane));
 
     let close_backdrop: Element<'a, Message> = if show_menu {
         mouse_area(container(text("")).width(Fill).height(Fill))
             .on_press(Message::Pane(PaneMessage::CloseHeaderOverflowMenu))
             .into()
-    } else if show_editor_theme_menu {
-        mouse_area(container(text("")).width(Fill).height(Fill))
-            .on_press(Message::Editor(super::EditorMessage::CloseThemeMenu))
-            .into()
     } else {
         container(text("")).width(Fill).height(Fill).into()
     };
     let menu: Element<'a, Message> = if show_menu {
-        let menu_panel = mouse_area(opaque(header_overflow_menu_panel(overflow_controls)))
-            .on_press(Message::Pane(PaneMessage::OpenHeaderOverflowMenu(group_id)))
+        let menu_content = if active_pane == WorkspacePaneKind::Editor {
+            editor_header_menu_panel(app)
+        } else {
+            let control_groups = pane_header_control_groups(app, group_id, active_pane);
+            let title_width = group_tabs_min_width(group);
+            let available_controls_width = (group_width - title_width).max(0.0);
+            let (_inline_controls, overflow_controls) =
+                split_header_control_groups(control_groups, available_controls_width);
+            header_overflow_menu_panel(overflow_controls)
+        };
+        let menu_panel = mouse_area(opaque(menu_content))
             .on_exit(Message::Pane(PaneMessage::CloseHeaderOverflowMenu));
         container(menu_panel)
             .width(Fill)
@@ -341,19 +345,7 @@ fn pane_body_with_header_menu<'a>(
     } else {
         container(text("")).width(Fill).height(Fill).into()
     };
-    let theme_menu: Element<'a, Message> = if show_editor_theme_menu {
-        container(opaque(editor_theme_menu_panel(app)))
-            .width(Fill)
-            .height(Fill)
-            .align_x(alignment::Horizontal::Right)
-            .align_y(alignment::Vertical::Top)
-            .padding([ui_style::SPACE_XS as u16, ui_style::SPACE_XS as u16])
-            .into()
-    } else {
-        container(text("")).width(Fill).height(Fill).into()
-    };
-
-    stack([body, close_backdrop, menu, theme_menu]).into()
+    stack([body, close_backdrop, menu]).into()
 }
 
 fn group_tabs<'a>(app: &'a LilyView, group: &'a super::DockGroup) -> row::Row<'a, Message> {
@@ -745,13 +737,13 @@ fn header_icon(icon: svg::Handle, size: f32) -> Element<'static, Message> {
 
 fn pane_header_control_groups<'a>(
     app: &'a LilyView,
-    group_id: super::DockGroupId,
+    _group_id: super::DockGroupId,
     pane: WorkspacePaneKind,
 ) -> Vec<HeaderControlGroup<'a>> {
     match pane {
         WorkspacePaneKind::Score => score_view::score_controls(app),
         WorkspacePaneKind::PianoRoll => piano_roll::controls(app),
-        WorkspacePaneKind::Editor => editor_controls(app, group_id),
+        WorkspacePaneKind::Editor => Vec::new(),
         WorkspacePaneKind::Logger => logger_controls(app),
     }
 }
@@ -760,7 +752,7 @@ fn pane_header_has_controls(app: &LilyView, pane: WorkspacePaneKind) -> bool {
     match pane {
         WorkspacePaneKind::Score => app.current_score.is_some(),
         WorkspacePaneKind::PianoRoll => true,
-        WorkspacePaneKind::Editor => app.editor.has_document(),
+        WorkspacePaneKind::Editor => true,
         WorkspacePaneKind::Logger => true,
     }
 }
@@ -977,251 +969,313 @@ fn logger_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
     }]
 }
 
-fn editor_controls<'a>(
-    app: &'a LilyView,
-    group_id: super::DockGroupId,
-) -> Vec<HeaderControlGroup<'a>> {
-    if !app.editor.has_document() {
-        return Vec::new();
-    }
-
-    let file_name = app.editor.file_name().unwrap_or("Editor");
-    let file_label = if app.editor.is_dirty() {
-        format!("{file_name} *")
-    } else {
-        file_name.to_string()
-    };
-
-    let reload_button = button(compact_control_icon(icons::refresh_cw()))
-        .style(ui_style::button_neutral)
-        .padding([
-            ui_style::PADDING_BUTTON_COMPACT_V,
-            ui_style::PADDING_BUTTON_COMPACT_H,
-        ]);
-    let reload_button = if app.editor.is_dirty() {
-        reload_button
-    } else {
-        reload_button.on_press(Message::Editor(super::EditorMessage::ReloadRequested))
-    };
-
-    let save_button = button(compact_control_icon(icons::save()))
-        .style(ui_style::button_neutral)
-        .padding([
-            ui_style::PADDING_BUTTON_COMPACT_V,
-            ui_style::PADDING_BUTTON_COMPACT_H,
-        ]);
-    let save_button = if app.editor.is_dirty() {
-        save_button.on_press(Message::Editor(super::EditorMessage::SaveRequested))
-    } else {
-        save_button
-    };
-    let zoom_out_button = button(compact_control_icon(icons::zoom_out()))
-        .style(ui_style::button_neutral)
-        .padding([
-            ui_style::PADDING_BUTTON_COMPACT_V,
-            ui_style::PADDING_BUTTON_COMPACT_H,
-        ]);
-    let zoom_out_button = if app.editor.can_zoom_out() {
-        zoom_out_button.on_press(Message::Editor(super::EditorMessage::ZoomOut))
-    } else {
-        zoom_out_button
-    };
-    let zoom_in_button = button(compact_control_icon(icons::zoom_in()))
-        .style(ui_style::button_neutral)
-        .padding([
-            ui_style::PADDING_BUTTON_COMPACT_V,
-            ui_style::PADDING_BUTTON_COMPACT_H,
-        ]);
-    let zoom_in_button = if app.editor.can_zoom_in() {
-        zoom_in_button.on_press(Message::Editor(super::EditorMessage::ZoomIn))
-    } else {
-        zoom_in_button
-    };
-    let theme_button = button(compact_control_icon(icons::sliders_horizontal()))
-        .style(ui_style::button_neutral)
-        .padding([
-            ui_style::PADDING_BUTTON_COMPACT_V,
-            ui_style::PADDING_BUTTON_COMPACT_H,
-        ])
-        .on_press(Message::Editor(super::EditorMessage::ToggleThemeMenu(
-            group_id,
-        )));
-
-    vec![
-        HeaderControlGroup {
-            min_width: 120.0,
-            content: text(file_label)
-                .size(ui_style::FONT_SIZE_UI_XS)
-                .font(iced::Font::MONOSPACE)
-                .into(),
-        },
-        HeaderControlGroup {
-            min_width: 182.0,
-            content: row![
-                Tooltip::new(
-                    reload_button,
-                    text("Reload from disk").size(ui_style::FONT_SIZE_UI_XS),
-                    tooltip::Position::Top,
-                )
-                .gap(6)
-                .padding(8)
-                .style(ui_style::tooltip_popup),
-                Tooltip::new(
-                    zoom_out_button,
-                    text(
-                        shortcuts::label_for_action(
-                            &app.shortcut_settings,
-                            shortcuts::ShortcutAction::EditorZoomOut,
-                        )
-                        .map(|shortcut| format!("Zoom out ({shortcut})"))
-                        .unwrap_or_else(|| "Zoom out".to_string()),
-                    )
-                    .size(ui_style::FONT_SIZE_UI_XS),
-                    tooltip::Position::Top,
-                )
-                .gap(6)
-                .padding(8)
-                .style(ui_style::tooltip_popup),
-                {
-                    let zoom_value = text(format!("{}%", app.editor.zoom_percent()))
-                        .size(ui_style::FONT_SIZE_UI_XS)
-                        .font(iced::Font::MONOSPACE);
-                    let zoom_value = if app.editor.can_reset_zoom() {
-                        mouse_area(zoom_value)
-                            .on_double_click(Message::Editor(super::EditorMessage::ResetZoom))
-                    } else {
-                        mouse_area(zoom_value)
-                    };
-
-                    Tooltip::new(
-                        zoom_value,
-                        text(
-                            shortcuts::label_for_action(
-                                &app.shortcut_settings,
-                                shortcuts::ShortcutAction::EditorZoomReset,
-                            )
-                            .map(|shortcut| format!("Reset zoom ({shortcut})"))
-                            .unwrap_or_else(|| "Reset zoom".to_string()),
-                        )
-                        .size(ui_style::FONT_SIZE_UI_XS),
-                        tooltip::Position::Top,
-                    )
-                    .gap(6)
-                    .padding(8)
-                    .style(ui_style::tooltip_popup)
-                },
-                Tooltip::new(
-                    zoom_in_button,
-                    text(
-                        shortcuts::label_for_action(
-                            &app.shortcut_settings,
-                            shortcuts::ShortcutAction::EditorZoomIn,
-                        )
-                        .map(|shortcut| format!("Zoom in ({shortcut})"))
-                        .unwrap_or_else(|| "Zoom in".to_string()),
-                    )
-                    .size(ui_style::FONT_SIZE_UI_XS),
-                    tooltip::Position::Top,
-                )
-                .gap(6)
-                .padding(8)
-                .style(ui_style::tooltip_popup),
-                Tooltip::new(
-                    save_button,
-                    text(
-                        shortcuts::label_for_action(
-                            &app.shortcut_settings,
-                            shortcuts::ShortcutAction::SaveEditor,
-                        )
-                        .map(|shortcut| format!("Save ({shortcut})"))
-                        .unwrap_or_else(|| "Save".to_string()),
-                    )
-                    .size(ui_style::FONT_SIZE_UI_XS),
-                    tooltip::Position::Top,
-                )
-                .gap(6)
-                .padding(8)
-                .style(ui_style::tooltip_popup),
-            ]
+fn editor_header_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
+    let root_menu = container(
+        Column::new()
             .spacing(ui_style::SPACE_XS)
-            .align_y(alignment::Vertical::Center)
+            .push(editor_root_menu_item(
+                "File",
+                app.open_editor_menu_section == Some(EditorHeaderMenuSection::File),
+                EditorHeaderMenuSection::File,
+            ))
+            .push(editor_root_menu_item(
+                "Appearance",
+                app.open_editor_menu_section == Some(EditorHeaderMenuSection::Appearance),
+                EditorHeaderMenuSection::Appearance,
+            )),
+    )
+    .width(Length::Fixed(EDITOR_MENU_ROOT_WIDTH))
+    .padding(ui_style::PADDING_XS)
+    .style(ui_style::tooltip_popup);
+
+    let submenu: Option<Element<'a, Message>> = match app.open_editor_menu_section {
+        Some(EditorHeaderMenuSection::File) => Some(
+            iced::widget::column![
+                container(text("")).height(Length::Fixed(editor_submenu_offset(
+                    EditorHeaderMenuSection::File,
+                ))),
+                container(editor_file_submenu(app))
+                    .width(Length::Fixed(EDITOR_FILE_SUBMENU_WIDTH))
+                    .padding(ui_style::PADDING_SM)
+                    .style(ui_style::tooltip_popup),
+            ]
+            .spacing(0)
             .into(),
-        },
-        HeaderControlGroup {
-            min_width: 32.0,
-            content: Tooltip::new(
-                theme_button,
-                text("Editor theme").size(ui_style::FONT_SIZE_UI_XS),
-                tooltip::Position::Top,
-            )
-            .gap(6)
-            .padding(8)
-            .style(ui_style::tooltip_popup)
+        ),
+        Some(EditorHeaderMenuSection::Appearance) => Some(
+            iced::widget::column![
+                container(text("")).height(Length::Fixed(editor_submenu_offset(
+                    EditorHeaderMenuSection::Appearance,
+                ))),
+                container(editor_appearance_submenu(app))
+                    .width(Length::Fixed(EDITOR_APPEARANCE_SUBMENU_WIDTH))
+                    .padding(Padding {
+                        top: f32::from(ui_style::PADDING_MD),
+                        right: f32::from(ui_style::PADDING_SM),
+                        bottom: f32::from(ui_style::PADDING_MD),
+                        left: f32::from(ui_style::PADDING_SM),
+                    })
+                    .style(ui_style::tooltip_popup),
+            ]
+            .spacing(0)
             .into(),
-        },
-    ]
+        ),
+        None => None,
+    };
+
+    match submenu {
+        Some(submenu) => row![submenu, root_menu]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Top)
+            .into(),
+        None => root_menu.into(),
+    }
 }
 
-fn editor_theme_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
+fn editor_submenu_offset(section: EditorHeaderMenuSection) -> f32 {
+    let item_index = match section {
+        EditorHeaderMenuSection::File => 0.0,
+        EditorHeaderMenuSection::Appearance => 1.0,
+    };
+
+    f32::from(ui_style::PADDING_XS)
+        + item_index * (EDITOR_MENU_ITEM_HEIGHT + ui_style::SPACE_XS as f32)
+}
+
+fn editor_root_menu_item<'a>(
+    label: &'a str,
+    active: bool,
+    section: EditorHeaderMenuSection,
+) -> Element<'a, Message> {
+    let button = button(
+        row![
+            svg(icons::chevron_left())
+                .width(Length::Fixed(10.0))
+                .height(Length::Fixed(10.0))
+                .content_fit(ContentFit::Contain)
+                .style(|theme: &Theme, status| svg::Style {
+                    color: Some(match status {
+                        svg::Status::Idle => theme.extended_palette().background.base.text,
+                        svg::Status::Hovered => theme.extended_palette().background.base.text,
+                    }),
+                }),
+            text(label).size(ui_style::FONT_SIZE_UI_XS),
+            container(text("")).width(Fill),
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .width(Fill)
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Fill)
+    .height(Length::Fixed(EDITOR_MENU_ITEM_HEIGHT))
+    .padding([
+        ui_style::PADDING_BUTTON_COMPACT_V + 2,
+        ui_style::PADDING_BUTTON_COMPACT_H,
+    ])
+    .style(move |theme: &Theme, status| ui_style::button_menu_item(theme, status, active))
+    .on_press(Message::Pane(PaneMessage::SetEditorHeaderMenuSection(
+        Some(section),
+    )));
+
+    mouse_area(button)
+        .interaction(mouse::Interaction::Pointer)
+        .on_enter(Message::Pane(PaneMessage::SetEditorHeaderMenuSection(
+            Some(section),
+        )))
+        .into()
+}
+
+fn editor_file_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
+    let has_document = app.editor.has_document();
+
+    Column::new()
+        .spacing(ui_style::SPACE_XS)
+        .push(editor_menu_item(
+            shortcuts::label_for_action(
+                &app.shortcut_settings,
+                shortcuts::ShortcutAction::NewEditor,
+            )
+            .map(|shortcut| format!("New ({shortcut})"))
+            .unwrap_or_else(|| "New".to_string()),
+            true,
+            Some(Message::Editor(super::EditorMessage::NewRequested)),
+        ))
+        .push(editor_menu_item(
+            shortcuts::label_for_action(
+                &app.shortcut_settings,
+                shortcuts::ShortcutAction::OpenEditorFile,
+            )
+            .map(|shortcut| format!("Open... ({shortcut})"))
+            .unwrap_or_else(|| "Open...".to_string()),
+            true,
+            Some(Message::Editor(super::EditorMessage::OpenRequested)),
+        ))
+        .push(editor_menu_item(
+            shortcuts::label_for_action(
+                &app.shortcut_settings,
+                shortcuts::ShortcutAction::SaveEditor,
+            )
+            .map(|shortcut| format!("Save ({shortcut})"))
+            .unwrap_or_else(|| "Save".to_string()),
+            has_document,
+            Some(Message::Editor(super::EditorMessage::SaveRequested)),
+        ))
+        .push(editor_menu_item(
+            "Save As...",
+            has_document,
+            Some(Message::Editor(super::EditorMessage::SaveAsRequested)),
+        ))
+        .into()
+}
+
+fn editor_appearance_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
+    let zoom_out_button = if app.editor.can_zoom_out() {
+        button(compact_control_icon(icons::zoom_out()))
+            .style(ui_style::button_neutral)
+            .padding([
+                ui_style::PADDING_BUTTON_COMPACT_V,
+                ui_style::PADDING_BUTTON_COMPACT_H,
+            ])
+            .on_press(Message::Editor(super::EditorMessage::ZoomOut))
+    } else {
+        button(compact_control_icon(icons::zoom_out()))
+            .style(ui_style::button_neutral)
+            .padding([
+                ui_style::PADDING_BUTTON_COMPACT_V,
+                ui_style::PADDING_BUTTON_COMPACT_H,
+            ])
+    };
+    let zoom_in_button = if app.editor.can_zoom_in() {
+        button(compact_control_icon(icons::zoom_in()))
+            .style(ui_style::button_neutral)
+            .padding([
+                ui_style::PADDING_BUTTON_COMPACT_V,
+                ui_style::PADDING_BUTTON_COMPACT_H,
+            ])
+            .on_press(Message::Editor(super::EditorMessage::ZoomIn))
+    } else {
+        button(compact_control_icon(icons::zoom_in()))
+            .style(ui_style::button_neutral)
+            .padding([
+                ui_style::PADDING_BUTTON_COMPACT_V,
+                ui_style::PADDING_BUTTON_COMPACT_H,
+            ])
+    };
+    let zoom_value = text(format!("{}%", app.editor.zoom_percent()))
+        .size(ui_style::FONT_SIZE_UI_XS)
+        .font(iced::Font::MONOSPACE);
+    let zoom_value = if app.editor.can_reset_zoom() {
+        mouse_area(zoom_value).on_double_click(Message::Editor(super::EditorMessage::ResetZoom))
+    } else {
+        mouse_area(zoom_value)
+    };
+
+    Column::new()
+        .spacing(ui_style::SPACE_SM)
+        .push(
+            row![
+                text("Zoom").size(ui_style::FONT_SIZE_UI_XS),
+                zoom_out_button,
+                zoom_value,
+                zoom_in_button
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center),
+        )
+        .push(
+            container(
+                container(text(""))
+                    .width(Fill)
+                    .height(Length::Fixed(1.0))
+                    .style(ui_style::chrome_separator),
+            )
+            .padding([ui_style::SPACE_SM as u16, 0]),
+        )
+        .push(editor_theme_controls_column(app))
+        .into()
+}
+
+fn editor_menu_item<'a>(
+    label: impl Into<String>,
+    enabled: bool,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    let mut item = button(
+        container(text(label.into()).size(ui_style::FONT_SIZE_UI_XS))
+            .width(Fill)
+            .align_x(alignment::Horizontal::Left),
+    )
+    .width(Fill)
+    .height(Length::Fixed(EDITOR_MENU_ITEM_HEIGHT))
+    .padding([
+        ui_style::PADDING_BUTTON_COMPACT_V + 2,
+        ui_style::PADDING_BUTTON_COMPACT_H,
+    ])
+    .style(|theme: &Theme, status| ui_style::button_menu_item(theme, status, false));
+
+    if enabled {
+        if let Some(message) = on_press {
+            item = item.on_press(message);
+        }
+    }
+
+    item.into()
+}
+
+fn editor_theme_controls_column<'a>(app: &'a LilyView) -> Column<'a, Message> {
     let settings = app.editor.theme_settings();
 
-    container(
-        Column::with_children(vec![
-            editor_theme_slider(
-                "Hue",
-                format!("{:+.0}°", settings.hue_offset_degrees),
-                -180.0..=180.0,
-                settings.hue_offset_degrees,
-                1.0,
-                |value| Message::Editor(super::EditorMessage::SetThemeHueOffsetDegrees(value)),
-            ),
-            editor_theme_slider(
-                "Saturation",
-                format!("{:.2}", settings.saturation),
-                0.0..=1.8,
-                settings.saturation,
-                0.01,
-                |value| Message::Editor(super::EditorMessage::SetThemeSaturation(value)),
-            ),
-            editor_theme_slider(
-                "Warmth",
-                format!("{:+.2}", settings.warmth),
-                -1.0..=1.0,
-                settings.warmth,
-                0.01,
-                |value| Message::Editor(super::EditorMessage::SetThemeWarmth(value)),
-            ),
-            editor_theme_slider(
-                "Brightness",
-                format!("{:.2}", settings.brightness),
-                0.5..=1.8,
-                settings.brightness,
-                0.01,
-                |value| Message::Editor(super::EditorMessage::SetThemeBrightness(value)),
-            ),
-            editor_theme_slider(
-                "Text Dim",
-                format!("{:.2}", settings.text_dim),
-                0.5..=3.0,
-                settings.text_dim,
-                0.01,
-                |value| Message::Editor(super::EditorMessage::SetThemeTextDim(value)),
-            ),
-            editor_theme_slider(
-                "Comment Dim",
-                format!("{:.2}", settings.comment_dim),
-                0.5..=1.8,
-                settings.comment_dim,
-                0.01,
-                |value| Message::Editor(super::EditorMessage::SetThemeCommentDim(value)),
-            ),
-        ])
-        .spacing(ui_style::SPACE_SM),
-    )
-    .width(Length::Fixed(EDITOR_THEME_MENU_WIDTH))
-    .padding(ui_style::PADDING_SM)
-    .style(ui_style::tooltip_popup)
-    .into()
+    Column::with_children(vec![
+        editor_theme_slider(
+            "Hue",
+            format!("{:+.0}°", settings.hue_offset_degrees),
+            -180.0..=180.0,
+            settings.hue_offset_degrees,
+            1.0,
+            |value| Message::Editor(super::EditorMessage::SetThemeHueOffsetDegrees(value)),
+        ),
+        editor_theme_slider(
+            "Saturation",
+            format!("{:.2}", settings.saturation),
+            0.0..=1.8,
+            settings.saturation,
+            0.01,
+            |value| Message::Editor(super::EditorMessage::SetThemeSaturation(value)),
+        ),
+        editor_theme_slider(
+            "Warmth",
+            format!("{:+.2}", settings.warmth),
+            -1.0..=1.0,
+            settings.warmth,
+            0.01,
+            |value| Message::Editor(super::EditorMessage::SetThemeWarmth(value)),
+        ),
+        editor_theme_slider(
+            "Brightness",
+            format!("{:.2}", settings.brightness),
+            0.5..=1.8,
+            settings.brightness,
+            0.01,
+            |value| Message::Editor(super::EditorMessage::SetThemeBrightness(value)),
+        ),
+        editor_theme_slider(
+            "Text Dim",
+            format!("{:.2}", settings.text_dim),
+            0.5..=3.0,
+            settings.text_dim,
+            0.01,
+            |value| Message::Editor(super::EditorMessage::SetThemeTextDim(value)),
+        ),
+        editor_theme_slider(
+            "Comment Dim",
+            format!("{:.2}", settings.comment_dim),
+            0.5..=1.8,
+            settings.comment_dim,
+            0.01,
+            |value| Message::Editor(super::EditorMessage::SetThemeCommentDim(value)),
+        ),
+    ])
+    .spacing(ui_style::SPACE_SM)
 }
 
 fn editor_theme_slider<'a>(

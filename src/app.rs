@@ -56,6 +56,12 @@ pub(super) type WorkspacePaneKind = crate::settings::WorkspacePane;
 
 type DockGroupId = u64;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorHeaderMenuSection {
+    File,
+    Appearance,
+}
+
 struct LilyView {
     theme: iced::Theme,
     window_width: f32,
@@ -84,7 +90,7 @@ struct LilyView {
     dragged_workspace_pane: Option<WorkspacePaneKind>,
     dock_drop_target: Option<DockDropTarget>,
     open_header_overflow_menu: Option<DockGroupId>,
-    open_editor_theme_menu: Option<DockGroupId>,
+    open_editor_menu_section: Option<EditorHeaderMenuSection>,
     editor: editor::EditorState,
     rendered_score: Option<RenderedScore>,
     score_cursor_maps: Option<ScoreCursorMaps>,
@@ -329,7 +335,7 @@ fn new(
         dragged_workspace_pane: None,
         dock_drop_target: None,
         open_header_overflow_menu: None,
-        open_editor_theme_menu: None,
+        open_editor_menu_section: None,
         editor: editor::EditorState::new(
             iced::Theme::Dark,
             stored_settings.editor_view,
