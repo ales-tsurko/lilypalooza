@@ -161,6 +161,7 @@ impl Default for PianoRollViewSettings {
 pub(crate) struct EditorThemeSettings {
     pub(crate) hue_offset_degrees: f32,
     pub(crate) saturation: f32,
+    pub(crate) warmth: f32,
     pub(crate) brightness: f32,
     pub(crate) text_dim: f32,
     pub(crate) comment_dim: f32,
@@ -171,6 +172,7 @@ impl Default for EditorThemeSettings {
         Self {
             hue_offset_degrees: 0.0,
             saturation: 1.0,
+            warmth: 0.0,
             brightness: 1.0,
             text_dim: 1.0,
             comment_dim: 1.0,

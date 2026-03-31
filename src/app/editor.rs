@@ -99,6 +99,11 @@ impl EditorState {
         self.apply_theme();
     }
 
+    pub(super) fn set_warmth(&mut self, value: f32) {
+        self.theme_settings.warmth = value;
+        self.apply_theme();
+    }
+
     pub(super) fn set_brightness(&mut self, value: f32) {
         self.theme_settings.brightness = value;
         self.apply_theme();
@@ -166,6 +171,7 @@ fn to_editor_theme_tuning(settings: EditorThemeSettings) -> ThemeTuning {
     ThemeTuning {
         hue_offset_degrees: settings.hue_offset_degrees,
         saturation: settings.saturation,
+        warmth: settings.warmth,
         contrast: settings.brightness,
         text_dim: settings.text_dim,
         comment_dim: settings.comment_dim,

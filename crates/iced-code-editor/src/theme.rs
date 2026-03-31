@@ -8,6 +8,8 @@ pub struct ThemeTuning {
     pub hue_offset_degrees: f32,
     /// Scales accent chroma to make syntax more muted or more vivid.
     pub saturation: f32,
+    /// Biases syntax accents warmer or cooler without rotating the whole palette.
+    pub warmth: f32,
     /// Pushes accent lightness farther from normal text or pulls it closer.
     pub contrast: f32,
     /// Controls how dim the default code text is relative to the host theme text.
@@ -21,6 +23,7 @@ impl Default for ThemeTuning {
         Self {
             hue_offset_degrees: 0.0,
             saturation: 1.0,
+            warmth: 0.0,
             contrast: 1.0,
             text_dim: 1.0,
             comment_dim: 1.0,
@@ -192,6 +195,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let scroller_color = palette.background.strong.color;
     let current_line_highlight = gutter_background;
     let saturation = tuning.saturation.clamp(0.0, 1.8);
+    let warmth = tuning.warmth.clamp(-1.0, 1.0);
 
     let comment_color = derive_neutral(
         bg_oklch,
@@ -210,7 +214,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let bracket_color = derive_accent(
         primary_oklch,
         fg_oklch,
-        285.0 + hue_offset,
+        cool_hue(285.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.72 } else { 0.46 },
             bg_oklch.l,
@@ -224,7 +228,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let variable_color = derive_accent(
         secondary_oklch,
         fg_oklch,
-        220.0 + hue_offset,
+        cool_hue(220.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.84 } else { 0.28 },
             bg_oklch.l,
@@ -238,7 +242,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let command_color = derive_accent(
         secondary_oklch,
         fg_oklch,
-        240.0 + hue_offset,
+        cool_hue(240.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.8 } else { 0.42 },
             bg_oklch.l,
@@ -252,7 +256,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let keyword_color = derive_accent(
         primary_oklch,
         fg_oklch,
-        285.0 + hue_offset,
+        cool_hue(285.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.74 } else { 0.48 },
             bg_oklch.l,
@@ -264,13 +268,18 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
         1.0,
     );
     let directive_color = derive_accent_from_hue(
-        rotate_hue(
-            mix_hues(
-                usable_hue(primary_oklch, 285.0),
-                usable_hue(danger_oklch, 20.0),
-                0.42,
+        apply_warmth_to_hue(
+            rotate_hue(
+                mix_hues(
+                    usable_hue(primary_oklch, 285.0),
+                    usable_hue(danger_oklch, 20.0),
+                    0.42,
+                ),
+                hue_offset,
             ),
-            hue_offset,
+            warmth,
+            25.0,
+            220.0,
         ),
         contrasted_lightness(
             if is_dark { 0.8 } else { 0.44 },
@@ -284,7 +293,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let operator_color = derive_accent(
         primary_oklch,
         fg_oklch,
-        285.0 + hue_offset,
+        cool_hue(285.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.76 } else { 0.46 },
             bg_oklch.l,
@@ -298,7 +307,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let function_color = derive_accent(
         secondary_oklch,
         fg_oklch,
-        235.0 + hue_offset,
+        cool_hue(235.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.78 } else { 0.46 },
             bg_oklch.l,
@@ -310,13 +319,18 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
         1.0,
     );
     let builtin_color = derive_accent_from_hue(
-        rotate_hue(
-            mix_hues(
-                usable_hue(success_oklch, 145.0),
-                usable_hue(primary_oklch, 285.0),
-                0.35,
+        apply_warmth_to_hue(
+            rotate_hue(
+                mix_hues(
+                    usable_hue(success_oklch, 145.0),
+                    usable_hue(primary_oklch, 285.0),
+                    0.35,
+                ),
+                hue_offset,
             ),
-            hue_offset,
+            warmth,
+            40.0,
+            220.0,
         ),
         contrasted_lightness(
             if is_dark { 0.8 } else { 0.42 },
@@ -328,13 +342,18 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
         1.0,
     );
     let processing_color = derive_accent_from_hue(
-        rotate_hue(
-            mix_hues(
-                usable_hue(primary_oklch, 285.0),
-                usable_hue(secondary_oklch, 235.0),
-                0.35,
+        apply_warmth_to_hue(
+            rotate_hue(
+                mix_hues(
+                    usable_hue(primary_oklch, 285.0),
+                    usable_hue(secondary_oklch, 235.0),
+                    0.35,
+                ),
+                hue_offset,
             ),
-            hue_offset,
+            warmth,
+            25.0,
+            220.0,
         ),
         contrasted_lightness(
             if is_dark { 0.82 } else { 0.48 },
@@ -346,13 +365,18 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
         1.0,
     );
     let type_color = derive_accent_from_hue(
-        rotate_hue(
-            mix_hues(
-                usable_hue(secondary_oklch, 235.0),
-                usable_hue(warning_oklch, 85.0),
-                0.28,
+        apply_warmth_to_hue(
+            rotate_hue(
+                mix_hues(
+                    usable_hue(secondary_oklch, 235.0),
+                    usable_hue(warning_oklch, 85.0),
+                    0.28,
+                ),
+                hue_offset,
             ),
-            hue_offset,
+            warmth,
+            40.0,
+            220.0,
         ),
         contrasted_lightness(
             if is_dark { 0.82 } else { 0.44 },
@@ -366,7 +390,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let property_color = derive_accent(
         warning_oklch,
         fg_oklch,
-        85.0 + hue_offset,
+        warm_hue(85.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.78 } else { 0.42 },
             bg_oklch.l,
@@ -380,7 +404,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let parameter_color = derive_accent(
         success_oklch,
         fg_oklch,
-        145.0 + hue_offset,
+        warm_hue(145.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.76 } else { 0.4 },
             bg_oklch.l,
@@ -392,13 +416,18 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
         1.0,
     );
     let string_color = derive_accent_from_hue(
-        rotate_hue(
-            mix_hues(
-                usable_hue(success_oklch, 145.0),
-                usable_hue(warning_oklch, 85.0),
-                0.3,
+        apply_warmth_to_hue(
+            rotate_hue(
+                mix_hues(
+                    usable_hue(success_oklch, 145.0),
+                    usable_hue(warning_oklch, 85.0),
+                    0.3,
+                ),
+                hue_offset,
             ),
-            hue_offset,
+            warmth,
+            55.0,
+            180.0,
         ),
         contrasted_lightness(
             if is_dark { 0.84 } else { 0.42 },
@@ -412,7 +441,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let string_delimiter_color = derive_accent(
         success_oklch,
         fg_oklch,
-        145.0 + hue_offset,
+        warm_hue(145.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.72 } else { 0.36 },
             bg_oklch.l,
@@ -426,7 +455,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let escape_color = derive_accent(
         success_oklch,
         fg_oklch,
-        145.0 + hue_offset,
+        warm_hue(145.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.9 } else { 0.34 },
             bg_oklch.l,
@@ -440,7 +469,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let number_color = derive_accent(
         warning_oklch,
         fg_oklch,
-        85.0 + hue_offset,
+        warm_hue(85.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.86 } else { 0.46 },
             bg_oklch.l,
@@ -452,13 +481,18 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
         1.0,
     );
     let constant_color = derive_accent_from_hue(
-        rotate_hue(
-            mix_hues(
-                usable_hue(warning_oklch, 85.0),
-                usable_hue(secondary_oklch, 235.0),
-                0.22,
+        apply_warmth_to_hue(
+            rotate_hue(
+                mix_hues(
+                    usable_hue(warning_oklch, 85.0),
+                    usable_hue(secondary_oklch, 235.0),
+                    0.22,
+                ),
+                hue_offset,
             ),
-            hue_offset,
+            warmth,
+            45.0,
+            210.0,
         ),
         contrasted_lightness(
             if is_dark { 0.8 } else { 0.42 },
@@ -472,7 +506,7 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let invalid_color = derive_accent(
         danger_oklch,
         fg_oklch,
-        25.0 + hue_offset,
+        warm_hue(25.0 + hue_offset, warmth),
         contrasted_lightness(
             if is_dark { 0.74 } else { 0.52 },
             bg_oklch.l,
@@ -604,6 +638,27 @@ fn mix_hues(start: OklabHue<f32>, end: OklabHue<f32>, factor: f32) -> OklabHue<f
 
 fn rotate_hue(hue: OklabHue<f32>, offset_degrees: f32) -> OklabHue<f32> {
     OklabHue::from_degrees(hue.into_degrees() + offset_degrees)
+}
+
+fn warm_hue(base_degrees: f32, warmth: f32) -> f32 {
+    apply_warmth_to_hue(OklabHue::from_degrees(base_degrees), warmth, 40.0, 210.0).into_degrees()
+}
+
+fn cool_hue(base_degrees: f32, warmth: f32) -> f32 {
+    apply_warmth_to_hue(OklabHue::from_degrees(base_degrees), warmth, 25.0, 220.0).into_degrees()
+}
+
+fn apply_warmth_to_hue(
+    base: OklabHue<f32>,
+    warmth: f32,
+    warm_target: f32,
+    cool_target: f32,
+) -> OklabHue<f32> {
+    if warmth >= 0.0 {
+        mix_hues(base, OklabHue::from_degrees(warm_target), warmth)
+    } else {
+        mix_hues(base, OklabHue::from_degrees(cool_target), -warmth)
+    }
 }
 
 fn mix_scalar(start: f32, end: f32, factor: f32) -> f32 {

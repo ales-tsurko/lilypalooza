@@ -1078,6 +1078,14 @@ fn editor_theme_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
                 |value| Message::Editor(super::EditorMessage::SetThemeSaturation(value)),
             ),
             editor_theme_slider(
+                "Warmth",
+                format!("{:+.2}", settings.warmth),
+                -1.0..=1.0,
+                settings.warmth,
+                0.01,
+                |value| Message::Editor(super::EditorMessage::SetThemeWarmth(value)),
+            ),
+            editor_theme_slider(
                 "Brightness",
                 format!("{:.2}", settings.brightness),
                 0.5..=1.8,
