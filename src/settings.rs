@@ -192,6 +192,14 @@ impl Default for EditorViewSettings {
     }
 }
 
+fn default_editor_recent_files_limit() -> usize {
+    7
+}
+
+fn is_default_editor_recent_files_limit(value: &usize) -> bool {
+    *value == default_editor_recent_files_limit()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ShortcutKeyCode {
@@ -312,7 +320,7 @@ impl ShortcutSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct AppSettings {
     pub(crate) workspace_layout: WorkspaceLayoutSettings,
@@ -320,8 +328,30 @@ pub(crate) struct AppSettings {
     pub(crate) piano_roll_view: PianoRollViewSettings,
     pub(crate) editor_view: EditorViewSettings,
     pub(crate) editor_theme: EditorThemeSettings,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) editor_recent_files: Vec<PathBuf>,
+    #[serde(
+        default = "default_editor_recent_files_limit",
+        skip_serializing_if = "is_default_editor_recent_files_limit"
+    )]
+    pub(crate) editor_recent_files_limit: usize,
     #[serde(skip_serializing_if = "ShortcutSettings::is_empty")]
     pub(crate) shortcuts: ShortcutSettings,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            workspace_layout: WorkspaceLayoutSettings::default(),
+            score_view: ScoreViewSettings::default(),
+            piano_roll_view: PianoRollViewSettings::default(),
+            editor_view: EditorViewSettings::default(),
+            editor_theme: EditorThemeSettings::default(),
+            editor_recent_files: Vec::new(),
+            editor_recent_files_limit: default_editor_recent_files_limit(),
+            shortcuts: ShortcutSettings::default(),
+        }
+    }
 }
 
 pub(crate) fn load() -> Result<AppSettings, String> {

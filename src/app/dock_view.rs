@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 
 use iced::widget::{
     Column, Tooltip, button, canvas, container, mouse_area, opaque, pane_grid, responsive, row,
@@ -10,8 +11,8 @@ use iced::{
 };
 
 use super::{
-    DockDropRegion, EditorHeaderMenuSection, LilyView, Message, PaneMessage, WorkspacePaneKind,
-    piano_roll, score_view, transport_bar,
+    DockDropRegion, EditorFileMenuSection, EditorHeaderMenuSection, LilyView, Message, PaneMessage,
+    WorkspacePaneKind, piano_roll, score_view, transport_bar,
 };
 use crate::{icons, shortcuts, ui_style};
 
@@ -23,6 +24,7 @@ const EDITOR_MENU_ROOT_WIDTH: f32 = 126.0;
 const EDITOR_FILE_SUBMENU_WIDTH: f32 = 320.0;
 const EDITOR_APPEARANCE_SUBMENU_WIDTH: f32 = 272.0;
 const EDITOR_MENU_ITEM_HEIGHT: f32 = 24.0;
+const EDITOR_RECENT_FILE_LABEL_MAX_CHARS: usize = 40;
 const TAB_ICON_GAP: u32 = 6;
 const HEADER_WIDTH_SAFETY: f32 = 24.0;
 pub(super) const TOOLBAR_HEIGHT: f32 = 32.0;
@@ -970,6 +972,7 @@ fn logger_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
 }
 
 fn editor_header_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
+    let root_width = EDITOR_MENU_ROOT_WIDTH;
     let root_menu = container(
         Column::new()
             .spacing(ui_style::SPACE_XS)
@@ -984,31 +987,39 @@ fn editor_header_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
                 EditorHeaderMenuSection::Appearance,
             )),
     )
-    .width(Length::Fixed(EDITOR_MENU_ROOT_WIDTH))
+    .width(Length::Fixed(root_width))
     .padding(ui_style::PADDING_XS)
     .style(ui_style::tooltip_popup);
 
-    let submenu: Option<Element<'a, Message>> = match app.open_editor_menu_section {
-        Some(EditorHeaderMenuSection::File) => Some(
-            iced::widget::column![
-                container(text("")).height(Length::Fixed(editor_submenu_offset(
-                    EditorHeaderMenuSection::File,
-                ))),
-                container(editor_file_submenu(app))
-                    .width(Length::Fixed(EDITOR_FILE_SUBMENU_WIDTH))
-                    .padding(ui_style::PADDING_SM)
-                    .style(ui_style::tooltip_popup),
+    match app.open_editor_menu_section {
+        Some(EditorHeaderMenuSection::File) => {
+            let file_width = EDITOR_FILE_SUBMENU_WIDTH;
+
+            row![
+                iced::widget::column![
+                    container(text("")).height(Length::Fixed(editor_submenu_offset(
+                        EditorHeaderMenuSection::File,
+                    ))),
+                    container(editor_file_submenu(app))
+                        .width(Length::Fixed(file_width))
+                        .padding(ui_style::PADDING_SM)
+                        .style(ui_style::tooltip_popup),
+                ]
+                .spacing(0),
+                root_menu,
             ]
-            .spacing(0)
-            .into(),
-        ),
-        Some(EditorHeaderMenuSection::Appearance) => Some(
-            iced::widget::column![
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Top)
+            .into()
+        }
+        Some(EditorHeaderMenuSection::Appearance) => {
+            let submenu_width = EDITOR_APPEARANCE_SUBMENU_WIDTH;
+            let submenu: Element<'a, Message> = iced::widget::column![
                 container(text("")).height(Length::Fixed(editor_submenu_offset(
                     EditorHeaderMenuSection::Appearance,
                 ))),
                 container(editor_appearance_submenu(app))
-                    .width(Length::Fixed(EDITOR_APPEARANCE_SUBMENU_WIDTH))
+                    .width(Length::Fixed(submenu_width))
                     .padding(Padding {
                         top: f32::from(ui_style::PADDING_MD),
                         right: f32::from(ui_style::PADDING_SM),
@@ -1018,16 +1029,13 @@ fn editor_header_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
                     .style(ui_style::tooltip_popup),
             ]
             .spacing(0)
-            .into(),
-        ),
-        None => None,
-    };
+            .into();
 
-    match submenu {
-        Some(submenu) => row![submenu, root_menu]
-            .spacing(ui_style::SPACE_XS)
-            .align_y(alignment::Vertical::Top)
-            .into(),
+            row![submenu, root_menu]
+                .spacing(ui_style::SPACE_XS)
+                .align_y(alignment::Vertical::Top)
+                .into()
+        }
         None => root_menu.into(),
     }
 }
@@ -1088,10 +1096,14 @@ fn editor_root_menu_item<'a>(
 
 fn editor_file_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
     let has_document = app.editor.has_document();
+    let has_recent_files = !app.editor_recent_files.is_empty();
+    let recent_open = app.open_editor_file_menu_section == Some(EditorFileMenuSection::OpenRecent);
+    let recent_hovered =
+        app.hovered_editor_file_menu_section == Some(EditorFileMenuSection::OpenRecent);
 
-    Column::new()
+    let mut column = Column::new()
         .spacing(ui_style::SPACE_XS)
-        .push(editor_menu_item(
+        .push(editor_file_menu_item(
             shortcuts::label_for_action(
                 &app.shortcut_settings,
                 shortcuts::ShortcutAction::NewEditor,
@@ -1101,7 +1113,7 @@ fn editor_file_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
             true,
             Some(Message::Editor(super::EditorMessage::NewRequested)),
         ))
-        .push(editor_menu_item(
+        .push(editor_file_menu_item(
             shortcuts::label_for_action(
                 &app.shortcut_settings,
                 shortcuts::ShortcutAction::OpenEditorFile,
@@ -1111,7 +1123,7 @@ fn editor_file_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
             true,
             Some(Message::Editor(super::EditorMessage::OpenRequested)),
         ))
-        .push(editor_menu_item(
+        .push(editor_file_menu_item(
             shortcuts::label_for_action(
                 &app.shortcut_settings,
                 shortcuts::ShortcutAction::SaveEditor,
@@ -1121,12 +1133,235 @@ fn editor_file_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
             has_document,
             Some(Message::Editor(super::EditorMessage::SaveRequested)),
         ))
-        .push(editor_menu_item(
+        .push(editor_file_menu_item(
             "Save As...",
             has_document,
             Some(Message::Editor(super::EditorMessage::SaveAsRequested)),
+        ));
+
+    let recent_row = if has_recent_files {
+        mouse_area(editor_fold_menu_item(
+            "Open Recent",
+            has_recent_files,
+            recent_open,
+            recent_hovered,
+            Message::Pane(PaneMessage::HoverEditorFileMenuSection {
+                section: Some(EditorFileMenuSection::OpenRecent),
+                expanded: !recent_open,
+            }),
         ))
+        .interaction(mouse::Interaction::Pointer)
+        .on_move(|position| {
+            Message::Pane(PaneMessage::HoverEditorFileMenuSection {
+                section: Some(EditorFileMenuSection::OpenRecent),
+                expanded: position.x >= EDITOR_FILE_SUBMENU_WIDTH * 0.5,
+            })
+        })
         .into()
+    } else {
+        editor_fold_menu_item(
+            "Open Recent",
+            false,
+            false,
+            false,
+            Message::Pane(PaneMessage::CloseHeaderOverflowMenu),
+        )
+    };
+
+    let mut recent_section = Column::new().spacing(ui_style::SPACE_XS).push(recent_row);
+
+    if recent_open {
+        recent_section = recent_section.push(container(editor_recent_files_submenu(app)).padding(
+            Padding {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: f32::from(ui_style::PADDING_MD),
+            },
+        ));
+    }
+
+    column = column.push(
+        mouse_area(recent_section)
+            .interaction(if has_recent_files {
+                mouse::Interaction::Pointer
+            } else {
+                mouse::Interaction::default()
+            })
+            .on_enter(Message::Pane(PaneMessage::HoverEditorFileMenuSection {
+                section: Some(EditorFileMenuSection::OpenRecent),
+                expanded: recent_open,
+            }))
+            .on_exit(Message::Pane(PaneMessage::HoverEditorFileMenuSection {
+                section: None,
+                expanded: false,
+            })),
+    );
+
+    column.into()
+}
+
+fn editor_recent_files_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
+    if app.editor_recent_files.is_empty() {
+        return Column::new()
+            .spacing(ui_style::SPACE_XS)
+            .push(editor_menu_item("No recent files", false, None))
+            .into();
+    }
+
+    let recent_paths: Vec<_> = app
+        .editor_recent_files
+        .iter()
+        .take(app.editor_recent_files_limit)
+        .cloned()
+        .collect();
+    let labels = recent_file_labels(&recent_paths, EDITOR_RECENT_FILE_LABEL_MAX_CHARS);
+
+    recent_paths
+        .into_iter()
+        .zip(labels)
+        .fold(
+            Column::new().spacing(ui_style::SPACE_XS),
+            |column, (path, label)| {
+                column.push(editor_recent_file_item(
+                    label,
+                    path.clone(),
+                    Message::Editor(super::EditorMessage::OpenRecent(path)),
+                ))
+            },
+        )
+        .into()
+}
+
+fn editor_recent_file_item<'a>(
+    label: String,
+    full_path: PathBuf,
+    on_press: Message,
+) -> Element<'a, Message> {
+    Tooltip::new(
+        editor_menu_item(label, true, Some(on_press)),
+        text(full_path.display().to_string()).size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Right,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup)
+    .into()
+}
+
+fn recent_file_labels(paths: &[PathBuf], max_chars: usize) -> Vec<String> {
+    let components: Vec<Vec<String>> = paths
+        .iter()
+        .map(|path| path_display_components(path))
+        .collect();
+    let mut suffix_lengths = vec![1; components.len()];
+
+    loop {
+        let mut collisions: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, parts) in components.iter().enumerate() {
+            collisions
+                .entry(suffix_path(parts, suffix_lengths[index]))
+                .or_default()
+                .push(index);
+        }
+
+        let mut changed = false;
+        for indices in collisions.values() {
+            if indices.len() < 2 {
+                continue;
+            }
+
+            for &index in indices {
+                if suffix_lengths[index] < components[index].len() {
+                    suffix_lengths[index] += 1;
+                    changed = true;
+                }
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    components
+        .iter()
+        .zip(suffix_lengths)
+        .map(|(parts, suffix_len)| {
+            truncate_recent_label(&suffix_path(parts, suffix_len), max_chars)
+        })
+        .collect()
+}
+
+fn path_display_components(path: &Path) -> Vec<String> {
+    let mut parts: Vec<String> = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            Component::ParentDir => Some("..".to_string()),
+            Component::CurDir | Component::RootDir | Component::Prefix(_) => None,
+        })
+        .collect();
+
+    if parts.is_empty() {
+        parts.push(path.display().to_string());
+    }
+
+    parts
+}
+
+fn suffix_path(parts: &[String], count: usize) -> String {
+    let start = parts.len().saturating_sub(count);
+    parts[start..].join("/")
+}
+
+fn truncate_recent_label(label: &str, max_chars: usize) -> String {
+    if label.chars().count() <= max_chars {
+        return label.to_string();
+    }
+
+    let parts: Vec<&str> = label.split('/').collect();
+    let Some(file_name) = parts.last().copied() else {
+        return label.to_string();
+    };
+
+    if file_name.chars().count() >= max_chars {
+        return truncate_from_left(file_name, max_chars);
+    }
+
+    let mut suffix = file_name.to_string();
+    for parent in parts[..parts.len().saturating_sub(1)].iter().rev() {
+        let candidate = format!("{parent}/{suffix}");
+        let display = format!("…/{candidate}");
+        if display.chars().count() <= max_chars {
+            suffix = candidate;
+        } else {
+            break;
+        }
+    }
+
+    format!("…/{suffix}")
+}
+
+fn truncate_from_left(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+
+    if max_chars <= 1 {
+        return "…".to_string();
+    }
+
+    let keep = max_chars - 1;
+    let tail: String = value
+        .chars()
+        .rev()
+        .take(keep)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("…{tail}")
 }
 
 fn editor_appearance_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
@@ -1228,6 +1463,60 @@ fn editor_menu_item<'a>(
     }
 
     item.into()
+}
+
+fn editor_file_menu_item<'a>(
+    label: impl Into<String>,
+    enabled: bool,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    editor_menu_item(label, enabled, on_press)
+}
+
+fn editor_fold_menu_item<'a>(
+    label: &'a str,
+    enabled: bool,
+    active: bool,
+    hovered: bool,
+    on_press: Message,
+) -> Element<'a, Message> {
+    let highlighted = active || hovered;
+    let content = row![
+        container(text(label).size(ui_style::FONT_SIZE_UI_XS))
+            .width(Fill)
+            .align_x(alignment::Horizontal::Left),
+        svg(icons::chevron_down())
+            .width(Length::Fixed(12.0))
+            .height(Length::Fixed(12.0))
+            .content_fit(ContentFit::Contain)
+            .style(move |theme: &Theme, _status| svg::Style {
+                color: Some(if highlighted {
+                    theme.extended_palette().background.weakest.text
+                } else {
+                    Color::from_rgb(0.12, 0.12, 0.14)
+                }),
+            }),
+    ]
+    .spacing(ui_style::SPACE_XS)
+    .width(Fill)
+    .align_y(alignment::Vertical::Center);
+
+    let button = button(content)
+        .width(Fill)
+        .height(Length::Fixed(EDITOR_MENU_ITEM_HEIGHT))
+        .padding([
+            ui_style::PADDING_BUTTON_COMPACT_V + 2,
+            ui_style::PADDING_BUTTON_COMPACT_H,
+        ])
+        .style(move |theme: &Theme, status| {
+            ui_style::button_menu_item(theme, status, active || hovered)
+        });
+
+    if enabled {
+        button.on_press(on_press).into()
+    } else {
+        button.into()
+    }
 }
 
 fn editor_theme_controls_column<'a>(app: &'a LilyView) -> Column<'a, Message> {

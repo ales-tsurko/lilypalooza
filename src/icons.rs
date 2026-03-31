@@ -3,6 +3,7 @@ use iced::widget::svg;
 const ARROW_LEFT: &[u8] = include_bytes!("../assets/icons/arrow-left.svg");
 const ARROW_RIGHT: &[u8] = include_bytes!("../assets/icons/arrow-right.svg");
 const BRUSH_CLEANING: &[u8] = include_bytes!("../assets/icons/brush-cleaning.svg");
+const CHEVRON_DOWN: &[u8] = include_bytes!("../assets/icons/chevron-down.svg");
 const CHEVRON_LEFT: &[u8] = include_bytes!("../assets/icons/chevron-left.svg");
 const ELLIPSIS_VERTICAL: &[u8] = include_bytes!("../assets/icons/ellipsis-vertical.svg");
 const FILE_MUSIC: &[u8] = include_bytes!("../assets/icons/file-music.svg");
@@ -30,6 +31,10 @@ pub(crate) fn arrow_right() -> svg::Handle {
 
 pub(crate) fn brush_cleaning() -> svg::Handle {
     svg::Handle::from_memory(BRUSH_CLEANING)
+}
+
+pub(crate) fn chevron_down() -> svg::Handle {
+    svg::Handle::from_memory(CHEVRON_DOWN)
 }
 
 pub(crate) fn chevron_left() -> svg::Handle {

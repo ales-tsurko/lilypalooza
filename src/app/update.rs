@@ -606,6 +606,7 @@ impl LilyView {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.open_header_overflow_menu = None;
                 self.open_editor_menu_section = None;
+                self.open_editor_file_menu_section = None;
                 self.editor.new_document();
                 Task::none()
             }
@@ -613,6 +614,7 @@ impl LilyView {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.open_header_overflow_menu = None;
                 self.open_editor_menu_section = None;
+                self.open_editor_file_menu_section = None;
                 Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
@@ -625,23 +627,15 @@ impl LilyView {
             }
             EditorMessage::OpenPicked(Some(path)) => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
-                match self.editor.load_file(&path) {
-                    Ok(()) => {
-                        self.logger
-                            .push(format!("Opened editor file {}", path.display()));
-                    }
-                    Err(error) => {
-                        self.show_prompt(
-                            ErrorPrompt::new(
-                                "Editor Open Error",
-                                error,
-                                ErrorFatality::Recoverable,
-                                PromptButtons::Ok,
-                            ),
-                            None,
-                        );
-                    }
-                }
+                self.open_editor_file_in_editor(&path);
+                Task::none()
+            }
+            EditorMessage::OpenRecent(path) => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.open_header_overflow_menu = None;
+                self.open_editor_menu_section = None;
+                self.open_editor_file_menu_section = None;
+                self.open_editor_file_in_editor(&path);
                 Task::none()
             }
             EditorMessage::OpenPicked(None) => Task::none(),
@@ -657,6 +651,7 @@ impl LilyView {
 
                 match self.editor.save_to_disk() {
                     Ok(path) => {
+                        self.register_editor_recent_file(&path);
                         self.logger.push(format!("Saved {}", path.display()));
                         if self.editor_targets_main_score() {
                             self.queue_compile("Editor saved, recompiling");
@@ -685,6 +680,7 @@ impl LilyView {
                 }
                 self.open_header_overflow_menu = None;
                 self.open_editor_menu_section = None;
+                self.open_editor_file_menu_section = None;
                 let suggested_name = self.editor.suggested_save_name();
                 Task::perform(
                     async move {
@@ -701,6 +697,7 @@ impl LilyView {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 match self.editor.save_to_path(&path) {
                     Ok(()) => {
+                        self.register_editor_recent_file(&path);
                         self.logger.push(format!("Saved {}", path.display()));
                         if self.editor_targets_main_score() {
                             self.queue_compile("Editor saved, recompiling");
@@ -846,17 +843,31 @@ impl LilyView {
                 }
                 self.open_header_overflow_menu = Some(group_id);
                 self.open_editor_menu_section = None;
+                self.open_editor_file_menu_section = None;
+                self.hovered_editor_file_menu_section = None;
             }
             PaneMessage::SetEditorHeaderMenuSection(section) => {
                 self.open_editor_menu_section = section;
+                if section != Some(super::EditorHeaderMenuSection::File) {
+                    self.open_editor_file_menu_section = None;
+                    self.hovered_editor_file_menu_section = None;
+                }
+            }
+            PaneMessage::HoverEditorFileMenuSection { section, expanded } => {
+                self.hovered_editor_file_menu_section = section;
+                self.open_editor_file_menu_section = if expanded { section } else { None };
             }
             PaneMessage::CloseHeaderOverflowMenu => {
                 self.open_header_overflow_menu = None;
                 self.open_editor_menu_section = None;
+                self.open_editor_file_menu_section = None;
+                self.hovered_editor_file_menu_section = None;
             }
             PaneMessage::ToggleWorkspacePane(pane) => {
                 self.open_header_overflow_menu = None;
                 self.open_editor_menu_section = None;
+                self.open_editor_file_menu_section = None;
+                self.hovered_editor_file_menu_section = None;
                 let changed = if self.is_pane_folded(pane) {
                     self.unfold_workspace_pane(pane)
                 } else {
@@ -907,6 +918,8 @@ impl LilyView {
                     self.persist_settings();
                     self.clear_workspace_drag_state();
                     self.open_editor_menu_section = None;
+                    self.open_editor_file_menu_section = None;
+                    self.hovered_editor_file_menu_section = None;
                     return self.restore_runtime_view_state(dragged_pane);
                 }
 
@@ -1073,6 +1086,8 @@ impl LilyView {
                 ),
                 None,
             );
+        } else {
+            self.register_editor_recent_file(&watched_path);
         }
         self.logger.push(format!(
             "Opened score file {}",
@@ -1880,6 +1895,35 @@ impl LilyView {
                 .map(|score| score.path.as_path())
     }
 
+    fn open_editor_file_in_editor(&mut self, path: &Path) {
+        match self.editor.load_file(path) {
+            Ok(()) => {
+                self.register_editor_recent_file(path);
+                self.logger
+                    .push(format!("Opened editor file {}", path.display()));
+            }
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "Editor Open Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+            }
+        }
+    }
+
+    fn register_editor_recent_file(&mut self, path: &Path) {
+        self.editor_recent_files.retain(|existing| existing != path);
+        self.editor_recent_files.insert(0, path.to_path_buf());
+        self.editor_recent_files
+            .truncate(self.editor_recent_files_limit.max(1));
+        self.persist_settings();
+    }
+
     fn persist_settings(&self) {
         let _ = settings::save(&settings::AppSettings {
             workspace_layout: WorkspaceLayoutSettings {
@@ -1905,6 +1949,8 @@ impl LilyView {
             },
             editor_view: self.editor.view_settings(),
             editor_theme: self.editor.theme_settings(),
+            editor_recent_files: self.editor_recent_files.clone(),
+            editor_recent_files_limit: self.editor_recent_files_limit,
             shortcuts: self.shortcut_settings.clone(),
         });
     }

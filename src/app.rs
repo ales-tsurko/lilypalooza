@@ -62,6 +62,11 @@ enum EditorHeaderMenuSection {
     Appearance,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorFileMenuSection {
+    OpenRecent,
+}
+
 struct LilyView {
     theme: iced::Theme,
     window_width: f32,
@@ -91,6 +96,10 @@ struct LilyView {
     dock_drop_target: Option<DockDropTarget>,
     open_header_overflow_menu: Option<DockGroupId>,
     open_editor_menu_section: Option<EditorHeaderMenuSection>,
+    open_editor_file_menu_section: Option<EditorFileMenuSection>,
+    hovered_editor_file_menu_section: Option<EditorFileMenuSection>,
+    editor_recent_files: Vec<PathBuf>,
+    editor_recent_files_limit: usize,
     editor: editor::EditorState,
     rendered_score: Option<RenderedScore>,
     score_cursor_maps: Option<ScoreCursorMaps>,
@@ -336,6 +345,10 @@ fn new(
         dock_drop_target: None,
         open_header_overflow_menu: None,
         open_editor_menu_section: None,
+        open_editor_file_menu_section: None,
+        hovered_editor_file_menu_section: None,
+        editor_recent_files: stored_settings.editor_recent_files.clone(),
+        editor_recent_files_limit: stored_settings.editor_recent_files_limit.max(1),
         editor: editor::EditorState::new(
             iced::Theme::Dark,
             stored_settings.editor_view,

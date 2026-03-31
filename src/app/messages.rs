@@ -7,7 +7,7 @@ use iced::{Size, keyboard, mouse};
 use iced_code_editor::Message as EditorWidgetMessage;
 use iced_core::image;
 
-use super::{EditorHeaderMenuSection, WorkspacePaneKind};
+use super::{EditorFileMenuSection, EditorHeaderMenuSection, WorkspacePaneKind};
 
 #[derive(Debug, Clone)]
 pub(super) enum Message {
@@ -51,6 +51,10 @@ pub(super) enum PaneMessage {
     WorkspaceTabHovered(Option<WorkspacePaneKind>),
     OpenHeaderOverflowMenu(u64),
     SetEditorHeaderMenuSection(Option<EditorHeaderMenuSection>),
+    HoverEditorFileMenuSection {
+        section: Option<EditorFileMenuSection>,
+        expanded: bool,
+    },
     CloseHeaderOverflowMenu,
     ToggleWorkspacePane(WorkspacePaneKind),
     WorkspaceDragMoved(iced::Point),
@@ -72,6 +76,7 @@ pub(super) enum EditorMessage {
     NewRequested,
     OpenRequested,
     OpenPicked(Option<PathBuf>),
+    OpenRecent(PathBuf),
     SaveRequested,
     SaveAsRequested,
     SaveAsPicked(Option<PathBuf>),
