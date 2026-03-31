@@ -34,6 +34,7 @@ mod canvas_impl;
 mod clipboard;
 pub mod command;
 mod cursor;
+mod highlighting;
 pub mod history;
 pub mod ime_requester;
 pub mod lsp;

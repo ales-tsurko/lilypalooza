@@ -107,7 +107,10 @@ fn build_editor(content: &str, syntax: &str) -> CodeEditor {
 }
 
 fn syntax_for_path(path: &Path) -> &str {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or("text")
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("ly" | "ily") => "lilypond",
+        Some("scm") => "scheme",
+        Some(extension) => extension,
+        None => "text",
+    }
 }

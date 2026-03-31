@@ -21,6 +21,30 @@ pub struct Style {
     pub scroller_color: Color,
     /// Highlight color for the current line where cursor is located
     pub current_line_highlight: Color,
+    /// Comment syntax color
+    pub comment_color: Color,
+    /// String syntax color
+    pub string_color: Color,
+    /// Escape sequence syntax color
+    pub escape_color: Color,
+    /// Keyword syntax color
+    pub keyword_color: Color,
+    /// Number syntax color
+    pub number_color: Color,
+    /// Function syntax color
+    pub function_color: Color,
+    /// Variable syntax color
+    pub variable_color: Color,
+    /// Operator syntax color
+    pub operator_color: Color,
+    /// Processing/directive syntax color
+    pub processing_color: Color,
+    /// Constant/global syntax color
+    pub constant_color: Color,
+    /// Punctuation syntax color
+    pub punctuation_color: Color,
+    /// Invalid/error syntax color
+    pub invalid_color: Color,
 }
 
 /// The theme catalog of a code editor.
@@ -100,6 +124,26 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let scrollbar_background = palette.background.weak.color;
     let scroller_color = palette.background.strong.color;
     let current_line_highlight = gutter_background;
+    let comment_color = blend_colors(text_color, background, 0.62);
+    let string_color = palette.success.base.color;
+    let escape_color = palette.success.strong.color;
+    let keyword_color = palette.primary.strong.color;
+    let number_color = palette.warning.strong.color;
+    let function_color = palette.secondary.strong.color;
+    let variable_color = blend_colors(text_color, palette.secondary.base.color, 0.42);
+    let operator_color = palette.primary.strong.color;
+    let processing_color = blend_colors(
+        palette.primary.strong.color,
+        palette.secondary.strong.color,
+        0.35,
+    );
+    let constant_color = blend_colors(
+        palette.warning.strong.color,
+        palette.secondary.base.color,
+        0.25,
+    );
+    let punctuation_color = blend_colors(text_color, background, 0.18);
+    let invalid_color = palette.danger.base.color;
 
     Style {
         background,
@@ -111,6 +155,18 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         scrollbar_background,
         scroller_color,
         current_line_highlight,
+        comment_color,
+        string_color,
+        escape_color,
+        keyword_color,
+        number_color,
+        function_color,
+        variable_color,
+        operator_color,
+        processing_color,
+        constant_color,
+        punctuation_color,
+        invalid_color,
     }
 }
 

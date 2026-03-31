@@ -1,0 +1,58 @@
+{
+  "grammars": [
+    {
+      "name": "lilypond",
+      "camelcase": "LilyPond",
+      "scope": "source.lilypond",
+      "path": "lilypond",
+      "file-types": [
+        "ily",
+        "ly"
+      ],
+      "highlights": [
+        "queries/highlights.scm",
+        "queries/highlights-builtins.scm",
+        "queries/highlights-scheme.scm",
+        "queries/highlights-scheme-builtins.scm",
+        "queries/highlights-scheme-lilypond-builtins.scm"
+      ],
+      "injection-regex": "^l(?:ilypond|y)$"
+    },
+    {
+      "name": "lilypond-scheme",
+      "camelcase": "LilyPondScheme",
+      "scope": "source.lilypond_scheme",
+      "path": "lilypond-scheme",
+      "highlights": [
+        "queries/highlights.scm",
+        "queries/highlights-builtins.scm",
+        "queries/highlights-scheme.scm",
+        "queries/highlights-scheme-builtins.scm",
+        "queries/highlights-scheme-lilypond-builtins.scm"
+      ]
+    }
+  ],
+  "metadata": {
+    "version": "0.0.1",
+    "license": "MIT",
+    "description": "LilyPond grammar for Tree-sitter",
+    "authors": [
+      {
+        "name": "Nathan Whetsell",
+        "email": "nathan.whetsell@gmail.com"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/nwhetsell/tree-sitter-lilypond.git",
+      "homepage": "https://github.com/nwhetsell/tree-sitter-lilypond"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true
+  }
+}

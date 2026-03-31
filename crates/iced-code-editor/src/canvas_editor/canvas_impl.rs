@@ -1,5 +1,6 @@
 //! Canvas rendering implementation using Iced's `canvas::Program`.
 
+use super::highlighting::{self, HighlightedDocument, StyledSpan};
 use iced::advanced::input_method;
 use iced::mouse;
 use iced::widget::canvas::{self, Geometry};
@@ -235,6 +236,7 @@ impl CodeEditor {
         ctx: &RenderContext<'_>,
         visual_line: &VisualLine,
         y: f32,
+        tree_sitter_document: Option<&HighlightedDocument>,
         syntax_ref: Option<&syntect::parsing::SyntaxReference>,
         syntax_set: &SyntaxSet,
         syntax_theme: Option<&syntect::highlighting::Theme>,
@@ -252,7 +254,23 @@ impl CodeEditor {
             .map_or(full_line_content.len(), |(idx, _)| idx);
         let line_segment = &full_line_content[start_byte..end_byte];
 
-        if let (Some(syntax), Some(syntax_theme)) = (syntax_ref, syntax_theme) {
+        if let Some(document) = tree_sitter_document {
+            let styled_spans = document
+                .lines
+                .get(visual_line.logical_line)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+
+            self.draw_text_with_styled_spans(
+                frame,
+                ctx,
+                full_line_content,
+                visual_line.start_col,
+                visual_line.end_col,
+                styled_spans,
+                y,
+            );
+        } else if let (Some(syntax), Some(syntax_theme)) = (syntax_ref, syntax_theme) {
             let mut highlighter = HighlightLines::new(syntax, syntax_theme);
 
             // Highlight the full line to get correct token colors
@@ -327,6 +345,114 @@ impl CodeEditor {
                 ..canvas::Text::default()
             });
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_with_styled_spans(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext<'_>,
+        full_line_content: &str,
+        visual_start_col: usize,
+        visual_end_col: usize,
+        spans: &[StyledSpan],
+        y: f32,
+    ) {
+        let mut current_col = visual_start_col;
+        let mut x_offset = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
+
+        for span in spans {
+            if span.end_col <= visual_start_col || span.start_col >= visual_end_col {
+                continue;
+            }
+
+            if current_col < span.start_col {
+                x_offset += self.draw_text_segment(
+                    frame,
+                    ctx,
+                    full_line_content,
+                    current_col,
+                    span.start_col.min(visual_end_col),
+                    y,
+                    self.style.text_color,
+                );
+            }
+
+            let segment_start = span.start_col.max(visual_start_col);
+            let segment_end = span.end_col.min(visual_end_col);
+
+            if segment_start < segment_end {
+                x_offset += self.draw_text_segment(
+                    frame,
+                    ctx,
+                    full_line_content,
+                    segment_start,
+                    segment_end,
+                    y,
+                    span.color,
+                );
+                current_col = segment_end;
+            }
+        }
+
+        if current_col < visual_end_col {
+            let _ = self.draw_text_segment(
+                frame,
+                ctx,
+                full_line_content,
+                current_col,
+                visual_end_col,
+                y,
+                self.style.text_color,
+            );
+        } else {
+            let _ = x_offset;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_segment(
+        &self,
+        frame: &mut canvas::Frame,
+        ctx: &RenderContext<'_>,
+        full_line_content: &str,
+        start_col: usize,
+        end_col: usize,
+        y: f32,
+        color: Color,
+    ) -> f32 {
+        if start_col >= end_col {
+            return 0.0;
+        }
+
+        let start_byte = full_line_content
+            .char_indices()
+            .nth(start_col)
+            .map_or(full_line_content.len(), |(idx, _)| idx);
+        let end_byte = full_line_content
+            .char_indices()
+            .nth(end_col)
+            .map_or(full_line_content.len(), |(idx, _)| idx);
+        let segment_text = &full_line_content[start_byte..end_byte];
+        let display_text = expand_tabs(segment_text, super::TAB_WIDTH).into_owned();
+        let display_width = measure_text_width(&display_text, ctx.full_char_width, ctx.char_width);
+        let x_offset = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset
+            + measure_text_width(
+                &expand_tabs(&full_line_content[..start_byte], super::TAB_WIDTH),
+                ctx.full_char_width,
+                ctx.char_width,
+            );
+
+        frame.fill_text(canvas::Text {
+            content: display_text,
+            position: Point::new(x_offset, y + 2.0),
+            color,
+            size: ctx.font_size.into(),
+            font: ctx.font,
+            ..canvas::Text::default()
+        });
+
+        display_width
     }
 
     /// Draws search match highlights for all visible matches.
@@ -1393,6 +1519,12 @@ impl canvas::Program<Message> for CodeEditor {
         // invalidation of the text layer on every overlay update.
         let visual_lines_for_content = visual_lines.clone();
         let content_geometry = self.content_cache.draw(renderer, bounds.size(), |frame| {
+            let tree_sitter_document = highlighting::highlight_document(
+                self.syntax.as_str(),
+                &self.buffer.to_string(),
+                &self.style,
+            );
+
             // syntect initialization is relatively expensive; keep it global.
             let syntax_set = SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
             let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
@@ -1449,6 +1581,7 @@ impl canvas::Program<Message> for CodeEditor {
                         &ctx,
                         visual_line,
                         y,
+                        tree_sitter_document.as_ref(),
                         syntax_ref,
                         syntax_set,
                         syntax_theme,

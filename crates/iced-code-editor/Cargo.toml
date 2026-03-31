@@ -18,6 +18,9 @@ lsp-process = ["dep:serde_json"]
 [dependencies]
 iced = { workspace = true, features = ["advanced", "highlighter", "canvas", "markdown"] }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+tree-sitter = "0.25"
+tree-sitter-highlight = "0.25"
+tree-sitter-lilypond = { path = "../tree-sitter-lilypond" }
 web-time = "1"
 iced_font_awesome = "0.4"
 iced_aw = "0.13"
