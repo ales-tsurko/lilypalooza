@@ -77,6 +77,7 @@ struct LilyView {
     dock_groups: HashMap<DockGroupId, DockGroup>,
     next_dock_group_id: DockGroupId,
     folded_panes: Vec<FoldedPaneState>,
+    focused_workspace_pane: Option<WorkspacePaneKind>,
     hovered_workspace_pane: Option<WorkspacePaneKind>,
     pressed_workspace_pane: Option<WorkspacePaneKind>,
     workspace_drag_origin: Option<Point>,
@@ -293,6 +294,11 @@ fn new(
         stored_settings.piano_roll_view.beat_subdivision,
     );
 
+    let initial_focused_workspace_pane = dock_layout
+        .as_ref()
+        .and_then(|layout| first_active_workspace_pane(layout, &dock_groups))
+        .or_else(|| dock_groups.values().next().map(|group| group.active));
+
     let mut app = LilyView {
         theme: iced::Theme::Dark,
         window_width: MIN_WINDOW_WIDTH,
@@ -314,6 +320,7 @@ fn new(
         dock_groups,
         next_dock_group_id,
         folded_panes,
+        focused_workspace_pane: initial_focused_workspace_pane,
         hovered_workspace_pane: None,
         pressed_workspace_pane: None,
         workspace_drag_origin: None,
@@ -533,6 +540,20 @@ impl LilyView {
             .find_map(|(group_id, group)| group.tabs.contains(&pane).then_some(*group_id))
     }
 
+    pub(super) fn focused_workspace_pane(&self) -> Option<WorkspacePaneKind> {
+        self.focused_workspace_pane
+            .filter(|pane| self.group_for_pane(*pane).is_some())
+    }
+
+    pub(super) fn is_workspace_group_focused(&self, group_id: DockGroupId) -> bool {
+        let Some(focused_pane) = self.focused_workspace_pane() else {
+            return false;
+        };
+
+        self.workspace_group(group_id)
+            .is_some_and(|group| group.active == focused_pane)
+    }
+
     pub(super) fn is_pane_folded(&self, pane: WorkspacePaneKind) -> bool {
         self.folded_panes.iter().any(|folded| folded.pane == pane)
     }
@@ -580,6 +601,17 @@ fn build_dock_runtime(
     let workspace_panes = build_workspace_panes(layout.as_ref());
 
     (layout, groups, next_id, workspace_panes)
+}
+
+fn first_active_workspace_pane(
+    node: &DockNode,
+    groups: &HashMap<DockGroupId, DockGroup>,
+) -> Option<WorkspacePaneKind> {
+    match node {
+        DockNode::Group(group_id) => groups.get(group_id).map(|group| group.active),
+        DockNode::Split { first, second, .. } => first_active_workspace_pane(first, groups)
+            .or_else(|| first_active_workspace_pane(second, groups)),
+    }
 }
 
 fn dock_node_from_settings(

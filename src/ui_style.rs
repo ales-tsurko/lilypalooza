@@ -1,5 +1,5 @@
 use iced::widget::{button, container, scrollable, svg, text_editor};
-use iced::{Color, Shadow, Theme, Vector, border};
+use iced::{Color, Radians, Shadow, Theme, Vector, border, gradient};
 
 pub(crate) const FONT_SIZE_HEADING_LG: u32 = 30;
 pub(crate) const FONT_SIZE_BODY_MD: u32 = 16;
@@ -88,11 +88,16 @@ pub(crate) fn tooltip_popup(theme: &Theme) -> container::Style {
 }
 
 pub(crate) fn pane_main_surface(theme: &Theme) -> container::Style {
+    pane_main_surface_focused(theme, false)
+}
+
+pub(crate) fn pane_main_surface_focused(theme: &Theme, _focused: bool) -> container::Style {
     let palette = theme.extended_palette();
 
     container::Style {
         background: Some(palette.background.base.color.into()),
         text_color: Some(palette.background.base.text),
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
         ..container::Style::default()
     }
 }
@@ -123,16 +128,44 @@ pub(crate) fn piano_roll_surface(theme: &Theme) -> container::Style {
     }
 }
 
-pub(crate) fn pane_title_bar_surface(theme: &Theme) -> container::Style {
+pub(crate) fn pane_title_bar_surface_focused(theme: &Theme, focused: bool) -> container::Style {
     let palette = theme.extended_palette();
+    let background = if focused {
+        let tinted = mix_color(
+            palette.background.weak.color,
+            palette.primary.base.color,
+            0.08,
+        );
+
+        gradient::Linear::new(Radians::PI / 2.0)
+            .add_stop(0.0, tinted)
+            .add_stop(0.55, palette.background.weak.color)
+            .add_stop(1.0, palette.background.weak.color)
+            .into()
+    } else {
+        palette.background.weak.color.into()
+    };
 
     container::Style {
-        background: Some(palette.background.weak.color.into()),
-        text_color: Some(palette.background.weak.text),
-        border: border::rounded(0)
-            .width(1)
-            .color(palette.background.strong.color),
+        background: Some(background),
+        text_color: Some(if focused {
+            palette.background.base.text
+        } else {
+            palette.background.weak.text
+        }),
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
         ..container::Style::default()
+    }
+}
+
+fn mix_color(a: Color, b: Color, amount: f32) -> Color {
+    let t = amount.clamp(0.0, 1.0);
+
+    Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
     }
 }
 
@@ -142,9 +175,34 @@ pub(crate) fn workspace_toolbar_surface(theme: &Theme) -> container::Style {
     container::Style {
         background: Some(palette.background.weak.color.into()),
         text_color: Some(palette.background.weak.text),
-        border: border::rounded(0)
-            .width(1)
-            .color(palette.background.strong.color),
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn transport_bar_surface(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.weak.color.into()),
+        text_color: Some(palette.background.weak.text),
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn chrome_separator(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(
+            mix_color(
+                palette.background.weak.color,
+                palette.background.strong.color,
+                0.28,
+            )
+            .into(),
+        ),
         ..container::Style::default()
     }
 }

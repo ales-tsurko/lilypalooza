@@ -37,6 +37,7 @@ pub(super) struct ScorePreviewReady {
 pub(super) enum PaneMessage {
     WorkspaceResized(pane_grid::ResizeEvent),
     WorkspaceTabPressed(WorkspacePaneKind),
+    FocusWorkspacePane(WorkspacePaneKind),
     WorkspaceTabHovered(Option<WorkspacePaneKind>),
     OpenHeaderOverflowMenu(u64),
     CloseHeaderOverflowMenu,

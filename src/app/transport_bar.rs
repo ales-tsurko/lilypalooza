@@ -139,41 +139,56 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     .on_press(Message::File(FileMessage::RequestSoundfont));
 
     container(
-        row![
-            row![play_pause_button, rewind_button]
-                .spacing(ui_style::SPACE_XS)
-                .align_y(alignment::Vertical::Center),
-            text(time_label)
-                .size(ui_style::FONT_SIZE_UI_XS)
-                .font(Font::MONOSPACE),
-            text(musical_clock_label)
-                .size(ui_style::FONT_SIZE_UI_XS)
-                .font(Font::MONOSPACE),
-            seek_slider,
-            row![
-                transport_icon(icons::metronome()),
-                text(tempo_label)
-                    .size(ui_style::FONT_SIZE_UI_XS)
-                    .font(Font::MONOSPACE),
-            ]
-            .spacing(ui_style::SPACE_XS)
-            .align_y(alignment::Vertical::Center),
-            text(meter_label)
-                .size(ui_style::FONT_SIZE_UI_XS)
-                .font(Font::MONOSPACE),
-            soundfont_button,
+        iced::widget::column![
+            container(text(""))
+                .height(Length::Fixed(1.0))
+                .width(Fill)
+                .style(ui_style::chrome_separator),
+            container(
+                row![
+                    row![play_pause_button, rewind_button]
+                        .spacing(ui_style::SPACE_XS)
+                        .align_y(alignment::Vertical::Center),
+                    text(time_label)
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .font(Font::MONOSPACE),
+                    text(musical_clock_label)
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .font(Font::MONOSPACE),
+                    seek_slider,
+                    row![
+                        transport_icon(icons::metronome()),
+                        text(tempo_label)
+                            .size(ui_style::FONT_SIZE_UI_XS)
+                            .font(Font::MONOSPACE),
+                    ]
+                    .spacing(ui_style::SPACE_XS)
+                    .align_y(alignment::Vertical::Center),
+                    text(meter_label)
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .font(Font::MONOSPACE),
+                    soundfont_button,
+                ]
+                .width(Fill)
+                .align_y(alignment::Vertical::Center)
+                .spacing(ui_style::SPACE_SM),
+            )
+            .width(Fill)
+            .height(Fill)
+            .padding([
+                ui_style::PADDING_STATUS_BAR_V,
+                ui_style::PADDING_STATUS_BAR_H,
+            ])
+            .style(ui_style::transport_bar_surface),
+            container(text(""))
+                .height(Length::Fixed(1.0))
+                .width(Fill)
+                .style(ui_style::chrome_separator),
         ]
-        .width(Fill)
-        .align_y(alignment::Vertical::Center)
-        .spacing(ui_style::SPACE_SM),
+        .spacing(0),
     )
     .width(Fill)
     .height(Length::Fixed(HEIGHT))
-    .padding([
-        ui_style::PADDING_STATUS_BAR_V,
-        ui_style::PADDING_STATUS_BAR_H,
-    ])
-    .style(ui_style::workspace_toolbar_surface)
     .into()
 }
 

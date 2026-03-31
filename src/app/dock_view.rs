@@ -52,22 +52,32 @@ fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
     );
 
     container(
-        row![
-            toolbar_file_button(app),
-            toolbar_separator(),
-            pane_toggles,
-            container(text("")).width(Fill),
+        iced::widget::column![
+            container(
+                row![
+                    toolbar_file_button(app),
+                    toolbar_separator(),
+                    pane_toggles,
+                    container(text("")).width(Fill),
+                ]
+                .spacing(ui_style::SPACE_SM)
+                .align_y(alignment::Vertical::Center)
+                .width(Fill),
+            )
+            .height(Fill)
+            .padding([
+                ui_style::PADDING_STATUS_BAR_V,
+                ui_style::PADDING_STATUS_BAR_H,
+            ])
+            .style(ui_style::workspace_toolbar_surface),
+            container(text(""))
+                .height(Length::Fixed(1.0))
+                .width(Fill)
+                .style(ui_style::chrome_separator),
         ]
-        .spacing(ui_style::SPACE_SM)
-        .align_y(alignment::Vertical::Center)
-        .width(Fill),
+        .spacing(0),
     )
     .height(Length::Fixed(TOOLBAR_HEIGHT))
-    .padding([
-        ui_style::PADDING_STATUS_BAR_V,
-        ui_style::PADDING_STATUS_BAR_H,
-    ])
-    .style(ui_style::workspace_toolbar_surface)
     .width(Fill)
     .into()
 }
@@ -168,11 +178,11 @@ fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
                     .get(group_id)
                     .map(|bounds| bounds.width)
                     .unwrap_or(size.width);
-                let body = match app
+                let active_pane = app
                     .workspace_group(*group_id)
                     .map(|group| group.active)
-                    .unwrap_or(WorkspacePaneKind::Score)
-                {
+                    .unwrap_or(WorkspacePaneKind::Score);
+                let body = match active_pane {
                     WorkspacePaneKind::Score => score_view::score_body(app),
                     WorkspacePaneKind::PianoRoll => piano_roll::content(app),
                     WorkspacePaneKind::Editor => app
@@ -183,11 +193,15 @@ fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
                         .view(|action| Message::Logger(super::LoggerMessage::TextAction(action))),
                 };
 
+                let body = workspace_pane_focus_body(active_pane, body);
                 let body = pane_body_with_header_menu(app, *group_id, group_width, body);
+                let is_focused = app.is_workspace_group_focused(*group_id);
 
                 pane_grid::Content::new(body)
-                    .title_bar(group_title_bar(app, *group_id, group_width))
-                    .style(ui_style::pane_main_surface)
+                    .title_bar(group_title_bar(app, *group_id, group_width, is_focused))
+                    .style(move |theme: &Theme| {
+                        ui_style::pane_main_surface_focused(theme, is_focused)
+                    })
             })
             .width(Fill)
             .height(Fill)
@@ -217,13 +231,19 @@ fn group_title_bar<'a>(
     app: &'a LilyView,
     group_id: super::DockGroupId,
     group_width: f32,
+    is_focused: bool,
 ) -> pane_grid::TitleBar<'a, Message> {
     pane_grid::TitleBar::new(group_header(app, group_id, group_width))
-        .padding([
-            ui_style::PADDING_STATUS_BAR_V,
-            ui_style::PADDING_STATUS_BAR_H,
-        ])
-        .style(ui_style::pane_title_bar_surface)
+        .style(move |theme: &Theme| ui_style::pane_title_bar_surface_focused(theme, is_focused))
+}
+
+fn workspace_pane_focus_body<'a>(
+    pane: WorkspacePaneKind,
+    body: Element<'a, Message>,
+) -> Element<'a, Message> {
+    mouse_area(body)
+        .on_press(Message::Pane(PaneMessage::FocusWorkspacePane(pane)))
+        .into()
 }
 
 fn group_header<'a>(
@@ -257,7 +277,19 @@ fn group_header<'a>(
     if shows_menu_button {
         header = header.push(header_overflow_trigger(group_id, is_menu_open));
     }
-    header.into()
+    iced::widget::column![
+        mouse_area(container(header).padding([
+            ui_style::PADDING_STATUS_BAR_V,
+            ui_style::PADDING_STATUS_BAR_H,
+        ]),)
+        .on_press(Message::Pane(PaneMessage::FocusWorkspacePane(active_pane))),
+        container(text(""))
+            .height(Length::Fixed(1.0))
+            .width(Fill)
+            .style(ui_style::chrome_separator),
+    ]
+    .spacing(0)
+    .into()
 }
 
 fn pane_body_with_header_menu<'a>(

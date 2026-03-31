@@ -39,7 +39,47 @@ pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
 }
 
 impl LilyView {
+    fn set_focused_workspace_pane(&mut self, pane: WorkspacePaneKind) {
+        if self.group_for_pane(pane).is_some() {
+            self.focused_workspace_pane = Some(pane);
+        }
+    }
+
+    fn normalize_focused_workspace_pane(&mut self) {
+        if self
+            .focused_workspace_pane
+            .is_some_and(|pane| self.group_for_pane(pane).is_some())
+        {
+            return;
+        }
+
+        self.focused_workspace_pane = self
+            .dock_layout
+            .as_ref()
+            .and_then(|layout| first_active_workspace_pane(layout, &self.dock_groups))
+            .or_else(|| self.dock_groups.values().next().map(|group| group.active));
+    }
+
     fn handle_viewer_message(&mut self, message: ViewerMessage) -> Task<Message> {
+        match message {
+            ViewerMessage::ScrollUp
+            | ViewerMessage::ScrollDown
+            | ViewerMessage::PrevPage
+            | ViewerMessage::NextPage
+            | ViewerMessage::ZoomIn
+            | ViewerMessage::ZoomOut
+            | ViewerMessage::SmoothZoom(_)
+            | ViewerMessage::DecreasePageBrightness
+            | ViewerMessage::IncreasePageBrightness
+            | ViewerMessage::ResetZoom
+            | ViewerMessage::ResetPageBrightness => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Score);
+            }
+            ViewerMessage::ScrollPositionChanged { .. }
+            | ViewerMessage::ViewportCursorMoved(_)
+            | ViewerMessage::ViewportCursorLeft => {}
+        }
+
         match message {
             ViewerMessage::ScrollUp => {
                 return iced::widget::operation::scroll_by(
@@ -200,6 +240,31 @@ impl LilyView {
         let mut task = Task::none();
 
         match message {
+            PianoRollMessage::ZoomIn
+            | PianoRollMessage::ZoomOut
+            | PianoRollMessage::SmoothZoom(_)
+            | PianoRollMessage::ResetZoom
+            | PianoRollMessage::SetCursorTicks(_)
+            | PianoRollMessage::SetRewindFlagTicks(_)
+            | PianoRollMessage::BeatSubdivisionSliderChanged(_)
+            | PianoRollMessage::BeatSubdivisionInputChanged(_)
+            | PianoRollMessage::FilePrevious
+            | PianoRollMessage::FileNext
+            | PianoRollMessage::TrackPanelToggle
+            | PianoRollMessage::TrackPanelResizedBy(_)
+            | PianoRollMessage::TrackMuteToggled(_)
+            | PianoRollMessage::TrackSoloToggled(_)
+            | PianoRollMessage::TransportSeekNormalized(_)
+            | PianoRollMessage::TransportPlayPause
+            | PianoRollMessage::TransportRewind => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::PianoRoll);
+            }
+            PianoRollMessage::ViewportCursorMoved(_)
+            | PianoRollMessage::ViewportCursorLeft
+            | PianoRollMessage::RollScrolled { .. } => {}
+        }
+
+        match message {
             PianoRollMessage::ViewportCursorMoved(position) => {
                 self.piano_roll_viewport_cursor = Some(position);
             }
@@ -329,11 +394,23 @@ impl LilyView {
 
     fn handle_editor_message(&mut self, message: EditorMessage) -> Task<Message> {
         match message {
-            EditorMessage::Widget(message) => self
-                .editor
-                .update(&message)
-                .map(|message| Message::Editor(EditorMessage::Widget(message))),
+            EditorMessage::Widget(message) => {
+                if matches!(
+                    message,
+                    iced_code_editor::Message::CanvasFocusGained
+                        | iced_code_editor::Message::MouseClick(_)
+                        | iced_code_editor::Message::MouseDrag(_)
+                        | iced_code_editor::Message::JumpClick(_)
+                ) {
+                    self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                }
+
+                self.editor
+                    .update(&message)
+                    .map(|message| Message::Editor(EditorMessage::Widget(message)))
+            }
             EditorMessage::SaveRequested => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 if !self.editor.has_document() {
                     return Task::none();
                 }
@@ -360,6 +437,7 @@ impl LilyView {
                 Task::none()
             }
             EditorMessage::ReloadRequested => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 if !self.editor.has_document() {
                     return Task::none();
                 }
@@ -388,6 +466,9 @@ impl LilyView {
                 Task::none()
             }
             EditorMessage::ToggleThemeMenu(group_id) => {
+                if let Some(group) = self.workspace_group(group_id) {
+                    self.set_focused_workspace_pane(group.active);
+                }
                 self.open_header_overflow_menu = None;
                 self.open_editor_theme_menu = if self.open_editor_theme_menu == Some(group_id) {
                     None
@@ -402,31 +483,37 @@ impl LilyView {
                 Task::none()
             }
             EditorMessage::SetThemeHueOffsetDegrees(value) => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.set_hue_offset_degrees(value);
                 self.persist_settings();
                 Task::none()
             }
             EditorMessage::SetThemeSaturation(value) => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.set_saturation(value);
                 self.persist_settings();
                 Task::none()
             }
             EditorMessage::SetThemeWarmth(value) => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.set_warmth(value);
                 self.persist_settings();
                 Task::none()
             }
             EditorMessage::SetThemeBrightness(value) => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.set_brightness(value);
                 self.persist_settings();
                 Task::none()
             }
             EditorMessage::SetThemeTextDim(value) => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.set_text_dim(value);
                 self.persist_settings();
                 Task::none()
             }
             EditorMessage::SetThemeCommentDim(value) => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.set_comment_dim(value);
                 self.persist_settings();
                 Task::none()
@@ -480,6 +567,7 @@ impl LilyView {
             }
             PaneMessage::WorkspaceTabPressed(kind) => {
                 self.set_active_workspace_pane(kind);
+                self.set_focused_workspace_pane(kind);
                 self.open_header_overflow_menu = None;
                 self.open_editor_theme_menu = None;
                 self.pressed_workspace_pane = Some(kind);
@@ -488,10 +576,16 @@ impl LilyView {
                 self.persist_settings();
                 return self.restore_runtime_view_state(kind);
             }
+            PaneMessage::FocusWorkspacePane(kind) => {
+                self.set_focused_workspace_pane(kind);
+            }
             PaneMessage::WorkspaceTabHovered(kind) => {
                 self.hovered_workspace_pane = kind;
             }
             PaneMessage::OpenHeaderOverflowMenu(group_id) => {
+                if let Some(group) = self.workspace_group(group_id) {
+                    self.set_focused_workspace_pane(group.active);
+                }
                 self.open_editor_theme_menu = None;
                 self.open_header_overflow_menu = Some(group_id);
             }
@@ -507,6 +601,11 @@ impl LilyView {
                     self.fold_workspace_pane(pane)
                 };
                 if changed {
+                    if self.group_for_pane(pane).is_some() {
+                        self.set_focused_workspace_pane(pane);
+                    } else {
+                        self.normalize_focused_workspace_pane();
+                    }
                     self.persist_settings();
                     return self.restore_runtime_view_state(pane);
                 }
@@ -615,6 +714,7 @@ impl LilyView {
     fn handle_logger_message(&mut self, message: LoggerMessage) -> Task<Message> {
         match message {
             LoggerMessage::RequestClear => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Logger);
                 if !self.logger.is_empty() {
                     self.show_prompt(
                         ErrorPrompt::new(
@@ -629,6 +729,7 @@ impl LilyView {
                 Task::none()
             }
             LoggerMessage::TextAction(action) => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Logger);
                 self.logger.handle_editor_action(action);
                 Task::none()
             }
@@ -1166,6 +1267,7 @@ impl LilyView {
 
         self.clear_workspace_drag_state();
         self.rebuild_workspace_panes();
+        self.normalize_focused_workspace_pane();
         true
     }
 
@@ -1220,6 +1322,7 @@ impl LilyView {
         }
 
         self.rebuild_workspace_panes();
+        self.set_focused_workspace_pane(pane);
         true
     }
 
@@ -1403,6 +1506,7 @@ impl LilyView {
         }
 
         self.rebuild_workspace_panes();
+        self.set_focused_workspace_pane(dragged);
     }
 
     fn clear_workspace_drag_state(&mut self) {
