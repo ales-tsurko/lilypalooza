@@ -1,4 +1,5 @@
 use iced::Color;
+use palette::{FromColor, LinSrgb, OklabHue, Oklch, Srgb};
 
 /// The appearance of a code editor.
 #[derive(Debug, Clone, Copy)]
@@ -7,6 +8,8 @@ pub struct Style {
     pub background: Color,
     /// Text content color
     pub text_color: Color,
+    /// LilyPond command / escaped identifier color
+    pub command_color: Color,
     /// Line numbers gutter background color
     pub gutter_background: Color,
     /// Border color for the gutter
@@ -25,6 +28,8 @@ pub struct Style {
     pub comment_color: Color,
     /// String syntax color
     pub string_color: Color,
+    /// String delimiter color
+    pub string_delimiter_color: Color,
     /// Escape sequence syntax color
     pub escape_color: Color,
     /// Keyword syntax color
@@ -43,6 +48,8 @@ pub struct Style {
     pub constant_color: Color,
     /// Punctuation syntax color
     pub punctuation_color: Color,
+    /// Bracket syntax color
+    pub bracket_color: Color,
     /// Invalid/error syntax color
     pub invalid_color: Color,
 }
@@ -116,38 +123,181 @@ impl Catalog for iced::Theme {
 pub fn from_iced_theme(theme: &iced::Theme) -> Style {
     let palette = theme.extended_palette();
     let background = palette.background.base.color;
-    let text_color = palette.background.base.text;
+    let base_text_color = palette.background.base.text;
     let gutter_background = palette.background.weakest.color;
     let gutter_border = palette.background.strong.color;
-    let active_line_number_color = blend_colors(text_color, gutter_background, 0.45);
-    let line_number_color = blend_colors(text_color, gutter_background, 0.88);
+    let bg_oklch = to_oklch(background);
+    let fg_oklch = to_oklch(base_text_color);
+    let primary_oklch = to_oklch(palette.primary.strong.color);
+    let secondary_oklch = to_oklch(palette.secondary.strong.color);
+    let success_oklch = to_oklch(palette.success.strong.color);
+    let warning_oklch = to_oklch(palette.warning.strong.color);
+    let danger_oklch = to_oklch(palette.danger.strong.color);
+    let is_dark = palette.is_dark;
+
+    let text_color = from_oklch(
+        Oklch::new(
+            (fg_oklch.l - if is_dark { 0.06 } else { 0.03 }).clamp(0.0, 1.0),
+            (fg_oklch.chroma * 0.55).clamp(0.0, 0.03),
+            usable_hue(fg_oklch, 260.0),
+        ),
+        1.0,
+    );
+    let active_line_number_color = blend_colors(text_color, gutter_background, 0.36);
+    let line_number_color = blend_colors(text_color, gutter_background, 0.9);
     let scrollbar_background = palette.background.weak.color;
     let scroller_color = palette.background.strong.color;
     let current_line_highlight = gutter_background;
-    let comment_color = blend_colors(text_color, background, 0.62);
-    let string_color = palette.success.base.color;
-    let escape_color = palette.success.strong.color;
-    let keyword_color = palette.primary.strong.color;
-    let number_color = palette.warning.strong.color;
-    let function_color = palette.secondary.strong.color;
-    let variable_color = blend_colors(text_color, palette.secondary.base.color, 0.42);
-    let operator_color = palette.primary.strong.color;
-    let processing_color = blend_colors(
-        palette.primary.strong.color,
-        palette.secondary.strong.color,
-        0.35,
+
+    let comment_color = derive_neutral(
+        bg_oklch,
+        fg_oklch,
+        if is_dark { 0.42 } else { 0.34 },
+        0.18,
+        1.0,
     );
-    let constant_color = blend_colors(
-        palette.warning.strong.color,
-        palette.secondary.base.color,
-        0.25,
+    let punctuation_color = derive_neutral(
+        bg_oklch,
+        fg_oklch,
+        if is_dark { 0.60 } else { 0.5 },
+        0.12,
+        1.0,
     );
-    let punctuation_color = blend_colors(text_color, background, 0.18);
-    let invalid_color = palette.danger.base.color;
+    let bracket_color = derive_accent(
+        primary_oklch,
+        fg_oklch,
+        285.0,
+        if is_dark { 0.72 } else { 0.46 },
+        0.55,
+        0.04,
+        0.12,
+        1.0,
+    );
+    let variable_color = derive_accent(
+        secondary_oklch,
+        fg_oklch,
+        220.0,
+        if is_dark { 0.84 } else { 0.28 },
+        0.45,
+        0.04,
+        0.1,
+        1.0,
+    );
+    let command_color = derive_accent(
+        secondary_oklch,
+        fg_oklch,
+        240.0,
+        if is_dark { 0.8 } else { 0.42 },
+        1.0,
+        0.08,
+        0.2,
+        1.0,
+    );
+    let keyword_color = derive_accent(
+        primary_oklch,
+        fg_oklch,
+        285.0,
+        if is_dark { 0.74 } else { 0.48 },
+        1.05,
+        0.1,
+        0.22,
+        1.0,
+    );
+    let operator_color = derive_accent(
+        primary_oklch,
+        fg_oklch,
+        285.0,
+        if is_dark { 0.76 } else { 0.46 },
+        0.75,
+        0.08,
+        0.18,
+        1.0,
+    );
+    let function_color = derive_accent(
+        secondary_oklch,
+        fg_oklch,
+        235.0,
+        if is_dark { 0.78 } else { 0.46 },
+        1.0,
+        0.1,
+        0.22,
+        1.0,
+    );
+    let processing_color = derive_accent_from_hue(
+        mix_hues(
+            usable_hue(primary_oklch, 285.0),
+            usable_hue(secondary_oklch, 235.0),
+            0.35,
+        ),
+        if is_dark { 0.82 } else { 0.48 },
+        (((primary_oklch.chroma + secondary_oklch.chroma) * 0.5) * 1.1).clamp(0.11, 0.24),
+        1.0,
+    );
+    let string_color = derive_accent_from_hue(
+        mix_hues(
+            usable_hue(success_oklch, 145.0),
+            usable_hue(warning_oklch, 85.0),
+            0.3,
+        ),
+        if is_dark { 0.84 } else { 0.42 },
+        (((success_oklch.chroma + warning_oklch.chroma) * 0.5) * 1.05).clamp(0.1, 0.22),
+        1.0,
+    );
+    let string_delimiter_color = derive_accent(
+        success_oklch,
+        fg_oklch,
+        145.0,
+        if is_dark { 0.72 } else { 0.36 },
+        0.8,
+        0.06,
+        0.16,
+        1.0,
+    );
+    let escape_color = derive_accent(
+        success_oklch,
+        fg_oklch,
+        145.0,
+        if is_dark { 0.9 } else { 0.34 },
+        1.1,
+        0.1,
+        0.22,
+        1.0,
+    );
+    let number_color = derive_accent(
+        warning_oklch,
+        fg_oklch,
+        85.0,
+        if is_dark { 0.86 } else { 0.46 },
+        1.1,
+        0.11,
+        0.24,
+        1.0,
+    );
+    let constant_color = derive_accent_from_hue(
+        mix_hues(
+            usable_hue(warning_oklch, 85.0),
+            usable_hue(secondary_oklch, 235.0),
+            0.22,
+        ),
+        if is_dark { 0.8 } else { 0.42 },
+        (((warning_oklch.chroma + secondary_oklch.chroma) * 0.5) * 1.0).clamp(0.1, 0.2),
+        1.0,
+    );
+    let invalid_color = derive_accent(
+        danger_oklch,
+        fg_oklch,
+        25.0,
+        if is_dark { 0.74 } else { 0.52 },
+        1.1,
+        0.12,
+        0.26,
+        1.0,
+    );
 
     Style {
         background,
         text_color,
+        command_color,
         gutter_background,
         gutter_border,
         line_number_color,
@@ -157,6 +307,7 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         current_line_highlight,
         comment_color,
         string_color,
+        string_delimiter_color,
         escape_color,
         keyword_color,
         number_color,
@@ -166,8 +317,93 @@ pub fn from_iced_theme(theme: &iced::Theme) -> Style {
         processing_color,
         constant_color,
         punctuation_color,
+        bracket_color,
         invalid_color,
     }
+}
+
+fn to_oklch(color: Color) -> Oklch {
+    let srgb = Srgb::new(color.r, color.g, color.b);
+    Oklch::from_color(srgb.into_linear())
+}
+
+fn from_oklch(color: Oklch, alpha: f32) -> Color {
+    let rgb: Srgb<f32> = Srgb::from_linear(LinSrgb::from_color(color));
+    let (r, g, b) = rgb.into_components();
+
+    Color {
+        r: r.clamp(0.0, 1.0),
+        g: g.clamp(0.0, 1.0),
+        b: b.clamp(0.0, 1.0),
+        a: alpha.clamp(0.0, 1.0),
+    }
+}
+
+fn derive_neutral(
+    background: Oklch,
+    foreground: Oklch,
+    lightness_mix: f32,
+    chroma_scale: f32,
+    alpha: f32,
+) -> Color {
+    let lightness = mix_scalar(background.l, foreground.l, lightness_mix);
+    let chroma = (foreground.chroma * chroma_scale).clamp(0.0, 0.035);
+    let hue = usable_hue(foreground, 260.0);
+
+    from_oklch(Oklch::new(lightness.clamp(0.0, 1.0), chroma, hue), alpha)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_accent(
+    seed: Oklch,
+    fallback: Oklch,
+    fallback_hue_degrees: f32,
+    lightness: f32,
+    chroma_scale: f32,
+    chroma_min: f32,
+    chroma_max: f32,
+    alpha: f32,
+) -> Color {
+    let hue = if seed.chroma > 0.02 {
+        seed.hue
+    } else {
+        usable_hue(fallback, fallback_hue_degrees)
+    };
+    let chroma = (seed.chroma * chroma_scale).clamp(chroma_min, chroma_max);
+
+    from_oklch(Oklch::new(lightness.clamp(0.0, 1.0), chroma, hue), alpha)
+}
+
+fn derive_accent_from_hue(hue: OklabHue<f32>, lightness: f32, chroma: f32, alpha: f32) -> Color {
+    from_oklch(
+        Oklch::new(lightness.clamp(0.0, 1.0), chroma.clamp(0.0, 0.22), hue),
+        alpha,
+    )
+}
+
+fn usable_hue(color: Oklch, fallback_hue_degrees: f32) -> OklabHue<f32> {
+    if color.chroma > 0.02 {
+        color.hue
+    } else {
+        OklabHue::from_degrees(fallback_hue_degrees)
+    }
+}
+
+fn mix_hues(start: OklabHue<f32>, end: OklabHue<f32>, factor: f32) -> OklabHue<f32> {
+    let start = start.into_degrees();
+    let mut delta = end.into_degrees() - start;
+
+    if delta > 180.0 {
+        delta -= 360.0;
+    } else if delta < -180.0 {
+        delta += 360.0;
+    }
+
+    OklabHue::from_degrees(start + delta * factor.clamp(0.0, 1.0))
+}
+
+fn mix_scalar(start: f32, end: f32, factor: f32) -> f32 {
+    start + (end - start) * factor.clamp(0.0, 1.0)
 }
 
 /// Blends two colors together by a given factor (0.0 = first color, 1.0 = second color).
