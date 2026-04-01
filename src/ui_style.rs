@@ -1,5 +1,5 @@
 use iced::widget::{button, container, scrollable, svg, text_editor};
-use iced::{Color, Radians, Shadow, Theme, Vector, border, gradient};
+use iced::{Color, Shadow, Theme, Vector, border};
 
 pub(crate) const FONT_SIZE_HEADING_LG: u32 = 30;
 pub(crate) const FONT_SIZE_BODY_MD: u32 = 15;
@@ -142,23 +142,12 @@ pub(crate) fn piano_roll_surface(theme: &Theme) -> container::Style {
 pub(crate) fn pane_title_bar_surface_focused(theme: &Theme, focused: bool) -> container::Style {
     let palette = theme.extended_palette();
     let background = if focused {
-        let tinted = mix_color(
+        mix_color(
             palette.background.weak.color,
             palette.primary.base.color,
-            0.18,
-        );
-        let mid_tint = mix_color(
-            palette.background.weak.color,
-            palette.primary.base.color,
-            0.09,
-        );
-
-        gradient::Linear::new(Radians::PI / 2.0)
-            .add_stop(0.0, tinted)
-            .add_stop(0.42, mid_tint)
-            .add_stop(0.78, palette.background.weak.color)
-            .add_stop(1.0, palette.background.weak.color)
-            .into()
+            0.12,
+        )
+        .into()
     } else {
         palette.background.weak.color.into()
     };
