@@ -50,11 +50,13 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
             .spacing(0)
             .into();
 
-    if app.open_project_menu {
-        stack([content, project_menu_overlay(app)]).into()
+    let overlay: Element<'_, Message> = if app.open_project_menu {
+        project_menu_overlay(app)
     } else {
-        content
-    }
+        container(text("")).width(Fill).height(Fill).into()
+    };
+
+    stack([content, overlay]).into()
 }
 
 fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {

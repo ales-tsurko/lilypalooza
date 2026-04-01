@@ -24,19 +24,19 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     .height(Fill)
     .into();
 
-    if let Some(prompt) = &app.error_prompt {
-        let overlay = match prompt.buttons() {
+    let overlay: Element<'_, Message> = if let Some(prompt) = &app.error_prompt {
+        match prompt.buttons() {
             PromptButtons::Ok => prompt.overlay_ok(Message::Prompt(PromptMessage::Acknowledge)),
             PromptButtons::OkCancel => prompt.overlay_ok_cancel(
                 Message::Prompt(PromptMessage::Acknowledge),
                 Message::Prompt(PromptMessage::Cancel),
             ),
-        };
-
-        stack([base, overlay]).into()
+        }
     } else {
-        base
-    }
+        container(text("")).width(Fill).height(Fill).into()
+    };
+
+    stack([base, overlay]).into()
 }
 
 fn main_content(app: &LilyView) -> Element<'_, Message> {
