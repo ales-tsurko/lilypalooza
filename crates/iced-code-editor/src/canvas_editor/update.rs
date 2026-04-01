@@ -46,6 +46,30 @@ impl CodeEditor {
         self.overlay_cache.clear();
     }
 
+    pub(crate) fn max_horizontal_scroll_offset(&self) -> f32 {
+        if self.wrap_enabled {
+            return 0.0;
+        }
+
+        let code_viewport_width = (self.viewport_width - self.gutter_width()).max(0.0);
+        (self.max_content_width() - self.gutter_width() - code_viewport_width).max(0.0)
+    }
+
+    pub(crate) fn clamp_horizontal_scroll_offset(&mut self) -> bool {
+        let clamped = self
+            .horizontal_scroll_offset
+            .clamp(0.0, self.max_horizontal_scroll_offset());
+
+        if (self.horizontal_scroll_offset - clamped).abs() > 0.1 {
+            self.horizontal_scroll_offset = clamped;
+            self.content_cache.clear();
+            self.overlay_cache.clear();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Starts command grouping with the given label if not already grouping.
     ///
     /// This is used for smart undo functionality, allowing multiple related
@@ -1081,6 +1105,17 @@ impl CodeEditor {
         self.viewport_scroll = new_scroll;
         self.viewport_height = new_height;
         self.viewport_width = new_width;
+
+        if self.clamp_horizontal_scroll_offset() {
+            return iced::widget::operation::scroll_to(
+                self.horizontal_scrollable_id.clone(),
+                iced::widget::scrollable::AbsoluteOffset {
+                    x: self.horizontal_scroll_offset,
+                    y: 0.0,
+                },
+            );
+        }
+
         Task::none()
     }
 
@@ -1100,7 +1135,10 @@ impl CodeEditor {
         &mut self,
         viewport: iced::widget::scrollable::Viewport,
     ) -> Task<Message> {
-        let new_x = viewport.absolute_offset().x;
+        let new_x = viewport
+            .absolute_offset()
+            .x
+            .clamp(0.0, self.max_horizontal_scroll_offset());
         if (self.horizontal_scroll_offset - new_x).abs() > 0.1 {
             self.horizontal_scroll_offset = new_x;
             self.content_cache.clear();
@@ -1115,10 +1153,8 @@ impl CodeEditor {
             return Task::none();
         }
 
-        let code_viewport_width = (self.viewport_width - self.gutter_width()).max(0.0);
-        let max_offset =
-            (self.max_content_width() - self.gutter_width() - code_viewport_width).max(0.0);
-        let new_x = (self.horizontal_scroll_offset + delta_x).clamp(0.0, max_offset);
+        let new_x = (self.horizontal_scroll_offset + delta_x)
+            .clamp(0.0, self.max_horizontal_scroll_offset());
 
         if (self.horizontal_scroll_offset - new_x).abs() > 0.1 {
             self.horizontal_scroll_offset = new_x;
@@ -1250,6 +1286,29 @@ mod tests {
         assert!(
             (editor.horizontal_scroll_offset - 0.0).abs() < f32::EPSILON,
             "Horizontal scroll offset should be reset when wrap is re-enabled"
+        );
+    }
+
+    #[test]
+    fn test_resize_clamps_horizontal_scroll_offset() {
+        let mut editor = CodeEditor::new(
+            "this is a very long line that definitely needs horizontal scrolling",
+            "rs",
+        );
+        editor.wrap_enabled = false;
+        editor.viewport_width = 120.0;
+        editor.horizontal_scroll_offset = 180.0;
+
+        editor.viewport_width = 4000.0;
+        let changed = editor.clamp_horizontal_scroll_offset();
+
+        assert!(
+            changed,
+            "Resize should clamp an out-of-range horizontal scroll"
+        );
+        assert!(
+            (editor.horizontal_scroll_offset - 0.0).abs() < f32::EPSILON,
+            "Horizontal scroll offset should reset when the content fits after resize"
         );
     }
 

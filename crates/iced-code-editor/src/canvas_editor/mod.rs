@@ -4,7 +4,7 @@
 //! and input directly, bypassing Iced's higher-level widgets for optimal speed.
 
 use iced::advanced::text::{Alignment, Paragraph, Renderer as TextRenderer, Text};
-use iced::widget::operation::{RelativeOffset, snap_to};
+use iced::widget::operation::{RelativeOffset, scroll_to, snap_to};
 use iced::widget::{Id, canvas};
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering as CmpOrdering;
@@ -528,6 +528,7 @@ impl CodeEditor {
         self.content_cache.clear();
         self.overlay_cache.clear();
         *self.max_content_width_cache.borrow_mut() = None;
+        let _ = self.clamp_horizontal_scroll_offset();
     }
 
     /// Measures the width of a single character string using the current font settings.
@@ -607,6 +608,21 @@ impl CodeEditor {
     /// Returns the current viewport width in pixels.
     pub fn viewport_width(&self) -> f32 {
         self.viewport_width
+    }
+
+    /// Sets the viewport size tracked by the editor.
+    ///
+    /// This should be updated whenever the host layout changes size or when an
+    /// editor instance is reused for a new document inside the same pane.
+    pub fn set_viewport_size(&mut self, width: f32, height: f32) {
+        if (self.viewport_width - width).abs() > 1.0 || (self.viewport_height - height).abs() > 1.0
+        {
+            self.viewport_width = width;
+            self.viewport_height = height;
+            self.content_cache.clear();
+            self.overlay_cache.clear();
+            let _ = self.clamp_horizontal_scroll_offset();
+        }
     }
 
     /// Returns the current vertical scroll offset in pixels.
@@ -973,8 +989,20 @@ impl CodeEditor {
         *self.visual_lines_cache.borrow_mut() = None;
         self.enqueue_lsp_change();
 
-        // Scroll to top to force a redraw
-        snap_to(self.scrollable_id.clone(), RelativeOffset::START)
+        iced::Task::batch([
+            snap_to(self.scrollable_id.clone(), RelativeOffset::START),
+            scroll_to(
+                self.horizontal_scrollable_id.clone(),
+                iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+            ),
+        ])
+    }
+
+    /// Resets the editor with new content and syntax while preserving the
+    /// widget instance, ids, focus state, and measured viewport.
+    pub fn reset_document(&mut self, content: &str, syntax: &str) -> iced::Task<Message> {
+        self.syntax = syntax.to_string();
+        self.reset(content)
     }
 
     /// Resets the cursor blink animation.

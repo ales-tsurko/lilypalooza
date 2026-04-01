@@ -47,34 +47,43 @@ impl EditorState {
         self.widget.update(message)
     }
 
-    pub(super) fn load_file(&mut self, path: &Path) -> Result<(), String> {
+    pub(super) fn load_file(
+        &mut self,
+        path: &Path,
+    ) -> Result<iced::Task<EditorWidgetMessage>, String> {
         let text = fs::read_to_string(path)
             .map_err(|error| format!("Failed to read editor file {}: {error}", path.display()))?;
 
         self.load_document(&text, Some(path.to_path_buf()), false)
     }
 
-    pub(super) fn new_document(&mut self) {
-        let _ = self.load_document("", None, false);
+    pub(super) fn new_document(&mut self) -> iced::Task<EditorWidgetMessage> {
+        self.load_document("", None, false)
+            .unwrap_or_else(|_| iced::Task::none())
     }
 
-    pub(super) fn save_to_disk(&mut self) -> Result<PathBuf, String> {
+    pub(super) fn save_to_disk(
+        &mut self,
+    ) -> Result<(PathBuf, iced::Task<EditorWidgetMessage>), String> {
         let Some(path) = self.path.clone() else {
             return Err("No editor file is currently loaded".to_string());
         };
 
-        self.save_to_path(&path)?;
+        let task = self.save_to_path(&path)?;
 
-        Ok(path)
+        Ok((path, task))
     }
 
-    pub(super) fn save_to_path(&mut self, path: &Path) -> Result<(), String> {
+    pub(super) fn save_to_path(
+        &mut self,
+        path: &Path,
+    ) -> Result<iced::Task<EditorWidgetMessage>, String> {
         fs::write(path, self.widget.content())
             .map_err(|error| format!("Failed to save editor file {}: {error}", path.display()))?;
         let content = self.widget.content().to_string();
-        self.load_document(&content, Some(path.to_path_buf()), false)?;
+        let task = self.load_document(&content, Some(path.to_path_buf()), false)?;
         self.widget.mark_saved();
-        Ok(())
+        Ok(task)
     }
 
     pub(super) fn has_document(&self) -> bool {
@@ -219,23 +228,23 @@ impl EditorState {
         content: &str,
         path: Option<PathBuf>,
         modified: bool,
-    ) -> Result<(), String> {
+    ) -> Result<iced::Task<EditorWidgetMessage>, String> {
         let syntax = path.as_deref().map(syntax_for_path).unwrap_or("lilypond");
-
-        self.widget = build_editor(
-            content,
-            syntax,
-            &self.app_theme,
-            self.view_settings,
-            self.theme_settings,
-        );
+        let task = self.widget.reset_document(content, syntax);
+        self.widget
+            .set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
+                &self.app_theme,
+                to_editor_theme_tuning(self.theme_settings),
+            ));
+        self.widget
+            .set_font_size(self.view_settings.font_size, true);
         if !modified {
             self.widget.mark_saved();
         }
         self.document_open = true;
         self.path = path;
 
-        Ok(())
+        Ok(task)
     }
 }
 

@@ -607,8 +607,9 @@ impl LilyView {
                 self.open_header_overflow_menu = None;
                 self.open_editor_menu_section = None;
                 self.open_editor_file_menu_section = None;
-                self.editor.new_document();
-                Task::none()
+                self.editor
+                    .new_document()
+                    .map(|message| Message::Editor(EditorMessage::Widget(message)))
             }
             EditorMessage::OpenRequested => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
@@ -627,16 +628,14 @@ impl LilyView {
             }
             EditorMessage::OpenPicked(Some(path)) => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
-                self.open_editor_file_in_editor(&path);
-                Task::none()
+                self.open_editor_file_in_editor(&path)
             }
             EditorMessage::OpenRecent(path) => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.open_header_overflow_menu = None;
                 self.open_editor_menu_section = None;
                 self.open_editor_file_menu_section = None;
-                self.open_editor_file_in_editor(&path);
-                Task::none()
+                self.open_editor_file_in_editor(&path)
             }
             EditorMessage::OpenPicked(None) => Task::none(),
             EditorMessage::SaveRequested => {
@@ -650,13 +649,14 @@ impl LilyView {
                 }
 
                 match self.editor.save_to_disk() {
-                    Ok(path) => {
+                    Ok((path, task)) => {
                         self.register_editor_recent_file(&path);
                         self.logger.push(format!("Saved {}", path.display()));
                         if self.editor_targets_main_score() {
                             self.queue_compile("Editor saved, recompiling");
                             self.start_compile_if_queued();
                         }
+                        return task.map(|message| Message::Editor(EditorMessage::Widget(message)));
                     }
                     Err(error) => {
                         self.show_prompt(
@@ -696,13 +696,14 @@ impl LilyView {
             EditorMessage::SaveAsPicked(Some(path)) => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 match self.editor.save_to_path(&path) {
-                    Ok(()) => {
+                    Ok(task) => {
                         self.register_editor_recent_file(&path);
                         self.logger.push(format!("Saved {}", path.display()));
                         if self.editor_targets_main_score() {
                             self.queue_compile("Editor saved, recompiling");
                             self.start_compile_if_queued();
                         }
+                        return task.map(|message| Message::Editor(EditorMessage::Widget(message)));
                     }
                     Err(error) => {
                         self.show_prompt(
@@ -947,23 +948,21 @@ impl LilyView {
                 },
                 |picked| Message::File(FileMessage::Picked(picked)),
             ),
-            FileMessage::Picked(Some(path)) => {
-                match selected_score_from_path(path) {
-                    Ok(selected_score) => self.activate_score(selected_score),
-                    Err(error) => {
-                        self.show_prompt(
-                            ErrorPrompt::new(
-                                "Open File Error",
-                                error,
-                                ErrorFatality::Recoverable,
-                                PromptButtons::Ok,
-                            ),
-                            None,
-                        );
-                    }
+            FileMessage::Picked(Some(path)) => match selected_score_from_path(path) {
+                Ok(selected_score) => self.activate_score(selected_score),
+                Err(error) => {
+                    self.show_prompt(
+                        ErrorPrompt::new(
+                            "Open File Error",
+                            error,
+                            ErrorFatality::Recoverable,
+                            PromptButtons::Ok,
+                        ),
+                        None,
+                    );
+                    Task::none()
                 }
-                Task::none()
-            }
+            },
             FileMessage::Picked(None) => Task::none(),
             FileMessage::RequestSoundfont => Task::perform(
                 async {
@@ -1074,21 +1073,26 @@ impl LilyView {
         Task::none()
     }
 
-    fn activate_score(&mut self, selected_score: SelectedScore) {
+    fn activate_score(&mut self, selected_score: SelectedScore) -> Task<Message> {
         let watched_path = selected_score.path.clone();
-        if let Err(error) = self.editor.load_file(&watched_path) {
-            self.show_prompt(
-                ErrorPrompt::new(
-                    "Editor Load Error",
-                    error,
-                    ErrorFatality::Recoverable,
-                    PromptButtons::Ok,
-                ),
-                None,
-            );
-        } else {
-            self.register_editor_recent_file(&watched_path);
-        }
+        let editor_task = match self.editor.load_file(&watched_path) {
+            Ok(task) => {
+                self.register_editor_recent_file(&watched_path);
+                task.map(|message| Message::Editor(EditorMessage::Widget(message)))
+            }
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "Editor Load Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                Task::none()
+            }
+        };
         self.logger.push(format!(
             "Opened score file {}",
             selected_score.path.display()
@@ -1102,6 +1106,7 @@ impl LilyView {
         self.restart_score_watcher(&watched_path);
         self.queue_compile("Score loaded, compiling SVG and MIDI");
         self.start_compile_if_queued();
+        editor_task
     }
 
     fn restart_score_watcher(&mut self, path: &Path) {
@@ -1895,12 +1900,13 @@ impl LilyView {
                 .map(|score| score.path.as_path())
     }
 
-    fn open_editor_file_in_editor(&mut self, path: &Path) {
+    fn open_editor_file_in_editor(&mut self, path: &Path) -> Task<Message> {
         match self.editor.load_file(path) {
-            Ok(()) => {
+            Ok(task) => {
                 self.register_editor_recent_file(path);
                 self.logger
                     .push(format!("Opened editor file {}", path.display()));
+                task.map(|message| Message::Editor(EditorMessage::Widget(message)))
             }
             Err(error) => {
                 self.show_prompt(
@@ -1912,6 +1918,7 @@ impl LilyView {
                     ),
                     None,
                 );
+                Task::none()
             }
         }
     }
