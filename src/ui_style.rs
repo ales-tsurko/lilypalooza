@@ -2,10 +2,10 @@ use iced::widget::{button, container, scrollable, svg, text_editor};
 use iced::{Color, Radians, Shadow, Theme, Vector, border, gradient};
 
 pub(crate) const FONT_SIZE_HEADING_LG: u32 = 30;
-pub(crate) const FONT_SIZE_BODY_MD: u32 = 16;
-pub(crate) const FONT_SIZE_BODY_SM: u32 = 15;
-pub(crate) const FONT_SIZE_UI_SM: u32 = 13;
-pub(crate) const FONT_SIZE_UI_XS: u32 = 12;
+pub(crate) const FONT_SIZE_BODY_MD: u32 = 15;
+pub(crate) const FONT_SIZE_BODY_SM: u32 = 14;
+pub(crate) const FONT_SIZE_UI_SM: u32 = 12;
+pub(crate) const FONT_SIZE_UI_XS: u32 = 11;
 
 pub(crate) const SIZE_SURFACE_LG: u32 = 620;
 

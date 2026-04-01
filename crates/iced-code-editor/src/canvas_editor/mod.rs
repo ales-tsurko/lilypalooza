@@ -459,7 +459,7 @@ impl CodeEditor {
             focus_locked: false,
             show_cursor: false,
             modifiers: Cell::new(iced::keyboard::Modifiers::default()),
-            font: iced::Font::MONOSPACE,
+            font: iced::Font::with_name("JetBrains Mono"),
             ime_preedit: None,
             font_size: FONT_SIZE,
             full_char_width: CHAR_WIDTH * 2.0,

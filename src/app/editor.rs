@@ -5,6 +5,7 @@ use iced::widget::{container, text};
 use iced::{Element, Fill};
 use iced_code_editor::{CodeEditor, Message as EditorWidgetMessage, theme::ThemeTuning};
 
+use crate::fonts;
 use crate::settings::{EditorThemeSettings, EditorViewSettings};
 use crate::ui_style;
 
@@ -231,6 +232,7 @@ impl EditorState {
     ) -> Result<iced::Task<EditorWidgetMessage>, String> {
         let syntax = path.as_deref().map(syntax_for_path).unwrap_or("lilypond");
         let task = self.widget.reset_document(content, syntax);
+        self.widget.set_font(fonts::MONO);
         self.widget
             .set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
                 &self.app_theme,
@@ -256,6 +258,7 @@ fn build_editor(
     theme_settings: EditorThemeSettings,
 ) -> CodeEditor {
     let mut editor = CodeEditor::new(content, syntax).with_wrap_enabled(false);
+    editor.set_font(fonts::MONO);
     editor.set_font_size(view_settings.font_size, true);
     editor.set_lsp_enabled(false);
     editor.set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(

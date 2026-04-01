@@ -14,7 +14,7 @@ use super::{
     DockDropRegion, EditorFileMenuSection, EditorHeaderMenuSection, LilyView, Message, PaneMessage,
     WorkspacePaneKind, piano_roll, score_view, transport_bar,
 };
-use crate::{icons, shortcuts, ui_style};
+use crate::{fonts, icons, shortcuts, ui_style};
 
 const TOOLBAR_ICON_SIZE: f32 = 14.0;
 const HEADER_CONTROL_HEIGHT: f32 = 22.0;
@@ -148,14 +148,14 @@ fn toolbar_project_button(app: &LilyView) -> Element<'_, Message> {
                             .size(ui_style::FONT_SIZE_UI_SM)
                             .font(iced::Font {
                                 weight: iced::font::Weight::Normal,
-                                ..iced::Font::DEFAULT
+                                ..fonts::UI
                             })
                             .line_height(1.0),
                         text(" | ")
                             .size(ui_style::FONT_SIZE_UI_SM)
                             .font(iced::Font {
                                 weight: iced::font::Weight::Normal,
-                                ..iced::Font::DEFAULT
+                                ..fonts::UI
                             })
                             .line_height(1.0)
                             .style(|theme: &Theme| {
@@ -171,7 +171,7 @@ fn toolbar_project_button(app: &LilyView) -> Element<'_, Message> {
                             .size(ui_style::FONT_SIZE_UI_SM)
                             .font(iced::Font {
                                 weight: iced::font::Weight::Normal,
-                                ..iced::Font::DEFAULT
+                                ..fonts::UI
                             })
                             .line_height(1.0)
                             .style(|theme: &Theme| {
@@ -731,12 +731,12 @@ fn empty_workspace_placeholder(app: &LilyView) -> Element<'_, Message> {
             .push(
                 text(format!("lily-view {}", env!("CARGO_PKG_VERSION")))
                     .size(ui_style::FONT_SIZE_UI_SM)
-                    .font(iced::Font::MONOSPACE),
+                    .font(fonts::MONO),
             )
             .push(
                 text(lilypond_label)
                     .size(ui_style::FONT_SIZE_UI_SM)
-                    .font(iced::Font::MONOSPACE),
+                    .font(fonts::MONO),
             )
             .spacing(ui_style::SPACE_SM)
             .align_x(alignment::Horizontal::Center),
@@ -1572,7 +1572,7 @@ fn editor_appearance_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
     };
     let zoom_value_label = text(format!("{}pt", app.editor.font_size_points()))
         .size(ui_style::FONT_SIZE_UI_XS)
-        .font(iced::Font::MONOSPACE);
+        .font(fonts::MONO);
     let zoom_value = if app.editor.can_reset_zoom() {
         mouse_area(zoom_value_label)
             .on_double_click(Message::Editor(super::EditorMessage::ResetZoom))
@@ -1764,7 +1764,7 @@ fn editor_theme_slider<'a>(
                 container(
                     text(value)
                         .size(ui_style::FONT_SIZE_UI_XS)
-                        .font(iced::Font::MONOSPACE)
+                        .font(fonts::MONO)
                 )
                 .width(Fill)
                 .align_x(alignment::Horizontal::Right),

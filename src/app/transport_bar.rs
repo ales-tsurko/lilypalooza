@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use iced::widget::{Tooltip, button, container, row, slider, svg, text, tooltip};
-use iced::{ContentFit, Element, Fill, Font, Length, alignment};
+use iced::{ContentFit, Element, Fill, Length, alignment};
 
 use super::{FileMessage, LilyView, Message, PianoRollMessage, SoundfontStatus};
+use crate::fonts;
 use crate::icons;
 use crate::midi::{MidiRollData, TimeSignatureChange};
 use crate::shortcuts::{self, ShortcutAction};
@@ -159,7 +160,7 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
             text("♬").size(ui_style::FONT_SIZE_UI_SM),
             text(soundfont_label)
                 .size(ui_style::FONT_SIZE_UI_XS)
-                .font(Font::MONOSPACE),
+                .font(fonts::MONO),
         ]
         .spacing(ui_style::SPACE_XS)
         .align_y(alignment::Vertical::Center),
@@ -184,22 +185,22 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
                         .align_y(alignment::Vertical::Center),
                     text(time_label)
                         .size(ui_style::FONT_SIZE_UI_XS)
-                        .font(Font::MONOSPACE),
+                        .font(fonts::MONO),
                     text(musical_clock_label)
                         .size(ui_style::FONT_SIZE_UI_XS)
-                        .font(Font::MONOSPACE),
+                        .font(fonts::MONO),
                     seek_slider,
                     row![
                         transport_icon(icons::metronome()),
                         text(tempo_label)
                             .size(ui_style::FONT_SIZE_UI_XS)
-                            .font(Font::MONOSPACE),
+                            .font(fonts::MONO),
                     ]
                     .spacing(ui_style::SPACE_XS)
                     .align_y(alignment::Vertical::Center),
                     text(meter_label)
                         .size(ui_style::FONT_SIZE_UI_XS)
-                        .font(Font::MONOSPACE),
+                        .font(fonts::MONO),
                     soundfont_button,
                 ]
                 .width(Fill)

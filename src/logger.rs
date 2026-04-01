@@ -1,7 +1,7 @@
 use iced::widget::{container, scrollable, text_editor};
-use iced::{Element, Fill, Font, Shrink};
+use iced::{Element, Fill, Shrink};
 
-use crate::ui_style;
+use crate::{fonts, ui_style};
 
 const MAX_LOG_LINES: usize = 2_000;
 
@@ -59,8 +59,8 @@ impl Logger {
         Message: Clone + 'a,
     {
         let editor = text_editor(&self.text)
-            .font(Font::MONOSPACE)
-            .size(ui_style::FONT_SIZE_UI_XS)
+            .font(fonts::MONO)
+            .size(ui_style::FONT_SIZE_UI_SM)
             .padding(0)
             .height(Shrink)
             .style(ui_style::logger_text_editor);

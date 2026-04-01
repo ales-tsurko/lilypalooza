@@ -1,7 +1,7 @@
 use iced::widget::{container, row, text};
-use iced::{Color, Element, Fill, Font, Theme};
+use iced::{Color, Element, Fill, Theme};
 
-use crate::ui_style;
+use crate::{fonts, ui_style};
 
 pub(crate) const HEIGHT: f32 = 26.0;
 
@@ -17,7 +17,7 @@ where
     let log_block = container(
         text(data.tail_message)
             .size(ui_style::FONT_SIZE_UI_XS)
-            .font(Font::MONOSPACE)
+            .font(fonts::MONO)
             .style(|theme: &Theme| {
                 let palette = theme.extended_palette();
                 iced::widget::text::Style {
@@ -37,7 +37,7 @@ where
     let spinner_block = container(
         text(data.spinner)
             .size(ui_style::FONT_SIZE_UI_XS)
-            .font(Font::MONOSPACE),
+            .font(fonts::MONO),
     )
     .height(Fill)
     .center_y(Fill)

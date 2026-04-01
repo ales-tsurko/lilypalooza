@@ -10,7 +10,7 @@ use iced_core::image;
 use super::{
     LilyView, Message, ScoreCursorPlacement, ViewerMessage, dock_view::HeaderControlGroup,
 };
-use crate::{icons, ui_style};
+use crate::{fonts, icons, ui_style};
 
 const SCROLL_MARKER_THICKNESS: f32 = 3.0;
 const SCROLL_MARKER_LENGTH: f32 = 16.0;
@@ -128,7 +128,7 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
 
     let zoom_value = text(zoom_label)
         .size(ui_style::FONT_SIZE_UI_XS)
-        .font(iced::Font::MONOSPACE);
+        .font(fonts::MONO);
     let zoom_value = if can_reset_zoom {
         mouse_area(zoom_value).on_double_click(Message::Viewer(ViewerMessage::ResetZoom))
     } else {
@@ -145,7 +145,7 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
 
     let brightness_value = text(brightness_label)
         .size(ui_style::FONT_SIZE_UI_XS)
-        .font(iced::Font::MONOSPACE);
+        .font(fonts::MONO);
     let brightness_value = if can_reset_page_brightness {
         mouse_area(brightness_value)
             .on_double_click(Message::Viewer(ViewerMessage::ResetPageBrightness))
@@ -166,7 +166,7 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
             min_width: 78.0,
             content: text(page_label)
                 .size(ui_style::FONT_SIZE_UI_XS)
-                .font(iced::Font::MONOSPACE)
+                .font(fonts::MONO)
                 .into(),
         },
         HeaderControlGroup {

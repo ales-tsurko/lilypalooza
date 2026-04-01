@@ -265,6 +265,16 @@ pub fn run(startup_soundfont: Option<PathBuf>, startup_score: Option<PathBuf>) -
         update,
         view,
     )
+    .default_font(crate::fonts::UI)
+    .font(crate::fonts::MANROPE_REGULAR_BYTES)
+    .font(crate::fonts::MANROPE_MEDIUM_BYTES)
+    .font(crate::fonts::MANROPE_BOLD_BYTES)
+    .font(crate::fonts::JETBRAINS_MONO_BYTES)
+    .font(crate::fonts::JETBRAINS_MONO_BOLD_BYTES)
+    .font(crate::fonts::JETBRAINS_MONO_ITALIC_BYTES)
+    .font(crate::fonts::JETBRAINS_MONO_BOLD_ITALIC_BYTES)
+    .font(crate::fonts::JETBRAINS_MONO_MEDIUM_BYTES)
+    .font(crate::fonts::JETBRAINS_MONO_MEDIUM_ITALIC_BYTES)
     .theme(|state: &LilyView| state.theme.clone())
     .title("lily-view")
     .window(window::Settings {

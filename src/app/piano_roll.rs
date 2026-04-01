@@ -5,14 +5,14 @@ use iced::widget::{
     text, text_input, tooltip,
 };
 use iced::{
-    Color, ContentFit, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size,
-    Theme, alignment, mouse,
+    Color, ContentFit, Element, Fill, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
+    alignment, mouse,
 };
 
 use super::{LilyView, Message, PianoRollMessage, dock_view::HeaderControlGroup};
 use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
 use crate::settings::PianoRollViewSettings;
-use crate::{icons, ui_style};
+use crate::{fonts, icons, ui_style};
 
 const TRACK_PANEL_DEFAULT_WIDTH: f32 = 96.0;
 const TRACK_PANEL_MIN_WIDTH: f32 = 92.0;
@@ -496,7 +496,7 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
             {
                 let zoom_value = text(format!("{:.0}%", state.zoom_x * 100.0))
                     .size(ui_style::FONT_SIZE_UI_XS)
-                    .font(Font::MONOSPACE);
+                    .font(fonts::MONO);
                 let zoom_value = if state.can_reset_zoom() {
                     mouse_area(zoom_value)
                         .on_double_click(Message::PianoRoll(PianoRollMessage::ResetZoom))
@@ -570,7 +570,7 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
                 prev_file_button,
                 text(file_name)
                     .size(ui_style::FONT_SIZE_UI_XS)
-                    .font(Font::MONOSPACE),
+                    .font(fonts::MONO),
                 next_file_button,
             ]
             .spacing(ui_style::SPACE_XS)
@@ -783,7 +783,7 @@ fn track_list<'a>(
             container(
                 text("S")
                     .size(ui_style::FONT_SIZE_UI_XS)
-                    .font(Font::MONOSPACE)
+                    .font(fonts::MONO)
                     .center(),
             )
             .width(Fill)
@@ -807,7 +807,7 @@ fn track_list<'a>(
             container(
                 text("M")
                     .size(ui_style::FONT_SIZE_UI_XS)
-                    .font(Font::MONOSPACE)
+                    .font(fonts::MONO)
                     .center(),
             )
             .width(Fill)
@@ -848,7 +848,7 @@ fn track_list<'a>(
         tracks_column = tracks_column.push(
             text("No parts")
                 .size(ui_style::FONT_SIZE_UI_XS)
-                .font(Font::MONOSPACE),
+                .font(fonts::MONO),
         );
     }
 
@@ -1258,7 +1258,7 @@ impl<Message> canvas::Program<Message> for KeyCanvas {
                     position: Point::new(4.0, y + NOTE_ROW_HEIGHT * 0.5),
                     color: text_color,
                     size: Pixels(ui_style::FONT_SIZE_UI_XS as f32),
-                    font: Font::MONOSPACE,
+                    font: fonts::MONO,
                     align_y: alignment::Vertical::Center,
                     ..canvas::Text::default()
                 });
@@ -1511,7 +1511,7 @@ fn draw_note(
             position: Point::new(geometry.x + 3.0, geometry.y + NOTE_ROW_HEIGHT * 0.5),
             color: Color::from_rgba(0.08, 0.08, 0.08, visibility_alpha.clamp(0.35, 1.0)),
             size: Pixels(10.0),
-            font: Font::MONOSPACE,
+            font: fonts::MONO,
             align_y: alignment::Vertical::Center,
             ..canvas::Text::default()
         });
@@ -1805,7 +1805,7 @@ fn draw_tempo_markers(
             position: Point::new(label_x, TEMPO_LABEL_TOP_PADDING),
             color: Color::from_rgba(0.96, 0.97, 0.99, 0.98),
             size: Pixels(ui_style::FONT_SIZE_UI_XS.saturating_sub(1) as f32),
-            font: Font::MONOSPACE,
+            font: fonts::MONO,
             align_y: alignment::Vertical::Top,
             ..canvas::Text::default()
         });
@@ -2086,7 +2086,7 @@ fn draw_bar_numbers(
                 0.82,
             ),
             size: Pixels(ui_style::FONT_SIZE_UI_XS.saturating_sub(2) as f32),
-            font: Font::MONOSPACE,
+            font: fonts::MONO,
             align_y: alignment::Vertical::Bottom,
             ..canvas::Text::default()
         });

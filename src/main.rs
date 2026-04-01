@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 mod app;
 mod error_prompt;
+mod fonts;
 mod icons;
 mod lilypond;
 mod logger;
