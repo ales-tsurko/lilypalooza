@@ -1,5 +1,5 @@
 use iced::widget::{container, row, text};
-use iced::{Element, Fill, Font};
+use iced::{Color, Element, Fill, Font, Theme};
 
 use crate::ui_style;
 
@@ -17,7 +17,16 @@ where
     let log_block = container(
         text(data.tail_message)
             .size(ui_style::FONT_SIZE_UI_XS)
-            .font(Font::MONOSPACE),
+            .font(Font::MONOSPACE)
+            .style(|theme: &Theme| {
+                let palette = theme.extended_palette();
+                iced::widget::text::Style {
+                    color: Some(Color {
+                        a: 0.74,
+                        ..palette.background.weak.text
+                    }),
+                }
+            }),
     )
     .width(Fill)
     .height(Fill)
