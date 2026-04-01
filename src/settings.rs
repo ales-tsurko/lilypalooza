@@ -3,7 +3,6 @@ use std::io;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
-use ron::ser::PrettyConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -323,13 +322,8 @@ impl ShortcutSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct AppSettings {
-    pub(crate) workspace_layout: WorkspaceLayoutSettings,
-    pub(crate) score_view: ScoreViewSettings,
-    pub(crate) piano_roll_view: PianoRollViewSettings,
     pub(crate) editor_view: EditorViewSettings,
     pub(crate) editor_theme: EditorThemeSettings,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) editor_recent_files: Vec<PathBuf>,
     #[serde(
         default = "default_editor_recent_files_limit",
         skip_serializing_if = "is_default_editor_recent_files_limit"
@@ -342,12 +336,8 @@ pub(crate) struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            workspace_layout: WorkspaceLayoutSettings::default(),
-            score_view: ScoreViewSettings::default(),
-            piano_roll_view: PianoRollViewSettings::default(),
             editor_view: EditorViewSettings::default(),
             editor_theme: EditorThemeSettings::default(),
-            editor_recent_files: Vec::new(),
             editor_recent_files_limit: default_editor_recent_files_limit(),
             shortcuts: ShortcutSettings::default(),
         }
@@ -358,7 +348,7 @@ pub(crate) fn load() -> Result<AppSettings, String> {
     let path = settings_path()?;
 
     match fs::read_to_string(&path) {
-        Ok(contents) => ron::from_str(&contents)
+        Ok(contents) => toml::from_str(&contents)
             .map_err(|error| format!("Failed to parse settings {}: {error}", path.display())),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(AppSettings::default()),
         Err(error) => Err(format!(
@@ -381,7 +371,7 @@ pub(crate) fn save(settings: &AppSettings) -> Result<(), String> {
         )
     })?;
 
-    let contents = ron::ser::to_string_pretty(settings, PrettyConfig::new())
+    let contents = toml::to_string_pretty(settings)
         .map_err(|error| format!("Failed to serialize settings: {error}"))?;
 
     fs::write(&path, contents)
@@ -389,8 +379,8 @@ pub(crate) fn save(settings: &AppSettings) -> Result<(), String> {
 }
 
 fn settings_path() -> Result<PathBuf, String> {
-    let project_dirs = ProjectDirs::from("rs", "alestsurko", "lily-view")
+    let project_dirs = ProjectDirs::from("by", "alestsurko", "lily-view")
         .ok_or_else(|| "Failed to resolve user config directory".to_string())?;
 
-    Ok(project_dirs.config_dir().join("settings.ron"))
+    Ok(project_dirs.config_dir().join("settings.toml"))
 }

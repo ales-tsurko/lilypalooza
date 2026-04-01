@@ -55,6 +55,9 @@ pub(super) enum PaneMessage {
         section: Option<EditorFileMenuSection>,
         expanded: bool,
     },
+    ToggleProjectMenu,
+    CloseProjectMenu,
+    SetProjectRecentOpen(bool),
     CloseHeaderOverflowMenu,
     ToggleWorkspacePane(WorkspacePaneKind),
     WorkspaceDragMoved(iced::Point),
@@ -66,6 +69,12 @@ pub(super) enum PaneMessage {
 pub(super) enum FileMessage {
     RequestOpen,
     Picked(Option<PathBuf>),
+    RequestCreateProject,
+    RequestSaveProject,
+    RequestLoadProject,
+    CreateProjectPicked(Option<PathBuf>),
+    LoadProjectPicked(Option<PathBuf>),
+    OpenRecentProject(PathBuf),
     RequestSoundfont,
     SoundfontPicked(Option<PathBuf>),
 }

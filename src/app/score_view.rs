@@ -50,9 +50,9 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
     let can_zoom_out = app.svg_zoom > super::MIN_SVG_ZOOM;
     let can_brightness_increase = app.svg_page_brightness < super::MAX_SVG_PAGE_BRIGHTNESS;
     let can_brightness_decrease = app.svg_page_brightness > super::MIN_SVG_PAGE_BRIGHTNESS;
-    let can_reset_zoom = (app.svg_zoom - app.default_settings.score_view.zoom).abs() > 1e-4;
+    let can_reset_zoom = (app.svg_zoom - app.default_global_state.score_view.zoom).abs() > 1e-4;
     let can_reset_page_brightness =
-        app.svg_page_brightness != app.default_settings.score_view.page_brightness;
+        app.svg_page_brightness != app.default_global_state.score_view.page_brightness;
 
     let prev_button = button(super::dock_view::compact_control_icon(icons::arrow_left()))
         .style(ui_style::button_neutral)

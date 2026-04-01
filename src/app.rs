@@ -15,8 +15,9 @@ use crate::logger::Logger;
 use crate::playback::MidiPlayback;
 use crate::score_watcher::ScoreWatcher;
 use crate::settings::{
-    self, AppSettings, DockAxis, DockNodeSettings, FoldedPaneRestoreSettings, FoldedPaneSettings,
+    self, DockAxis, DockNodeSettings, FoldedPaneRestoreSettings, FoldedPaneSettings,
 };
+use crate::state::{self, GlobalState};
 
 use messages::{
     EditorMessage, FileMessage, KeyPress, LoggerMessage, Message, PaneMessage, PianoRollMessage,
@@ -98,7 +99,10 @@ struct LilyView {
     open_editor_menu_section: Option<EditorHeaderMenuSection>,
     open_editor_file_menu_section: Option<EditorFileMenuSection>,
     hovered_editor_file_menu_section: Option<EditorFileMenuSection>,
+    open_project_menu: bool,
+    open_project_recent: bool,
     editor_recent_files: Vec<PathBuf>,
+    recent_projects: Vec<PathBuf>,
     editor_recent_files_limit: usize,
     editor: editor::EditorState,
     rendered_score: Option<RenderedScore>,
@@ -118,7 +122,9 @@ struct LilyView {
     transport_seek_preview: Option<f32>,
     keyboard_modifiers: keyboard::Modifiers,
     shortcut_settings: settings::ShortcutSettings,
-    default_settings: AppSettings,
+    project_root: Option<PathBuf>,
+    project_name: Option<String>,
+    default_global_state: GlobalState,
 }
 
 struct SelectedScore {
@@ -273,26 +279,31 @@ fn new(
     startup_soundfont: Option<PathBuf>,
     startup_score: Option<PathBuf>,
 ) -> (LilyView, Task<Message>) {
-    let default_settings = AppSettings::default();
-    let (mut stored_settings, settings_error) = match settings::load() {
+    let default_settings = settings::AppSettings::default();
+    let default_global_state = GlobalState::default();
+    let (stored_settings, settings_error) = match settings::load() {
         Ok(settings) => (settings, None),
         Err(error) => (default_settings.clone(), Some(error)),
     };
+    let (mut stored_state, state_error) = match state::load_global() {
+        Ok(state) => (state, None),
+        Err(error) => (default_global_state.clone(), Some(error)),
+    };
     migrate_workspace_layout(
-        &mut stored_settings.workspace_layout.root,
-        &stored_settings.workspace_layout.folded_panes,
+        &mut stored_state.workspace_layout.root,
+        &stored_state.workspace_layout.folded_panes,
     );
 
     let (dock_layout, dock_groups, next_dock_group_id, workspace_panes) =
-        build_dock_runtime(stored_settings.workspace_layout.root.as_ref());
-    let mut folded_panes: Vec<_> = stored_settings
+        build_dock_runtime(stored_state.workspace_layout.root.as_ref());
+    let mut folded_panes: Vec<_> = stored_state
         .workspace_layout
         .folded_panes
         .iter()
         .cloned()
         .map(folded_pane_from_settings)
         .collect();
-    if folded_panes.is_empty() && !stored_settings.workspace_layout.piano_visible {
+    if folded_panes.is_empty() && !stored_state.workspace_layout.piano_visible {
         folded_panes.push(FoldedPaneState {
             pane: WorkspacePaneKind::PianoRoll,
             restore: FoldedPaneRestore::Tab {
@@ -304,11 +315,11 @@ fn new(
         .iter()
         .any(|folded| folded.pane == WorkspacePaneKind::PianoRoll);
 
-    let mut piano_roll = PianoRollState::new(default_settings.piano_roll_view);
+    let mut piano_roll = PianoRollState::new(default_global_state.piano_roll_view);
     piano_roll.visible = piano_roll_visible;
     piano_roll.apply_view_settings(
-        stored_settings.piano_roll_view.zoom_x,
-        stored_settings.piano_roll_view.beat_subdivision,
+        stored_state.piano_roll_view.zoom_x,
+        stored_state.piano_roll_view.beat_subdivision,
     );
 
     let initial_focused_workspace_pane = dock_layout
@@ -347,7 +358,10 @@ fn new(
         open_editor_menu_section: None,
         open_editor_file_menu_section: None,
         hovered_editor_file_menu_section: None,
-        editor_recent_files: stored_settings.editor_recent_files.clone(),
+        open_project_menu: false,
+        open_project_recent: false,
+        editor_recent_files: stored_state.editor_recent_files.clone(),
+        recent_projects: stored_state.recent_projects.clone(),
         editor_recent_files_limit: stored_settings.editor_recent_files_limit.max(1),
         editor: editor::EditorState::new(
             iced::Theme::Dark,
@@ -358,11 +372,11 @@ fn new(
         score_cursor_maps: None,
         score_cursor_overlay: None,
         piano_roll,
-        svg_zoom: stored_settings
+        svg_zoom: stored_state
             .score_view
             .zoom
             .clamp(MIN_SVG_ZOOM, MAX_SVG_ZOOM),
-        svg_page_brightness: stored_settings
+        svg_page_brightness: stored_state
             .score_view
             .page_brightness
             .clamp(MIN_SVG_PAGE_BRIGHTNESS, MAX_SVG_PAGE_BRIGHTNESS),
@@ -377,7 +391,9 @@ fn new(
         transport_seek_preview: None,
         keyboard_modifiers: keyboard::Modifiers::default(),
         shortcut_settings: stored_settings.shortcuts.clone(),
-        default_settings,
+        project_root: None,
+        project_name: None,
+        default_global_state,
     };
 
     app.logger.push("Checking LilyPond availability");
@@ -392,6 +408,9 @@ fn new(
     if let Some(error) = settings_error {
         app.logger.push(format!("Settings load failed: {error}"));
     }
+    if let Some(error) = state_error {
+        app.logger.push(format!("State load failed: {error}"));
+    }
 
     let mut startup_tasks = vec![Task::perform(
         async { lilypond::check_lilypond().map_err(|error| error.to_string()) },
@@ -403,7 +422,7 @@ fn new(
             Some(path),
         ))));
     }
-    if let Some(path) = startup_score {
+    if let Some(path) = startup_score.or(stored_state.main_score.clone()) {
         startup_tasks.push(Task::done(Message::File(FileMessage::Picked(Some(path)))));
     }
 
@@ -473,6 +492,18 @@ impl LilyView {
     pub(super) fn focused_workspace_pane(&self) -> Option<WorkspacePaneKind> {
         self.focused_workspace_pane
             .filter(|pane| self.group_for_pane(*pane).is_some())
+    }
+
+    pub(super) fn has_saved_project(&self) -> bool {
+        self.project_root.is_some()
+    }
+
+    pub(super) fn project_title(&self) -> String {
+        self.project_name
+            .as_ref()
+            .filter(|name| !name.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "Unsaved Project".to_string())
     }
 
     pub(super) fn is_workspace_group_focused(&self, group_id: DockGroupId) -> bool {
@@ -750,4 +781,13 @@ fn selected_score_stem(selected_file_name: &str) -> Result<&str, String> {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .ok_or_else(|| "Selected score name has no valid stem".to_string())
+}
+
+fn default_project_name(project_root: &std::path::Path) -> String {
+    project_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "Untitled Project".to_string())
 }

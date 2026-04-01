@@ -15,6 +15,7 @@ use crate::error_prompt::{ErrorFatality, ErrorPrompt, PromptButtons};
 use crate::midi;
 use crate::settings::{self, DockGroupSettings, DockNodeSettings, WorkspaceLayoutSettings};
 use crate::shortcuts::{self, ShortcutAction, ShortcutInput};
+use crate::state::{self, GlobalState, ProjectState};
 
 const DRAG_START_THRESHOLD: f32 = 8.0;
 const SCORE_PREVIEW_FALLBACK_MAX_DIMENSION: f32 = 2200.0;
@@ -371,12 +372,12 @@ impl LilyView {
                 self.persist_settings();
             }
             ViewerMessage::ResetZoom => {
-                self.svg_zoom = self.default_settings.score_view.zoom;
+                self.svg_zoom = self.default_global_state.score_view.zoom;
                 self.score_zoom_persist_pending = false;
                 self.persist_settings();
             }
             ViewerMessage::ResetPageBrightness => {
-                self.svg_page_brightness = self.default_settings.score_view.page_brightness;
+                self.svg_page_brightness = self.default_global_state.score_view.page_brightness;
                 self.persist_settings();
             }
         }
@@ -842,6 +843,8 @@ impl LilyView {
                 if let Some(group) = self.workspace_group(group_id) {
                     self.set_focused_workspace_pane(group.active);
                 }
+                self.open_project_menu = false;
+                self.open_project_recent = false;
                 self.open_header_overflow_menu = Some(group_id);
                 self.open_editor_menu_section = None;
                 self.open_editor_file_menu_section = None;
@@ -864,7 +867,26 @@ impl LilyView {
                 self.open_editor_file_menu_section = None;
                 self.hovered_editor_file_menu_section = None;
             }
+            PaneMessage::ToggleProjectMenu => {
+                self.open_header_overflow_menu = None;
+                self.open_editor_menu_section = None;
+                self.open_editor_file_menu_section = None;
+                self.hovered_editor_file_menu_section = None;
+                self.open_project_menu = !self.open_project_menu;
+                if !self.open_project_menu {
+                    self.open_project_recent = false;
+                }
+            }
+            PaneMessage::CloseProjectMenu => {
+                self.open_project_menu = false;
+                self.open_project_recent = false;
+            }
+            PaneMessage::SetProjectRecentOpen(open) => {
+                self.open_project_recent = open;
+            }
             PaneMessage::ToggleWorkspacePane(pane) => {
+                self.open_project_menu = false;
+                self.open_project_recent = false;
                 self.open_header_overflow_menu = None;
                 self.open_editor_menu_section = None;
                 self.open_editor_file_menu_section = None;
@@ -949,7 +971,10 @@ impl LilyView {
                 |picked| Message::File(FileMessage::Picked(picked)),
             ),
             FileMessage::Picked(Some(path)) => match selected_score_from_path(path) {
-                Ok(selected_score) => self.activate_score(selected_score),
+                Ok(selected_score) => {
+                    self.attach_persistence_context_for_score(&selected_score.path);
+                    self.activate_score(selected_score)
+                }
                 Err(error) => {
                     self.show_prompt(
                         ErrorPrompt::new(
@@ -964,6 +989,74 @@ impl LilyView {
                 }
             },
             FileMessage::Picked(None) => Task::none(),
+            FileMessage::RequestCreateProject => {
+                self.open_project_menu = false;
+                self.open_project_recent = false;
+                let suggested_directory = self
+                    .project_root
+                    .clone()
+                    .or_else(|| {
+                        self.current_score
+                            .as_ref()
+                            .and_then(|score| score.path.parent().map(Path::to_path_buf))
+                    })
+                    .unwrap_or_else(|| PathBuf::from("."));
+
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_directory(&suggested_directory)
+                            .pick_folder()
+                            .await
+                            .map(|folder| folder.path().to_path_buf())
+                    },
+                    |picked| Message::File(FileMessage::CreateProjectPicked(picked)),
+                )
+            }
+            FileMessage::RequestSaveProject => {
+                self.open_project_menu = false;
+                self.open_project_recent = false;
+                if let Some(project_root) = self.project_root.clone() {
+                    self.save_project_to_root(project_root)
+                } else {
+                    update(self, Message::File(FileMessage::RequestCreateProject))
+                }
+            }
+            FileMessage::RequestLoadProject => {
+                self.open_project_menu = false;
+                self.open_project_recent = false;
+                let suggested_directory = self
+                    .project_root
+                    .clone()
+                    .or_else(|| {
+                        self.current_score
+                            .as_ref()
+                            .and_then(|score| score.path.parent().map(Path::to_path_buf))
+                    })
+                    .unwrap_or_else(|| PathBuf::from("."));
+
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_directory(&suggested_directory)
+                            .pick_folder()
+                            .await
+                            .map(|folder| folder.path().to_path_buf())
+                    },
+                    |picked| Message::File(FileMessage::LoadProjectPicked(picked)),
+                )
+            }
+            FileMessage::CreateProjectPicked(Some(project_root)) => {
+                self.save_project_to_root(project_root)
+            }
+            FileMessage::CreateProjectPicked(None) => Task::none(),
+            FileMessage::LoadProjectPicked(Some(project_root)) => {
+                self.load_project_from_root(project_root)
+            }
+            FileMessage::LoadProjectPicked(None) => Task::none(),
+            FileMessage::OpenRecentProject(project_root) => {
+                self.load_project_from_root(project_root)
+            }
             FileMessage::RequestSoundfont => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
@@ -1103,6 +1196,7 @@ impl LilyView {
         self.piano_roll.clear_files();
         self.unload_playback_file();
         self.current_score = Some(selected_score);
+        self.persist_settings();
         self.restart_score_watcher(&watched_path);
         self.queue_compile("Score loaded, compiling SVG and MIDI");
         self.start_compile_if_queued();
@@ -1923,6 +2017,145 @@ impl LilyView {
         }
     }
 
+    fn attach_persistence_context_for_score(&mut self, score_path: &Path) {
+        let next_project_root = state::find_project_root(score_path);
+        if next_project_root == self.project_root {
+            return;
+        }
+
+        match next_project_root {
+            Some(project_root) => {
+                let project_state = match state::load_project(&project_root) {
+                    Ok(mut state) => {
+                        migrate_workspace_layout(
+                            &mut state.workspace_layout.root,
+                            &state.workspace_layout.folded_panes,
+                        );
+                        state
+                    }
+                    Err(error) => {
+                        self.show_prompt(
+                            ErrorPrompt::new(
+                                "Project Load Error",
+                                error,
+                                ErrorFatality::Recoverable,
+                                PromptButtons::Ok,
+                            ),
+                            None,
+                        );
+                        ProjectState::default()
+                    }
+                };
+                self.apply_project_state(project_root, project_state);
+            }
+            None => {
+                let global_state = match state::load_global() {
+                    Ok(mut state) => {
+                        migrate_workspace_layout(
+                            &mut state.workspace_layout.root,
+                            &state.workspace_layout.folded_panes,
+                        );
+                        state
+                    }
+                    Err(error) => {
+                        self.show_prompt(
+                            ErrorPrompt::new(
+                                "State Load Error",
+                                error,
+                                ErrorFatality::Recoverable,
+                                PromptButtons::Ok,
+                            ),
+                            None,
+                        );
+                        GlobalState::default()
+                    }
+                };
+                self.apply_global_state(global_state);
+            }
+        }
+    }
+
+    fn apply_global_state(&mut self, state: GlobalState) {
+        self.project_root = None;
+        self.project_name = None;
+        self.editor_recent_files = state.editor_recent_files;
+        self.recent_projects = state.recent_projects;
+        self.apply_workspace_state(
+            state.workspace_layout,
+            state.score_view,
+            state.piano_roll_view,
+        );
+    }
+
+    fn apply_project_state(&mut self, project_root: PathBuf, state: ProjectState) {
+        self.register_recent_project(&project_root);
+        self.project_root = Some(project_root);
+        self.project_name = state
+            .project_name
+            .or_else(|| self.project_root.as_deref().map(default_project_name));
+        self.apply_workspace_state(
+            state.workspace_layout,
+            state.score_view,
+            state.piano_roll_view,
+        );
+    }
+
+    fn apply_workspace_state(
+        &mut self,
+        workspace_layout: WorkspaceLayoutSettings,
+        score_view: settings::ScoreViewSettings,
+        piano_roll_view: settings::PianoRollViewSettings,
+    ) {
+        let WorkspaceLayoutSettings {
+            root,
+            folded_panes,
+            piano_visible,
+        } = workspace_layout;
+        let (dock_layout, dock_groups, next_dock_group_id, workspace_panes) =
+            build_dock_runtime(root.as_ref());
+        self.workspace_panes = workspace_panes;
+        self.dock_layout = dock_layout;
+        self.dock_groups = dock_groups;
+        self.next_dock_group_id = next_dock_group_id;
+        self.folded_panes = folded_panes
+            .into_iter()
+            .map(folded_pane_from_settings)
+            .collect();
+        if self.folded_panes.is_empty() && !piano_visible {
+            self.folded_panes.push(FoldedPaneState {
+                pane: WorkspacePaneKind::PianoRoll,
+                restore: FoldedPaneRestore::Tab {
+                    anchor: WorkspacePaneKind::Score,
+                },
+            });
+        }
+
+        self.piano_roll.visible = !self.is_pane_folded(WorkspacePaneKind::PianoRoll);
+        self.piano_roll
+            .apply_view_settings(piano_roll_view.zoom_x, piano_roll_view.beat_subdivision);
+        self.svg_zoom = score_view.zoom.clamp(MIN_SVG_ZOOM, MAX_SVG_ZOOM);
+        self.svg_page_brightness = score_view
+            .page_brightness
+            .clamp(MIN_SVG_PAGE_BRIGHTNESS, MAX_SVG_PAGE_BRIGHTNESS);
+        self.focused_workspace_pane = self
+            .dock_layout
+            .as_ref()
+            .and_then(|layout| first_active_workspace_pane(layout, &self.dock_groups))
+            .or_else(|| self.dock_groups.values().next().map(|group| group.active));
+        self.hovered_workspace_pane = None;
+        self.pressed_workspace_pane = None;
+        self.workspace_drag_origin = None;
+        self.dragged_workspace_pane = None;
+        self.dock_drop_target = None;
+        self.open_header_overflow_menu = None;
+        self.open_editor_menu_section = None;
+        self.open_editor_file_menu_section = None;
+        self.hovered_editor_file_menu_section = None;
+        self.open_project_menu = false;
+        self.open_project_recent = false;
+        self.sync_editor_widget_focus();
+    }
+
     fn register_editor_recent_file(&mut self, path: &Path) {
         self.editor_recent_files.retain(|existing| existing != path);
         self.editor_recent_files.insert(0, path.to_path_buf());
@@ -1931,8 +2164,75 @@ impl LilyView {
         self.persist_settings();
     }
 
-    fn persist_settings(&self) {
-        let _ = settings::save(&settings::AppSettings {
+    fn register_recent_project(&mut self, project_root: &Path) {
+        self.recent_projects
+            .retain(|existing| existing != project_root);
+        self.recent_projects.insert(0, project_root.to_path_buf());
+        self.recent_projects.truncate(7);
+    }
+
+    fn persist_settings(&mut self) {
+        if let Err(error) = self.try_persist_settings() {
+            self.show_prompt(
+                ErrorPrompt::new(
+                    "Persistence Error",
+                    error,
+                    ErrorFatality::Recoverable,
+                    PromptButtons::Ok,
+                ),
+                None,
+            );
+        }
+    }
+
+    fn try_persist_settings(&self) -> Result<(), String> {
+        settings::save(&settings::AppSettings {
+            editor_view: self.editor.view_settings(),
+            editor_theme: self.editor.theme_settings(),
+            editor_recent_files_limit: self.editor_recent_files_limit,
+            shortcuts: self.shortcut_settings.clone(),
+        })?;
+
+        if let Some(project_root) = self.project_root.as_ref() {
+            state::save_project(
+                project_root,
+                &ProjectState {
+                    project_name: self.project_name.clone(),
+                    workspace_layout: WorkspaceLayoutSettings {
+                        root: self
+                            .dock_layout
+                            .as_ref()
+                            .map(|layout| dock_node_to_settings(layout, &self.dock_groups)),
+                        folded_panes: self
+                            .folded_panes
+                            .iter()
+                            .cloned()
+                            .map(folded_pane_to_settings)
+                            .collect(),
+                        piano_visible: !self.is_pane_folded(WorkspacePaneKind::PianoRoll),
+                    },
+                    score_view: settings::ScoreViewSettings {
+                        zoom: self.svg_zoom,
+                        page_brightness: self.svg_page_brightness,
+                    },
+                    piano_roll_view: settings::PianoRollViewSettings {
+                        zoom_x: self.piano_roll.zoom_x,
+                        beat_subdivision: self.piano_roll.beat_subdivision,
+                    },
+                    main_score: self.current_score.as_ref().and_then(|score| {
+                        state::main_score_relative_to(project_root, &score.path).ok()
+                    }),
+                },
+            )?;
+
+            let mut global_state = state::load_global()?;
+            global_state.editor_recent_files = self.editor_recent_files.clone();
+            global_state.recent_projects = self.recent_projects.clone();
+            state::save_global(&global_state)?;
+            return Ok(());
+        }
+
+        state::save_global(&GlobalState {
             workspace_layout: WorkspaceLayoutSettings {
                 root: self
                     .dock_layout
@@ -1954,12 +2254,106 @@ impl LilyView {
                 zoom_x: self.piano_roll.zoom_x,
                 beat_subdivision: self.piano_roll.beat_subdivision,
             },
-            editor_view: self.editor.view_settings(),
-            editor_theme: self.editor.theme_settings(),
+            main_score: self.current_score.as_ref().map(|score| score.path.clone()),
             editor_recent_files: self.editor_recent_files.clone(),
-            editor_recent_files_limit: self.editor_recent_files_limit,
-            shortcuts: self.shortcut_settings.clone(),
-        });
+            recent_projects: self.recent_projects.clone(),
+        })
+    }
+
+    fn save_project_to_root(&mut self, project_root: PathBuf) -> Task<Message> {
+        self.open_project_menu = false;
+        self.open_project_recent = false;
+        self.register_recent_project(&project_root);
+        self.project_root = Some(project_root.clone());
+        if self.project_name.is_none() {
+            self.project_name = Some(default_project_name(&project_root));
+        }
+        self.persist_settings();
+        self.logger.push(format!(
+            "Saved project {}",
+            state::project_file_path(&project_root).display()
+        ));
+        Task::none()
+    }
+
+    fn load_project_from_root(&mut self, project_root: PathBuf) -> Task<Message> {
+        self.open_project_menu = false;
+        self.open_project_recent = false;
+        if !state::project_file_path(&project_root).is_file() {
+            self.show_prompt(
+                ErrorPrompt::new(
+                    "Project Load Error",
+                    format!(
+                        "No project file found at {}",
+                        state::project_file_path(&project_root).display()
+                    ),
+                    ErrorFatality::Recoverable,
+                    PromptButtons::Ok,
+                ),
+                None,
+            );
+            return Task::none();
+        }
+
+        let project_state = match state::load_project(&project_root) {
+            Ok(mut state) => {
+                migrate_workspace_layout(
+                    &mut state.workspace_layout.root,
+                    &state.workspace_layout.folded_panes,
+                );
+                state
+            }
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "Project Load Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                return Task::none();
+            }
+        };
+
+        let main_score_path = project_state
+            .main_score
+            .as_ref()
+            .map(|path| project_root.join(path));
+        self.apply_project_state(project_root, project_state);
+
+        if let Some(path) = main_score_path {
+            match selected_score_from_path(path) {
+                Ok(selected_score) => self.activate_score(selected_score),
+                Err(error) => {
+                    self.show_prompt(
+                        ErrorPrompt::new(
+                            "Project Load Error",
+                            error,
+                            ErrorFatality::Recoverable,
+                            PromptButtons::Ok,
+                        ),
+                        None,
+                    );
+                    Task::none()
+                }
+            }
+        } else {
+            self.unload_current_score();
+            self.persist_settings();
+            Task::none()
+        }
+    }
+
+    fn unload_current_score(&mut self) {
+        self.current_score = None;
+        self.rendered_score = None;
+        self.score_cursor_maps = None;
+        self.score_cursor_overlay = None;
+        self.score_watcher = None;
+        self.piano_roll.clear_files();
+        self.unload_playback_file();
     }
 
     fn restore_piano_roll_scroll(&self) -> Task<Message> {

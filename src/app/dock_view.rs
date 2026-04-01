@@ -30,7 +30,10 @@ const HEADER_WIDTH_SAFETY: f32 = 24.0;
 pub(super) const TOOLBAR_HEIGHT: f32 = 32.0;
 const TOOLBAR_TOGGLE_ICON_SIZE: f32 = 13.0;
 const TOOLBAR_BUTTON_HEIGHT: f32 = 25.0;
-const TOOLBAR_FILE_NAME_MAX_CHARS: usize = 24;
+const TOOLBAR_FILE_NAME_MAX_CHARS: usize = 20;
+const TOOLBAR_PROJECT_NAME_MAX_CHARS: usize = 28;
+const PROJECT_MENU_WIDTH: f32 = 280.0;
+const PROJECT_RECENT_LABEL_MAX_CHARS: usize = 40;
 
 pub(super) struct HeaderControlGroup<'a> {
     pub(super) min_width: f32,
@@ -40,12 +43,18 @@ pub(super) struct HeaderControlGroup<'a> {
 pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     let toolbar = workspace_toolbar(app);
     let workspace = workspace_panes(app);
+    let content: Element<'_, Message> =
+        iced::widget::column![toolbar, workspace, transport_bar::view(app)]
+            .width(Fill)
+            .height(Fill)
+            .spacing(0)
+            .into();
 
-    iced::widget::column![toolbar, workspace, transport_bar::view(app)]
-        .width(Fill)
-        .height(Fill)
-        .spacing(0)
-        .into()
+    if app.open_project_menu {
+        stack([content, project_menu_overlay(app)]).into()
+    } else {
+        content
+    }
 }
 
 fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
@@ -60,7 +69,7 @@ fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
         iced::widget::column![
             container(
                 row![
-                    toolbar_file_button(app),
+                    toolbar_project_button(app),
                     toolbar_separator(),
                     pane_toggles,
                     container(text("")).width(Fill),
@@ -101,17 +110,20 @@ fn toolbar_separator() -> Element<'static, Message> {
         .into()
 }
 
-fn toolbar_file_button(app: &LilyView) -> Element<'_, Message> {
-    let file_name = app
-        .current_score
-        .as_ref()
-        .map(|selected_score| selected_score.file_name.as_str())
-        .unwrap_or("No file");
-    let button_label = truncate_toolbar_file_name(file_name, TOOLBAR_FILE_NAME_MAX_CHARS);
-
-    let icon = svg(icons::file_music())
-        .width(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
-        .height(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
+fn toolbar_project_button(app: &LilyView) -> Element<'_, Message> {
+    let project_title =
+        truncate_toolbar_file_name(&app.project_title(), TOOLBAR_PROJECT_NAME_MAX_CHARS);
+    let main_score_title = truncate_toolbar_file_name(
+        app.current_score
+            .as_ref()
+            .map(|selected_score| selected_score.file_name.as_str())
+            .unwrap_or("No main score"),
+        TOOLBAR_FILE_NAME_MAX_CHARS,
+    );
+    let tooltip_text = "Project menu";
+    let chevron = svg(icons::chevron_down())
+        .width(Length::Fixed(12.0))
+        .height(Length::Fixed(12.0))
         .content_fit(ContentFit::Contain)
         .style(|theme: &Theme, status| {
             let palette = theme.extended_palette();
@@ -122,37 +134,198 @@ fn toolbar_file_button(app: &LilyView) -> Element<'_, Message> {
                 }),
             }
         });
-
     Tooltip::new(
         button(
             row![
-                container(icon)
-                    .width(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
-                    .height(Fill)
-                    .center_x(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
-                    .center_y(Fill),
-                text(button_label)
-                    .size(ui_style::FONT_SIZE_UI_XS)
-                    .font(iced::Font::MONOSPACE)
-                    .line_height(1.0)
+                container(chevron)
+                    .width(Length::Fixed(12.0))
                     .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
+                    .center_x(Length::Fixed(12.0))
+                    .center_y(Length::Fixed(TOOLBAR_BUTTON_HEIGHT)),
+                container(
+                    row![
+                        text(project_title)
+                            .size(ui_style::FONT_SIZE_UI_SM)
+                            .font(iced::Font {
+                                weight: iced::font::Weight::Normal,
+                                ..iced::Font::DEFAULT
+                            })
+                            .line_height(1.0),
+                        text(" | ")
+                            .size(ui_style::FONT_SIZE_UI_SM)
+                            .font(iced::Font {
+                                weight: iced::font::Weight::Normal,
+                                ..iced::Font::DEFAULT
+                            })
+                            .line_height(1.0)
+                            .style(|theme: &Theme| {
+                                let palette = theme.extended_palette();
+                                iced::widget::text::Style {
+                                    color: Some(Color {
+                                        a: 0.58,
+                                        ..palette.background.base.text
+                                    }),
+                                }
+                            }),
+                        text(main_score_title)
+                            .size(ui_style::FONT_SIZE_UI_SM)
+                            .font(iced::Font {
+                                weight: iced::font::Weight::Normal,
+                                ..iced::Font::DEFAULT
+                            })
+                            .line_height(1.0)
+                            .style(|theme: &Theme| {
+                                let palette = theme.extended_palette();
+                                iced::widget::text::Style {
+                                    color: Some(Color {
+                                        a: 0.58,
+                                        ..palette.background.base.text
+                                    }),
+                                }
+                            }),
+                    ]
+                    .spacing(0)
                     .align_y(alignment::Vertical::Center),
+                )
+                .padding(Padding {
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 2.0,
+                    left: 0.0,
+                })
+                .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
+                .center_y(Length::Fixed(TOOLBAR_BUTTON_HEIGHT)),
             ]
-            .height(Fill)
+            .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
             .spacing(ui_style::SPACE_XS)
             .align_y(alignment::Vertical::Center),
         )
         .style(ui_style::button_toolbar_chip)
-        .padding([6, 8])
+        .padding([0, 8])
         .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
-        .on_press(Message::File(super::FileMessage::RequestOpen)),
-        text("Open main score").size(ui_style::FONT_SIZE_UI_XS),
+        .on_press(Message::Pane(PaneMessage::ToggleProjectMenu)),
+        text(tooltip_text).size(ui_style::FONT_SIZE_UI_XS),
         tooltip::Position::Bottom,
     )
     .gap(6)
     .padding(8)
     .style(ui_style::tooltip_popup)
     .into()
+}
+
+fn project_menu_overlay(app: &LilyView) -> Element<'_, Message> {
+    let backdrop: Element<'_, Message> = mouse_area(container(text("")).width(Fill).height(Fill))
+        .on_press(Message::Pane(PaneMessage::CloseProjectMenu))
+        .into();
+    let panel: Element<'_, Message> = container(
+        mouse_area(opaque(project_menu_panel(app)))
+            .on_exit(Message::Pane(PaneMessage::CloseProjectMenu)),
+    )
+    .padding([TOOLBAR_HEIGHT as u16, ui_style::PADDING_STATUS_BAR_H])
+    .width(Fill)
+    .height(Fill)
+    .align_x(alignment::Horizontal::Left)
+    .align_y(alignment::Vertical::Top)
+    .into();
+
+    stack([backdrop, panel]).into()
+}
+
+fn project_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
+    let save_project = editor_menu_item(
+        "Save Project",
+        true,
+        Some(Message::File(if app.has_saved_project() {
+            super::FileMessage::RequestSaveProject
+        } else {
+            super::FileMessage::RequestCreateProject
+        })),
+    );
+
+    let load_project = editor_menu_item(
+        "Load Project...",
+        true,
+        Some(Message::File(super::FileMessage::RequestLoadProject)),
+    );
+    let open_main_score = editor_menu_item(
+        "Open Main Score...",
+        true,
+        Some(Message::File(super::FileMessage::RequestOpen)),
+    );
+
+    let rename_project = editor_menu_item("Rename Project", false, None);
+
+    let recent_open = app.open_project_recent;
+    let recent_row = editor_fold_menu_item(
+        "Open Recent",
+        !app.recent_projects.is_empty(),
+        recent_open,
+        false,
+        Message::Pane(PaneMessage::SetProjectRecentOpen(!recent_open)),
+    );
+
+    let mut column = Column::new()
+        .spacing(ui_style::SPACE_XS)
+        .push(save_project)
+        .push(load_project)
+        .push(open_main_score)
+        .push(rename_project)
+        .push(recent_row);
+
+    if recent_open {
+        column = column.push(
+            container(project_recent_projects_submenu(app)).padding(Padding {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: f32::from(ui_style::PADDING_MD),
+            }),
+        );
+    }
+
+    container(column)
+        .width(Length::Fixed(PROJECT_MENU_WIDTH))
+        .padding(ui_style::PADDING_SM)
+        .style(ui_style::tooltip_popup)
+        .into()
+}
+
+fn project_recent_projects_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
+    if app.recent_projects.is_empty() {
+        return Column::new()
+            .spacing(ui_style::SPACE_XS)
+            .push(editor_menu_item("No recent projects", false, None))
+            .into();
+    }
+
+    let recent_paths: Vec<_> = app.recent_projects.iter().take(7).cloned().collect();
+    let labels = recent_file_labels(&recent_paths, PROJECT_RECENT_LABEL_MAX_CHARS);
+
+    recent_paths
+        .into_iter()
+        .zip(labels)
+        .fold(
+            Column::new().spacing(ui_style::SPACE_XS),
+            |column, (path, label)| {
+                column.push(
+                    Tooltip::new(
+                        editor_menu_item(
+                            label,
+                            true,
+                            Some(Message::File(super::FileMessage::OpenRecentProject(
+                                path.clone(),
+                            ))),
+                        ),
+                        text(path.display().to_string()).size(ui_style::FONT_SIZE_UI_XS),
+                        tooltip::Position::Right,
+                    )
+                    .gap(6)
+                    .padding(8)
+                    .style(ui_style::tooltip_popup),
+                )
+            },
+        )
+        .into()
 }
 
 fn truncate_toolbar_file_name(file_name: &str, max_chars: usize) -> String {
