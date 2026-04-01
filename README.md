@@ -1,17 +1,22 @@
-# lily-view
+# Lilypalooza
 
-**lily-view** is a desktop app for working on LilyPond scores with immediate
-visual feedback. Open a `.ly` file, keep it under watch, and the app updates its
-generated output in one place while you edit.
+**Lilypalooza** is a LilyPond IDE.
+
+It is built for writing, previewing, navigating, and playing LilyPond projects
+in one place instead of bouncing between a text editor, a PDF viewer, and MIDI
+tools.
 
 ![Screenshot 1](assets/screenshots/screenshot_1.jpg)
 ![Screenshot 2](assets/screenshots/screenshot_2.jpg)
 
-Features:
+Current features:
 
+- code editor with LilyPond-focused treesitter-based syntax highlighting
 - score preview
 - piano roll visualisation
-- MIDI playback with seek and cursor following
+- MIDI playback with seek, rewind, and cursor following
+- dockable multi-pane workspace
+- project persistence
 - logger
 
 Run it with:
@@ -20,9 +25,12 @@ Run it with:
 cargo run --release
 ```
 
+
+
+
 ## CLI Arguments
 
-They mostly exist for development, you can do these things using UI.
+They mostly exist for development. The normal workflow is through the UI.
 
 You can preload a SoundFont on startup with `--soundfont`, for example:
 
@@ -33,7 +41,7 @@ cargo run -- --soundfont assets/soundfonts/FluidR3_GM.sf2
 The same can be set via environment variable:
 
 ```bash
-LILY_VIEW_SOUNDFONT=assets/soundfonts/FluidR3_GM.sf2 cargo run
+LILYPALOOZA_SOUNDFONT=assets/soundfonts/FluidR3_GM.sf2 cargo run
 ```
 
 You can also preload a LilyPond score file on startup with `--score` (or
@@ -46,7 +54,7 @@ cargo run -- --score path/to/score.ly
 The same can be set via environment variable:
 
 ```bash
-LILY_VIEW_SCORE=path/to/score.ly cargo run
+LILYPALOOZA_SCORE=path/to/score.ly cargo run
 ```
 
 ## Tests

@@ -1,6 +1,6 @@
 # LilyPond Error Path Scripts
 
-These scripts launch `lily-view` with controlled `PATH` changes to force specific
+These scripts launch `Lilypalooza` with controlled `PATH` changes to force specific
 startup check failures and verify the error prompt UI.
 
 Run them from the repository root:

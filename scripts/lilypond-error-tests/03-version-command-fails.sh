@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
-echo "Building lily-view..."
+echo "Building Lilypalooza..."
 cargo build
 
 FAKE_BIN_DIR="$(mktemp -d)"
@@ -17,7 +17,7 @@ exit 1
 EOF
 chmod +x "$FAKE_BIN_DIR/lilypond"
 
-echo "Running lily-view with failing lilypond --version..."
+echo "Running Lilypalooza with failing lilypond --version..."
 PATH="$FAKE_BIN_DIR:$PATH" command -v lilypond
 PATH="$FAKE_BIN_DIR:$PATH" lilypond --version || true
-PATH="$FAKE_BIN_DIR:$PATH" ./target/debug/lily-view
+PATH="$FAKE_BIN_DIR:$PATH" ./target/debug/lilypalooza

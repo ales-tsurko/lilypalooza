@@ -1,6 +1,6 @@
 use super::*;
 
-impl LilyView {
+impl Lilypalooza {
     pub(in crate::app) fn handle_pane_message(&mut self, message: PaneMessage) -> Task<Message> {
         match message {
             PaneMessage::WorkspaceResized(event) => {

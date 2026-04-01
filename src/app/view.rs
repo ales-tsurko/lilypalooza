@@ -2,11 +2,11 @@ use iced::widget::{column, container, stack, text};
 use iced::{Element, Fill};
 
 use super::dock_view;
-use super::{LilyView, Message, PromptMessage};
+use super::{Lilypalooza, Message, PromptMessage};
 use crate::error_prompt::PromptButtons;
 use crate::status_bar;
 
-pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
+pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     let tail_message = app.logger.last_line().unwrap_or("No log messages");
     let spinner = if app.compile_session.is_some() {
         super::SPINNER_FRAMES[app.spinner_step % super::SPINNER_FRAMES.len()]
@@ -39,7 +39,7 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     stack([base, overlay]).into()
 }
 
-fn main_content(app: &LilyView) -> Element<'_, Message> {
+fn main_content(app: &Lilypalooza) -> Element<'_, Message> {
     match &app.lilypond_status {
         super::LilypondStatus::Checking => container(
             text("Checking LilyPond availability...").size(crate::ui_style::FONT_SIZE_BODY_MD),

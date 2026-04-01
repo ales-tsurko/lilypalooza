@@ -2546,7 +2546,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lily-view"
+name = "lilypalooza"
 version = "0.1.0"
 dependencies = [
  "cpal",

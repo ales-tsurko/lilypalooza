@@ -3,7 +3,7 @@ use std::time::Duration;
 use iced::widget::{Tooltip, button, container, row, slider, svg, text, tooltip};
 use iced::{ContentFit, Element, Fill, Length, alignment};
 
-use super::{FileMessage, LilyView, Message, PianoRollMessage, SoundfontStatus};
+use super::{FileMessage, Lilypalooza, Message, PianoRollMessage, SoundfontStatus};
 use crate::fonts;
 use crate::icons;
 use crate::midi::{MidiRollData, TimeSignatureChange};
@@ -15,7 +15,7 @@ const ICON_BUTTON_WIDTH: f32 = 34.0;
 const ICON_BUTTON_HEIGHT: f32 = 22.0;
 const ICON_SIZE: f32 = 14.0;
 
-pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
+pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     let is_playing = app.piano_roll.playback_is_playing();
     let seek_preview = app
         .transport_seek_preview

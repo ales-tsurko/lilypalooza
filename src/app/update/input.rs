@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::piano_roll::{adjacent_subdivision_tick, roll_scroll_id};
 
-impl LilyView {
+impl Lilypalooza {
     pub(in crate::app) fn sync_editor_widget_focus(&mut self) {
         if self.focused_workspace_pane == Some(WorkspacePaneKind::Editor) {
             self.editor.request_focus();

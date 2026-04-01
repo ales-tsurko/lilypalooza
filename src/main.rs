@@ -1,4 +1,4 @@
-//! lily-view desktop application entry point.
+//! Lilypalooza desktop application entry point.
 //!
 //! This binary wires the UI modules and starts the Iced runtime.
 
@@ -32,9 +32,9 @@ struct StartupOptions {
 }
 
 fn startup_options() -> StartupOptions {
-    const SOUND_FONT_ENV: &str = "LILY_VIEW_SOUNDFONT";
+    const SOUND_FONT_ENV: &str = "LILYPALOOZA_SOUNDFONT";
     const SOUND_FONT_FLAG: &str = "--soundfont";
-    const SCORE_ENV: &str = "LILY_VIEW_SCORE";
+    const SCORE_ENV: &str = "LILYPALOOZA_SCORE";
     const SCORE_FLAG: &str = "--score";
     const SCORE_ALIAS_FLAG: &str = "--file";
 

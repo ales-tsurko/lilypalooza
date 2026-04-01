@@ -9,7 +9,7 @@ use iced::{
     alignment, mouse,
 };
 
-use super::{LilyView, Message, PianoRollMessage, dock_view::HeaderControlGroup};
+use super::{Lilypalooza, Message, PianoRollMessage, dock_view::HeaderControlGroup};
 use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
 use crate::settings::PianoRollViewSettings;
 use crate::{fonts, icons, ui_style};
@@ -400,7 +400,7 @@ pub(super) fn roll_scroll_id() -> iced::widget::Id {
     iced::widget::Id::new(ROLL_SCROLL_ID)
 }
 
-pub(super) fn controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
+pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> {
     let state = &app.piano_roll;
     let can_toggle_tracks = state
         .current_file()
@@ -582,7 +582,7 @@ pub(super) fn controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
     controls
 }
 
-pub(super) fn content(app: &LilyView) -> Element<'_, Message> {
+pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
     let Some(file) = app.piano_roll.current_file() else {
         return container(text("No MIDI output yet").size(ui_style::FONT_SIZE_UI_SM))
             .width(Fill)

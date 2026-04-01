@@ -68,7 +68,7 @@ enum EditorFileMenuSection {
     OpenRecent,
 }
 
-struct LilyView {
+struct Lilypalooza {
     theme: iced::Theme,
     window_width: f32,
     window_height: f32,
@@ -275,8 +275,8 @@ pub fn run(startup_soundfont: Option<PathBuf>, startup_score: Option<PathBuf>) -
     .font(crate::fonts::JETBRAINS_MONO_BOLD_ITALIC_BYTES)
     .font(crate::fonts::JETBRAINS_MONO_MEDIUM_BYTES)
     .font(crate::fonts::JETBRAINS_MONO_MEDIUM_ITALIC_BYTES)
-    .theme(|state: &LilyView| state.theme.clone())
-    .title("lily-view")
+    .theme(|state: &Lilypalooza| state.theme.clone())
+    .title("Lilypalooza")
     .window(window::Settings {
         min_size: Some(Size::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)),
         ..window::Settings::default()
@@ -288,7 +288,7 @@ pub fn run(startup_soundfont: Option<PathBuf>, startup_score: Option<PathBuf>) -
 fn new(
     startup_soundfont: Option<PathBuf>,
     startup_score: Option<PathBuf>,
-) -> (LilyView, Task<Message>) {
+) -> (Lilypalooza, Task<Message>) {
     let default_settings = settings::AppSettings::default();
     let default_global_state = GlobalState::default();
     let (stored_settings, settings_error) = match settings::load() {
@@ -337,7 +337,7 @@ fn new(
         .and_then(|layout| first_active_workspace_pane(layout, &dock_groups))
         .or_else(|| dock_groups.values().next().map(|group| group.active));
 
-    let mut app = LilyView {
+    let mut app = Lilypalooza {
         theme: iced::Theme::Dark,
         window_width: MIN_WINDOW_WIDTH,
         window_height: MIN_WINDOW_HEIGHT,
@@ -439,7 +439,7 @@ fn new(
     (app, Task::batch(startup_tasks))
 }
 
-fn subscription(app: &LilyView) -> Subscription<Message> {
+fn subscription(app: &Lilypalooza) -> Subscription<Message> {
     let mut subscriptions = vec![
         window::resize_events().map(|(_id, size)| Message::WindowResized(size)),
         event::listen_with(runtime_event_to_message),
@@ -484,7 +484,7 @@ fn runtime_event_to_message(
     }
 }
 
-impl LilyView {
+impl Lilypalooza {
     pub(super) fn zoom_modifier_active(&self) -> bool {
         self.keyboard_modifiers.command() || self.keyboard_modifiers.control()
     }

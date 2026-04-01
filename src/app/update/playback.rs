@@ -1,6 +1,6 @@
 use super::*;
 
-impl LilyView {
+impl Lilypalooza {
     pub(in crate::app) fn reload_piano_roll(&mut self) {
         let Some(selected_score) = &self.current_score else {
             self.piano_roll.clear_files();

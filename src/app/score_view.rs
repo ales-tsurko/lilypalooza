@@ -8,7 +8,7 @@ use iced::{
 use iced_core::image;
 
 use super::{
-    LilyView, Message, ScoreCursorPlacement, ViewerMessage, dock_view::HeaderControlGroup,
+    Lilypalooza, Message, ScoreCursorPlacement, ViewerMessage, dock_view::HeaderControlGroup,
 };
 use crate::{fonts, icons, ui_style};
 
@@ -21,7 +21,7 @@ pub(super) fn score_base_scale() -> f32 {
     SCORE_BASE_SCALE
 }
 
-pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
+pub(super) fn score_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> {
     if app.current_score.is_none() {
         return Vec::new();
     }
@@ -197,7 +197,7 @@ pub(super) fn score_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a
     ]
 }
 
-pub(super) fn score_body(app: &LilyView) -> Element<'_, Message> {
+pub(super) fn score_body(app: &Lilypalooza) -> Element<'_, Message> {
     if app.current_score.is_none() {
         let open_button = button(
             row![

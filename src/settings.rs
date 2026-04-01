@@ -379,7 +379,7 @@ pub(crate) fn save(settings: &AppSettings) -> Result<(), String> {
 }
 
 fn settings_path() -> Result<PathBuf, String> {
-    let project_dirs = ProjectDirs::from("by", "alestsurko", "lily-view")
+    let project_dirs = ProjectDirs::from("by", "alestsurko", "lilypalooza")
         .ok_or_else(|| "Failed to resolve user config directory".to_string())?;
 
     Ok(project_dirs.config_dir().join("settings.toml"))

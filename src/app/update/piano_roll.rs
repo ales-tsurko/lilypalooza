@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::piano_roll::roll_scroll_id;
 
-impl LilyView {
+impl Lilypalooza {
     pub(in crate::app) fn handle_piano_roll_message(
         &mut self,
         message: PianoRollMessage,

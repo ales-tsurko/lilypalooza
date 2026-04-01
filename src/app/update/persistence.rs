@@ -1,7 +1,7 @@
 use super::*;
 use crate::settings::WorkspaceLayoutSettings;
 
-impl LilyView {
+impl Lilypalooza {
     pub(in crate::app) fn attach_persistence_context_for_score(&mut self, score_path: &Path) {
         let next_project_root = state::find_project_root(score_path);
         if next_project_root == self.project_root {

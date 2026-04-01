@@ -1,6 +1,6 @@
 use super::*;
 
-impl LilyView {
+impl Lilypalooza {
     pub(in crate::app) fn handle_editor_message(
         &mut self,
         message: EditorMessage,

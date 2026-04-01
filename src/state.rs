@@ -109,7 +109,7 @@ pub(crate) fn find_project_root(path: &Path) -> Option<PathBuf> {
 }
 
 pub(crate) fn project_file_path(project_root: &Path) -> PathBuf {
-    project_root.join(".lilyview").join("project.ron")
+    project_root.join(".lilypalooza").join("project.ron")
 }
 
 pub(crate) fn main_score_relative_to(
@@ -129,7 +129,7 @@ pub(crate) fn main_score_relative_to(
 }
 
 fn global_state_path() -> Result<PathBuf, String> {
-    let project_dirs = ProjectDirs::from("by", "alestsurko", "lily-view")
+    let project_dirs = ProjectDirs::from("by", "alestsurko", "lilypalooza")
         .ok_or_else(|| "Failed to resolve user config directory".to_string())?;
 
     Ok(project_dirs.config_dir().join("state.ron"))

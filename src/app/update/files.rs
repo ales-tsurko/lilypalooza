@@ -1,6 +1,6 @@
 use super::*;
 
-impl LilyView {
+impl Lilypalooza {
     pub(in crate::app) fn handle_startup_checked(
         &mut self,
         result: Result<lilypond::VersionCheck, String>,
@@ -377,7 +377,7 @@ impl LilyView {
     ) -> Result<std::path::PathBuf, String> {
         if self.build_dir.is_none() {
             let build_dir = tempfile::Builder::new()
-                .prefix("lily-view-build-")
+                .prefix("lilypalooza-build-")
                 .tempdir()
                 .map_err(|error| format!("Failed to create temporary build directory: {error}"))?;
             self.logger.push(format!(

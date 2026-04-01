@@ -2,7 +2,7 @@
 name = "iced-code-editor"
 description = "A custom code editor widget for the Iced GUI framework with syntax highlighting, line numbers, and scrolling support."
 version = "0.3.7"
-authors = ["LuDog71 <ludog71.trekker238@passmail.net>", "lily-view contributors"]
+authors = ["LuDog71 <ludog71.trekker238@passmail.net>", "Lilypalooza contributors"]
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/LuDog71FR/iced-code-editor"

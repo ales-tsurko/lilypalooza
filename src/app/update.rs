@@ -44,7 +44,7 @@ mod piano_roll;
 mod playback;
 mod score;
 
-pub(super) fn update(app: &mut LilyView, message: Message) -> Task<Message> {
+pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
     match message {
         Message::StartupChecked(result) => app.handle_startup_checked(result),
         Message::Pane(message) => app.handle_pane_message(message),
@@ -183,7 +183,7 @@ fn split_children(
 fn dock_node_min_width(
     node: &pane_grid::Node,
     state: &pane_grid::State<DockGroupId>,
-    app: &LilyView,
+    app: &Lilypalooza,
 ) -> f32 {
     match node {
         pane_grid::Node::Pane(pane) => state

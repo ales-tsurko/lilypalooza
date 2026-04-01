@@ -11,8 +11,8 @@ use iced::{
 };
 
 use super::{
-    DockDropRegion, EditorFileMenuSection, EditorHeaderMenuSection, LilyView, Message, PaneMessage,
-    WorkspacePaneKind, piano_roll, score_view, transport_bar,
+    DockDropRegion, EditorFileMenuSection, EditorHeaderMenuSection, Lilypalooza, Message,
+    PaneMessage, WorkspacePaneKind, piano_roll, score_view, transport_bar,
 };
 use crate::{fonts, icons, shortcuts, ui_style};
 
@@ -40,7 +40,7 @@ pub(super) struct HeaderControlGroup<'a> {
     pub(super) content: Element<'a, Message>,
 }
 
-pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
+pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     let toolbar = workspace_toolbar(app);
     let workspace = workspace_panes(app);
     let content: Element<'_, Message> =
@@ -59,7 +59,7 @@ pub(super) fn view(app: &LilyView) -> Element<'_, Message> {
     stack([content, overlay]).into()
 }
 
-fn workspace_toolbar(app: &LilyView) -> Element<'_, Message> {
+fn workspace_toolbar(app: &Lilypalooza) -> Element<'_, Message> {
     let pane_toggles = all_workspace_panes().into_iter().fold(
         row![]
             .spacing(ui_style::SPACE_XS)
@@ -112,7 +112,7 @@ fn toolbar_separator() -> Element<'static, Message> {
         .into()
 }
 
-fn toolbar_project_button(app: &LilyView) -> Element<'_, Message> {
+fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
     let project_title =
         truncate_toolbar_file_name(&app.project_title(), TOOLBAR_PROJECT_NAME_MAX_CHARS);
     let main_score_title = truncate_toolbar_file_name(
@@ -215,7 +215,7 @@ fn toolbar_project_button(app: &LilyView) -> Element<'_, Message> {
     .into()
 }
 
-fn project_menu_overlay(app: &LilyView) -> Element<'_, Message> {
+fn project_menu_overlay(app: &Lilypalooza) -> Element<'_, Message> {
     let backdrop: Element<'_, Message> = mouse_area(container(text("")).width(Fill).height(Fill))
         .on_press(Message::Pane(PaneMessage::CloseProjectMenu))
         .into();
@@ -233,7 +233,7 @@ fn project_menu_overlay(app: &LilyView) -> Element<'_, Message> {
     stack([backdrop, panel]).into()
 }
 
-fn project_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
+fn project_menu_panel<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
     let save_project = editor_menu_item(
         "Save Project",
         true,
@@ -292,7 +292,7 @@ fn project_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
         .into()
 }
 
-fn project_recent_projects_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
+fn project_recent_projects_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
     if app.recent_projects.is_empty() {
         return Column::new()
             .spacing(ui_style::SPACE_XS)
@@ -345,7 +345,7 @@ fn truncate_toolbar_file_name(file_name: &str, max_chars: usize) -> String {
     format!("{truncated}...")
 }
 
-fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
+fn workspace_panes(app: &Lilypalooza) -> Element<'_, Message> {
     if app.workspace_visible_pane_count() == 0 {
         return empty_workspace_placeholder(app);
     }
@@ -410,7 +410,7 @@ fn workspace_panes(app: &LilyView) -> Element<'_, Message> {
 }
 
 fn group_title_bar<'a>(
-    app: &'a LilyView,
+    app: &'a Lilypalooza,
     group_id: super::DockGroupId,
     group_width: f32,
     is_focused: bool,
@@ -429,7 +429,7 @@ fn workspace_pane_focus_body<'a>(
 }
 
 fn group_header<'a>(
-    app: &'a LilyView,
+    app: &'a Lilypalooza,
     group_id: super::DockGroupId,
     group_width: f32,
 ) -> Element<'a, Message> {
@@ -479,7 +479,7 @@ fn group_header<'a>(
 }
 
 fn pane_body_with_header_menu<'a>(
-    app: &'a LilyView,
+    app: &'a Lilypalooza,
     group_id: super::DockGroupId,
     group_width: f32,
     body: Element<'a, Message>,
@@ -525,7 +525,7 @@ fn pane_body_with_header_menu<'a>(
     stack([body, close_backdrop, menu]).into()
 }
 
-fn group_tabs<'a>(app: &'a LilyView, group: &'a super::DockGroup) -> row::Row<'a, Message> {
+fn group_tabs<'a>(app: &'a Lilypalooza, group: &'a super::DockGroup) -> row::Row<'a, Message> {
     group.tabs.iter().copied().fold(
         row![]
             .spacing(ui_style::SPACE_XS)
@@ -534,7 +534,7 @@ fn group_tabs<'a>(app: &'a LilyView, group: &'a super::DockGroup) -> row::Row<'a
     )
 }
 
-fn workspace_tab(app: &LilyView, pane: WorkspacePaneKind) -> Element<'_, Message> {
+fn workspace_tab(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'_, Message> {
     let (is_active, is_stacked) = app
         .group_for_pane(pane)
         .and_then(|group_id| app.workspace_group(group_id))
@@ -668,7 +668,7 @@ fn all_workspace_panes() -> [WorkspacePaneKind; 4] {
     ]
 }
 
-fn toolbar_pane_toggle(app: &LilyView, pane: WorkspacePaneKind) -> Element<'static, Message> {
+fn toolbar_pane_toggle(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'static, Message> {
     let is_visible = app.group_for_pane(pane).is_some();
     let title = workspace_pane_title(pane);
     let icon = workspace_pane_icon(pane);
@@ -719,7 +719,7 @@ fn toolbar_pane_toggle(app: &LilyView, pane: WorkspacePaneKind) -> Element<'stat
     .into()
 }
 
-fn empty_workspace_placeholder(app: &LilyView) -> Element<'_, Message> {
+fn empty_workspace_placeholder(app: &Lilypalooza) -> Element<'_, Message> {
     let lilypond_label = match &app.lilypond_status {
         super::LilypondStatus::Checking => "LilyPond: checking...".to_string(),
         super::LilypondStatus::Ready { detected, .. } => {
@@ -731,7 +731,7 @@ fn empty_workspace_placeholder(app: &LilyView) -> Element<'_, Message> {
     container(
         Column::new()
             .push(
-                text(format!("lily-view {}", env!("CARGO_PKG_VERSION")))
+                text(format!("Lilypalooza {}", env!("CARGO_PKG_VERSION")))
                     .size(ui_style::FONT_SIZE_UI_SM)
                     .font(fonts::MONO),
             )
@@ -804,7 +804,7 @@ fn header_overflow_menu_panel<'a>(controls: Vec<Element<'a, Message>>) -> Elemen
     .into()
 }
 
-pub(super) fn workspace_group_min_width(app: &LilyView, group_id: super::DockGroupId) -> f32 {
+pub(super) fn workspace_group_min_width(app: &Lilypalooza, group_id: super::DockGroupId) -> f32 {
     let Some(group) = app.workspace_group(group_id) else {
         return 0.0;
     };
@@ -913,7 +913,7 @@ fn header_icon(icon: svg::Handle, size: f32) -> Element<'static, Message> {
 }
 
 fn pane_header_control_groups<'a>(
-    app: &'a LilyView,
+    app: &'a Lilypalooza,
     _group_id: super::DockGroupId,
     pane: WorkspacePaneKind,
 ) -> Vec<HeaderControlGroup<'a>> {
@@ -925,7 +925,7 @@ fn pane_header_control_groups<'a>(
     }
 }
 
-fn pane_header_has_controls(app: &LilyView, pane: WorkspacePaneKind) -> bool {
+fn pane_header_has_controls(app: &Lilypalooza, pane: WorkspacePaneKind) -> bool {
     match pane {
         WorkspacePaneKind::Score => app.current_score.is_some(),
         WorkspacePaneKind::PianoRoll => true,
@@ -934,7 +934,7 @@ fn pane_header_has_controls(app: &LilyView, pane: WorkspacePaneKind) -> bool {
     }
 }
 
-fn workspace_drag_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
+fn workspace_drag_overlay(app: &Lilypalooza, size: Size) -> Element<'_, Message> {
     let Some(target) = app.dock_drop_target else {
         return container(text("")).width(Fill).height(Fill).into();
     };
@@ -950,7 +950,7 @@ fn workspace_drag_overlay(app: &LilyView, size: Size) -> Element<'_, Message> {
         .into()
 }
 
-fn workspace_drag_capture_layer(app: &LilyView) -> Element<'_, Message> {
+fn workspace_drag_capture_layer(app: &Lilypalooza) -> Element<'_, Message> {
     if app.pressed_workspace_pane.is_none() && app.dragged_workspace_pane.is_none() {
         return container(text("")).width(Fill).height(Fill).into();
     }
@@ -1119,7 +1119,7 @@ impl<Message> canvas::Program<Message> for DropOverlayCanvas {
     }
 }
 
-fn logger_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
+fn logger_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> {
     let clear_button = button(compact_control_icon(icons::brush_cleaning()))
         .style(ui_style::button_neutral)
         .padding([
@@ -1146,7 +1146,7 @@ fn logger_controls<'a>(app: &'a LilyView) -> Vec<HeaderControlGroup<'a>> {
     }]
 }
 
-fn editor_header_menu_panel<'a>(app: &'a LilyView) -> Element<'a, Message> {
+fn editor_header_menu_panel<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
     let root_width = EDITOR_MENU_ROOT_WIDTH;
     let root_menu = container(
         Column::new()
@@ -1269,7 +1269,7 @@ fn editor_root_menu_item<'a>(
         .into()
 }
 
-fn editor_file_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
+fn editor_file_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
     let has_document = app.editor.has_document();
     let has_recent_files = !app.editor_recent_files.is_empty();
     let recent_open = app.open_editor_file_menu_section == Some(EditorFileMenuSection::OpenRecent);
@@ -1376,7 +1376,7 @@ fn editor_file_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
     column.into()
 }
 
-fn editor_recent_files_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
+fn editor_recent_files_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
     if app.editor_recent_files.is_empty() {
         return Column::new()
             .spacing(ui_style::SPACE_XS)
@@ -1539,7 +1539,7 @@ fn truncate_from_left(value: &str, max_chars: usize) -> String {
     format!("…{tail}")
 }
 
-fn editor_appearance_submenu<'a>(app: &'a LilyView) -> Element<'a, Message> {
+fn editor_appearance_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
     let zoom_out_button = if app.editor.can_zoom_out() {
         button(compact_control_icon(icons::zoom_out()))
             .style(ui_style::button_neutral)
@@ -1694,7 +1694,7 @@ fn editor_fold_menu_item<'a>(
     }
 }
 
-fn editor_theme_controls_column<'a>(app: &'a LilyView) -> Column<'a, Message> {
+fn editor_theme_controls_column<'a>(app: &'a Lilypalooza) -> Column<'a, Message> {
     let settings = app.editor.theme_settings();
 
     Column::with_children(vec![
