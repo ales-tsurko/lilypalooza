@@ -6,8 +6,8 @@ It is built for writing, previewing, navigating, and playing LilyPond projects
 in one place instead of bouncing between a text editor, a PDF viewer, and MIDI
 tools.
 
-![Screenshot 1](assets/screenshots/screenshot_1.jpg)
-![Screenshot 2](assets/screenshots/screenshot_2.jpg)
+![Screenshot 1](assets/screenshots/screenshot_1.png)
+![Screenshot 2](assets/screenshots/screenshot_2.png)
 
 Current features:
 
