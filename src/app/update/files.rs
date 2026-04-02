@@ -168,6 +168,20 @@ impl Lilypalooza {
     pub(in crate::app) fn handle_tick(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
 
+        tasks.push(self.tick_editor_tabbar_autoscroll());
+
+        if let Some(tab_id) = self.pending_reveal_editor_tab {
+            if self.editor.tab_ids().contains(&tab_id) {
+                if self.editor_tab_reveal_target_x(tab_id).is_some() {
+                    tasks.push(self.reveal_editor_tab(tab_id));
+                } else {
+                    self.pending_reveal_editor_tab = None;
+                }
+            } else {
+                self.pending_reveal_editor_tab = None;
+            }
+        }
+
         if self.editor_font_metrics_refresh_pending {
             self.editor.refresh_font_metrics();
             self.editor_font_metrics_refresh_pending = false;
@@ -219,6 +233,7 @@ impl Lilypalooza {
         let editor_task = match self.editor.load_file(&watched_path) {
             Ok((tab_id, task, _)) => {
                 self.register_editor_recent_file(&watched_path);
+                self.pending_reveal_editor_tab = Some(tab_id);
                 let sync_task = self.editor.sync_tab_scroll_state(tab_id);
                 self.map_editor_widget_task(tab_id, Task::batch([task, sync_task]))
             }

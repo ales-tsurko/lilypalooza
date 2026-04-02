@@ -434,7 +434,7 @@ fn workspace_panes(app: &Lilypalooza) -> Element<'_, Message> {
 }
 
 fn editor_pane_body(app: &Lilypalooza) -> Element<'_, Message> {
-    iced::widget::column![
+    let content: Element<'_, Message> = iced::widget::column![
         editor_tab_strip(app),
         app.editor.view(
             |tab_id, message| Message::Editor(super::EditorMessage::Widget { tab_id, message })
@@ -443,7 +443,19 @@ fn editor_pane_body(app: &Lilypalooza) -> Element<'_, Message> {
     .spacing(0)
     .width(Fill)
     .height(Fill)
-    .into()
+    .into();
+
+    if app.dragged_editor_tab.is_some() {
+        let overlay: Element<'_, Message> =
+            mouse_area(container(text("")).width(Fill).height(Fill))
+                .on_move(|position| Message::Editor(super::EditorMessage::TabGlobalMoved(position)))
+                .on_release(Message::Editor(super::EditorMessage::TabDragReleased))
+                .into();
+
+        stack([content, overlay]).width(Fill).height(Fill).into()
+    } else {
+        content
+    }
 }
 
 fn editor_tab_strip(app: &Lilypalooza) -> Element<'_, Message> {
@@ -458,7 +470,7 @@ fn editor_tab_strip(app: &Lilypalooza) -> Element<'_, Message> {
             .height(Length::Fixed(EDITOR_TAB_HEIGHT)),
     )
     .on_move(|position| Message::Editor(super::EditorMessage::TabBarMoved(position)))
-    .on_enter(Message::Editor(super::EditorMessage::TabHovered(None)))
+    .on_enter(Message::Editor(super::EditorMessage::TabBarEmptyMoved))
     .on_double_click(Message::Editor(super::EditorMessage::NewRequested));
 
     let tabs_scroll = mouse_area(
@@ -473,9 +485,11 @@ fn editor_tab_strip(app: &Lilypalooza) -> Element<'_, Message> {
             .width(Fill)
             .style(ui_style::workspace_toolbar_surface),
         )
+        .id(super::EDITOR_TABBAR_SCROLL_ID)
         .direction(scrollable::Direction::Horizontal(
             scrollable::Scrollbar::new().width(4).scroller_width(4),
         ))
+        .on_scroll(|viewport| Message::Editor(super::EditorMessage::TabBarScrolled(viewport)))
         .style(ui_style::editor_tabbar_scrollable)
         .width(Fill)
         .height(Length::Fixed(EDITOR_TAB_HEIGHT)),

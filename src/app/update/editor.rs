@@ -2,6 +2,11 @@ use super::*;
 use iced::widget::operation::{focus, select_all};
 
 const EDITOR_TAB_WIDTH: f32 = 144.0;
+const EDITOR_TAB_SLOT_WIDTH: f32 = EDITOR_TAB_WIDTH + 4.0;
+const EDITOR_TABBAR_AUTOSCROLL_EDGE: f32 = 32.0;
+const EDITOR_TABBAR_AUTOSCROLL_MIN_STEP: f32 = 3.0;
+const EDITOR_TABBAR_AUTOSCROLL_MAX_STEP: f32 = 12.0;
+const EDITOR_TABBAR_NEW_BUTTON_WIDTH: f32 = 36.0;
 
 impl Lilypalooza {
     pub(in crate::app) fn handle_editor_message(
@@ -30,6 +35,7 @@ impl Lilypalooza {
                 let (tab_id, task, _reused) = self.editor.new_document();
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.request_focus();
+                self.pending_reveal_editor_tab = Some(tab_id);
                 self.map_editor_widget_task(tab_id, task)
             }
             EditorMessage::TabPressed(tab_id) => {
@@ -39,6 +45,7 @@ impl Lilypalooza {
                 self.editor.activate_tab(tab_id);
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.request_focus();
+                self.pending_reveal_editor_tab = Some(tab_id);
                 self.pressed_editor_tab = Some(tab_id);
                 self.editor_tab_drag_origin = None;
                 self.dragged_editor_tab = None;
@@ -47,6 +54,10 @@ impl Lilypalooza {
             EditorMessage::TabMoved { tab_id, position } => {
                 self.hovered_editor_tab = Some(tab_id);
                 self.editor_tab_drop_after = position.x >= EDITOR_TAB_WIDTH * 0.5;
+                if self.dragged_editor_tab.is_some() {
+                    self.editor_tabbar_drag_pointer_x = Some(position.x);
+                    self.update_editor_tabbar_autoscroll(position.x);
+                }
                 if self.dragged_editor_tab.is_none()
                     && let Some(pressed_tab) = self.pressed_editor_tab
                 {
@@ -62,18 +73,42 @@ impl Lilypalooza {
                 }
                 Task::none()
             }
+            EditorMessage::TabGlobalMoved(position) => {
+                if self.dragged_editor_tab.is_some() {
+                    self.editor_tabbar_drag_pointer_x = Some(position.x);
+                    self.update_editor_tabbar_autoscroll(position.x);
+                    self.update_editor_drag_target_from_x(position.x);
+                }
+                Task::none()
+            }
             EditorMessage::TabHovered(tab_id) => {
                 self.hovered_editor_tab = tab_id;
                 Task::none()
             }
+            EditorMessage::TabBarScrolled(viewport) => {
+                self.editor_tabbar_scroll_x = viewport.absolute_offset().x;
+                self.editor_tabbar_viewport_width = viewport.bounds().width;
+                if self.dragged_editor_tab.is_some()
+                    && let Some(pointer_x) = self.editor_tabbar_drag_pointer_x
+                {
+                    self.update_editor_drag_target_from_x(pointer_x);
+                }
+                Task::none()
+            }
+            EditorMessage::TabBarEmptyMoved => {
+                if let Some(last_tab) = self.editor.tab_ids().last().copied() {
+                    self.hovered_editor_tab = Some(last_tab);
+                    self.editor_tab_drop_after = true;
+                } else {
+                    self.hovered_editor_tab = None;
+                }
+                Task::none()
+            }
             EditorMessage::TabBarMoved(position) => {
                 if self.dragged_editor_tab.is_some() {
-                    if let Some(last_tab) = self.editor.tab_ids().last().copied() {
-                        self.hovered_editor_tab = Some(last_tab);
-                        self.editor_tab_drop_after = true;
-                    } else {
-                        self.hovered_editor_tab = None;
-                    }
+                    self.editor_tabbar_drag_pointer_x = Some(position.x);
+                    self.update_editor_tabbar_autoscroll(position.x);
+                    self.update_editor_drag_target_from_x(position.x);
                 }
                 if self.dragged_editor_tab.is_none()
                     && let Some(pressed_tab) = self.pressed_editor_tab
@@ -103,7 +138,9 @@ impl Lilypalooza {
                 Task::none()
             }
             EditorMessage::TabDragExited => {
-                self.clear_editor_tab_drag_state();
+                if self.dragged_editor_tab.is_none() {
+                    self.hovered_editor_tab = None;
+                }
                 Task::none()
             }
             EditorMessage::StartRename(tab_id) => self.start_editor_tab_rename(tab_id),
@@ -285,6 +322,7 @@ impl Lilypalooza {
                 }
                 self.editor.request_focus();
                 let sync_task = self.editor.sync_tab_scroll_state(tab_id);
+                self.pending_reveal_editor_tab = Some(tab_id);
                 self.map_editor_widget_task(tab_id, iced::Task::batch([task, sync_task]))
             }
             Err(error) => {
@@ -568,6 +606,125 @@ impl Lilypalooza {
         self.editor_tab_drag_origin = None;
         self.hovered_editor_tab = None;
         self.editor_tab_drop_after = false;
+        self.editor_tabbar_autoscroll_direction = 0;
+        self.editor_tabbar_drag_pointer_x = None;
+    }
+
+    fn update_editor_drag_target_from_x(&mut self, x: f32) {
+        let tab_ids = self.editor.tab_ids();
+        if tab_ids.is_empty() {
+            self.hovered_editor_tab = None;
+            self.editor_tab_drop_after = false;
+            return;
+        }
+
+        let effective_x = (x + self.editor_tabbar_scroll_x).max(0.0);
+        let total_tabs_width = EDITOR_TAB_SLOT_WIDTH * tab_ids.len() as f32;
+
+        if effective_x >= total_tabs_width {
+            self.hovered_editor_tab = tab_ids.last().copied();
+            self.editor_tab_drop_after = true;
+            return;
+        }
+
+        let slot_index = (effective_x / EDITOR_TAB_SLOT_WIDTH).floor() as usize;
+        let clamped_index = slot_index.min(tab_ids.len() - 1);
+        let within_slot = effective_x - clamped_index as f32 * EDITOR_TAB_SLOT_WIDTH;
+
+        self.hovered_editor_tab = Some(tab_ids[clamped_index]);
+        self.editor_tab_drop_after = within_slot >= (2.0 + EDITOR_TAB_WIDTH / 2.0);
+    }
+
+    pub(in crate::app) fn tick_editor_tabbar_autoscroll(&mut self) -> Task<Message> {
+        if self.dragged_editor_tab.is_none() || self.editor_tabbar_autoscroll_direction == 0 {
+            return Task::none();
+        }
+
+        let Some(pointer_x) = self.editor_tabbar_drag_pointer_x else {
+            return Task::none();
+        };
+        self.update_editor_drag_target_from_x(pointer_x);
+
+        let scroll_region_width = self.editor_tabbar_scroll_region_width();
+        if scroll_region_width <= 0.0 {
+            return Task::none();
+        }
+
+        let edge_ratio = if self.editor_tabbar_autoscroll_direction < 0 {
+            ((EDITOR_TABBAR_AUTOSCROLL_EDGE - pointer_x) / EDITOR_TABBAR_AUTOSCROLL_EDGE)
+                .clamp(0.0, 1.0)
+        } else {
+            ((pointer_x - (scroll_region_width - EDITOR_TABBAR_AUTOSCROLL_EDGE))
+                / EDITOR_TABBAR_AUTOSCROLL_EDGE)
+                .clamp(0.0, 1.0)
+        };
+        let scroll_step = EDITOR_TABBAR_AUTOSCROLL_MIN_STEP
+            + (EDITOR_TABBAR_AUTOSCROLL_MAX_STEP - EDITOR_TABBAR_AUTOSCROLL_MIN_STEP) * edge_ratio;
+
+        iced::widget::operation::scroll_by(
+            super::EDITOR_TABBAR_SCROLL_ID,
+            iced::widget::operation::AbsoluteOffset {
+                x: scroll_step * f32::from(self.editor_tabbar_autoscroll_direction),
+                y: 0.0,
+            },
+        )
+    }
+
+    fn update_editor_tabbar_autoscroll(&mut self, x: f32) {
+        let scroll_region_width = self.editor_tabbar_scroll_region_width();
+
+        self.editor_tabbar_autoscroll_direction = if x <= EDITOR_TABBAR_AUTOSCROLL_EDGE {
+            -1
+        } else if x >= scroll_region_width - EDITOR_TABBAR_AUTOSCROLL_EDGE {
+            1
+        } else {
+            0
+        };
+    }
+
+    fn editor_tabbar_scroll_region_width(&self) -> f32 {
+        if self.editor_tabbar_viewport_width > 0.0 {
+            self.editor_tabbar_viewport_width
+        } else {
+            (self.window_width - EDITOR_TABBAR_NEW_BUTTON_WIDTH).max(0.0)
+        }
+    }
+
+    pub(in crate::app) fn editor_tab_reveal_target_x(&self, tab_id: u64) -> Option<f32> {
+        let tab_ids = self.editor.tab_ids();
+        let index = tab_ids.iter().position(|candidate| *candidate == tab_id)?;
+
+        let viewport_width = self.editor_tabbar_scroll_region_width();
+        if viewport_width <= 0.0 {
+            return None;
+        }
+
+        let tab_start = index as f32 * EDITOR_TAB_SLOT_WIDTH;
+        let tab_end = tab_start + EDITOR_TAB_SLOT_WIDTH;
+        let visible_start = self.editor_tabbar_scroll_x;
+        let visible_end = visible_start + viewport_width;
+
+        if tab_start < visible_start {
+            Some(tab_start.max(0.0))
+        } else if tab_end > visible_end {
+            Some((tab_end - viewport_width).max(0.0))
+        } else {
+            None
+        }
+    }
+
+    pub(in crate::app) fn reveal_editor_tab(&self, tab_id: u64) -> Task<Message> {
+        let Some(target_x) = self.editor_tab_reveal_target_x(tab_id) else {
+            return Task::none();
+        };
+
+        iced::widget::operation::scroll_to(
+            super::EDITOR_TABBAR_SCROLL_ID,
+            iced::widget::operation::AbsoluteOffset {
+                x: target_x.max(0.0),
+                y: 0.0,
+            },
+        )
     }
 }
 

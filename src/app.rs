@@ -41,7 +41,9 @@ mod view;
 const MIN_WINDOW_WIDTH: f32 = 960.0;
 const MIN_WINDOW_HEIGHT: f32 = 640.0;
 const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_millis(120);
+const EDITOR_TABBAR_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(16);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
+pub(super) const EDITOR_TABBAR_SCROLL_ID: &str = "editor-tabbar-scroll";
 pub(super) const KEYBOARD_SCROLL_STEP: f32 = 84.0;
 const MIN_SVG_ZOOM: f32 = 0.4;
 const MAX_SVG_ZOOM: f32 = 3.0;
@@ -106,6 +108,11 @@ struct Lilypalooza {
     dragged_editor_tab: Option<u64>,
     editor_tab_drag_origin: Option<Point>,
     editor_tab_drop_after: bool,
+    editor_tabbar_scroll_x: f32,
+    editor_tabbar_viewport_width: f32,
+    editor_tabbar_autoscroll_direction: i8,
+    editor_tabbar_drag_pointer_x: Option<f32>,
+    pending_reveal_editor_tab: Option<u64>,
     renaming_editor_tab: Option<u64>,
     editor_tab_rename_value: String,
     editor_tab_rename_input_id: Id,
@@ -404,6 +411,11 @@ fn new(
         dragged_editor_tab: None,
         editor_tab_drag_origin: None,
         editor_tab_drop_after: false,
+        editor_tabbar_scroll_x: 0.0,
+        editor_tabbar_viewport_width: 0.0,
+        editor_tabbar_autoscroll_direction: 0,
+        editor_tabbar_drag_pointer_x: None,
+        pending_reveal_editor_tab: None,
         renaming_editor_tab: None,
         editor_tab_rename_value: String::new(),
         editor_tab_rename_input_id: Id::unique(),
@@ -494,6 +506,11 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
 
     if app.compile_session.is_some() || app.score_watcher.is_some() || app.editor.has_document() {
         subscriptions.push(iced::time::every(BACKGROUND_POLL_INTERVAL).map(|_| Message::Tick));
+    }
+
+    if app.dragged_editor_tab.is_some() {
+        subscriptions
+            .push(iced::time::every(EDITOR_TABBAR_AUTOSCROLL_INTERVAL).map(|_| Message::Tick));
     }
 
     if app.score_zoom_preview_active() || app.score_zoom_persist_pending {
