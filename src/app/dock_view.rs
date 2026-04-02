@@ -36,7 +36,7 @@ const PROJECT_MENU_WIDTH: f32 = 280.0;
 const PROJECT_RECENT_LABEL_MAX_CHARS: usize = 40;
 const EDITOR_TAB_WIDTH: f32 = 144.0;
 const EDITOR_TAB_HEIGHT: f32 = 32.0;
-const EDITOR_TAB_TITLE_MAX_CHARS: usize = 16;
+const EDITOR_TAB_TITLE_MAX_CHARS: usize = 18;
 
 pub(super) struct HeaderControlGroup<'a> {
     pub(super) min_width: f32,
@@ -437,6 +437,7 @@ fn editor_pane_body(app: &Lilypalooza) -> Element<'_, Message> {
     let content: Element<'_, Message> = iced::widget::column![
         editor_tab_strip(app),
         app.editor.view(
+            Message::Editor(super::EditorMessage::OpenRequested),
             |tab_id, message| Message::Editor(super::EditorMessage::Widget { tab_id, message })
         ),
     ]

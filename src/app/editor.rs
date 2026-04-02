@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use iced::widget::{container, keyed_column, text};
+use iced::widget::{button, container, keyed_column, text};
 use iced::{Element, Fill};
 use iced_code_editor::{CodeEditor, Message as EditorWidgetMessage, theme::ThemeTuning};
 
@@ -9,7 +9,7 @@ use crate::fonts;
 use crate::settings::{EditorThemeSettings, EditorViewSettings};
 use crate::ui_style;
 
-const EMPTY_EDITOR_MESSAGE: &str = "Open a LilyPond score to edit its source here.";
+const EMPTY_EDITOR_MESSAGE: &str = "Edit a text file here.";
 const MIN_EDITOR_FONT_SIZE: f32 = 9.0;
 const MAX_EDITOR_FONT_SIZE: f32 = 32.0;
 const EDITOR_FONT_SIZE_STEP: f32 = 1.0;
@@ -455,18 +455,32 @@ impl EditorState {
 
     pub(super) fn view<'a, Message>(
         &'a self,
+        open_message: Message,
         map_message: impl Fn(u64, EditorWidgetMessage) -> Message + 'a,
     ) -> Element<'a, Message>
     where
         Message: Clone + 'a,
     {
         let Some(tab) = self.active_tab() else {
-            return container(text(EMPTY_EDITOR_MESSAGE).size(ui_style::FONT_SIZE_BODY_MD))
-                .width(Fill)
-                .height(Fill)
-                .center_x(Fill)
-                .center_y(Fill)
-                .into();
+            return container(
+                iced::widget::column![
+                    text(EMPTY_EDITOR_MESSAGE).size(ui_style::FONT_SIZE_UI_SM),
+                    button(text("Open...").size(ui_style::FONT_SIZE_UI_SM))
+                        .style(ui_style::button_neutral)
+                        .padding([
+                            ui_style::PADDING_BUTTON_COMPACT_V,
+                            ui_style::PADDING_BUTTON_COMPACT_H,
+                        ])
+                        .on_press(open_message)
+                ]
+                .spacing(ui_style::SPACE_SM)
+                .align_x(iced::alignment::Horizontal::Center),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into();
         };
 
         let tab_id = tab.id;
