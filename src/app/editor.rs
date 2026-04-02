@@ -71,6 +71,12 @@ impl EditorState {
             .unwrap_or_else(iced::Task::none)
     }
 
+    pub(super) fn refresh_font_metrics(&mut self) {
+        for tab in &mut self.tabs {
+            tab.widget.refresh_font_metrics();
+        }
+    }
+
     pub(super) fn active_tab_id(&self) -> Option<u64> {
         self.active_tab_id
     }

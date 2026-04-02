@@ -168,6 +168,16 @@ impl Lilypalooza {
     pub(in crate::app) fn handle_tick(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
 
+        if self.editor_font_metrics_refresh_pending {
+            self.editor.refresh_font_metrics();
+            self.editor_font_metrics_refresh_pending = false;
+            if let Some(tab_id) = self.editor.active_tab_id() {
+                tasks.push(
+                    self.map_editor_widget_task(tab_id, self.editor.sync_tab_scroll_state(tab_id)),
+                );
+            }
+        }
+
         for tab_id in self.editor.tab_ids() {
             let task = self.editor.update(tab_id, &iced_code_editor::Message::Tick);
             tasks.push(self.map_editor_widget_task(tab_id, task));

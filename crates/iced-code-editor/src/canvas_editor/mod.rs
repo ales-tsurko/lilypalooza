@@ -505,6 +505,14 @@ impl CodeEditor {
         self.recalculate_char_dimensions(auto_adjust_line_height);
     }
 
+    /// Recalculate glyph metrics using the current font and size.
+    ///
+    /// This is useful after startup when bundled fonts may only become fully
+    /// available after editor instances have already been constructed.
+    pub fn refresh_font_metrics(&mut self) {
+        self.recalculate_char_dimensions(false);
+    }
+
     /// Recalculates character dimensions based on current font and size.
     fn recalculate_char_dimensions(&mut self, auto_adjust_line_height: bool) {
         self.char_width = self.measure_single_char_width("a");

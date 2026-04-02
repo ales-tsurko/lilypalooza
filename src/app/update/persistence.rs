@@ -395,6 +395,7 @@ impl Lilypalooza {
         let (_tasks, warnings) =
             self.editor
                 .restore_file_tabs(paths, active_path, has_clean_untitled);
+        self.editor_font_metrics_refresh_pending = !self.editor.tab_ids().is_empty();
         for warning in warnings {
             self.logger.push(warning);
         }
