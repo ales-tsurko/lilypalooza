@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -114,9 +115,14 @@ impl EditorState {
     }
 
     pub(super) fn find_tab_by_path(&self, path: &Path) -> Option<u64> {
-        self.tabs
-            .iter()
-            .find_map(|tab| (tab.path.as_deref() == Some(path)).then_some(tab.id))
+        let normalized_path = normalize_editor_path(path);
+        self.tabs.iter().find_map(|tab| {
+            tab.path
+                .as_deref()
+                .map(normalize_editor_path)
+                .filter(|candidate| *candidate == normalized_path)
+                .map(|_| tab.id)
+        })
     }
 
     pub(super) fn suggested_save_name(&self) -> String {
@@ -273,15 +279,21 @@ impl EditorState {
         &mut self,
         path: &Path,
     ) -> Result<(u64, iced::Task<EditorWidgetMessage>, bool), String> {
-        if let Some(tab_id) = self.find_tab_by_path(path) {
+        let normalized_path = normalize_editor_path(path);
+
+        if let Some(tab_id) = self.find_tab_by_path(&normalized_path) {
             self.active_tab_id = Some(tab_id);
             return Ok((tab_id, iced::Task::none(), true));
         }
 
-        let text = fs::read_to_string(path)
-            .map_err(|error| format!("Failed to read editor file {}: {error}", path.display()))?;
+        let text = fs::read_to_string(&normalized_path).map_err(|error| {
+            format!(
+                "Failed to read editor file {}: {error}",
+                normalized_path.display()
+            )
+        })?;
         let tab_id = self.allocate_tab_id();
-        let task = self.load_document_into_tab(tab_id, &text, Some(path.to_path_buf()), false)?;
+        let task = self.load_document_into_tab(tab_id, &text, Some(normalized_path), false)?;
         Ok((tab_id, task, false))
     }
 
@@ -347,8 +359,8 @@ impl EditorState {
         fs::write(path, &content)
             .map_err(|error| format!("Failed to save editor file {}: {error}", path.display()))?;
 
-        let task =
-            self.load_document_into_tab(tab_id, &content, Some(path.to_path_buf()), false)?;
+        let normalized_path = normalize_editor_path(path);
+        let task = self.load_document_into_tab(tab_id, &content, Some(normalized_path), false)?;
         if let Some(tab) = self.tab_mut(tab_id) {
             tab.widget.mark_saved();
         }
@@ -372,8 +384,9 @@ impl EditorState {
             )
         })?;
 
+        let normalized_path = normalize_editor_path(new_path);
         if let Some(tab) = self.tab_mut(tab_id) {
-            tab.path = Some(new_path.to_path_buf());
+            tab.path = Some(normalized_path);
         }
 
         Ok(iced::Task::none())
@@ -634,6 +647,18 @@ fn to_editor_theme_tuning(settings: EditorThemeSettings) -> ThemeTuning {
         text_dim: settings.text_dim,
         comment_dim: settings.comment_dim,
     }
+}
+
+fn normalize_editor_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        }
+    })
 }
 
 fn syntax_for_path(path: &Path) -> &str {

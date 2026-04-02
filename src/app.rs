@@ -841,6 +841,7 @@ fn contains_group(node: &DockNode, group_id: DockGroupId) -> bool {
 }
 
 fn selected_score_from_path(path: PathBuf) -> Result<SelectedScore, String> {
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
     let file_name = path
         .file_name()
         .ok_or_else(|| "Selected path has no file name".to_string())?
