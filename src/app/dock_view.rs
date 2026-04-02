@@ -152,7 +152,7 @@ fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
                         text(project_title)
                             .size(ui_style::FONT_SIZE_UI_SM)
                             .font(iced::Font {
-                                weight: iced::font::Weight::Normal,
+                                weight: iced::font::Weight::Bold,
                                 ..fonts::UI
                             })
                             .line_height(1.0),
