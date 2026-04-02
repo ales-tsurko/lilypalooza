@@ -25,6 +25,7 @@ pub(super) enum Message {
     Tick,
     Frame(Instant),
     WindowResized(Size),
+    WindowCloseRequested,
 }
 
 #[derive(Debug, Clone)]
@@ -81,8 +82,27 @@ pub(super) enum FileMessage {
 
 #[derive(Debug, Clone)]
 pub(super) enum EditorMessage {
-    Widget(EditorWidgetMessage),
+    Widget {
+        tab_id: u64,
+        message: EditorWidgetMessage,
+    },
     NewRequested,
+    TabPressed(u64),
+    TabMoved {
+        tab_id: u64,
+        position: iced::Point,
+    },
+    TabHovered(Option<u64>),
+    TabBarMoved(iced::Point),
+    StartRename(u64),
+    RenameInputChanged(String),
+    CommitRename,
+    CancelRename,
+    TabDragReleased,
+    TabDragExited,
+    CloseTabRequested(u64),
+    RenameRequested,
+    RenamePicked(Option<PathBuf>),
     OpenRequested,
     OpenPicked(Option<PathBuf>),
     OpenRecent(PathBuf),
@@ -152,5 +172,6 @@ pub(super) enum PianoRollMessage {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum PromptMessage {
     Acknowledge,
+    Discard,
     Cancel,
 }

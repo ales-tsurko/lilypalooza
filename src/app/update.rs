@@ -60,6 +60,7 @@ pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
         Message::Tick => app.handle_tick(),
         Message::Frame(_now) => app.handle_frame(),
         Message::WindowResized(size) => app.handle_window_resized(size),
+        Message::WindowCloseRequested => app.handle_window_close_requested(),
     }
 }
 

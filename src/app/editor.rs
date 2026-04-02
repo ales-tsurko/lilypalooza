@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use iced::widget::{container, text};
+use iced::widget::{container, keyed_column, text};
 use iced::{Element, Fill};
 use iced_code_editor::{CodeEditor, Message as EditorWidgetMessage, theme::ThemeTuning};
 
@@ -14,10 +14,24 @@ const MIN_EDITOR_FONT_SIZE: f32 = 9.0;
 const MAX_EDITOR_FONT_SIZE: f32 = 32.0;
 const EDITOR_FONT_SIZE_STEP: f32 = 1.0;
 
-pub(super) struct EditorState {
+#[derive(Debug, Clone)]
+pub(super) struct EditorTabSummary {
+    pub(super) id: u64,
+    pub(super) title: String,
+    pub(super) dirty: bool,
+    pub(super) active: bool,
+}
+
+struct EditorTab {
+    id: u64,
     widget: CodeEditor,
-    document_open: bool,
     path: Option<PathBuf>,
+}
+
+pub(super) struct EditorState {
+    tabs: Vec<EditorTab>,
+    active_tab_id: Option<u64>,
+    next_tab_id: u64,
     app_theme: iced::Theme,
     view_settings: EditorViewSettings,
     default_view_settings: EditorViewSettings,
@@ -31,9 +45,9 @@ impl EditorState {
         theme_settings: EditorThemeSettings,
     ) -> Self {
         Self {
-            widget: build_editor("", "text", &app_theme, view_settings, theme_settings),
-            document_open: false,
-            path: None,
+            tabs: Vec::new(),
+            active_tab_id: None,
+            next_tab_id: 1,
             app_theme,
             view_settings,
             default_view_settings: EditorViewSettings::default(),
@@ -43,80 +57,80 @@ impl EditorState {
 
     pub(super) fn update(
         &mut self,
+        tab_id: u64,
         message: &EditorWidgetMessage,
     ) -> iced::Task<EditorWidgetMessage> {
-        self.widget.update(message)
+        self.tab_mut(tab_id)
+            .map(|tab| tab.widget.update(message))
+            .unwrap_or_else(iced::Task::none)
     }
 
-    pub(super) fn load_file(
-        &mut self,
-        path: &Path,
-    ) -> Result<iced::Task<EditorWidgetMessage>, String> {
-        let text = fs::read_to_string(path)
-            .map_err(|error| format!("Failed to read editor file {}: {error}", path.display()))?;
-
-        self.load_document(&text, Some(path.to_path_buf()), false)
+    pub(super) fn sync_tab_scroll_state(&self, tab_id: u64) -> iced::Task<EditorWidgetMessage> {
+        self.tab(tab_id)
+            .map(|tab| tab.widget.sync_scroll_state())
+            .unwrap_or_else(iced::Task::none)
     }
 
-    pub(super) fn new_document(&mut self) -> iced::Task<EditorWidgetMessage> {
-        self.load_document("", None, false)
-            .unwrap_or_else(|_| iced::Task::none())
-    }
-
-    pub(super) fn save_to_disk(
-        &mut self,
-    ) -> Result<(PathBuf, iced::Task<EditorWidgetMessage>), String> {
-        let Some(path) = self.path.clone() else {
-            return Err("No editor file is currently loaded".to_string());
-        };
-
-        let task = self.save_to_path(&path)?;
-
-        Ok((path, task))
-    }
-
-    pub(super) fn save_to_path(
-        &mut self,
-        path: &Path,
-    ) -> Result<iced::Task<EditorWidgetMessage>, String> {
-        fs::write(path, self.widget.content())
-            .map_err(|error| format!("Failed to save editor file {}: {error}", path.display()))?;
-        let content = self.widget.content().to_string();
-        let task = self.load_document(&content, Some(path.to_path_buf()), false)?;
-        self.widget.mark_saved();
-        Ok(task)
+    pub(super) fn active_tab_id(&self) -> Option<u64> {
+        self.active_tab_id
     }
 
     pub(super) fn has_document(&self) -> bool {
-        self.document_open
-    }
-
-    pub(super) fn has_path(&self) -> bool {
-        self.path.is_some()
+        !self.tabs.is_empty()
     }
 
     pub(super) fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
+        self.active_tab().and_then(|tab| tab.path.as_deref())
     }
 
-    pub(super) fn lose_focus(&mut self) {
-        self.widget.lose_focus();
+    pub(super) fn tab_path(&self, tab_id: u64) -> Option<&Path> {
+        self.tab(tab_id).and_then(|tab| tab.path.as_deref())
     }
 
-    pub(super) fn request_focus(&mut self) {
-        self.widget.request_focus();
+    pub(super) fn tab_is_modified(&self, tab_id: u64) -> bool {
+        self.tab(tab_id).is_some_and(|tab| tab.widget.is_modified())
     }
 
-    pub(super) fn file_name(&self) -> Option<&str> {
-        self.path
-            .as_deref()
-            .and_then(Path::file_name)
-            .and_then(|file_name| file_name.to_str())
-            .or_else(|| self.document_open.then_some("Untitled"))
+    pub(super) fn has_dirty_tabs(&self) -> bool {
+        self.tabs.iter().any(|tab| tab.widget.is_modified())
+    }
+
+    pub(super) fn dirty_tab_ids(&self) -> Vec<u64> {
+        self.tabs
+            .iter()
+            .filter(|tab| tab.widget.is_modified())
+            .map(|tab| tab.id)
+            .collect()
+    }
+
+    pub(super) fn tab_ids(&self) -> Vec<u64> {
+        self.tabs.iter().map(|tab| tab.id).collect()
+    }
+
+    pub(super) fn find_tab_by_path(&self, path: &Path) -> Option<u64> {
+        self.tabs
+            .iter()
+            .find_map(|tab| (tab.path.as_deref() == Some(path)).then_some(tab.id))
     }
 
     pub(super) fn suggested_save_name(&self) -> String {
-        self.file_name().unwrap_or("untitled.ly").to_string()
+        self.path()
+            .and_then(Path::file_name)
+            .and_then(|file_name| file_name.to_str())
+            .unwrap_or("untitled.ly")
+            .to_string()
+    }
+
+    pub(super) fn suggested_rename_name(&self, tab_id: u64) -> String {
+        self.tab(tab_id)
+            .and_then(|tab| {
+                tab.path
+                    .as_deref()
+                    .and_then(Path::file_name)
+                    .and_then(|file_name| file_name.to_str())
+            })
+            .unwrap_or("untitled.ly")
+            .to_string()
     }
 
     pub(super) fn theme_settings(&self) -> EditorThemeSettings {
@@ -128,19 +142,19 @@ impl EditorState {
     }
 
     pub(super) fn font_size_points(&self) -> u32 {
-        self.widget.font_size().round() as u32
+        self.view_settings.font_size.round() as u32
     }
 
     pub(super) fn can_zoom_in(&self) -> bool {
-        self.widget.font_size() < MAX_EDITOR_FONT_SIZE - f32::EPSILON
+        self.view_settings.font_size < MAX_EDITOR_FONT_SIZE - f32::EPSILON
     }
 
     pub(super) fn can_zoom_out(&self) -> bool {
-        self.widget.font_size() > MIN_EDITOR_FONT_SIZE + f32::EPSILON
+        self.view_settings.font_size > MIN_EDITOR_FONT_SIZE + f32::EPSILON
     }
 
     pub(super) fn can_reset_zoom(&self) -> bool {
-        (self.widget.font_size() - self.default_view_settings.font_size).abs() > 1e-4
+        (self.view_settings.font_size - self.default_view_settings.font_size).abs() > 1e-4
     }
 
     pub(super) fn set_hue_offset_degrees(&mut self, value: f32) {
@@ -174,12 +188,12 @@ impl EditorState {
     }
 
     pub(super) fn zoom_in(&mut self) {
-        let next = (self.widget.font_size() + EDITOR_FONT_SIZE_STEP).min(MAX_EDITOR_FONT_SIZE);
+        let next = (self.view_settings.font_size + EDITOR_FONT_SIZE_STEP).min(MAX_EDITOR_FONT_SIZE);
         self.set_font_size(next);
     }
 
     pub(super) fn zoom_out(&mut self) {
-        let next = (self.widget.font_size() - EDITOR_FONT_SIZE_STEP).max(MIN_EDITOR_FONT_SIZE);
+        let next = (self.view_settings.font_size - EDITOR_FONT_SIZE_STEP).max(MIN_EDITOR_FONT_SIZE);
         self.set_font_size(next);
     }
 
@@ -187,66 +201,389 @@ impl EditorState {
         self.set_font_size(self.default_view_settings.font_size);
     }
 
+    pub(super) fn tab_summaries(&self) -> Vec<EditorTabSummary> {
+        let mut untitled_counter = 0usize;
+
+        self.tabs
+            .iter()
+            .map(|tab| {
+                let title = if let Some(path) = &tab.path {
+                    path.file_name()
+                        .and_then(|file_name| file_name.to_str())
+                        .unwrap_or("Untitled")
+                        .to_string()
+                } else {
+                    untitled_counter += 1;
+                    if untitled_counter == 1 {
+                        "Untitled".to_string()
+                    } else {
+                        format!("Untitled {untitled_counter}")
+                    }
+                };
+
+                EditorTabSummary {
+                    id: tab.id,
+                    title,
+                    dirty: tab.widget.is_modified(),
+                    active: self.active_tab_id == Some(tab.id),
+                }
+            })
+            .collect()
+    }
+
+    pub(super) fn activate_tab(&mut self, tab_id: u64) -> bool {
+        if self.tab(tab_id).is_none() {
+            return false;
+        }
+
+        self.active_tab_id = Some(tab_id);
+        true
+    }
+
+    pub(super) fn new_document(&mut self) -> (u64, iced::Task<EditorWidgetMessage>, bool) {
+        if let Some(tab_id) = self.find_reusable_empty_tab() {
+            self.active_tab_id = Some(tab_id);
+            return (tab_id, iced::Task::none(), true);
+        }
+
+        let tab_id = self.allocate_tab_id();
+        let tab = EditorTab {
+            id: tab_id,
+            widget: build_editor(
+                "",
+                "lilypond",
+                &self.app_theme,
+                self.view_settings,
+                self.theme_settings,
+            ),
+            path: None,
+        };
+        self.tabs.push(tab);
+        self.active_tab_id = Some(tab_id);
+        (tab_id, iced::Task::none(), false)
+    }
+
+    pub(super) fn load_file(
+        &mut self,
+        path: &Path,
+    ) -> Result<(u64, iced::Task<EditorWidgetMessage>, bool), String> {
+        if let Some(tab_id) = self.find_tab_by_path(path) {
+            self.active_tab_id = Some(tab_id);
+            return Ok((tab_id, iced::Task::none(), true));
+        }
+
+        let text = fs::read_to_string(path)
+            .map_err(|error| format!("Failed to read editor file {}: {error}", path.display()))?;
+        let tab_id = self.allocate_tab_id();
+        let task = self.load_document_into_tab(tab_id, &text, Some(path.to_path_buf()), false)?;
+        Ok((tab_id, task, false))
+    }
+
+    pub(super) fn restore_file_tabs(
+        &mut self,
+        paths: &[PathBuf],
+        active_path: Option<&Path>,
+        include_clean_untitled: bool,
+    ) -> (Vec<(u64, iced::Task<EditorWidgetMessage>)>, Vec<String>) {
+        self.tabs.clear();
+        self.active_tab_id = None;
+
+        let mut tasks = Vec::new();
+        let mut warnings = Vec::new();
+
+        for path in paths {
+            match self.load_file(path) {
+                Ok((tab_id, task, _)) => tasks.push((tab_id, task)),
+                Err(error) => warnings.push(error),
+            }
+        }
+
+        if include_clean_untitled {
+            let (tab_id, task, _) = self.new_document();
+            tasks.push((tab_id, task));
+        }
+
+        if let Some(active_path) = active_path
+            && let Some(tab_id) = self.find_tab_by_path(active_path)
+        {
+            self.active_tab_id = Some(tab_id);
+        }
+
+        if self.active_tab_id.is_none() {
+            self.active_tab_id = self.tabs.first().map(|tab| tab.id);
+        }
+
+        (tasks, warnings)
+    }
+
+    pub(super) fn save_to_disk(
+        &mut self,
+        tab_id: u64,
+    ) -> Result<(PathBuf, iced::Task<EditorWidgetMessage>), String> {
+        let Some(path) = self.tab(tab_id).and_then(|tab| tab.path.clone()) else {
+            return Err("No editor file is currently loaded".to_string());
+        };
+
+        let task = self.save_to_path(tab_id, &path)?;
+
+        Ok((path, task))
+    }
+
+    pub(super) fn save_to_path(
+        &mut self,
+        tab_id: u64,
+        path: &Path,
+    ) -> Result<iced::Task<EditorWidgetMessage>, String> {
+        let Some(content) = self.tab(tab_id).map(|tab| tab.widget.content()) else {
+            return Err("Editor tab no longer exists".to_string());
+        };
+
+        fs::write(path, &content)
+            .map_err(|error| format!("Failed to save editor file {}: {error}", path.display()))?;
+
+        let task =
+            self.load_document_into_tab(tab_id, &content, Some(path.to_path_buf()), false)?;
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.widget.mark_saved();
+        }
+        Ok(task)
+    }
+
+    pub(super) fn rename_file(
+        &mut self,
+        tab_id: u64,
+        new_path: &Path,
+    ) -> Result<iced::Task<EditorWidgetMessage>, String> {
+        let Some(old_path) = self.tab(tab_id).and_then(|tab| tab.path.clone()) else {
+            return self.save_to_path(tab_id, new_path);
+        };
+
+        fs::rename(&old_path, new_path).map_err(|error| {
+            format!(
+                "Failed to rename editor file {} to {}: {error}",
+                old_path.display(),
+                new_path.display()
+            )
+        })?;
+
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.path = Some(new_path.to_path_buf());
+        }
+
+        Ok(iced::Task::none())
+    }
+
+    pub(super) fn close_tab(&mut self, tab_id: u64) -> bool {
+        let Some(index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+            return false;
+        };
+
+        let was_active = self.active_tab_id == Some(tab_id);
+        self.tabs.remove(index);
+
+        if self.tabs.is_empty() {
+            self.active_tab_id = None;
+        } else if was_active {
+            let next_index = index.saturating_sub(1).min(self.tabs.len() - 1);
+            self.active_tab_id = Some(self.tabs[next_index].id);
+        }
+
+        true
+    }
+
+    pub(super) fn reorder_tabs(
+        &mut self,
+        dragged_tab_id: u64,
+        target_tab_id: u64,
+        insert_after_target: bool,
+    ) -> bool {
+        let Some(from_index) = self.tabs.iter().position(|tab| tab.id == dragged_tab_id) else {
+            return false;
+        };
+        if dragged_tab_id == target_tab_id {
+            return false;
+        }
+
+        let tab = self.tabs.remove(from_index);
+        let Some(target_index) = self.tabs.iter().position(|tab| tab.id == target_tab_id) else {
+            self.tabs.insert(from_index.min(self.tabs.len()), tab);
+            return false;
+        };
+        let insert_index = if insert_after_target {
+            target_index + 1
+        } else {
+            target_index
+        };
+        self.tabs.insert(insert_index.min(self.tabs.len()), tab);
+        true
+    }
+
+    pub(super) fn file_backed_tab_paths(&self) -> Vec<PathBuf> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| tab.path.clone())
+            .collect()
+    }
+
+    pub(super) fn active_file_backed_tab_path(&self) -> Option<PathBuf> {
+        self.active_tab().and_then(|tab| tab.path.as_ref().cloned())
+    }
+
+    pub(super) fn has_clean_untitled_tab(&self) -> bool {
+        self.tabs.iter().any(|tab| {
+            tab.path.is_none() && !tab.widget.is_modified() && tab.widget.content().is_empty()
+        })
+    }
+
+    pub(super) fn lose_focus(&mut self) {
+        for tab in &mut self.tabs {
+            tab.widget.lose_focus();
+        }
+    }
+
+    pub(super) fn request_focus(&mut self) {
+        if let Some(tab) = self.active_tab_mut() {
+            tab.widget.request_focus();
+        }
+    }
+
     pub(super) fn view<'a, Message>(
         &'a self,
-        map_message: impl Fn(EditorWidgetMessage) -> Message + 'a,
+        map_message: impl Fn(u64, EditorWidgetMessage) -> Message + 'a,
     ) -> Element<'a, Message>
     where
         Message: Clone + 'a,
     {
-        if !self.has_document() {
+        let Some(tab) = self.active_tab() else {
             return container(text(EMPTY_EDITOR_MESSAGE).size(ui_style::FONT_SIZE_BODY_MD))
                 .width(Fill)
                 .height(Fill)
                 .center_x(Fill)
                 .center_y(Fill)
                 .into();
-        }
+        };
 
-        container(self.widget.view().map(map_message))
+        let tab_id = tab.id;
+        container(
+            keyed_column([(
+                tab_id,
+                tab.widget
+                    .view()
+                    .map(move |message| map_message(tab_id, message)),
+            )])
             .width(Fill)
-            .height(Fill)
-            .style(ui_style::pane_main_surface)
-            .into()
+            .height(Fill),
+        )
+        .width(Fill)
+        .height(Fill)
+        .style(ui_style::pane_main_surface)
+        .into()
+    }
+
+    pub(super) fn tab_title(&self, tab_id: u64) -> String {
+        self.tab_summaries()
+            .into_iter()
+            .find(|tab| tab.id == tab_id)
+            .map(|tab| tab.title)
+            .unwrap_or_else(|| "Untitled".to_string())
     }
 
     fn apply_theme(&mut self) {
-        self.widget
-            .set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
-                &self.app_theme,
-                to_editor_theme_tuning(self.theme_settings),
-            ));
+        let theme = iced_code_editor::theme::from_iced_theme_with_tuning(
+            &self.app_theme,
+            to_editor_theme_tuning(self.theme_settings),
+        );
+        for tab in &mut self.tabs {
+            tab.widget.set_theme(theme);
+        }
     }
 
     fn set_font_size(&mut self, size: f32) {
         let clamped = size.clamp(MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE);
         self.view_settings.font_size = clamped;
-        self.widget.set_font_size(clamped, true);
+        for tab in &mut self.tabs {
+            tab.widget.set_font_size(clamped, true);
+        }
     }
 
-    fn load_document(
+    fn load_document_into_tab(
         &mut self,
+        tab_id: u64,
         content: &str,
         path: Option<PathBuf>,
         modified: bool,
     ) -> Result<iced::Task<EditorWidgetMessage>, String> {
         let syntax = path.as_deref().map(syntax_for_path).unwrap_or("lilypond");
-        let task = self.widget.reset_document(content, syntax);
-        self.widget.set_font(fonts::MONO);
-        self.widget
-            .set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
-                &self.app_theme,
-                to_editor_theme_tuning(self.theme_settings),
-            ));
-        self.widget
-            .set_font_size(self.view_settings.font_size, true);
-        if !modified {
-            self.widget.mark_saved();
-        }
-        self.document_open = true;
-        self.path = path;
+        let app_theme = self.app_theme.clone();
+        let theme_settings = self.theme_settings;
+        let font_size = self.view_settings.font_size;
+
+        let task = if let Some(tab) = self.tab_mut(tab_id) {
+            let task = tab.widget.reset_document(content, syntax);
+            tab.widget.set_font(fonts::MONO);
+            tab.widget
+                .set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
+                    &app_theme,
+                    to_editor_theme_tuning(theme_settings),
+                ));
+            tab.widget.set_font_size(font_size, true);
+            if !modified {
+                tab.widget.mark_saved();
+            }
+            tab.path = path;
+            task
+        } else {
+            let mut tab = EditorTab {
+                id: tab_id,
+                widget: build_editor(
+                    content,
+                    syntax,
+                    &self.app_theme,
+                    self.view_settings,
+                    self.theme_settings,
+                ),
+                path,
+            };
+            if !modified {
+                tab.widget.mark_saved();
+            }
+            self.tabs.push(tab);
+            iced::Task::none()
+        };
+
+        self.active_tab_id = Some(tab_id);
 
         Ok(task)
+    }
+
+    fn find_reusable_empty_tab(&self) -> Option<u64> {
+        self.tabs.iter().find_map(|tab| {
+            (tab.path.is_none() && !tab.widget.is_modified() && tab.widget.content().is_empty())
+                .then_some(tab.id)
+        })
+    }
+
+    fn allocate_tab_id(&mut self) -> u64 {
+        let tab_id = self.next_tab_id;
+        self.next_tab_id = self.next_tab_id.wrapping_add(1);
+        tab_id
+    }
+
+    fn active_tab(&self) -> Option<&EditorTab> {
+        self.active_tab_id.and_then(|tab_id| self.tab(tab_id))
+    }
+
+    fn active_tab_mut(&mut self) -> Option<&mut EditorTab> {
+        let tab_id = self.active_tab_id?;
+        self.tab_mut(tab_id)
+    }
+
+    fn tab(&self, tab_id: u64) -> Option<&EditorTab> {
+        self.tabs.iter().find(|tab| tab.id == tab_id)
+    }
+
+    fn tab_mut(&mut self, tab_id: u64) -> Option<&mut EditorTab> {
+        self.tabs.iter_mut().find(|tab| tab.id == tab_id)
     }
 }
 

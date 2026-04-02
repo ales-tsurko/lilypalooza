@@ -16,6 +16,10 @@ pub(crate) struct GlobalState {
     pub(crate) piano_roll_view: PianoRollViewSettings,
     pub(crate) main_score: Option<PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) editor_tabs: Vec<PathBuf>,
+    pub(crate) active_editor_tab: Option<PathBuf>,
+    pub(crate) has_clean_untitled_editor_tab: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) editor_recent_files: Vec<PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) recent_projects: Vec<PathBuf>,
@@ -29,6 +33,10 @@ pub(crate) struct ProjectState {
     pub(crate) score_view: ScoreViewSettings,
     pub(crate) piano_roll_view: PianoRollViewSettings,
     pub(crate) main_score: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) editor_tabs: Vec<PathBuf>,
+    pub(crate) active_editor_tab: Option<PathBuf>,
+    pub(crate) has_clean_untitled_editor_tab: bool,
 }
 
 pub(crate) fn load_global() -> Result<GlobalState, String> {

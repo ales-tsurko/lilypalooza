@@ -13,6 +13,7 @@ pub(crate) enum ErrorFatality {
 pub(crate) enum PromptButtons {
     Ok,
     OkCancel,
+    SaveDiscardCancel,
 }
 
 #[derive(Debug, Clone)]
@@ -60,10 +61,40 @@ impl ErrorPrompt {
         self.overlay(on_ok, Some(on_cancel))
     }
 
+    pub(crate) fn overlay_save_discard_cancel<'a, Message>(
+        &'a self,
+        on_save: Message,
+        on_discard: Message,
+        on_cancel: Message,
+    ) -> Element<'a, Message>
+    where
+        Message: Clone + 'a,
+    {
+        self.overlay_with_actions(PromptActions {
+            ok: Some(("Save", on_save)),
+            discard: Some(("Discard", on_discard)),
+            cancel: Some(("Cancel", on_cancel)),
+        })
+    }
+
     fn overlay<'a, Message>(
         &'a self,
         on_ok: Message,
         on_cancel: Option<Message>,
+    ) -> Element<'a, Message>
+    where
+        Message: Clone + 'a,
+    {
+        self.overlay_with_actions(PromptActions {
+            ok: Some(("OK", on_ok.clone())),
+            discard: None,
+            cancel: on_cancel.map(|message| ("Cancel", message)),
+        })
+    }
+
+    fn overlay_with_actions<'a, Message>(
+        &'a self,
+        actions: PromptActions<Message>,
     ) -> Element<'a, Message>
     where
         Message: Clone + 'a,
@@ -76,26 +107,71 @@ impl ErrorPrompt {
             .padding(ui_style::PADDING_SM)
             .style(move |theme: &Theme| ui_style::prompt_message(theme, is_critical));
 
-        let ok_button = button(text("OK").size(ui_style::FONT_SIZE_BODY_SM))
-            .style(if is_critical {
-                ui_style::button_danger
-            } else {
-                ui_style::button_active
-            })
-            .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
-            .on_press(on_ok.clone());
-
         let action_row = match self.buttons {
-            PromptButtons::Ok => row![ok_button].spacing(ui_style::SPACE_SM),
+            PromptButtons::Ok => {
+                let Some((label, message)) = actions.ok.clone() else {
+                    unreachable!("OK prompt requires confirm action");
+                };
+                row![
+                    button(text(label).size(ui_style::FONT_SIZE_BODY_SM))
+                        .style(if is_critical {
+                            ui_style::button_danger
+                        } else {
+                            ui_style::button_active
+                        })
+                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
+                        .on_press(message)
+                ]
+                .spacing(ui_style::SPACE_SM)
+            }
             PromptButtons::OkCancel => {
-                let cancel_message = on_cancel.unwrap_or_else(|| on_ok.clone());
+                let Some((ok_label, ok_message)) = actions.ok.clone() else {
+                    unreachable!("OK/Cancel prompt requires confirm action");
+                };
+                let Some((cancel_label, cancel_message)) = actions.cancel.clone() else {
+                    unreachable!("OK/Cancel prompt requires cancel action");
+                };
 
                 row![
-                    button(text("Cancel").size(ui_style::FONT_SIZE_BODY_SM))
+                    button(text(cancel_label).size(ui_style::FONT_SIZE_BODY_SM))
                         .style(ui_style::button_neutral)
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(cancel_message),
-                    ok_button
+                    button(text(ok_label).size(ui_style::FONT_SIZE_BODY_SM))
+                        .style(if is_critical {
+                            ui_style::button_danger
+                        } else {
+                            ui_style::button_active
+                        })
+                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
+                        .on_press(ok_message)
+                ]
+                .spacing(ui_style::SPACE_SM)
+            }
+            PromptButtons::SaveDiscardCancel => {
+                let Some((save_label, save_message)) = actions.ok.clone() else {
+                    unreachable!("Save/Discard/Cancel prompt requires save action");
+                };
+                let Some((discard_label, discard_message)) = actions.discard.clone() else {
+                    unreachable!("Save/Discard/Cancel prompt requires discard action");
+                };
+                let Some((cancel_label, cancel_message)) = actions.cancel.clone() else {
+                    unreachable!("Save/Discard/Cancel prompt requires cancel action");
+                };
+
+                row![
+                    button(text(cancel_label).size(ui_style::FONT_SIZE_BODY_SM))
+                        .style(ui_style::button_neutral)
+                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
+                        .on_press(cancel_message),
+                    button(text(discard_label).size(ui_style::FONT_SIZE_BODY_SM))
+                        .style(ui_style::button_neutral)
+                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
+                        .on_press(discard_message),
+                    button(text(save_label).size(ui_style::FONT_SIZE_BODY_SM))
+                        .style(ui_style::button_active)
+                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
+                        .on_press(save_message)
                 ]
                 .spacing(ui_style::SPACE_SM)
             }
@@ -132,4 +208,11 @@ impl ErrorPrompt {
 
         opaque(backdrop)
     }
+}
+
+#[derive(Clone)]
+struct PromptActions<Message> {
+    ok: Option<(&'static str, Message)>,
+    discard: Option<(&'static str, Message)>,
+    cancel: Option<(&'static str, Message)>,
 }

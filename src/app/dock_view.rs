@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 use iced::widget::{
     Column, Tooltip, button, canvas, container, mouse_area, opaque, pane_grid, responsive, row,
-    slider, stack, svg, text, tooltip,
+    scrollable, slider, stack, svg, text, text_input, tooltip,
 };
 use iced::{
     Color, ContentFit, Element, Fill, Length, Padding, Point, Rectangle, Size, Theme, alignment,
@@ -34,6 +34,9 @@ const TOOLBAR_FILE_NAME_MAX_CHARS: usize = 20;
 const TOOLBAR_PROJECT_NAME_MAX_CHARS: usize = 28;
 const PROJECT_MENU_WIDTH: f32 = 280.0;
 const PROJECT_RECENT_LABEL_MAX_CHARS: usize = 40;
+const EDITOR_TAB_WIDTH: f32 = 144.0;
+const EDITOR_TAB_HEIGHT: f32 = 32.0;
+const EDITOR_TAB_TITLE_MAX_CHARS: usize = 16;
 
 pub(super) struct HeaderControlGroup<'a> {
     pub(super) min_width: f32,
@@ -345,6 +348,29 @@ fn truncate_toolbar_file_name(file_name: &str, max_chars: usize) -> String {
     format!("{truncated}...")
 }
 
+fn shorten_editor_tab_title(title: &str, max_chars: usize) -> String {
+    let chars: Vec<_> = title.chars().collect();
+    if chars.len() <= max_chars {
+        return title.to_string();
+    }
+
+    if max_chars <= 1 {
+        return "…".to_string();
+    }
+
+    if let Some(dot_index) = title.rfind('.') {
+        let extension: Vec<_> = title[dot_index..].chars().collect();
+        if extension.len() + 2 < max_chars {
+            let prefix_len = max_chars.saturating_sub(extension.len() + 1);
+            let prefix: String = chars.into_iter().take(prefix_len).collect();
+            return format!("{prefix}…{}", &title[dot_index..]);
+        }
+    }
+
+    let prefix: String = chars.into_iter().take(max_chars - 1).collect();
+    format!("{prefix}…")
+}
+
 fn workspace_panes(app: &Lilypalooza) -> Element<'_, Message> {
     if app.workspace_visible_pane_count() == 0 {
         return empty_workspace_placeholder(app);
@@ -365,9 +391,7 @@ fn workspace_panes(app: &Lilypalooza) -> Element<'_, Message> {
                 let body = match active_pane {
                     WorkspacePaneKind::Score => score_view::score_body(app),
                     WorkspacePaneKind::PianoRoll => piano_roll::content(app),
-                    WorkspacePaneKind::Editor => app
-                        .editor
-                        .view(|message| Message::Editor(super::EditorMessage::Widget(message))),
+                    WorkspacePaneKind::Editor => editor_pane_body(app),
                     WorkspacePaneKind::Logger => app
                         .logger
                         .view(app.is_workspace_group_focused(*group_id), |action| {
@@ -406,6 +430,280 @@ fn workspace_panes(app: &Lilypalooza) -> Element<'_, Message> {
         .on_exit(Message::Pane(PaneMessage::WorkspaceDragExited))
         .into()
     })
+    .into()
+}
+
+fn editor_pane_body(app: &Lilypalooza) -> Element<'_, Message> {
+    iced::widget::column![
+        editor_tab_strip(app),
+        app.editor.view(
+            |tab_id, message| Message::Editor(super::EditorMessage::Widget { tab_id, message })
+        ),
+    ]
+    .spacing(0)
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+fn editor_tab_strip(app: &Lilypalooza) -> Element<'_, Message> {
+    let tabs_row = app.editor.tab_summaries().into_iter().fold(
+        row![].spacing(0).align_y(alignment::Vertical::Center),
+        |tabs, tab| tabs.push(editor_tab(app, tab)),
+    );
+
+    let empty_area = mouse_area(
+        container(text(""))
+            .width(Length::Fill)
+            .height(Length::Fixed(EDITOR_TAB_HEIGHT)),
+    )
+    .on_move(|position| Message::Editor(super::EditorMessage::TabBarMoved(position)))
+    .on_enter(Message::Editor(super::EditorMessage::TabHovered(None)))
+    .on_double_click(Message::Editor(super::EditorMessage::NewRequested));
+
+    let tabs_scroll = mouse_area(
+        scrollable(
+            container(
+                row![tabs_row, empty_area]
+                    .spacing(0)
+                    .align_y(alignment::Vertical::Center)
+                    .width(Fill)
+                    .height(Length::Fixed(EDITOR_TAB_HEIGHT)),
+            )
+            .width(Fill)
+            .style(ui_style::workspace_toolbar_surface),
+        )
+        .direction(scrollable::Direction::Horizontal(
+            scrollable::Scrollbar::new().width(4).scroller_width(4),
+        ))
+        .style(ui_style::editor_tabbar_scrollable)
+        .width(Fill)
+        .height(Length::Fixed(EDITOR_TAB_HEIGHT)),
+    )
+    .on_move(|position| Message::Editor(super::EditorMessage::TabBarMoved(position)))
+    .on_release(Message::Editor(super::EditorMessage::TabDragReleased))
+    .on_exit(Message::Editor(super::EditorMessage::TabDragExited));
+
+    let new_tab = button(
+        svg(icons::plus())
+            .width(Length::Fixed(14.0))
+            .height(Length::Fixed(14.0))
+            .content_fit(ContentFit::Contain)
+            .style(|theme: &Theme, status| {
+                let palette = theme.extended_palette();
+                svg::Style {
+                    color: Some(match status {
+                        svg::Status::Idle => palette.background.weak.text,
+                        svg::Status::Hovered => palette.background.base.text,
+                    }),
+                }
+            }),
+    )
+    .style(ui_style::button_neutral)
+    .padding([
+        ui_style::PADDING_BUTTON_COMPACT_V,
+        ui_style::PADDING_BUTTON_COMPACT_H,
+    ])
+    .on_press(Message::Editor(super::EditorMessage::NewRequested));
+
+    container(
+        iced::widget::column![
+            container(
+                row![tabs_scroll, new_tab]
+                    .spacing(ui_style::SPACE_XS)
+                    .align_y(alignment::Vertical::Center)
+                    .width(Fill),
+            )
+            .height(Length::Fixed(EDITOR_TAB_HEIGHT))
+            .padding(Padding {
+                top: 0.0,
+                right: f32::from(ui_style::PADDING_STATUS_BAR_H),
+                bottom: 0.0,
+                left: 0.0,
+            })
+            .style(ui_style::workspace_toolbar_surface),
+        ]
+        .spacing(0),
+    )
+    .width(Fill)
+    .into()
+}
+
+fn editor_tab(app: &Lilypalooza, tab: super::editor::EditorTabSummary) -> Element<'_, Message> {
+    let is_hovered = app.hovered_editor_tab == Some(tab.id);
+    let is_dragged = app.dragged_editor_tab == Some(tab.id);
+    let is_renaming = app.renaming_editor_tab == Some(tab.id);
+    let show_before_drop = app.dragged_editor_tab.is_some()
+        && app.hovered_editor_tab == Some(tab.id)
+        && !app.editor_tab_drop_after;
+    let show_after_drop = app.dragged_editor_tab.is_some()
+        && app.hovered_editor_tab == Some(tab.id)
+        && app.editor_tab_drop_after;
+    let tooltip_label = app
+        .editor
+        .tab_path(tab.id)
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| tab.title.clone());
+
+    let title: Element<'_, Message> = if is_renaming {
+        text_input("", &app.editor_tab_rename_value)
+            .id(app.editor_tab_rename_input_id.clone())
+            .on_input(|value| Message::Editor(super::EditorMessage::RenameInputChanged(value)))
+            .on_submit(Message::Editor(super::EditorMessage::CommitRename))
+            .padding([3, 0])
+            .size(ui_style::FONT_SIZE_UI_SM)
+            .width(Fill)
+            .into()
+    } else {
+        text(shorten_editor_tab_title(
+            &tab.title,
+            EDITOR_TAB_TITLE_MAX_CHARS,
+        ))
+        .size(ui_style::FONT_SIZE_UI_SM)
+        .line_height(1.0)
+        .style(move |theme: &Theme| {
+            let palette = theme.extended_palette();
+            iced::widget::text::Style {
+                color: Some(if is_hovered && !is_dragged {
+                    palette.primary.weak.text
+                } else if tab.active {
+                    palette.background.base.text
+                } else {
+                    palette.background.strong.text
+                }),
+            }
+        })
+        .width(Fill)
+        .into()
+    };
+
+    let dirty_marker: Element<'_, Message> = if tab.dirty && !is_renaming {
+        text("•")
+            .size(ui_style::FONT_SIZE_UI_SM)
+            .line_height(1.0)
+            .into()
+    } else {
+        container(text("")).width(Length::Fixed(0.0)).into()
+    };
+
+    let close_button: Element<'_, Message> = if is_renaming {
+        container(text(""))
+            .width(Length::Fixed(14.0))
+            .height(Length::Fixed(EDITOR_TAB_HEIGHT))
+            .center_y(Length::Fixed(EDITOR_TAB_HEIGHT))
+            .into()
+    } else {
+        button(
+            container(
+                svg(icons::x())
+                    .width(Length::Fixed(11.0))
+                    .height(Length::Fixed(11.0))
+                    .content_fit(ContentFit::Contain)
+                    .style(move |theme: &Theme, status| {
+                        let palette = theme.extended_palette();
+                        svg::Style {
+                            color: Some(match status {
+                                svg::Status::Idle => {
+                                    if tab.active {
+                                        palette.background.base.text
+                                    } else {
+                                        palette.background.strong.text
+                                    }
+                                }
+                                svg::Status::Hovered => palette.primary.weak.text,
+                            }),
+                        }
+                    }),
+            )
+            .width(Length::Fixed(14.0))
+            .height(Length::Fixed(EDITOR_TAB_HEIGHT))
+            .center_y(Length::Fixed(EDITOR_TAB_HEIGHT)),
+        )
+        .style(move |theme: &Theme, status| {
+            ui_style::button_editor_tab_close(theme, status, tab.active)
+        })
+        .padding([0, 0])
+        .width(Length::Fixed(14.0))
+        .height(Length::Fixed(EDITOR_TAB_HEIGHT))
+        .on_press(Message::Editor(super::EditorMessage::CloseTabRequested(
+            tab.id,
+        )))
+        .into()
+    };
+
+    let drop_marker = |visible: bool| -> Element<'_, Message> {
+        if visible {
+            container(text(""))
+                .width(Length::Fixed(2.0))
+                .height(Length::Fixed(EDITOR_TAB_HEIGHT))
+                .style(|theme: &Theme| container::Style {
+                    background: Some(theme.extended_palette().primary.base.color.into()),
+                    ..container::Style::default()
+                })
+                .into()
+        } else {
+            container(text(""))
+                .width(Length::Fixed(2.0))
+                .height(Length::Fixed(EDITOR_TAB_HEIGHT))
+                .into()
+        }
+    };
+
+    let body: Element<'_, Message> = row![
+        drop_marker(show_before_drop),
+        container(
+            row![
+                dirty_marker,
+                container(title).width(Fill).height(Fill).center_y(Fill),
+                close_button
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center)
+            .width(Fill)
+            .height(Fill),
+        )
+        .width(Length::Fixed(EDITOR_TAB_WIDTH))
+        .height(Length::Fixed(EDITOR_TAB_HEIGHT))
+        .padding([0, 8])
+        .style(move |theme: &Theme| {
+            ui_style::editor_tab_surface(theme, tab.active, is_hovered || is_renaming, is_dragged)
+        }),
+        drop_marker(show_after_drop)
+    ]
+    .spacing(0)
+    .height(Length::Fixed(EDITOR_TAB_HEIGHT))
+    .align_y(alignment::Vertical::Center)
+    .into();
+
+    let body = if is_renaming {
+        body
+    } else {
+        mouse_area(body)
+            .on_press(Message::Editor(super::EditorMessage::TabPressed(tab.id)))
+            .on_double_click(Message::Editor(super::EditorMessage::StartRename(tab.id)))
+            .on_move(move |position| {
+                Message::Editor(super::EditorMessage::TabMoved {
+                    tab_id: tab.id,
+                    position,
+                })
+            })
+            .on_exit(Message::Editor(super::EditorMessage::TabHovered(None)))
+            .interaction(if is_dragged {
+                mouse::Interaction::Grabbing
+            } else {
+                mouse::Interaction::Grab
+            })
+            .into()
+    };
+
+    Tooltip::new(
+        body,
+        text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS),
+        tooltip::Position::Bottom,
+    )
+    .gap(6)
+    .padding(8)
+    .style(ui_style::tooltip_popup)
     .into()
 }
 
@@ -1312,6 +1610,11 @@ fn editor_file_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
             "Save As...",
             has_document,
             Some(Message::Editor(super::EditorMessage::SaveAsRequested)),
+        ))
+        .push(editor_file_menu_item(
+            "Rename...",
+            has_document,
+            Some(Message::Editor(super::EditorMessage::RenameRequested)),
         ));
 
     let recent_row = if has_recent_files {

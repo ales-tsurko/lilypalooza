@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use iced::event;
 use iced::keyboard;
-use iced::widget::{pane_grid, svg};
+use iced::widget::{Id, pane_grid, svg};
 use iced::{Point, Rectangle, Size, Subscription, Task, window};
 use iced_core::{Bytes, image};
 use tempfile::TempDir;
@@ -101,6 +101,14 @@ struct Lilypalooza {
     hovered_editor_file_menu_section: Option<EditorFileMenuSection>,
     open_project_menu: bool,
     open_project_recent: bool,
+    pressed_editor_tab: Option<u64>,
+    hovered_editor_tab: Option<u64>,
+    dragged_editor_tab: Option<u64>,
+    editor_tab_drag_origin: Option<Point>,
+    editor_tab_drop_after: bool,
+    renaming_editor_tab: Option<u64>,
+    editor_tab_rename_value: String,
+    editor_tab_rename_input_id: Id,
     editor_recent_files: Vec<PathBuf>,
     recent_projects: Vec<PathBuf>,
     editor_recent_files_limit: usize,
@@ -124,6 +132,9 @@ struct Lilypalooza {
     shortcut_settings: settings::ShortcutSettings,
     project_root: Option<PathBuf>,
     project_name: Option<String>,
+    pending_editor_action: Option<PendingEditorAction>,
+    pending_editor_save_as_tab: Option<u64>,
+    pending_editor_rename_tab: Option<u64>,
     default_global_state: GlobalState,
 }
 
@@ -259,6 +270,22 @@ enum PromptOkAction {
     ClearLogs,
 }
 
+#[derive(Debug, Clone)]
+enum PendingEditorAction {
+    ResolveDirtyTabs {
+        dirty_tab_ids: Vec<u64>,
+        continuation: EditorContinuation,
+    },
+}
+
+#[derive(Debug, Clone)]
+enum EditorContinuation {
+    CloseTab(u64),
+    LoadProject(PathBuf),
+    OpenScore(PathBuf),
+    ExitApp,
+}
+
 pub fn run(startup_soundfont: Option<PathBuf>, startup_score: Option<PathBuf>) -> iced::Result {
     iced::application(
         move || new(startup_soundfont.clone(), startup_score.clone()),
@@ -279,6 +306,7 @@ pub fn run(startup_soundfont: Option<PathBuf>, startup_score: Option<PathBuf>) -
     .title("Lilypalooza")
     .window(window::Settings {
         min_size: Some(Size::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)),
+        exit_on_close_request: false,
         ..window::Settings::default()
     })
     .subscription(subscription)
@@ -370,6 +398,14 @@ fn new(
         hovered_editor_file_menu_section: None,
         open_project_menu: false,
         open_project_recent: false,
+        pressed_editor_tab: None,
+        hovered_editor_tab: None,
+        dragged_editor_tab: None,
+        editor_tab_drag_origin: None,
+        editor_tab_drop_after: false,
+        renaming_editor_tab: None,
+        editor_tab_rename_value: String::new(),
+        editor_tab_rename_input_id: Id::unique(),
         editor_recent_files: stored_state.editor_recent_files.clone(),
         recent_projects: stored_state.recent_projects.clone(),
         editor_recent_files_limit: stored_settings.editor_recent_files_limit.max(1),
@@ -403,6 +439,9 @@ fn new(
         shortcut_settings: stored_settings.shortcuts.clone(),
         project_root: None,
         project_name: None,
+        pending_editor_action: None,
+        pending_editor_save_as_tab: None,
+        pending_editor_rename_tab: None,
         default_global_state,
     };
 
@@ -421,6 +460,12 @@ fn new(
     if let Some(error) = state_error {
         app.logger.push(format!("State load failed: {error}"));
     }
+
+    app.restore_editor_session(
+        &stored_state.editor_tabs,
+        stored_state.active_editor_tab.as_deref(),
+        stored_state.has_clean_untitled_editor_tab,
+    );
 
     let mut startup_tasks = vec![Task::perform(
         async { lilypond::check_lilypond().map_err(|error| error.to_string()) },
@@ -480,6 +525,7 @@ fn runtime_event_to_message(
             physical_key,
             modifiers,
         })),
+        iced::Event::Window(window::Event::CloseRequested) => Some(Message::WindowCloseRequested),
         _ => None,
     }
 }

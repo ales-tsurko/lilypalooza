@@ -31,6 +31,11 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
                 Message::Prompt(PromptMessage::Acknowledge),
                 Message::Prompt(PromptMessage::Cancel),
             ),
+            PromptButtons::SaveDiscardCancel => prompt.overlay_save_discard_cancel(
+                Message::Prompt(PromptMessage::Acknowledge),
+                Message::Prompt(PromptMessage::Discard),
+                Message::Prompt(PromptMessage::Cancel),
+            ),
         }
     } else {
         container(text("")).width(Fill).height(Fill).into()

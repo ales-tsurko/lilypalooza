@@ -10,6 +10,7 @@ const MUSIC_4: &[u8] = include_bytes!("../assets/icons/music-4.svg");
 const METRONOME: &[u8] = include_bytes!("../assets/icons/metronome.svg");
 const PIANO: &[u8] = include_bytes!("../assets/icons/piano.svg");
 const PLAY: &[u8] = include_bytes!("../assets/icons/play.svg");
+const PLUS: &[u8] = include_bytes!("../assets/icons/plus.svg");
 const PAUSE: &[u8] = include_bytes!("../assets/icons/pause.svg");
 const FILE_PEN: &[u8] = include_bytes!("../assets/icons/file-pen.svg");
 const LIST_MUSIC: &[u8] = include_bytes!("../assets/icons/list-music.svg");
@@ -19,6 +20,7 @@ const SUN_DIM: &[u8] = include_bytes!("../assets/icons/sun-dim.svg");
 const SUN: &[u8] = include_bytes!("../assets/icons/sun.svg");
 const ZOOM_IN: &[u8] = include_bytes!("../assets/icons/zoom-in.svg");
 const ZOOM_OUT: &[u8] = include_bytes!("../assets/icons/zoom-out.svg");
+const X: &[u8] = include_bytes!("../assets/icons/x.svg");
 
 pub(crate) fn arrow_left() -> svg::Handle {
     svg::Handle::from_memory(ARROW_LEFT)
@@ -60,6 +62,10 @@ pub(crate) fn play() -> svg::Handle {
     svg::Handle::from_memory(PLAY)
 }
 
+pub(crate) fn plus() -> svg::Handle {
+    svg::Handle::from_memory(PLUS)
+}
+
 pub(crate) fn pause() -> svg::Handle {
     svg::Handle::from_memory(PAUSE)
 }
@@ -94,4 +100,8 @@ pub(crate) fn zoom_in() -> svg::Handle {
 
 pub(crate) fn zoom_out() -> svg::Handle {
     svg::Handle::from_memory(ZOOM_OUT)
+}
+
+pub(crate) fn x() -> svg::Handle {
+    svg::Handle::from_memory(X)
 }

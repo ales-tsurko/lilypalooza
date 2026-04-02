@@ -65,6 +65,11 @@ impl Lilypalooza {
         self.project_name = None;
         self.editor_recent_files = state.editor_recent_files;
         self.recent_projects = state.recent_projects;
+        self.restore_editor_session(
+            &state.editor_tabs,
+            state.active_editor_tab.as_deref(),
+            state.has_clean_untitled_editor_tab,
+        );
         self.apply_workspace_state(
             state.workspace_layout,
             state.score_view,
@@ -82,6 +87,11 @@ impl Lilypalooza {
         self.project_name = state
             .project_name
             .or_else(|| self.project_root.as_deref().map(default_project_name));
+        self.restore_editor_session(
+            &state.editor_tabs,
+            state.active_editor_tab.as_deref(),
+            state.has_clean_untitled_editor_tab,
+        );
         self.apply_workspace_state(
             state.workspace_layout,
             state.score_view,
@@ -211,6 +221,9 @@ impl Lilypalooza {
                     main_score: self.current_score.as_ref().and_then(|score| {
                         state::main_score_relative_to(project_root, &score.path).ok()
                     }),
+                    editor_tabs: self.editor.file_backed_tab_paths(),
+                    active_editor_tab: self.editor.active_file_backed_tab_path(),
+                    has_clean_untitled_editor_tab: self.editor.has_clean_untitled_tab(),
                 },
             )?;
 
@@ -244,6 +257,9 @@ impl Lilypalooza {
                 beat_subdivision: self.piano_roll.beat_subdivision,
             },
             main_score: self.current_score.as_ref().map(|score| score.path.clone()),
+            editor_tabs: self.editor.file_backed_tab_paths(),
+            active_editor_tab: self.editor.active_file_backed_tab_path(),
+            has_clean_untitled_editor_tab: self.editor.has_clean_untitled_tab(),
             editor_recent_files: self.editor_recent_files.clone(),
             recent_projects: self.recent_projects.clone(),
         })
@@ -269,6 +285,13 @@ impl Lilypalooza {
         &mut self,
         project_root: PathBuf,
     ) -> Task<Message> {
+        if self.pending_editor_action.is_none() && self.editor.has_dirty_tabs() {
+            return self.begin_pending_editor_action(
+                self.editor.dirty_tab_ids(),
+                EditorContinuation::LoadProject(project_root),
+            );
+        }
+
         self.open_project_menu = false;
         self.open_project_recent = false;
         if !state::project_file_path(&project_root).is_file() {
@@ -361,5 +384,19 @@ impl Lilypalooza {
                 y: Some(self.svg_scroll_y),
             },
         )
+    }
+
+    pub(in crate::app) fn restore_editor_session(
+        &mut self,
+        paths: &[PathBuf],
+        active_path: Option<&Path>,
+        has_clean_untitled: bool,
+    ) {
+        let (_tasks, warnings) =
+            self.editor
+                .restore_file_tabs(paths, active_path, has_clean_untitled);
+        for warning in warnings {
+            self.logger.push(warning);
+        }
     }
 }

@@ -11,6 +11,15 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn handle_key_pressed(&mut self, key_press: KeyPress) -> Task<Message> {
+        if self.renaming_editor_tab.is_some()
+            && matches!(
+                key_press.key,
+                keyboard::Key::Named(keyboard::key::Named::Escape)
+            )
+        {
+            return update(self, Message::Editor(EditorMessage::CancelRename));
+        }
+
         let shortcut_input =
             ShortcutInput::new(&key_press.key, key_press.physical_key, key_press.modifiers);
 
@@ -228,6 +237,19 @@ impl Lilypalooza {
         &mut self,
         message: PromptMessage,
     ) -> Task<Message> {
+        if self.pending_editor_action.is_some() {
+            return match message {
+                PromptMessage::Acknowledge => self.handle_pending_editor_prompt_save(),
+                PromptMessage::Discard => self.advance_pending_editor_action(),
+                PromptMessage::Cancel => {
+                    self.error_prompt = None;
+                    self.pending_editor_action = None;
+                    self.pending_editor_save_as_tab = None;
+                    Task::none()
+                }
+            };
+        }
+
         match message {
             PromptMessage::Acknowledge => {
                 if self.error_prompt.take().is_some() {
@@ -243,12 +265,27 @@ impl Lilypalooza {
                     Task::none()
                 }
             }
+            PromptMessage::Discard => Task::none(),
             PromptMessage::Cancel => {
                 self.error_prompt = None;
                 self.prompt_ok_action = None;
                 Task::none()
             }
         }
+    }
+
+    pub(in crate::app) fn handle_window_close_requested(&mut self) -> Task<Message> {
+        let dirty_tabs = self.editor.dirty_tab_ids();
+        if dirty_tabs.is_empty() {
+            return iced::exit();
+        }
+
+        self.pending_editor_action = Some(PendingEditorAction::ResolveDirtyTabs {
+            dirty_tab_ids: dirty_tabs,
+            continuation: EditorContinuation::ExitApp,
+        });
+        self.show_current_pending_editor_prompt();
+        Task::none()
     }
 
     pub(in crate::app) fn handle_window_resized(&mut self, size: Size) -> Task<Message> {
@@ -273,5 +310,137 @@ impl Lilypalooza {
     ) {
         self.error_prompt = Some(prompt);
         self.prompt_ok_action = ok_action;
+    }
+
+    pub(in crate::app) fn begin_pending_editor_action(
+        &mut self,
+        dirty_tab_ids: Vec<u64>,
+        continuation: EditorContinuation,
+    ) -> Task<Message> {
+        if dirty_tab_ids.is_empty() {
+            return self.continue_editor_continuation(continuation);
+        }
+
+        self.pending_editor_action = Some(PendingEditorAction::ResolveDirtyTabs {
+            dirty_tab_ids,
+            continuation,
+        });
+        self.show_current_pending_editor_prompt();
+        Task::none()
+    }
+
+    pub(in crate::app) fn show_current_pending_editor_prompt(&mut self) {
+        let Some(PendingEditorAction::ResolveDirtyTabs { dirty_tab_ids, .. }) =
+            self.pending_editor_action.as_ref()
+        else {
+            return;
+        };
+        let Some(&tab_id) = dirty_tab_ids.first() else {
+            return;
+        };
+
+        let title = self.editor.tab_title(tab_id);
+        self.error_prompt = Some(ErrorPrompt::new(
+            format!("Close {title}?"),
+            format!("Save changes to {title} before continuing?"),
+            ErrorFatality::Recoverable,
+            PromptButtons::SaveDiscardCancel,
+        ));
+        self.prompt_ok_action = None;
+    }
+
+    pub(in crate::app) fn handle_pending_editor_prompt_save(&mut self) -> Task<Message> {
+        let Some(PendingEditorAction::ResolveDirtyTabs { dirty_tab_ids, .. }) =
+            self.pending_editor_action.as_ref()
+        else {
+            return Task::none();
+        };
+        let Some(&tab_id) = dirty_tab_ids.first() else {
+            return Task::none();
+        };
+
+        self.error_prompt = None;
+
+        if self.editor.tab_path(tab_id).is_none() {
+            self.pending_editor_save_as_tab = Some(tab_id);
+            let suggested_name = self.editor.suggested_rename_name(tab_id);
+            return Task::perform(
+                async move {
+                    rfd::AsyncFileDialog::new()
+                        .set_file_name(&suggested_name)
+                        .save_file()
+                        .await
+                        .map(|file| file.path().to_path_buf())
+                },
+                |picked| Message::Editor(EditorMessage::SaveAsPicked(picked)),
+            );
+        }
+
+        let save_task = self.save_editor_tab(tab_id);
+        let advance_task = self.advance_pending_editor_action();
+        Task::batch([save_task, advance_task])
+    }
+
+    pub(in crate::app) fn advance_pending_editor_action(&mut self) -> Task<Message> {
+        let Some(PendingEditorAction::ResolveDirtyTabs {
+            dirty_tab_ids,
+            continuation: _,
+        }) = self.pending_editor_action.as_mut()
+        else {
+            return Task::none();
+        };
+
+        if !dirty_tab_ids.is_empty() {
+            dirty_tab_ids.remove(0);
+        }
+
+        if !dirty_tab_ids.is_empty() {
+            self.show_current_pending_editor_prompt();
+            return Task::none();
+        }
+
+        let continuation = match self.pending_editor_action.take() {
+            Some(PendingEditorAction::ResolveDirtyTabs { continuation, .. }) => continuation,
+            None => return Task::none(),
+        };
+
+        self.error_prompt = None;
+        self.continue_editor_continuation(continuation)
+    }
+
+    pub(in crate::app) fn continue_editor_continuation(
+        &mut self,
+        continuation: EditorContinuation,
+    ) -> Task<Message> {
+        match continuation {
+            EditorContinuation::CloseTab(tab_id) => {
+                self.editor.close_tab(tab_id);
+                self.editor.request_focus();
+                self.persist_settings();
+                Task::none()
+            }
+            EditorContinuation::LoadProject(project_root) => {
+                self.load_project_from_root(project_root)
+            }
+            EditorContinuation::OpenScore(path) => match selected_score_from_path(path) {
+                Ok(selected_score) => {
+                    self.attach_persistence_context_for_score(&selected_score.path);
+                    self.activate_score(selected_score)
+                }
+                Err(error) => {
+                    self.show_prompt(
+                        ErrorPrompt::new(
+                            "Open File Error",
+                            error,
+                            ErrorFatality::Recoverable,
+                            PromptButtons::Ok,
+                        ),
+                        None,
+                    );
+                    Task::none()
+                }
+            },
+            EditorContinuation::ExitApp => iced::exit(),
+        }
     }
 }

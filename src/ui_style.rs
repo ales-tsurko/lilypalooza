@@ -227,6 +227,57 @@ pub(crate) fn workspace_scrollable(theme: &Theme, status: scrollable::Status) ->
     style
 }
 
+pub(crate) fn editor_tabbar_scrollable(
+    theme: &Theme,
+    status: scrollable::Status,
+) -> scrollable::Style {
+    let palette = theme.extended_palette();
+    let (show_horizontal, track_alpha, thumb_alpha) = match status {
+        scrollable::Status::Active {
+            is_horizontal_scrollbar_disabled,
+            ..
+        } => (!is_horizontal_scrollbar_disabled, 0.0, 0.0),
+        scrollable::Status::Hovered {
+            is_horizontal_scrollbar_disabled,
+            ..
+        } => (!is_horizontal_scrollbar_disabled, 0.025, 0.08),
+        scrollable::Status::Dragged {
+            is_horizontal_scrollbar_disabled,
+            ..
+        } => (!is_horizontal_scrollbar_disabled, 0.04, 0.12),
+    };
+
+    let mut style = scrollable::default(theme, status);
+    style.container.background = Some(palette.background.weak.color.into());
+    style.container.text_color = Some(palette.background.weak.text);
+    style.vertical_rail.background = Some(
+        Color {
+            a: 0.04,
+            ..palette.background.base.color
+        }
+        .into(),
+    );
+    style.vertical_rail.scroller.background = Color {
+        a: 0.14,
+        ..palette.background.base.text
+    }
+    .into();
+    style.horizontal_rail.background = Some(
+        Color {
+            a: if show_horizontal { track_alpha } else { 0.0 },
+            ..palette.background.base.color
+        }
+        .into(),
+    );
+    style.horizontal_rail.scroller.background = Color {
+        a: if show_horizontal { thumb_alpha } else { 0.0 },
+        ..palette.background.base.text
+    }
+    .into();
+
+    style
+}
+
 pub(crate) fn svg_page_surface(theme: &Theme, brightness_percent: u8) -> container::Style {
     let palette = theme.extended_palette();
     let alpha = (brightness_percent as f32 / 100.0).clamp(0.0, 1.0);
@@ -562,6 +613,85 @@ pub(crate) fn button_menu_item(
         button::Status::Disabled => button::Style {
             background: None,
             text_color: foreground_muted,
+            ..base
+        },
+    }
+}
+
+pub(crate) fn editor_tab_surface(
+    theme: &Theme,
+    active: bool,
+    hovered: bool,
+    dragged: bool,
+) -> container::Style {
+    let palette = theme.extended_palette();
+    let focused_header_background = mix_color(
+        palette.background.weak.color,
+        palette.primary.base.color,
+        0.12,
+    );
+
+    let (background, text_color) = if dragged {
+        (
+            Color {
+                a: 0.12,
+                ..palette.background.base.color
+            },
+            Color {
+                a: 0.28,
+                ..palette.background.base.text
+            },
+        )
+    } else if active {
+        (focused_header_background, palette.background.base.text)
+    } else if hovered {
+        (Color::TRANSPARENT, palette.background.base.text)
+    } else {
+        (Color::TRANSPARENT, palette.background.strong.text)
+    };
+
+    container::Style {
+        background: Some(background.into()),
+        text_color: Some(text_color),
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn button_editor_tab_close(
+    theme: &Theme,
+    status: button::Status,
+    active: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let base_text = if active {
+        palette.background.base.text
+    } else {
+        palette.background.strong.text
+    };
+
+    let base = button::Style {
+        background: None,
+        text_color: base_text,
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        shadow: Shadow::default(),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: None,
+            text_color: palette.primary.weak.text,
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: None,
+            text_color: palette.primary.base.text,
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.weak.text,
             ..base
         },
     }

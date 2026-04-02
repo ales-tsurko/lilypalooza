@@ -630,6 +630,27 @@ impl CodeEditor {
         self.viewport_scroll
     }
 
+    /// Synchronizes the underlying scrollable widgets with the editor's stored
+    /// vertical and horizontal offsets.
+    pub fn sync_scroll_state(&self) -> iced::Task<Message> {
+        iced::Task::batch([
+            scroll_to(
+                self.scrollable_id.clone(),
+                iced::widget::scrollable::AbsoluteOffset {
+                    x: 0.0,
+                    y: self.viewport_scroll,
+                },
+            ),
+            scroll_to(
+                self.horizontal_scrollable_id.clone(),
+                iced::widget::scrollable::AbsoluteOffset {
+                    x: self.horizontal_scroll_offset,
+                    y: 0.0,
+                },
+            ),
+        ])
+    }
+
     /// Returns the current text content as a string.
     ///
     /// # Returns

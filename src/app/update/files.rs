@@ -47,24 +47,34 @@ impl Lilypalooza {
                 },
                 |picked| Message::File(FileMessage::Picked(picked)),
             ),
-            FileMessage::Picked(Some(path)) => match selected_score_from_path(path) {
-                Ok(selected_score) => {
-                    self.attach_persistence_context_for_score(&selected_score.path);
-                    self.activate_score(selected_score)
-                }
-                Err(error) => {
-                    self.show_prompt(
-                        ErrorPrompt::new(
-                            "Open File Error",
-                            error,
-                            ErrorFatality::Recoverable,
-                            PromptButtons::Ok,
-                        ),
-                        None,
+            FileMessage::Picked(Some(path)) => {
+                let next_project_root = state::find_project_root(&path);
+                if next_project_root != self.project_root && self.editor.has_dirty_tabs() {
+                    return self.begin_pending_editor_action(
+                        self.editor.dirty_tab_ids(),
+                        EditorContinuation::OpenScore(path),
                     );
-                    Task::none()
                 }
-            },
+
+                match selected_score_from_path(path) {
+                    Ok(selected_score) => {
+                        self.attach_persistence_context_for_score(&selected_score.path);
+                        self.activate_score(selected_score)
+                    }
+                    Err(error) => {
+                        self.show_prompt(
+                            ErrorPrompt::new(
+                                "Open File Error",
+                                error,
+                                ErrorFatality::Recoverable,
+                                PromptButtons::Ok,
+                            ),
+                            None,
+                        );
+                        Task::none()
+                    }
+                }
+            }
             FileMessage::Picked(None) => Task::none(),
             FileMessage::RequestCreateProject => {
                 self.open_project_menu = false;
@@ -158,12 +168,9 @@ impl Lilypalooza {
     pub(in crate::app) fn handle_tick(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
 
-        if self.editor.has_document() {
-            tasks.push(
-                self.editor
-                    .update(&iced_code_editor::Message::Tick)
-                    .map(|message| Message::Editor(EditorMessage::Widget(message))),
-            );
+        for tab_id in self.editor.tab_ids() {
+            let task = self.editor.update(tab_id, &iced_code_editor::Message::Tick);
+            tasks.push(self.map_editor_widget_task(tab_id, task));
         }
 
         if self.compile_session.is_some() || self.score_watcher.is_some() {
@@ -200,9 +207,10 @@ impl Lilypalooza {
     ) -> Task<Message> {
         let watched_path = selected_score.path.clone();
         let editor_task = match self.editor.load_file(&watched_path) {
-            Ok(task) => {
+            Ok((tab_id, task, _)) => {
                 self.register_editor_recent_file(&watched_path);
-                task.map(|message| Message::Editor(EditorMessage::Widget(message)))
+                let sync_task = self.editor.sync_tab_scroll_state(tab_id);
+                self.map_editor_widget_task(tab_id, Task::batch([task, sync_task]))
             }
             Err(error) => {
                 self.show_prompt(
