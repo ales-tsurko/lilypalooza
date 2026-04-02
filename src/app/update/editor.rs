@@ -184,17 +184,19 @@ impl Lilypalooza {
                 self.cancel_editor_tab_rename_state();
                 Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
-                            .pick_file()
-                            .await
-                            .map(|file| file.path().to_path_buf())
+                        rfd::AsyncFileDialog::new().pick_files().await.map(|files| {
+                            files
+                                .into_iter()
+                                .map(|file| file.path().to_path_buf())
+                                .collect()
+                        })
                     },
                     |picked| Message::Editor(EditorMessage::OpenPicked(picked)),
                 )
             }
-            EditorMessage::OpenPicked(Some(path)) => {
+            EditorMessage::OpenPicked(Some(paths)) => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
-                self.open_editor_file_in_editor(&path)
+                self.open_editor_files_in_editor(&paths)
             }
             EditorMessage::OpenRecent(path) => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
@@ -338,6 +340,59 @@ impl Lilypalooza {
                 Task::none()
             }
         }
+    }
+
+    pub(in crate::app) fn open_editor_files_in_editor(
+        &mut self,
+        paths: &[PathBuf],
+    ) -> Task<Message> {
+        self.cancel_editor_tab_rename_state();
+
+        let mut tasks = Vec::new();
+        let mut opened_any = false;
+        let mut last_tab_id = None;
+
+        for path in paths {
+            match self.editor.load_file(path) {
+                Ok((tab_id, task, reused_existing)) => {
+                    self.register_editor_recent_file(path);
+                    if reused_existing {
+                        self.logger
+                            .push(format!("Activated editor file {}", path.display()));
+                    } else {
+                        self.logger
+                            .push(format!("Opened editor file {}", path.display()));
+                    }
+                    tasks.push(self.map_editor_widget_task(
+                        tab_id,
+                        iced::Task::batch([task, self.editor.sync_tab_scroll_state(tab_id)]),
+                    ));
+                    last_tab_id = Some(tab_id);
+                    opened_any = true;
+                }
+                Err(error) => {
+                    self.show_prompt(
+                        ErrorPrompt::new(
+                            "Editor Open Error",
+                            error,
+                            ErrorFatality::Recoverable,
+                            PromptButtons::Ok,
+                        ),
+                        None,
+                    );
+                    break;
+                }
+            }
+        }
+
+        if opened_any {
+            self.editor.request_focus();
+        }
+        if let Some(tab_id) = last_tab_id {
+            self.pending_reveal_editor_tab = Some(tab_id);
+        }
+
+        Task::batch(tasks)
     }
 
     pub(in crate::app) fn map_editor_widget_task(

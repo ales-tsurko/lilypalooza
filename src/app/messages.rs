@@ -107,7 +107,7 @@ pub(super) enum EditorMessage {
     RenameRequested,
     RenamePicked(Option<PathBuf>),
     OpenRequested,
-    OpenPicked(Option<PathBuf>),
+    OpenPicked(Option<Vec<PathBuf>>),
     OpenRecent(PathBuf),
     SaveRequested,
     SaveAsRequested,
