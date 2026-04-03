@@ -168,6 +168,16 @@ impl Lilypalooza {
     pub(in crate::app) fn handle_tick(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
 
+        if self.open_tooltip_key != self.hovered_tooltip_key
+            && let (Some(hovered), Some(started_at)) = (
+                self.hovered_tooltip_key.as_ref(),
+                self.tooltip_hover_started_at,
+            )
+            && started_at.elapsed() >= super::TOOLTIP_DELAY
+        {
+            self.open_tooltip_key = Some(hovered.clone());
+        }
+
         tasks.push(self.tick_editor_tabbar_autoscroll());
 
         if let Some(tab_id) = self.pending_reveal_editor_tab {

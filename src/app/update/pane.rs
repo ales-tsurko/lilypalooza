@@ -73,6 +73,16 @@ impl Lilypalooza {
             PaneMessage::SetProjectRecentOpen(open) => {
                 self.open_project_recent = open;
             }
+            PaneMessage::TooltipHovered(key) => {
+                if self.hovered_tooltip_key == key {
+                    return Task::none();
+                }
+
+                self.hovered_tooltip_key = key;
+                self.tooltip_hover_started_at =
+                    self.hovered_tooltip_key.as_ref().map(|_| Instant::now());
+                self.open_tooltip_key = None;
+            }
             PaneMessage::ToggleWorkspacePane(pane) => {
                 self.open_project_menu = false;
                 self.open_project_recent = false;

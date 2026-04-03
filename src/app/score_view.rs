@@ -1,6 +1,5 @@
 use iced::widget::{
-    Tooltip, button, canvas, container, mouse_area, responsive, row, scrollable, stack, svg, text,
-    tooltip,
+    button, canvas, container, mouse_area, responsive, row, scrollable, stack, svg, text, tooltip,
 };
 use iced::{
     Color, ContentFit, Element, Fill, Length, Point, Rectangle, Size, Theme, alignment, mouse,
@@ -134,14 +133,15 @@ pub(super) fn score_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup
     } else {
         mouse_area(zoom_value)
     };
-    let zoom_value = Tooltip::new(
-        zoom_value,
-        text("Double-click to reset zoom").size(ui_style::FONT_SIZE_UI_XS),
+    let zoom_value = super::dock_view::delayed_tooltip(
+        app,
+        "score-zoom-reset",
+        zoom_value.into(),
+        text("Double-click to reset zoom")
+            .size(ui_style::FONT_SIZE_UI_XS)
+            .into(),
         tooltip::Position::Bottom,
-    )
-    .gap(8)
-    .padding(8)
-    .style(ui_style::tooltip_popup);
+    );
 
     let brightness_value = text(brightness_label)
         .size(ui_style::FONT_SIZE_UI_XS)
@@ -152,14 +152,15 @@ pub(super) fn score_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup
     } else {
         mouse_area(brightness_value)
     };
-    let brightness_value = Tooltip::new(
-        brightness_value,
-        text("Double-click to reset brightness").size(ui_style::FONT_SIZE_UI_XS),
+    let brightness_value = super::dock_view::delayed_tooltip(
+        app,
+        "score-brightness-reset",
+        brightness_value.into(),
+        text("Double-click to reset brightness")
+            .size(ui_style::FONT_SIZE_UI_XS)
+            .into(),
         tooltip::Position::Top,
-    )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup);
+    );
 
     vec![
         HeaderControlGroup {

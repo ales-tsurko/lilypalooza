@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use iced::widget::{
-    Tooltip, button, canvas, column, container, mouse_area, row, scrollable, slider, stack, svg,
-    text, text_input, tooltip,
+    button, canvas, column, container, mouse_area, row, scrollable, slider, stack, svg, text,
+    text_input, tooltip,
 };
 use iced::{
     Color, ContentFit, Element, Fill, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
@@ -439,14 +439,13 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
     } else {
         track_toggle_button
     };
-    let track_toggle_button = Tooltip::new(
-        track_toggle_button,
-        text("Tracks").size(ui_style::FONT_SIZE_UI_XS),
+    let track_toggle_button = super::dock_view::delayed_tooltip(
+        app,
+        "piano-roll-track-toggle",
+        track_toggle_button.into(),
+        text("Tracks").size(ui_style::FONT_SIZE_UI_XS).into(),
         tooltip::Position::Top,
-    )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup);
+    );
 
     let zoom_out_button = button(super::dock_view::compact_control_icon(icons::zoom_out()))
         .style(ui_style::button_neutral)
@@ -504,14 +503,15 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
                     mouse_area(zoom_value)
                 };
 
-                Tooltip::new(
-                    zoom_value,
-                    text("Double-click to reset zoom").size(ui_style::FONT_SIZE_UI_XS),
+                super::dock_view::delayed_tooltip(
+                    app,
+                    "piano-roll-zoom-reset",
+                    zoom_value.into(),
+                    text("Double-click to reset zoom")
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .into(),
                     tooltip::Position::Top,
                 )
-                .gap(6)
-                .padding(8)
-                .style(ui_style::tooltip_popup)
             },
             zoom_in_button,
         ]
@@ -535,7 +535,7 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
     let mut controls = vec![
         HeaderControlGroup {
             min_width: 34.0,
-            content: track_toggle_button.into(),
+            content: track_toggle_button,
         },
         zoom_group,
         beat_subdiv_group,

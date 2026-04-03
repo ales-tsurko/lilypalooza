@@ -42,6 +42,7 @@ const MIN_WINDOW_WIDTH: f32 = 960.0;
 const MIN_WINDOW_HEIGHT: f32 = 640.0;
 const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_millis(120);
 const EDITOR_TABBAR_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(16);
+const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
 pub(super) const EDITOR_TABBAR_SCROLL_ID: &str = "editor-tabbar-scroll";
 pub(super) const KEYBOARD_SCROLL_STEP: f32 = 84.0;
@@ -103,6 +104,9 @@ struct Lilypalooza {
     hovered_editor_file_menu_section: Option<EditorFileMenuSection>,
     open_project_menu: bool,
     open_project_recent: bool,
+    hovered_tooltip_key: Option<String>,
+    open_tooltip_key: Option<String>,
+    tooltip_hover_started_at: Option<Instant>,
     pressed_editor_tab: Option<u64>,
     hovered_editor_tab: Option<u64>,
     dragged_editor_tab: Option<u64>,
@@ -406,6 +410,9 @@ fn new(
         hovered_editor_file_menu_section: None,
         open_project_menu: false,
         open_project_recent: false,
+        hovered_tooltip_key: None,
+        open_tooltip_key: None,
+        tooltip_hover_started_at: None,
         pressed_editor_tab: None,
         hovered_editor_tab: None,
         dragged_editor_tab: None,
@@ -513,6 +520,10 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
             .push(iced::time::every(EDITOR_TABBAR_AUTOSCROLL_INTERVAL).map(|_| Message::Tick));
     }
 
+    if app.hovered_tooltip_key.is_some() && app.open_tooltip_key != app.hovered_tooltip_key {
+        subscriptions.push(iced::time::every(Duration::from_millis(50)).map(|_| Message::Tick));
+    }
+
     if app.score_zoom_preview_active() || app.score_zoom_persist_pending {
         subscriptions.push(iced::time::every(SCORE_ZOOM_PREVIEW_INTERVAL).map(|_| Message::Tick));
     }
@@ -571,6 +582,10 @@ impl Lilypalooza {
 
     pub(super) fn has_saved_project(&self) -> bool {
         self.project_root.is_some()
+    }
+
+    pub(super) fn is_tooltip_open(&self, key: &str) -> bool {
+        self.open_tooltip_key.as_deref() == Some(key)
     }
 
     pub(super) fn project_title(&self) -> String {

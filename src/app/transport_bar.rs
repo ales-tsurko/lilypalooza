@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use iced::widget::{Tooltip, button, container, row, slider, svg, text, tooltip};
+use iced::widget::{button, container, row, slider, svg, text, tooltip};
 use iced::{ContentFit, Element, Fill, Length, alignment};
 
 use super::{FileMessage, Lilypalooza, Message, PianoRollMessage, SoundfontStatus};
@@ -88,19 +88,19 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     } else {
         play_pause_button
     };
-    let play_pause_button = Tooltip::new(
-        play_pause_button,
+    let play_pause_button = super::dock_view::delayed_tooltip(
+        app,
+        "transport-play-pause",
+        play_pause_button.into(),
         text(
             shortcuts::label_for_action(&app.shortcut_settings, ShortcutAction::TransportPlayPause)
                 .map(|shortcut| format!("Play ({shortcut})"))
                 .unwrap_or_else(|| "Play".to_string()),
         )
-        .size(ui_style::FONT_SIZE_UI_XS),
+        .size(ui_style::FONT_SIZE_UI_XS)
+        .into(),
         tooltip::Position::Top,
-    )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup);
+    );
 
     let rewind_button = button(
         container(transport_icon(icons::skip_back()))
@@ -118,19 +118,19 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     } else {
         rewind_button
     };
-    let rewind_button = Tooltip::new(
-        rewind_button,
+    let rewind_button = super::dock_view::delayed_tooltip(
+        app,
+        "transport-rewind",
+        rewind_button.into(),
         text(
             shortcuts::label_for_action(&app.shortcut_settings, ShortcutAction::TransportRewind)
                 .map(|shortcut| format!("Rewind ({shortcut})"))
                 .unwrap_or_else(|| "Rewind".to_string()),
         )
-        .size(ui_style::FONT_SIZE_UI_XS),
+        .size(ui_style::FONT_SIZE_UI_XS)
+        .into(),
         tooltip::Position::Top,
-    )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup);
+    );
 
     let seek_slider = slider(0.0..=1.0, normalized_position, |value| {
         Message::PianoRoll(PianoRollMessage::TransportSeekNormalized(value))

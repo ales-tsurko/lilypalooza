@@ -62,6 +62,31 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     stack([content, overlay]).into()
 }
 
+pub(super) fn delayed_tooltip<'a>(
+    app: &Lilypalooza,
+    key: impl Into<String>,
+    content: Element<'a, Message>,
+    tooltip_content: Element<'a, Message>,
+    position: tooltip::Position,
+) -> Element<'a, Message> {
+    let key = key.into();
+    let tracked = mouse_area(content)
+        .on_enter(Message::Pane(PaneMessage::TooltipHovered(Some(
+            key.clone(),
+        ))))
+        .on_exit(Message::Pane(PaneMessage::TooltipHovered(None)));
+
+    if app.is_tooltip_open(&key) {
+        Tooltip::new(tracked, tooltip_content, position)
+            .gap(6)
+            .padding(8)
+            .style(ui_style::tooltip_popup)
+            .into()
+    } else {
+        tracked.into()
+    }
+}
+
 fn workspace_toolbar(app: &Lilypalooza) -> Element<'_, Message> {
     let pane_toggles = all_workspace_panes().into_iter().fold(
         row![]
@@ -139,7 +164,9 @@ fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
                 }),
             }
         });
-    Tooltip::new(
+    delayed_tooltip(
+        app,
+        "toolbar-project-menu",
         button(
             row![
                 container(chevron)
@@ -208,14 +235,11 @@ fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
         .style(ui_style::button_toolbar_chip)
         .padding([0, 8])
         .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
-        .on_press(Message::Pane(PaneMessage::ToggleProjectMenu)),
-        text(tooltip_text).size(ui_style::FONT_SIZE_UI_XS),
+        .on_press(Message::Pane(PaneMessage::ToggleProjectMenu))
+        .into(),
+        text(tooltip_text).size(ui_style::FONT_SIZE_UI_XS).into(),
         tooltip::Position::Bottom,
     )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup)
-    .into()
 }
 
 fn project_menu_overlay(app: &Lilypalooza) -> Element<'_, Message> {
@@ -312,22 +336,21 @@ fn project_recent_projects_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Mess
         .fold(
             Column::new().spacing(ui_style::SPACE_XS),
             |column, (path, label)| {
-                column.push(
-                    Tooltip::new(
-                        editor_menu_item(
-                            label,
-                            true,
-                            Some(Message::File(super::FileMessage::OpenRecentProject(
-                                path.clone(),
-                            ))),
-                        ),
-                        text(path.display().to_string()).size(ui_style::FONT_SIZE_UI_XS),
-                        tooltip::Position::Right,
-                    )
-                    .gap(6)
-                    .padding(8)
-                    .style(ui_style::tooltip_popup),
-                )
+                column.push(delayed_tooltip(
+                    app,
+                    format!("project-recent-{}", path.display()),
+                    editor_menu_item(
+                        label,
+                        true,
+                        Some(Message::File(super::FileMessage::OpenRecentProject(
+                            path.clone(),
+                        ))),
+                    ),
+                    text(path.display().to_string())
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .into(),
+                    tooltip::Position::Right,
+                ))
             },
         )
         .into()
@@ -711,15 +734,13 @@ fn editor_tab(app: &Lilypalooza, tab: super::editor::EditorTabSummary) -> Elemen
             .into()
     };
 
-    Tooltip::new(
+    delayed_tooltip(
+        app,
+        format!("editor-tab-{}", tab.id),
         body,
-        text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS),
+        text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS).into(),
         tooltip::Position::Bottom,
     )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup)
-    .into()
 }
 
 fn group_title_bar<'a>(
@@ -774,7 +795,7 @@ fn group_header<'a>(
     }
 
     if shows_menu_button {
-        header = header.push(header_overflow_trigger(group_id, is_menu_open));
+        header = header.push(header_overflow_trigger(app, group_id, is_menu_open));
     }
     iced::widget::column![
         mouse_area(container(header).padding([
@@ -1014,7 +1035,9 @@ fn toolbar_pane_toggle(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'s
     .map(|shortcut| format!("{title} ({shortcut})"))
     .unwrap_or_else(|| title.to_string());
 
-    Tooltip::new(
+    delayed_tooltip(
+        app,
+        format!("toolbar-pane-toggle-{pane:?}"),
         button(icon)
             .style(if is_visible {
                 ui_style::button_toolbar_toggle_active
@@ -1022,14 +1045,11 @@ fn toolbar_pane_toggle(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'s
                 ui_style::button_toolbar_chip
             })
             .padding([6, 7])
-            .on_press(Message::Pane(PaneMessage::ToggleWorkspacePane(pane))),
-        text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS),
+            .on_press(Message::Pane(PaneMessage::ToggleWorkspacePane(pane)))
+            .into(),
+        text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS).into(),
         tooltip::Position::Bottom,
     )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup)
-    .into()
 }
 
 fn empty_workspace_placeholder(app: &Lilypalooza) -> Element<'_, Message> {
@@ -1064,6 +1084,7 @@ fn empty_workspace_placeholder(app: &Lilypalooza) -> Element<'_, Message> {
 }
 
 fn header_overflow_button(
+    app: &Lilypalooza,
     group_id: super::DockGroupId,
     is_open: bool,
 ) -> Element<'static, Message> {
@@ -1088,22 +1109,21 @@ fn header_overflow_button(
         "Show pane controls"
     };
 
-    Tooltip::new(
-        container(button).padding([0, 2]),
-        text(tooltip).size(ui_style::FONT_SIZE_UI_XS),
+    delayed_tooltip(
+        app,
+        format!("header-overflow-{group_id}"),
+        container(button).padding([0, 2]).into(),
+        text(tooltip).size(ui_style::FONT_SIZE_UI_XS).into(),
         tooltip::Position::Top,
     )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup)
-    .into()
 }
 
 fn header_overflow_trigger(
+    app: &Lilypalooza,
     group_id: super::DockGroupId,
     is_open: bool,
 ) -> Element<'static, Message> {
-    header_overflow_button(group_id, is_open)
+    header_overflow_button(app, group_id, is_open)
 }
 
 fn header_overflow_menu_panel<'a>(controls: Vec<Element<'a, Message>>) -> Element<'a, Message> {
@@ -1447,15 +1467,13 @@ fn logger_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> {
 
     vec![HeaderControlGroup {
         min_width: 32.0,
-        content: Tooltip::new(
-            clear_button,
-            text("Clear").size(ui_style::FONT_SIZE_UI_XS),
+        content: delayed_tooltip(
+            app,
+            "logger-clear",
+            clear_button.into(),
+            text("Clear").size(ui_style::FONT_SIZE_UI_XS).into(),
             tooltip::Position::Top,
-        )
-        .gap(6)
-        .padding(8)
-        .style(ui_style::tooltip_popup)
-        .into(),
+        ),
     }]
 }
 
@@ -1717,6 +1735,7 @@ fn editor_recent_files_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message>
             Column::new().spacing(ui_style::SPACE_XS),
             |column, (path, label)| {
                 column.push(editor_recent_file_item(
+                    app,
                     label,
                     path.clone(),
                     Message::Editor(super::EditorMessage::OpenRecent(path)),
@@ -1727,19 +1746,20 @@ fn editor_recent_files_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message>
 }
 
 fn editor_recent_file_item<'a>(
+    app: &Lilypalooza,
     label: String,
     full_path: PathBuf,
     on_press: Message,
 ) -> Element<'a, Message> {
-    Tooltip::new(
+    delayed_tooltip(
+        app,
+        format!("editor-recent-{}", full_path.display()),
         editor_menu_item(label, true, Some(on_press)),
-        text(full_path.display().to_string()).size(ui_style::FONT_SIZE_UI_XS),
+        text(full_path.display().to_string())
+            .size(ui_style::FONT_SIZE_UI_XS)
+            .into(),
         tooltip::Position::Right,
     )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup)
-    .into()
 }
 
 fn recent_file_labels(paths: &[PathBuf], max_chars: usize) -> Vec<String> {
@@ -1899,14 +1919,15 @@ fn editor_appearance_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
     } else {
         mouse_area(zoom_value_label)
     };
-    let zoom_value = Tooltip::new(
-        zoom_value,
-        text("Double-click to reset").size(ui_style::FONT_SIZE_UI_XS),
+    let zoom_value = delayed_tooltip(
+        app,
+        "editor-font-size-reset",
+        zoom_value.into(),
+        text("Double-click to reset")
+            .size(ui_style::FONT_SIZE_UI_XS)
+            .into(),
         tooltip::Position::Top,
-    )
-    .gap(6)
-    .padding(8)
-    .style(ui_style::tooltip_popup);
+    );
 
     Column::new()
         .spacing(ui_style::SPACE_SM)

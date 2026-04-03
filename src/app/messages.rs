@@ -59,6 +59,7 @@ pub(super) enum PaneMessage {
     ToggleProjectMenu,
     CloseProjectMenu,
     SetProjectRecentOpen(bool),
+    TooltipHovered(Option<String>),
     CloseHeaderOverflowMenu,
     ToggleWorkspacePane(WorkspacePaneKind),
     WorkspaceDragMoved(iced::Point),
