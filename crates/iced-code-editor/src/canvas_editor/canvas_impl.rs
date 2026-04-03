@@ -1017,6 +1017,12 @@ impl CodeEditor {
             return Some(Action::publish(Message::CloseSearch).and_capture());
         }
 
+        if self.goto_line_state.is_open
+            && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+        {
+            return Some(Action::publish(Message::CloseGotoLine).and_capture());
+        }
+
         None
     }
 
@@ -1283,7 +1289,7 @@ impl CodeEditor {
                     }
 
                     let now = super::Instant::now();
-                    let is_double_click = self.last_click_at.get().is_some_and(|last_click| {
+                    let repeated_click = self.last_click_at.get().is_some_and(|last_click| {
                         now.duration_since(last_click) <= DOUBLE_CLICK_INTERVAL
                             && self
                                 .last_click_position
@@ -1295,14 +1301,26 @@ impl CodeEditor {
                                 })
                     });
 
-                    if is_double_click {
-                        self.last_click_at.set(None);
-                        *self.last_click_position.borrow_mut() = None;
-                        return Action::publish(Message::MouseDoubleClick(position));
-                    }
+                    let click_count = if repeated_click {
+                        self.last_click_count.get().saturating_add(1)
+                    } else {
+                        1
+                    };
 
                     self.last_click_at.set(Some(now));
                     *self.last_click_position.borrow_mut() = Some(position);
+                    self.last_click_count.set(click_count);
+
+                    if click_count >= 3 {
+                        self.last_click_count.set(0);
+                        self.last_click_at.set(None);
+                        *self.last_click_position.borrow_mut() = None;
+                        return Action::publish(Message::MouseTripleClick(position));
+                    }
+
+                    if click_count == 2 {
+                        return Action::publish(Message::MouseDoubleClick(position));
+                    }
 
                     // Don't capture the event so it can bubble up for focus management
                     // This implements focus event propagation through the widget hierarchy

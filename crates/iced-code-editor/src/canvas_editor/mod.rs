@@ -30,11 +30,16 @@ static EDITOR_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// ID of the currently focused editor (0 = no editor focused)
 static FOCUSED_EDITOR_ID: AtomicU64 = AtomicU64::new(0);
 
+type CursorPosition = (usize, usize);
+type BracketPair = (CursorPosition, CursorPosition);
+
 // Re-export submodules
 mod canvas_impl;
 mod clipboard;
 pub mod command;
 mod cursor;
+mod goto_line;
+mod goto_line_dialog;
 mod highlighting;
 pub mod history;
 pub mod ime_requester;
@@ -206,6 +211,8 @@ pub struct CodeEditor {
     pub(crate) wrap_column: Option<usize>,
     /// Search state
     pub(crate) search_state: search::SearchState,
+    /// Go-to-line dialog state
+    pub(crate) goto_line_state: goto_line::GotoLineState,
     /// Translations for UI text
     pub(crate) translations: Translations,
     /// Whether search/replace functionality is enabled
@@ -243,6 +250,8 @@ pub struct CodeEditor {
     pub(crate) last_click_at: Cell<Option<Instant>>,
     /// Last mouse click position for double-click detection.
     pub(crate) last_click_position: RefCell<Option<iced::Point>>,
+    /// Consecutive click count at the last click position.
+    pub(crate) last_click_count: Cell<u8>,
     /// Font size in pixels
     pub(crate) font_size: f32,
     /// Full character width (wide chars like CJK) in pixels
@@ -317,6 +326,8 @@ pub enum Message {
     MouseClick(iced::Point),
     /// Mouse double-clicked at position
     MouseDoubleClick(iced::Point),
+    /// Mouse triple-clicked at position
+    MouseTripleClick(iced::Point),
     /// Mouse drag for selection
     MouseDrag(iced::Point),
     /// Mouse moved within the editor without dragging
@@ -329,6 +340,8 @@ pub enum Message {
     Paste(String),
     /// Delete selected text (Shift+Delete)
     DeleteSelection,
+    /// Select the whole document
+    SelectAll,
     /// Request redraw for cursor blink
     Tick,
     /// Page Up pressed
@@ -377,6 +390,14 @@ pub enum Message {
     CopyLineUp,
     /// Copy the current line or touched lines down
     CopyLineDown,
+    /// Open go-to-line dialog
+    OpenGotoLine,
+    /// Close go-to-line dialog
+    CloseGotoLine,
+    /// Go-to-line query changed
+    GotoLineQueryChanged(String),
+    /// Submit go-to-line dialog
+    SubmitGotoLine,
     /// Join the current line with the next line or join touched lines
     JoinLines,
     /// Toggle a line comment
@@ -491,6 +512,7 @@ impl CodeEditor {
             wrap_enabled: true,
             wrap_column: None,
             search_state: search::SearchState::new(),
+            goto_line_state: goto_line::GotoLineState::new(),
             translations: Translations::default(),
             search_replace_enabled: true,
             line_numbers_enabled: true,
@@ -508,6 +530,7 @@ impl CodeEditor {
             ime_preedit: None,
             last_click_at: Cell::new(None),
             last_click_position: RefCell::new(None),
+            last_click_count: Cell::new(0),
             font_size: FONT_SIZE,
             full_char_width: CHAR_WIDTH * 2.0,
             line_height: LINE_HEIGHT,
@@ -1201,21 +1224,15 @@ impl CodeEditor {
         })
     }
 
-    pub(crate) fn bracket_pair_at(
-        &self,
-        position: (usize, usize),
-    ) -> Option<((usize, usize), (usize, usize))> {
+    pub(crate) fn bracket_pair_at(&self, position: CursorPosition) -> Option<BracketPair> {
         self.char_at(position).and_then(|ch| {
             Self::match_from_position(self, position, ch).map(|matching| (position, matching))
         })
     }
 
-    pub(crate) fn nearest_bracket_pair(
-        &self,
-        position: (usize, usize),
-    ) -> Option<((usize, usize), (usize, usize))> {
+    pub(crate) fn nearest_bracket_pair(&self, position: CursorPosition) -> Option<BracketPair> {
         let anchor = self.document_offset(position);
-        let mut best: Option<(((usize, usize), (usize, usize)), usize)> = None;
+        let mut best: Option<(BracketPair, usize)> = None;
 
         for line in 0..self.buffer.line_count() {
             for (col, ch) in self.buffer.line(line).chars().enumerate() {

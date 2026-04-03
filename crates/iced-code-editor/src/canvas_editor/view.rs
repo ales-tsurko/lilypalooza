@@ -6,6 +6,7 @@ use iced::widget::canvas::Canvas;
 use iced::widget::{Column, Row, Scrollable, Space, container, scrollable};
 use iced::{Background, Color, Element, Length, Rectangle, Shadow, Vector};
 
+use super::goto_line_dialog;
 use super::ime_requester::ImeRequester;
 use super::search_dialog;
 use super::wrapping::{self, WrappingCalculator};
@@ -305,6 +306,21 @@ impl CodeEditor {
                 Row::new()
                     .push(Space::new().width(Length::Fill))
                     .push(search_dialog),
+            )
+            .padding(20)
+            .width(Length::Fill)
+            .height(Length::Shrink);
+
+            editor_stack = editor_stack.push(positioned_dialog);
+        }
+
+        if self.goto_line_state.is_open {
+            let goto_line_dialog = goto_line_dialog::view(&self.goto_line_state);
+
+            let positioned_dialog = container(
+                Row::new()
+                    .push(Space::new().width(Length::Fill))
+                    .push(goto_line_dialog),
             )
             .padding(20)
             .width(Length::Fill)

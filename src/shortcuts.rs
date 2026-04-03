@@ -17,6 +17,7 @@ pub(crate) enum ShortcutAction {
     EditorPaste,
     EditorOpenSearch,
     EditorOpenSearchReplace,
+    EditorOpenGotoLine,
     EditorFindNext,
     EditorFindPrevious,
     EditorWordLeft,
@@ -36,6 +37,7 @@ pub(crate) enum ShortcutAction {
     EditorDocumentStartSelect,
     EditorDocumentEndSelect,
     EditorDeleteSelection,
+    EditorSelectAll,
     EditorInsertLineBelow,
     EditorInsertLineAbove,
     EditorDeleteLine,
@@ -43,6 +45,7 @@ pub(crate) enum ShortcutAction {
     EditorMoveLineDown,
     EditorCopyLineUp,
     EditorCopyLineDown,
+    EditorJoinLines,
     EditorIndent,
     EditorOutdent,
     EditorToggleLineComment,
@@ -139,6 +142,7 @@ const EDITOR_CONTEXTUAL_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::EditorPaste,
     ShortcutAction::EditorOpenSearch,
     ShortcutAction::EditorOpenSearchReplace,
+    ShortcutAction::EditorOpenGotoLine,
     ShortcutAction::EditorFindNext,
     ShortcutAction::EditorFindPrevious,
     ShortcutAction::EditorWordLeft,
@@ -158,6 +162,7 @@ const EDITOR_CONTEXTUAL_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::EditorDocumentStartSelect,
     ShortcutAction::EditorDocumentEndSelect,
     ShortcutAction::EditorDeleteSelection,
+    ShortcutAction::EditorSelectAll,
     ShortcutAction::EditorInsertLineBelow,
     ShortcutAction::EditorInsertLineAbove,
     ShortcutAction::EditorDeleteLine,
@@ -165,6 +170,7 @@ const EDITOR_CONTEXTUAL_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::EditorMoveLineDown,
     ShortcutAction::EditorCopyLineUp,
     ShortcutAction::EditorCopyLineDown,
+    ShortcutAction::EditorJoinLines,
     ShortcutAction::EditorIndent,
     ShortcutAction::EditorOutdent,
     ShortcutAction::EditorToggleLineComment,
@@ -352,6 +358,9 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
         ShortcutAction::EditorOpenSearchReplace => {
             vec![binding_code(ShortcutKeyCode::KeyH, true, false, false)]
         }
+        ShortcutAction::EditorOpenGotoLine => {
+            vec![binding_code(ShortcutKeyCode::KeyG, true, false, false)]
+        }
         ShortcutAction::EditorFindNext => {
             vec![binding_code(ShortcutKeyCode::F3, false, false, false)]
         }
@@ -472,6 +481,9 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
         ShortcutAction::EditorDeleteSelection => {
             vec![binding_code(ShortcutKeyCode::Delete, false, false, true)]
         }
+        ShortcutAction::EditorSelectAll => {
+            vec![binding_code(ShortcutKeyCode::KeyA, true, false, false)]
+        }
         ShortcutAction::EditorInsertLineBelow => {
             vec![binding_named(ShortcutNamedKey::Enter, true, false, false)]
         }
@@ -492,6 +504,9 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
         }
         ShortcutAction::EditorCopyLineDown => {
             vec![binding_code(ShortcutKeyCode::ArrowDown, false, true, true)]
+        }
+        ShortcutAction::EditorJoinLines => {
+            vec![binding_code(ShortcutKeyCode::KeyJ, true, false, false)]
         }
         ShortcutAction::EditorIndent => {
             vec![binding_code(
@@ -685,7 +700,9 @@ fn code_label(code: ShortcutKeyCode) -> &'static str {
         ShortcutKeyCode::KeyA => "A",
         ShortcutKeyCode::KeyC => "C",
         ShortcutKeyCode::KeyF => "F",
+        ShortcutKeyCode::KeyG => "G",
         ShortcutKeyCode::KeyH => "H",
+        ShortcutKeyCode::KeyJ => "J",
         ShortcutKeyCode::KeyK => "K",
         ShortcutKeyCode::KeyL => "L",
         ShortcutKeyCode::KeyN => "N",
@@ -760,7 +777,9 @@ fn to_iced_key_code(code: ShortcutKeyCode) -> keyboard::key::Code {
         ShortcutKeyCode::KeyA => keyboard::key::Code::KeyA,
         ShortcutKeyCode::KeyC => keyboard::key::Code::KeyC,
         ShortcutKeyCode::KeyF => keyboard::key::Code::KeyF,
+        ShortcutKeyCode::KeyG => keyboard::key::Code::KeyG,
         ShortcutKeyCode::KeyH => keyboard::key::Code::KeyH,
+        ShortcutKeyCode::KeyJ => keyboard::key::Code::KeyJ,
         ShortcutKeyCode::KeyK => keyboard::key::Code::KeyK,
         ShortcutKeyCode::KeyL => keyboard::key::Code::KeyL,
         ShortcutKeyCode::KeyN => keyboard::key::Code::KeyN,
@@ -821,6 +840,7 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::EditorPaste => Some(ShortcutActionId::EditorPaste),
         ShortcutAction::EditorOpenSearch => Some(ShortcutActionId::EditorOpenSearch),
         ShortcutAction::EditorOpenSearchReplace => Some(ShortcutActionId::EditorOpenSearchReplace),
+        ShortcutAction::EditorOpenGotoLine => Some(ShortcutActionId::EditorOpenGotoLine),
         ShortcutAction::EditorFindNext => Some(ShortcutActionId::EditorFindNext),
         ShortcutAction::EditorFindPrevious => Some(ShortcutActionId::EditorFindPrevious),
         ShortcutAction::EditorWordLeft => Some(ShortcutActionId::EditorWordLeft),
@@ -844,6 +864,7 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         }
         ShortcutAction::EditorDocumentEndSelect => Some(ShortcutActionId::EditorDocumentEndSelect),
         ShortcutAction::EditorDeleteSelection => Some(ShortcutActionId::EditorDeleteSelection),
+        ShortcutAction::EditorSelectAll => Some(ShortcutActionId::EditorSelectAll),
         ShortcutAction::EditorInsertLineBelow => Some(ShortcutActionId::EditorInsertLineBelow),
         ShortcutAction::EditorInsertLineAbove => Some(ShortcutActionId::EditorInsertLineAbove),
         ShortcutAction::EditorDeleteLine => Some(ShortcutActionId::EditorDeleteLine),
@@ -851,6 +872,7 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::EditorMoveLineDown => Some(ShortcutActionId::EditorMoveLineDown),
         ShortcutAction::EditorCopyLineUp => Some(ShortcutActionId::EditorCopyLineUp),
         ShortcutAction::EditorCopyLineDown => Some(ShortcutActionId::EditorCopyLineDown),
+        ShortcutAction::EditorJoinLines => Some(ShortcutActionId::EditorJoinLines),
         ShortcutAction::EditorIndent => Some(ShortcutActionId::EditorIndent),
         ShortcutAction::EditorOutdent => Some(ShortcutActionId::EditorOutdent),
         ShortcutAction::EditorToggleLineComment => Some(ShortcutActionId::EditorToggleLineComment),

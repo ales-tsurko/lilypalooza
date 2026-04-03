@@ -167,6 +167,18 @@ impl Lilypalooza {
         } else if let Some(layout) = dock_node_from_workspace_state(&self.workspace_panes) {
             self.dock_layout = Some(layout);
         }
+        self.sync_editor_viewport_from_layout();
+    }
+
+    pub(in crate::app) fn sync_editor_viewport_from_layout(&mut self) {
+        let Some(group_id) = self.group_for_pane(WorkspacePaneKind::Editor) else {
+            return;
+        };
+        let Some(bounds) = self.workspace_group_bounds().get(&group_id).copied() else {
+            return;
+        };
+
+        self.editor.set_viewport_width(bounds.width);
     }
 
     pub(in crate::app) fn constrained_workspace_split_ratio(

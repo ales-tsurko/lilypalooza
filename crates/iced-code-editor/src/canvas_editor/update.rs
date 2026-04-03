@@ -164,6 +164,22 @@ impl CodeEditor {
             .collect()
     }
 
+    fn first_non_whitespace_col(&self, line: usize) -> usize {
+        self.buffer
+            .line(line)
+            .chars()
+            .take_while(|ch| matches!(ch, ' ' | '\t'))
+            .count()
+    }
+
+    fn trimmed_line_end_col(&self, line: usize) -> usize {
+        self.buffer
+            .line(line)
+            .trim_end_matches([' ', '\t'])
+            .chars()
+            .count()
+    }
+
     fn position_after_text(start: (usize, usize), text: &str) -> (usize, usize) {
         let lines: Vec<&str> = text.split('\n').collect();
         if lines.len() == 1 {
@@ -396,8 +412,9 @@ impl CodeEditor {
         if let Some((start, end)) = self.get_selection_range()
             && start != end
         {
+            let (start_line, end_line) = self.touched_line_range();
             let mut composite = CompositeCommand::new("Indent".to_string());
-            for line in start.0..=end.0 {
+            for line in start_line..=end_line {
                 composite.add(Box::new(ReplaceRangeCommand::new(
                     &self.buffer,
                     (line, 0),
@@ -409,8 +426,15 @@ impl CodeEditor {
             }
             composite.execute(&mut self.buffer, &mut self.cursor);
             self.history.push(Box::new(composite));
-            self.selection_start = Some((start.0, start.1 + 4));
-            self.selection_end = Some((end.0, end.1 + 4));
+            self.selection_start = Some((start.0, if start.1 == 0 { 0 } else { start.1 + 4 }));
+            self.selection_end = Some((
+                end.0,
+                if end.0 > start.0 && end.1 == 0 {
+                    0
+                } else {
+                    end.1 + 4
+                },
+            ));
         } else {
             let (line, col) = self.cursor;
             self.apply_replace_range(
@@ -428,10 +452,10 @@ impl CodeEditor {
     fn handle_shift_tab(&mut self) -> Task<Message> {
         self.end_grouping_if_active();
 
-        let (start_line, end_line) = if let Some((start, end)) = self.get_selection_range()
-            && start != end
+        let original_selection = self.get_selection_range();
+        let (start_line, end_line) = if original_selection.is_some_and(|(start, end)| start != end)
         {
-            (start.0, end.0)
+            self.touched_line_range()
         } else {
             (self.cursor.0, self.cursor.0)
         };
@@ -469,13 +493,32 @@ impl CodeEditor {
         composite.execute(&mut self.buffer, &mut self.cursor);
         self.history.push(Box::new(composite));
 
-        if let Some((start, end)) = self.get_selection_range()
+        if let Some((start, end)) = original_selection
             && start != end
         {
-            self.selection_start = Some((start.0, start.1.saturating_sub(4)));
-            self.selection_end = Some((end.0, end.1.saturating_sub(4)));
+            let start_removed = edits
+                .iter()
+                .find(|(line, _)| *line == start.0)
+                .map_or(0, |(_, count)| *count);
+            let end_removed = edits
+                .iter()
+                .find(|(line, _)| *line == end.0)
+                .map_or(0, |(_, count)| *count);
+            self.selection_start = Some((start.0, start.1.saturating_sub(start_removed)));
+            self.selection_end = Some((
+                end.0,
+                if end.0 > start.0 && end.1 == 0 {
+                    0
+                } else {
+                    end.1.saturating_sub(end_removed)
+                },
+            ));
         } else if self.cursor.1 > 0 {
-            self.cursor.1 = self.cursor.1.saturating_sub(4);
+            let removed = edits
+                .iter()
+                .find(|(line, _)| *line == self.cursor.0)
+                .map_or(0, |(_, count)| *count);
+            self.cursor.1 = self.cursor.1.saturating_sub(removed);
         }
 
         self.finish_edit_operation();
@@ -591,6 +634,23 @@ impl CodeEditor {
         let start = Self::word_start_in_line(line, position.1);
         let end = Self::word_end_in_line(line, position.1);
         (start < end).then_some(((position.0, start), (position.0, end)))
+    }
+
+    fn join_requires_space(joined: &str, trimmed_next: &str) -> bool {
+        let prev = joined.chars().next_back();
+        let next = trimmed_next.chars().next();
+
+        let Some(prev) = prev else {
+            return false;
+        };
+        let Some(next) = next else {
+            return false;
+        };
+
+        let next_is_tight = matches!(next, ')' | ']' | '}' | ',' | '.' | ';' | ':');
+        let prev_is_tight = matches!(prev, '(' | '[' | '{');
+
+        !next_is_tight && !prev_is_tight && !joined.ends_with(' ')
     }
 
     fn select_line_at(&mut self, line: usize) {
@@ -919,7 +979,12 @@ impl CodeEditor {
     /// horizontal scroll back to x=0 when wrap is disabled)
     fn handle_home(&mut self, shift_pressed: bool) -> Task<Message> {
         let original_cursor = self.cursor;
-        self.cursor.1 = 0;
+        let first_non_ws = self.first_non_whitespace_col(self.cursor.0);
+        self.cursor.1 = if self.cursor.1 == first_non_ws {
+            0
+        } else {
+            first_non_ws
+        };
         self.set_selection_after_move(original_cursor, shift_pressed);
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -940,8 +1005,13 @@ impl CodeEditor {
     fn handle_end(&mut self, shift_pressed: bool) -> Task<Message> {
         let line = self.cursor.0;
         let line_len = self.buffer.line_len(line);
+        let trimmed_end = self.trimmed_line_end_col(line);
         let original_cursor = self.cursor;
-        self.cursor.1 = line_len;
+        self.cursor.1 = if self.cursor.1 == trimmed_end {
+            line_len
+        } else {
+            trimmed_end
+        };
         self.set_selection_after_move(original_cursor, shift_pressed);
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -1021,6 +1091,49 @@ impl CodeEditor {
         self.set_cursor(line, col)
     }
 
+    fn parse_goto_line_query(query: &str) -> Option<(usize, usize)> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let mut parts = trimmed.split([':', ',']);
+        let line = parts.next()?.trim().parse::<usize>().ok()?;
+        let col = parts
+            .next()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(1);
+        Some((line.saturating_sub(1), col.saturating_sub(1)))
+    }
+
+    fn handle_open_goto_line_msg(&mut self) -> Task<Message> {
+        self.search_state.close();
+        self.goto_line_state.open();
+        self.goto_line_state.query = format!("{}", self.cursor.0 + 1);
+        Task::batch([
+            focus(self.goto_line_state.input_id.clone()),
+            select_all(self.goto_line_state.input_id.clone()),
+        ])
+    }
+
+    fn handle_close_goto_line_msg(&mut self) -> Task<Message> {
+        self.goto_line_state.close();
+        Task::none()
+    }
+
+    fn handle_goto_line_query_changed_msg(&mut self, query: &str) -> Task<Message> {
+        self.goto_line_state.query = query.to_string();
+        Task::none()
+    }
+
+    fn handle_submit_goto_line_msg(&mut self) -> Task<Message> {
+        let Some((line, col)) = Self::parse_goto_line_query(&self.goto_line_state.query) else {
+            return Task::none();
+        };
+        self.goto_line_state.close();
+        self.handle_goto_position(line, col)
+    }
+
     fn handle_insert_line_below(&mut self) -> Task<Message> {
         let mut lines = self.document_lines();
         let current_line = self.cursor.0.min(lines.len().saturating_sub(1));
@@ -1094,6 +1207,28 @@ impl CodeEditor {
     }
 
     fn handle_copy_line(&mut self, down: bool) -> Task<Message> {
+        if let Some((start, end)) = self.get_selection_range()
+            && start != end
+        {
+            let selected_text = self.get_selected_text().unwrap_or_default();
+            let insert_at = if down { end } else { start };
+            let cursor_after = if down {
+                Self::position_after_text(insert_at, &selected_text)
+            } else {
+                Self::position_after_text(start, &selected_text)
+            };
+            self.apply_replace_range(insert_at, insert_at, selected_text.clone(), cursor_after);
+            if down {
+                self.selection_start = Some(end);
+                self.selection_end = Some(cursor_after);
+            } else {
+                self.selection_start = Some(start);
+                self.selection_end = Some(cursor_after);
+            }
+            self.finish_edit_operation();
+            return self.scroll_to_cursor();
+        }
+
         let (start_line, end_line) = self.touched_line_range();
         let mut lines = self.document_lines();
         let block: Vec<String> = lines[start_line..=end_line].to_vec();
@@ -1129,7 +1264,10 @@ impl CodeEditor {
         let mut joined = lines[start_line].trim_end().to_string();
         for next_line in &lines[(start_line + 1)..=end_line] {
             let trimmed = next_line.trim_start();
-            if !joined.is_empty() && !trimmed.is_empty() && !joined.ends_with(' ') {
+            if !joined.is_empty()
+                && !trimmed.is_empty()
+                && Self::join_requires_space(&joined, trimmed)
+            {
                 joined.push(' ');
             }
             joined.push_str(trimmed);
@@ -1275,6 +1413,15 @@ impl CodeEditor {
         self.scroll_to_cursor()
     }
 
+    fn handle_select_all(&mut self) -> Task<Message> {
+        let end = self.full_document_end();
+        self.selection_start = Some((0, 0));
+        self.selection_end = Some(end);
+        self.cursor = end;
+        self.finish_navigation_operation();
+        self.scroll_to_cursor()
+    }
+
     fn handle_jump_to_matching_bracket(&mut self) -> Task<Message> {
         self.end_grouping_if_active();
         if let Some((first, second)) = self.matching_bracket_pair() {
@@ -1352,6 +1499,25 @@ impl CodeEditor {
             self.clear_selection();
         }
 
+        self.overlay_cache.clear();
+        Task::none()
+    }
+
+    fn handle_mouse_triple_click_msg(&mut self, point: iced::Point) -> Task<Message> {
+        self.request_focus();
+        self.has_canvas_focus = true;
+        self.focus_locked = false;
+        self.end_grouping_if_active();
+
+        let Some(cursor) = self.calculate_cursor_from_point(point) else {
+            return Task::none();
+        };
+
+        self.cursor = cursor;
+        self.is_dragging = false;
+        self.show_cursor = true;
+        self.reset_cursor_blink();
+        self.select_line_at(cursor.0);
         self.overlay_cache.clear();
         Task::none()
     }
@@ -1469,6 +1635,7 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that focuses and selects all in the search input
     fn handle_open_search_msg(&mut self) -> Task<Message> {
+        self.goto_line_state.close();
         self.search_state.open_search();
         self.overlay_cache.clear();
 
@@ -1485,6 +1652,7 @@ impl CodeEditor {
     ///
     /// A `Task<Message>` that focuses and selects all in the search input
     fn handle_open_search_replace_msg(&mut self) -> Task<Message> {
+        self.goto_line_state.close();
         self.search_state.open_replace();
         self.overlay_cache.clear();
 
@@ -2023,6 +2191,7 @@ impl CodeEditor {
             Message::DeleteToLineStart => self.handle_delete_to_line_start(),
             Message::DeleteToLineEnd => self.handle_delete_to_line_end(),
             Message::DeleteSelection => self.handle_delete_selection(),
+            Message::SelectAll => self.handle_select_all(),
             Message::InsertLineBelow => self.handle_insert_line_below(),
             Message::InsertLineAbove => self.handle_insert_line_above(),
             Message::DeleteLine => self.handle_delete_line(),
@@ -2030,6 +2199,10 @@ impl CodeEditor {
             Message::MoveLineDown => self.handle_move_line(true),
             Message::CopyLineUp => self.handle_copy_line(false),
             Message::CopyLineDown => self.handle_copy_line(true),
+            Message::OpenGotoLine => self.handle_open_goto_line_msg(),
+            Message::CloseGotoLine => self.handle_close_goto_line_msg(),
+            Message::GotoLineQueryChanged(query) => self.handle_goto_line_query_changed_msg(query),
+            Message::SubmitGotoLine => self.handle_submit_goto_line_msg(),
             Message::JoinLines => self.handle_join_lines(),
             Message::ToggleLineComment => self.handle_toggle_line_comment(),
             Message::ToggleBlockComment => self.handle_toggle_block_comment(),
@@ -2052,6 +2225,7 @@ impl CodeEditor {
             // Mouse and selection operations
             Message::MouseClick(point) => self.handle_mouse_click_msg(*point),
             Message::MouseDoubleClick(point) => self.handle_mouse_double_click_msg(*point),
+            Message::MouseTripleClick(point) => self.handle_mouse_triple_click_msg(*point),
             Message::MouseDrag(point) => self.handle_mouse_drag_msg(*point),
             Message::MouseHover(point) => self.handle_mouse_drag_msg(*point),
             Message::MouseRelease => self.handle_mouse_release_msg(),
@@ -2234,6 +2408,30 @@ mod tests {
         editor.cursor = (0, 0);
         let _ = editor.update(&Message::End(false));
         assert_eq!(editor.cursor, (0, 11)); // Length of "hello world"
+    }
+
+    #[test]
+    fn test_smart_home_toggles_indent_and_line_start() {
+        let mut editor = CodeEditor::new("    hello", "py");
+        editor.cursor = (0, 7);
+
+        let _ = editor.update(&Message::Home(false));
+        assert_eq!(editor.cursor, (0, 4));
+
+        let _ = editor.update(&Message::Home(false));
+        assert_eq!(editor.cursor, (0, 0));
+    }
+
+    #[test]
+    fn test_smart_end_toggles_trimmed_end_and_line_end() {
+        let mut editor = CodeEditor::new("hello   ", "py");
+        editor.cursor = (0, 0);
+
+        let _ = editor.update(&Message::End(false));
+        assert_eq!(editor.cursor, (0, 5));
+
+        let _ = editor.update(&Message::End(false));
+        assert_eq!(editor.cursor, (0, 8));
     }
 
     #[test]
@@ -2917,6 +3115,16 @@ mod tests {
     }
 
     #[test]
+    fn test_tab_multiline_selection_ignores_trailing_line_at_col_zero() {
+        let mut editor = CodeEditor::new("a\nb", "py");
+        editor.selection_start = Some((0, 0));
+        editor.selection_end = Some((1, 0));
+
+        let _ = editor.update(&Message::Tab);
+        assert_eq!(editor.buffer.to_string(), "    a\nb");
+    }
+
+    #[test]
     fn test_enter_carries_indentation() {
         let mut editor = CodeEditor::new("    hello", "py");
         editor.cursor = (0, 9);
@@ -3000,6 +3208,18 @@ mod tests {
     }
 
     #[test]
+    fn test_copy_line_down_duplicates_selection_when_present() {
+        let mut editor = CodeEditor::new("hello", "lilypond");
+        editor.selection_start = Some((0, 1));
+        editor.selection_end = Some((0, 4));
+
+        let _ = editor.update(&Message::CopyLineDown);
+        assert_eq!(editor.buffer.to_string(), "hellello");
+        assert_eq!(editor.selection_start, Some((0, 4)));
+        assert_eq!(editor.selection_end, Some((0, 7)));
+    }
+
+    #[test]
     fn test_toggle_line_comment_for_lilypond() {
         let mut editor = CodeEditor::new("foo\n  bar", "lilypond");
         editor.selection_start = Some((0, 0));
@@ -3033,6 +3253,15 @@ mod tests {
     }
 
     #[test]
+    fn test_select_all_selects_full_document() {
+        let mut editor = CodeEditor::new("one\ntwo", "lilypond");
+
+        let _ = editor.update(&Message::SelectAll);
+        assert_eq!(editor.selection_start, Some((0, 0)));
+        assert_eq!(editor.selection_end, Some((1, 3)));
+    }
+
+    #[test]
     fn test_jump_to_matching_bracket_moves_cursor() {
         let mut editor = CodeEditor::new("foo(bar)", "lilypond");
         editor.cursor = (0, 3);
@@ -3059,5 +3288,34 @@ mod tests {
         let _ = editor.update(&Message::MouseDoubleClick(point));
         assert_eq!(editor.selection_start, Some((0, 0)));
         assert_eq!(editor.selection_end, Some((0, 5)));
+    }
+
+    #[test]
+    fn test_mouse_triple_click_selects_line() {
+        let mut editor = CodeEditor::new("hello world\nnext", "lilypond");
+        let x = crate::canvas_editor::GUTTER_WIDTH + 5.0 + editor.char_width() * 1.5;
+        let point = iced::Point::new(x, 10.0);
+
+        let _ = editor.update(&Message::MouseTripleClick(point));
+        assert_eq!(editor.selection_start, Some((0, 0)));
+        assert_eq!(editor.selection_end, Some((1, 0)));
+    }
+
+    #[test]
+    fn test_submit_goto_line_moves_cursor() {
+        let mut editor = CodeEditor::new("one\ntwo\nthree", "lilypond");
+        editor.goto_line_state.query = "3:2".to_string();
+
+        let _ = editor.update(&Message::SubmitGotoLine);
+        assert_eq!(editor.cursor, (2, 1));
+    }
+
+    #[test]
+    fn test_join_lines_avoids_space_before_closing_paren() {
+        let mut editor = CodeEditor::new("foo(\n)", "lilypond");
+        editor.cursor = (0, 0);
+
+        let _ = editor.update(&Message::JoinLines);
+        assert_eq!(editor.buffer.to_string(), "foo()");
     }
 }

@@ -78,6 +78,14 @@ impl EditorState {
         }
     }
 
+    pub(super) fn set_viewport_width(&mut self, width: f32) {
+        let width = width.max(1.0);
+        for tab in &mut self.tabs {
+            let height = tab.widget.viewport_height();
+            tab.widget.set_viewport_size(width, height);
+        }
+    }
+
     pub(super) fn active_tab_id(&self) -> Option<u64> {
         self.active_tab_id
     }

@@ -107,6 +107,9 @@ impl Lilypalooza {
             ShortcutAction::EditorOpenSearchReplace => self.dispatch_active_editor_widget_message(
                 iced_code_editor::Message::OpenSearchReplace,
             ),
+            ShortcutAction::EditorOpenGotoLine => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::OpenGotoLine)
+            }
             ShortcutAction::EditorFindNext => {
                 self.dispatch_active_editor_widget_message(iced_code_editor::Message::FindNext)
             }
@@ -175,6 +178,9 @@ impl Lilypalooza {
             ),
             ShortcutAction::EditorDeleteSelection => self
                 .dispatch_active_editor_widget_message(iced_code_editor::Message::DeleteSelection),
+            ShortcutAction::EditorSelectAll => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::SelectAll)
+            }
             ShortcutAction::EditorInsertLineBelow => self
                 .dispatch_active_editor_widget_message(iced_code_editor::Message::InsertLineBelow),
             ShortcutAction::EditorInsertLineAbove => self
@@ -193,6 +199,9 @@ impl Lilypalooza {
             }
             ShortcutAction::EditorCopyLineDown => {
                 self.dispatch_active_editor_widget_message(iced_code_editor::Message::CopyLineDown)
+            }
+            ShortcutAction::EditorJoinLines => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::JoinLines)
             }
             ShortcutAction::EditorIndent => {
                 self.dispatch_active_editor_widget_message(iced_code_editor::Message::Tab)
@@ -463,6 +472,7 @@ impl Lilypalooza {
     pub(in crate::app) fn handle_window_resized(&mut self, size: Size) -> Task<Message> {
         self.window_width = size.width.max(1.0);
         self.window_height = size.height.max(1.0);
+        self.sync_editor_viewport_from_layout();
 
         Task::none()
     }
