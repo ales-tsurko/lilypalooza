@@ -252,6 +252,27 @@ impl EditorState {
         true
     }
 
+    pub(super) fn activate_adjacent_tab(&mut self, next: bool) -> Option<u64> {
+        let active_tab_id = self.active_tab_id?;
+        let current_index = self.tabs.iter().position(|tab| tab.id == active_tab_id)?;
+        let tab_count = self.tabs.len();
+        if tab_count <= 1 {
+            return Some(active_tab_id);
+        }
+
+        let next_index = if next {
+            (current_index + 1) % tab_count
+        } else if current_index == 0 {
+            tab_count - 1
+        } else {
+            current_index - 1
+        };
+
+        let next_tab_id = self.tabs[next_index].id;
+        self.active_tab_id = Some(next_tab_id);
+        Some(next_tab_id)
+    }
+
     pub(super) fn new_document(&mut self) -> (u64, iced::Task<EditorWidgetMessage>, bool) {
         if let Some(tab_id) = self.find_reusable_empty_tab() {
             self.active_tab_id = Some(tab_id);

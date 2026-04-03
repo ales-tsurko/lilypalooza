@@ -615,6 +615,35 @@ impl CodeEditor {
         }
     }
 
+    fn draw_matching_bracket_highlight(&self, frame: &mut canvas::Frame, _ctx: &RenderContext<'_>) {
+        let Some((start, end)) = self.matching_bracket_pair() else {
+            return;
+        };
+
+        let highlight_color = Color {
+            a: 0.18,
+            ..self.style.text_color
+        };
+
+        for position in [start, end] {
+            let Some(ch) = self.char_at(position) else {
+                continue;
+            };
+            let Some(point) = self.point_from_position(position.0, position.1) else {
+                continue;
+            };
+
+            frame.fill_rectangle(
+                Point::new(point.x - self.horizontal_scroll_offset, point.y + 1.0),
+                Size::new(
+                    super::measure_char_width(ch, self.full_char_width, self.char_width),
+                    (self.line_height - 2.0).max(1.0),
+                ),
+                highlight_color,
+            );
+        }
+    }
+
     /// Draws text selection highlights.
     ///
     /// # Arguments
@@ -659,8 +688,8 @@ impl CodeEditor {
                         let x_end = x_start + sel_width;
 
                         frame.fill_rectangle(
-                            Point::new(x_start, y + 2.0),
-                            Size::new(x_end - x_start, ctx.line_height - 4.0),
+                            Point::new(x_start, y),
+                            Size::new(x_end - x_start, ctx.line_height),
                             selection_color,
                         );
                     } else {
@@ -696,8 +725,8 @@ impl CodeEditor {
                             let x_end = x_start + sel_width;
 
                             frame.fill_rectangle(
-                                Point::new(x_start, y + 2.0),
-                                Size::new(x_end - x_start, ctx.line_height - 4.0),
+                                Point::new(x_start, y),
+                                Size::new(x_end - x_start, ctx.line_height),
                                 selection_color,
                             );
                         }
@@ -747,8 +776,8 @@ impl CodeEditor {
                         let x_end = x_start + sel_width;
 
                         frame.fill_rectangle(
-                            Point::new(x_start, y + 2.0),
-                            Size::new(x_end - x_start, ctx.line_height - 4.0),
+                            Point::new(x_start, y),
+                            Size::new(x_end - x_start, ctx.line_height),
                             selection_color,
                         );
                     }
@@ -977,48 +1006,50 @@ impl CodeEditor {
         key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
-        // Handle Tab for focus navigation when search dialog is not open
-        // This implements focus chain management between multiple editors
-        if matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
-            && !self.search_state.is_open
-        {
-            if modifiers.shift() {
-                // Shift+Tab: focus navigation backward
-                return Some(Action::publish(Message::FocusNavigationShiftTab).and_capture());
-            } else {
-                // Tab: focus navigation forward
-                return Some(Action::publish(Message::FocusNavigationTab).and_capture());
-            }
-        }
+        let primary_modifier = if cfg!(target_os = "macos") {
+            modifiers.command()
+        } else {
+            modifiers.control()
+        };
 
-        // Handle Ctrl+C / Ctrl+Insert (copy)
-        if (modifiers.control() && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
+        // Handle Copy / Ctrl+Insert
+        if (primary_modifier && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
             || (modifiers.control()
                 && matches!(key, keyboard::Key::Named(keyboard::key::Named::Insert)))
         {
             return Some(Action::publish(Message::Copy).and_capture());
         }
 
-        // Handle Ctrl+Z (undo)
-        if modifiers.control() && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z") {
-            return Some(Action::publish(Message::Undo).and_capture());
-        }
-
-        // Handle Ctrl+Y (redo)
-        if modifiers.control() && matches!(key, keyboard::Key::Character(y) if y.as_str() == "y") {
+        if (cfg!(target_os = "macos")
+            && primary_modifier
+            && modifiers.shift()
+            && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z"))
+            || (!cfg!(target_os = "macos")
+                && primary_modifier
+                && matches!(key, keyboard::Key::Character(y) if y.as_str() == "y"))
+            || (!cfg!(target_os = "macos")
+                && primary_modifier
+                && modifiers.shift()
+                && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z"))
+        {
             return Some(Action::publish(Message::Redo).and_capture());
         }
 
-        // Handle Ctrl+F (open search)
-        if modifiers.control()
+        if primary_modifier
+            && !modifiers.shift()
+            && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z")
+        {
+            return Some(Action::publish(Message::Undo).and_capture());
+        }
+
+        if primary_modifier
             && matches!(key, keyboard::Key::Character(f) if f.as_str() == "f")
             && self.search_replace_enabled
         {
             return Some(Action::publish(Message::OpenSearch).and_capture());
         }
 
-        // Handle Ctrl+H (open search and replace)
-        if modifiers.control()
+        if primary_modifier
             && matches!(key, keyboard::Key::Character(h) if h.as_str() == "h")
             && self.search_replace_enabled
         {
@@ -1054,26 +1085,27 @@ impl CodeEditor {
             }
         }
 
-        // Handle Ctrl+V / Shift+Insert (paste) - read clipboard and send paste message
-        if (modifiers.control() && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v"))
+        if (primary_modifier && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v"))
             || (modifiers.shift()
                 && matches!(key, keyboard::Key::Named(keyboard::key::Named::Insert)))
         {
-            // Return an action that requests clipboard read
             return Some(Action::publish(Message::Paste(String::new())));
         }
 
-        // Handle Ctrl+Home (go to start of document)
-        if modifiers.control() && matches!(key, keyboard::Key::Named(keyboard::key::Named::Home)) {
-            return Some(Action::publish(Message::CtrlHome).and_capture());
+        if !cfg!(target_os = "macos")
+            && primary_modifier
+            && matches!(key, keyboard::Key::Named(keyboard::key::Named::Home))
+        {
+            return Some(Action::publish(Message::DocumentHome(modifiers.shift())).and_capture());
         }
 
-        // Handle Ctrl+End (go to end of document)
-        if modifiers.control() && matches!(key, keyboard::Key::Named(keyboard::key::Named::End)) {
-            return Some(Action::publish(Message::CtrlEnd).and_capture());
+        if !cfg!(target_os = "macos")
+            && primary_modifier
+            && matches!(key, keyboard::Key::Named(keyboard::key::Named::End))
+        {
+            return Some(Action::publish(Message::DocumentEnd(modifiers.shift())).and_capture());
         }
 
-        // Handle Shift+Delete (delete selection)
         if modifiers.shift() && matches!(key, keyboard::Key::Named(keyboard::key::Named::Delete)) {
             return Some(Action::publish(Message::DeleteSelection).and_capture());
         }
@@ -1130,45 +1162,118 @@ impl CodeEditor {
 
         // PRIORITY 2: Handle special named keys (navigation, editing)
         // These are only processed if text didn't contain a printable character
+        let primary_modifier = if cfg!(target_os = "macos") {
+            modifiers.command()
+        } else {
+            modifiers.control()
+        };
+        let is_word_modifier = if cfg!(target_os = "macos") {
+            modifiers.alt() && !primary_modifier
+        } else {
+            modifiers.control() && !modifiers.command()
+        };
+        let plain_editing_modifiers = !modifiers.command() && !modifiers.control() && !modifiers.alt();
+
         let message = match key {
-            keyboard::Key::Named(keyboard::key::Named::Backspace) => Some(Message::Backspace),
-            keyboard::Key::Named(keyboard::key::Named::Delete) => Some(Message::Delete),
-            keyboard::Key::Named(keyboard::key::Named::Enter) => Some(Message::Enter),
-            keyboard::Key::Named(keyboard::key::Named::Tab) => {
-                // Handle Tab for focus navigation or text insertion
-                // This implements focus event propagation and focus chain management
-                if modifiers.shift() {
-                    // Shift+Tab: focus navigation backward through widget hierarchy
-                    Some(Message::FocusNavigationShiftTab)
+            keyboard::Key::Named(keyboard::key::Named::Backspace) => {
+                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
+                    Some(Message::DeleteToLineStart)
+                } else if is_word_modifier {
+                    Some(Message::DeleteWordBackward)
+                } else if plain_editing_modifiers {
+                    Some(Message::Backspace)
                 } else {
-                    // Regular Tab: check if search dialog is open
+                    None
+                }
+            }
+            keyboard::Key::Named(keyboard::key::Named::Delete) => {
+                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
+                    Some(Message::DeleteToLineEnd)
+                } else if is_word_modifier {
+                    Some(Message::DeleteWordForward)
+                } else if plain_editing_modifiers {
+                    Some(Message::Delete)
+                } else {
+                    None
+                }
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                plain_editing_modifiers.then_some(Message::Enter)
+            }
+            keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                if !plain_editing_modifiers {
+                    None
+                } else if modifiers.shift() {
+                    if self.search_state.is_open {
+                        Some(Message::SearchDialogShiftTab)
+                    } else {
+                        Some(Message::ShiftTab)
+                    }
+                } else {
                     if self.search_state.is_open {
                         Some(Message::SearchDialogTab)
                     } else {
-                        // Insert 4 spaces for Tab when not in search dialog
                         Some(Message::Tab)
                     }
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                Some(Message::ArrowKey(ArrowDirection::Up, modifiers.shift()))
+                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
+                    Some(Message::DocumentHome(modifiers.shift()))
+                } else if plain_editing_modifiers {
+                    Some(Message::ArrowKey(ArrowDirection::Up, modifiers.shift()))
+                } else {
+                    None
+                }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                Some(Message::ArrowKey(ArrowDirection::Down, modifiers.shift()))
+                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
+                    Some(Message::DocumentEnd(modifiers.shift()))
+                } else if plain_editing_modifiers {
+                    Some(Message::ArrowKey(ArrowDirection::Down, modifiers.shift()))
+                } else {
+                    None
+                }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
-                Some(Message::ArrowKey(ArrowDirection::Left, modifiers.shift()))
+                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
+                    Some(Message::Home(modifiers.shift()))
+                } else if is_word_modifier {
+                    Some(Message::WordArrowKey(
+                        ArrowDirection::Left,
+                        modifiers.shift(),
+                    ))
+                } else if plain_editing_modifiers {
+                    Some(Message::ArrowKey(ArrowDirection::Left, modifiers.shift()))
+                } else {
+                    None
+                }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
-                Some(Message::ArrowKey(ArrowDirection::Right, modifiers.shift()))
+                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
+                    Some(Message::End(modifiers.shift()))
+                } else if is_word_modifier {
+                    Some(Message::WordArrowKey(
+                        ArrowDirection::Right,
+                        modifiers.shift(),
+                    ))
+                } else if plain_editing_modifiers {
+                    Some(Message::ArrowKey(ArrowDirection::Right, modifiers.shift()))
+                } else {
+                    None
+                }
             }
-            keyboard::Key::Named(keyboard::key::Named::PageUp) => Some(Message::PageUp),
-            keyboard::Key::Named(keyboard::key::Named::PageDown) => Some(Message::PageDown),
+            keyboard::Key::Named(keyboard::key::Named::PageUp) => {
+                plain_editing_modifiers.then_some(Message::PageUp)
+            }
+            keyboard::Key::Named(keyboard::key::Named::PageDown) => {
+                plain_editing_modifiers.then_some(Message::PageDown)
+            }
             keyboard::Key::Named(keyboard::key::Named::Home) => {
-                Some(Message::Home(modifiers.shift()))
+                plain_editing_modifiers.then_some(Message::Home(modifiers.shift()))
             }
             keyboard::Key::Named(keyboard::key::Named::End) => {
-                Some(Message::End(modifiers.shift()))
+                plain_editing_modifiers.then_some(Message::End(modifiers.shift()))
             }
             // PRIORITY 3: Fallback to extracting from 'key' if text was empty/control char
             // This handles edge cases where text field is not populated
@@ -1647,6 +1752,7 @@ impl canvas::Program<Message> for CodeEditor {
                 }
 
                 self.draw_search_highlights(f, &ctx, start_idx, end_idx);
+                self.draw_matching_bracket_highlight(f, &ctx);
                 self.draw_selection_highlight(f, &ctx);
                 self.draw_jump_link_highlight(f, &ctx, bounds, _cursor);
                 self.draw_cursor(f, &ctx);

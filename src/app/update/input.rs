@@ -68,6 +68,15 @@ impl Lilypalooza {
             ShortcutAction::SaveEditor => {
                 update(self, Message::Editor(EditorMessage::SaveRequested))
             }
+            ShortcutAction::CloseEditorTab => {
+                let Some(tab_id) = self.editor.active_tab_id() else {
+                    return Task::none();
+                };
+                update(
+                    self,
+                    Message::Editor(EditorMessage::CloseTabRequested(tab_id)),
+                )
+            }
             ShortcutAction::ToggleWorkspacePane(pane) => {
                 update(self, Message::Pane(PaneMessage::ToggleWorkspacePane(pane)))
             }
@@ -78,6 +87,24 @@ impl Lilypalooza {
             ShortcutAction::SwitchWorkspaceTabNext => {
                 self.switch_focused_workspace_tab(TabDirection::Next);
                 Task::none()
+            }
+            ShortcutAction::SwitchEditorTabPrevious => {
+                let Some(tab_id) = self.editor.activate_adjacent_tab(false) else {
+                    return Task::none();
+                };
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.editor.request_focus();
+                self.pending_reveal_editor_tab = Some(tab_id);
+                self.map_editor_widget_task(tab_id, self.editor.sync_tab_scroll_state(tab_id))
+            }
+            ShortcutAction::SwitchEditorTabNext => {
+                let Some(tab_id) = self.editor.activate_adjacent_tab(true) else {
+                    return Task::none();
+                };
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.editor.request_focus();
+                self.pending_reveal_editor_tab = Some(tab_id);
+                self.map_editor_widget_task(tab_id, self.editor.sync_tab_scroll_state(tab_id))
             }
             ShortcutAction::FocusWorkspacePanePrevious => {
                 self.cycle_workspace_pane_focus(PaneCycleDirection::Previous);

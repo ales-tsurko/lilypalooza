@@ -193,7 +193,10 @@ pub fn from_iced_theme_with_tuning(theme: &iced::Theme, tuning: ThemeTuning) -> 
     let line_number_color = blend_colors(text_color, gutter_background, 0.9);
     let scrollbar_background = palette.background.weak.color;
     let scroller_color = palette.background.strong.color;
-    let current_line_highlight = gutter_background;
+    let current_line_highlight = Color {
+        a: if is_dark { 0.28 } else { 0.16 },
+        ..gutter_background
+    };
     let saturation = tuning.saturation.clamp(0.0, 1.8);
     let warmth = tuning.warmth.clamp(-1.0, 1.0);
 

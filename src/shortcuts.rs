@@ -10,9 +10,12 @@ pub(crate) enum ShortcutAction {
     NewEditor,
     OpenEditorFile,
     SaveEditor,
+    CloseEditorTab,
     ToggleWorkspacePane(WorkspacePane),
     SwitchWorkspaceTabPrevious,
     SwitchWorkspaceTabNext,
+    SwitchEditorTabPrevious,
+    SwitchEditorTabNext,
     FocusWorkspacePanePrevious,
     FocusWorkspacePaneNext,
     ScoreZoomIn,
@@ -89,9 +92,12 @@ const PIANO_ROLL_CONTEXTUAL_ACTIONS: [ShortcutAction; 5] = [
     ShortcutAction::TransportRewind,
 ];
 
-const EDITOR_CONTEXTUAL_ACTIONS: [ShortcutAction; 5] = [
+const EDITOR_CONTEXTUAL_ACTIONS: [ShortcutAction; 8] = [
     ShortcutAction::NewEditor,
     ShortcutAction::OpenEditorFile,
+    ShortcutAction::CloseEditorTab,
+    ShortcutAction::SwitchEditorTabPrevious,
+    ShortcutAction::SwitchEditorTabNext,
     ShortcutAction::EditorZoomIn,
     ShortcutAction::EditorZoomOut,
     ShortcutAction::EditorZoomReset,
@@ -237,6 +243,9 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
             vec![binding_code(ShortcutKeyCode::KeyO, true, false, false)]
         }
         ShortcutAction::SaveEditor => vec![binding_code(ShortcutKeyCode::KeyS, true, false, false)],
+        ShortcutAction::CloseEditorTab => {
+            vec![binding_code(ShortcutKeyCode::KeyW, true, false, false)]
+        }
         ShortcutAction::ToggleWorkspacePane(WorkspacePane::Editor) => vec![
             binding_code(ShortcutKeyCode::Digit1, true, false, false),
             binding_code(ShortcutKeyCode::Numpad1, true, false, false),
@@ -268,6 +277,12 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
                 false,
                 true,
             )]
+        }
+        ShortcutAction::SwitchEditorTabPrevious => {
+            vec![binding_code(ShortcutKeyCode::ArrowLeft, true, true, false)]
+        }
+        ShortcutAction::SwitchEditorTabNext => {
+            vec![binding_code(ShortcutKeyCode::ArrowRight, true, true, false)]
         }
         ShortcutAction::FocusWorkspacePanePrevious => {
             vec![binding_code(
@@ -392,10 +407,13 @@ fn code_label(code: ShortcutKeyCode) -> &'static str {
         ShortcutKeyCode::KeyN => "N",
         ShortcutKeyCode::KeyO => "O",
         ShortcutKeyCode::KeyS => "S",
+        ShortcutKeyCode::KeyW => "W",
         ShortcutKeyCode::Digit1 | ShortcutKeyCode::Numpad1 => "1",
         ShortcutKeyCode::Digit2 | ShortcutKeyCode::Numpad2 => "2",
         ShortcutKeyCode::Digit3 | ShortcutKeyCode::Numpad3 => "3",
         ShortcutKeyCode::Digit4 | ShortcutKeyCode::Numpad4 => "4",
+        ShortcutKeyCode::ArrowLeft => "Left",
+        ShortcutKeyCode::ArrowRight => "Right",
         ShortcutKeyCode::Equal | ShortcutKeyCode::NumpadAdd => "+",
         ShortcutKeyCode::Minus | ShortcutKeyCode::NumpadSubtract => "-",
         ShortcutKeyCode::Digit0 | ShortcutKeyCode::Numpad0 => "0",
@@ -445,10 +463,13 @@ fn to_iced_key_code(code: ShortcutKeyCode) -> keyboard::key::Code {
         ShortcutKeyCode::KeyN => keyboard::key::Code::KeyN,
         ShortcutKeyCode::KeyO => keyboard::key::Code::KeyO,
         ShortcutKeyCode::KeyS => keyboard::key::Code::KeyS,
+        ShortcutKeyCode::KeyW => keyboard::key::Code::KeyW,
         ShortcutKeyCode::Digit1 => keyboard::key::Code::Digit1,
         ShortcutKeyCode::Digit2 => keyboard::key::Code::Digit2,
         ShortcutKeyCode::Digit3 => keyboard::key::Code::Digit3,
         ShortcutKeyCode::Digit4 => keyboard::key::Code::Digit4,
+        ShortcutKeyCode::ArrowLeft => keyboard::key::Code::ArrowLeft,
+        ShortcutKeyCode::ArrowRight => keyboard::key::Code::ArrowRight,
         ShortcutKeyCode::Numpad1 => keyboard::key::Code::Numpad1,
         ShortcutKeyCode::Numpad2 => keyboard::key::Code::Numpad2,
         ShortcutKeyCode::Numpad3 => keyboard::key::Code::Numpad3,
@@ -477,6 +498,7 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::NewEditor => Some(ShortcutActionId::NewEditor),
         ShortcutAction::OpenEditorFile => Some(ShortcutActionId::OpenEditorFile),
         ShortcutAction::SaveEditor => Some(ShortcutActionId::SaveEditor),
+        ShortcutAction::CloseEditorTab => Some(ShortcutActionId::CloseEditorTab),
         ShortcutAction::ToggleWorkspacePane(WorkspacePane::Editor) => {
             Some(ShortcutActionId::ToggleEditorPane)
         }
@@ -491,6 +513,8 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         }
         ShortcutAction::SwitchWorkspaceTabPrevious => Some(ShortcutActionId::PreviousTab),
         ShortcutAction::SwitchWorkspaceTabNext => Some(ShortcutActionId::NextTab),
+        ShortcutAction::SwitchEditorTabPrevious => Some(ShortcutActionId::PreviousEditorTab),
+        ShortcutAction::SwitchEditorTabNext => Some(ShortcutActionId::NextEditorTab),
         ShortcutAction::FocusWorkspacePanePrevious => Some(ShortcutActionId::PreviousPane),
         ShortcutAction::FocusWorkspacePaneNext => Some(ShortcutActionId::NextPane),
         ShortcutAction::ScoreZoomIn => Some(ShortcutActionId::ScoreZoomIn),

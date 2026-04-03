@@ -225,6 +225,7 @@ impl Command for DeleteForwardCommand {
 
 /// Command for inserting a newline.
 #[derive(Debug, Clone)]
+#[cfg(test)]
 pub struct InsertNewlineCommand {
     line: usize,
     col: usize,
@@ -232,6 +233,7 @@ pub struct InsertNewlineCommand {
     cursor_after: (usize, usize),
 }
 
+#[cfg(test)]
 impl InsertNewlineCommand {
     /// Creates a new insert newline command.
     ///
@@ -250,6 +252,7 @@ impl InsertNewlineCommand {
     }
 }
 
+#[cfg(test)]
 impl Command for InsertNewlineCommand {
     fn execute(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
         buffer.insert_newline(self.line, self.col);
@@ -477,6 +480,58 @@ impl Command for DeleteRangeCommand {
     }
 }
 
+/// Command for replacing an arbitrary range with new text.
+#[derive(Debug, Clone)]
+pub struct ReplaceRangeCommand {
+    start: (usize, usize),
+    new_text: String,
+    old_text: String,
+    old_text_char_count: usize,
+    cursor_before: (usize, usize),
+    cursor_after: (usize, usize),
+}
+
+impl ReplaceRangeCommand {
+    /// Creates a new replace-range command.
+    pub fn new(
+        buffer: &TextBuffer,
+        start: (usize, usize),
+        end: (usize, usize),
+        new_text: String,
+        cursor_before: (usize, usize),
+        cursor_after: (usize, usize),
+    ) -> Self {
+        let old_text = extract_range_text(buffer, start, end);
+        let old_text_char_count = old_text.chars().count();
+
+        Self {
+            start,
+            new_text,
+            old_text,
+            old_text_char_count,
+            cursor_before,
+            cursor_after,
+        }
+    }
+}
+
+impl Command for ReplaceRangeCommand {
+    fn execute(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
+        replace_range_text(buffer, self.start, self.old_text_char_count, &self.new_text);
+        *cursor = self.cursor_after;
+    }
+
+    fn undo(&mut self, buffer: &mut TextBuffer, cursor: &mut (usize, usize)) {
+        replace_range_text(
+            buffer,
+            self.start,
+            self.new_text.chars().count(),
+            &self.old_text,
+        );
+        *cursor = self.cursor_before;
+    }
+}
+
 /// Composite command that groups multiple commands together.
 #[derive(Debug)]
 pub struct CompositeCommand {
@@ -584,6 +639,72 @@ impl Command for ReplaceTextCommand {
         );
 
         *cursor = self.cursor_before;
+    }
+}
+
+fn extract_range_text(buffer: &TextBuffer, start: (usize, usize), end: (usize, usize)) -> String {
+    if start == end {
+        return String::new();
+    }
+
+    let mut deleted_text = String::new();
+
+    if start.0 == end.0 {
+        let line = buffer.line(start.0);
+        let chars: Vec<char> = line.chars().collect();
+        for ch in chars.iter().skip(start.1).take(
+            end.1
+                .saturating_sub(start.1)
+                .min(chars.len().saturating_sub(start.1)),
+        ) {
+            deleted_text.push(*ch);
+        }
+    } else {
+        for line_idx in start.0..=end.0 {
+            let line = buffer.line(line_idx);
+            let chars: Vec<char> = line.chars().collect();
+
+            if line_idx == start.0 {
+                for ch in chars.iter().skip(start.1) {
+                    deleted_text.push(*ch);
+                }
+                deleted_text.push('\n');
+            } else if line_idx == end.0 {
+                for ch in chars.iter().take(end.1.min(chars.len())) {
+                    deleted_text.push(*ch);
+                }
+            } else {
+                deleted_text.push_str(line);
+                deleted_text.push('\n');
+            }
+        }
+    }
+
+    deleted_text
+}
+
+fn replace_range_text(
+    buffer: &mut TextBuffer,
+    start: (usize, usize),
+    old_text_char_count: usize,
+    new_text: &str,
+) {
+    for _ in 0..old_text_char_count {
+        buffer.delete_forward(start.0, start.1);
+    }
+
+    let mut current_line = start.0;
+    let mut current_col = start.1;
+
+    for ch in new_text.chars() {
+        if ch == '\n' {
+            buffer.insert_newline(current_line, current_col);
+            current_line += 1;
+            current_col = 0;
+        } else {
+            buffer.insert_char(current_line, current_col, ch);
+            current_col += 1;
+        }
     }
 }
 

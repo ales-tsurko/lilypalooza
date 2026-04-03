@@ -300,8 +300,12 @@ pub enum Message {
     Enter,
     /// Tab pressed (inserts 4 spaces)
     Tab,
+    /// Shift+Tab pressed (outdent)
+    ShiftTab,
     /// Arrow key pressed (direction, shift_pressed)
     ArrowKey(ArrowDirection, bool),
+    /// Word navigation key pressed (direction, shift_pressed)
+    WordArrowKey(ArrowDirection, bool),
     /// Mouse clicked at position
     MouseClick(iced::Point),
     /// Mouse drag for selection
@@ -326,10 +330,10 @@ pub enum Message {
     Home(bool),
     /// End key pressed (move to end of line, shift_pressed)
     End(bool),
-    /// Ctrl+Home pressed (move to start of document)
-    CtrlHome,
-    /// Ctrl+End pressed (move to end of document)
-    CtrlEnd,
+    /// Document home pressed (move to start of document, shift_pressed)
+    DocumentHome(bool),
+    /// Document end pressed (move to end of document, shift_pressed)
+    DocumentEnd(bool),
     /// Go to an explicit logical position (line, column), both 0-based.
     GotoPosition(usize, usize),
     /// Viewport scrolled - track scroll position
@@ -342,6 +346,14 @@ pub enum Message {
     Undo,
     /// Redo last undone operation (Ctrl+Y)
     Redo,
+    /// Delete the previous word
+    DeleteWordBackward,
+    /// Delete the next word
+    DeleteWordForward,
+    /// Delete from cursor to line start
+    DeleteToLineStart,
+    /// Delete from cursor to line end
+    DeleteToLineEnd,
     /// Open search dialog (Ctrl+F)
     OpenSearch,
     /// Open search and replace dialog (Ctrl+H)
@@ -1137,6 +1149,96 @@ impl CodeEditor {
         ch == '_' || ch.is_alphanumeric()
     }
 
+    pub(crate) fn char_at(&self, position: (usize, usize)) -> Option<char> {
+        self.buffer.line(position.0).chars().nth(position.1)
+    }
+
+    pub(crate) fn matching_bracket_pair(&self) -> Option<((usize, usize), (usize, usize))> {
+        let current = self.char_at(self.cursor).and_then(|ch| {
+            Self::match_from_position(self, self.cursor, ch).map(|matching| (self.cursor, matching))
+        });
+
+        current.or_else(|| {
+            let previous = (self.cursor.0, self.cursor.1.saturating_sub(1));
+            self.char_at(previous).and_then(|ch| {
+                Self::match_from_position(self, previous, ch).map(|matching| (previous, matching))
+            })
+        })
+    }
+
+    fn match_from_position(&self, position: (usize, usize), ch: char) -> Option<(usize, usize)> {
+        match ch {
+            '(' => self.find_matching_forward(position, '(', ')'),
+            '[' => self.find_matching_forward(position, '[', ']'),
+            '{' => self.find_matching_forward(position, '{', '}'),
+            ')' => self.find_matching_backward(position, '(', ')'),
+            ']' => self.find_matching_backward(position, '[', ']'),
+            '}' => self.find_matching_backward(position, '{', '}'),
+            _ => None,
+        }
+    }
+
+    fn find_matching_forward(
+        &self,
+        start: (usize, usize),
+        open: char,
+        close: char,
+    ) -> Option<(usize, usize)> {
+        let mut depth = 0usize;
+
+        for line in start.0..self.buffer.line_count() {
+            let start_col = if line == start.0 { start.1 } else { 0 };
+            for (col, ch) in self.buffer.line(line).chars().enumerate().skip(start_col) {
+                if ch == open {
+                    depth += 1;
+                } else if ch == close {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some((line, col));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn find_matching_backward(
+        &self,
+        start: (usize, usize),
+        open: char,
+        close: char,
+    ) -> Option<(usize, usize)> {
+        let mut depth = 0usize;
+
+        for line in (0..=start.0).rev() {
+            let chars: Vec<char> = self.buffer.line(line).chars().collect();
+            if chars.is_empty() {
+                continue;
+            }
+
+            let start_col = if line == start.0 {
+                start.1.min(chars.len().saturating_sub(1))
+            } else {
+                chars.len().saturating_sub(1)
+            };
+
+            for col in (0..=start_col).rev() {
+                let ch = chars[col];
+                if ch == close {
+                    depth += 1;
+                } else if ch == open {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some((line, col));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     /// Computes and queues the latest LSP text change for the buffer.
     ///
     /// When auto-flush is enabled, this immediately sends changes.
@@ -1846,6 +1948,7 @@ mod tests {
     #[test]
     fn test_set_font_size() {
         let mut editor = CodeEditor::new("", "rs");
+        let initial_char_width = editor.char_width;
 
         // Initial state (defaults)
         assert!((editor.font_size() - 14.0).abs() < f32::EPSILON);
@@ -1871,11 +1974,9 @@ mod tests {
             compare_floats(editor.line_height(), 50.0),
             CmpOrdering::Equal
         );
-        // Char width should have scaled back to roughly default (but depends on measurement)
-        // We check if it is close to the expected value, but since measurement can vary,
-        // we just ensure it is positive and close to what we expect (around 8.4)
+        // Char width should return close to its initial measured value.
         assert!(editor.char_width > 0.0);
-        assert!((editor.char_width - CHAR_WIDTH).abs() < 0.5);
+        assert!((editor.char_width - initial_char_width).abs() < 0.5);
     }
 
     #[test]
@@ -2055,5 +2156,15 @@ mod tests {
     fn test_syntax_getter() {
         let editor = CodeEditor::new("", "lua");
         assert_eq!(editor.syntax(), "lua");
+    }
+
+    #[test]
+    fn test_matching_bracket_pair() {
+        let mut editor = CodeEditor::new("{\n  foo\n}", "rs");
+        editor.cursor = (0, 0);
+        assert_eq!(editor.matching_bracket_pair(), Some(((0, 0), (2, 0))));
+
+        editor.cursor = (2, 1);
+        assert_eq!(editor.matching_bracket_pair(), Some(((2, 0), (0, 0))));
     }
 }
