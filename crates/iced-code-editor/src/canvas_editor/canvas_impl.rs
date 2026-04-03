@@ -1094,7 +1094,24 @@ impl CodeEditor {
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                plain_editing_modifiers.then_some(Message::Enter)
+                if self.search_state.is_open
+                    && !modifiers.command()
+                    && !modifiers.control()
+                    && !modifiers.alt()
+                {
+                    Some(if modifiers.shift() {
+                        Message::FindPrevious
+                    } else if self.search_state.is_replace_mode
+                        && self.search_state.focused_field
+                            == crate::canvas_editor::search::SearchFocusedField::Replace
+                    {
+                        Message::ReplaceNext
+                    } else {
+                        Message::FindNext
+                    })
+                } else {
+                    plain_editing_modifiers.then_some(Message::Enter)
+                }
             }
             keyboard::Key::Named(keyboard::key::Named::Tab) => {
                 if !plain_editing_modifiers {

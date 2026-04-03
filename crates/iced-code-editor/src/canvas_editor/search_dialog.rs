@@ -35,7 +35,6 @@ pub fn view<'a>(
     let search_input = text_input(&translations.search_placeholder(), &search_state.query)
         .id(search_state.search_input_id.clone())
         .on_input(Message::SearchQueryChanged)
-        .on_submit(Message::FindNext)
         .padding(4)
         .width(Length::Fixed(180.0));
 
@@ -109,7 +108,6 @@ pub fn view<'a>(
         )
         .id(search_state.replace_input_id.clone())
         .on_input(Message::ReplaceQueryChanged)
-        .on_submit(Message::ReplaceNext)
         .padding(4)
         .width(Length::Fixed(180.0));
 
