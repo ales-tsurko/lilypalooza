@@ -29,6 +29,15 @@ impl Lilypalooza {
                 let task = self.editor.update(tab_id, &message);
                 self.map_editor_widget_task(tab_id, task)
             }
+            EditorMessage::ActiveWidgetMessage(message) => {
+                let Some(tab_id) = self.editor.active_tab_id() else {
+                    return Task::none();
+                };
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.editor.activate_tab(tab_id);
+                let task = self.editor.update(tab_id, &message);
+                self.map_editor_widget_task(tab_id, task)
+            }
             EditorMessage::NewRequested => {
                 self.close_editor_menus();
                 self.cancel_editor_tab_rename_state();

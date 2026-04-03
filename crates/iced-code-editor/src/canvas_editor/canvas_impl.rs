@@ -85,7 +85,10 @@ fn expand_tabs(text: &str, tab_width: usize) -> Cow<'_, str> {
 }
 
 use super::wrapping::{VisualLine, WrappingCalculator};
-use super::{ArrowDirection, CodeEditor, Message, measure_text_width};
+use super::{
+    ArrowDirection, CodeEditor, DOUBLE_CLICK_DISTANCE, DOUBLE_CLICK_INTERVAL, Message,
+    measure_text_width,
+};
 use iced::widget::canvas::Action;
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
@@ -988,7 +991,8 @@ impl CodeEditor {
         focused_id == self.editor_id && self.has_canvas_focus && !self.focus_locked
     }
 
-    /// Handles keyboard shortcut combinations (Ctrl+C, Ctrl+Z, etc.).
+    /// Handles widget-local keyboard controls that are not part of the app
+    /// shortcut binding system.
     ///
     /// This implementation includes focus chain management for Tab and Shift+Tab
     /// navigation between editors.
@@ -1004,110 +1008,13 @@ impl CodeEditor {
     fn handle_keyboard_shortcuts(
         &self,
         key: &keyboard::Key,
-        modifiers: &keyboard::Modifiers,
+        _modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
-        let primary_modifier = if cfg!(target_os = "macos") {
-            modifiers.command()
-        } else {
-            modifiers.control()
-        };
-
-        // Handle Copy / Ctrl+Insert
-        if (primary_modifier && matches!(key, keyboard::Key::Character(c) if c.as_str() == "c"))
-            || (modifiers.control()
-                && matches!(key, keyboard::Key::Named(keyboard::key::Named::Insert)))
-        {
-            return Some(Action::publish(Message::Copy).and_capture());
-        }
-
-        if (cfg!(target_os = "macos")
-            && primary_modifier
-            && modifiers.shift()
-            && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z"))
-            || (!cfg!(target_os = "macos")
-                && primary_modifier
-                && matches!(key, keyboard::Key::Character(y) if y.as_str() == "y"))
-            || (!cfg!(target_os = "macos")
-                && primary_modifier
-                && modifiers.shift()
-                && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z"))
-        {
-            return Some(Action::publish(Message::Redo).and_capture());
-        }
-
-        if primary_modifier
-            && !modifiers.shift()
-            && matches!(key, keyboard::Key::Character(z) if z.as_str() == "z")
-        {
-            return Some(Action::publish(Message::Undo).and_capture());
-        }
-
-        if primary_modifier
-            && matches!(key, keyboard::Key::Character(f) if f.as_str() == "f")
-            && self.search_replace_enabled
-        {
-            return Some(Action::publish(Message::OpenSearch).and_capture());
-        }
-
-        if primary_modifier
-            && matches!(key, keyboard::Key::Character(h) if h.as_str() == "h")
-            && self.search_replace_enabled
-        {
-            return Some(Action::publish(Message::OpenSearchReplace).and_capture());
-        }
-
         // Handle Escape (close search dialog if open)
-        if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+        if self.search_state.is_open
+            && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+        {
             return Some(Action::publish(Message::CloseSearch).and_capture());
-        }
-
-        // Handle Tab (cycle forward in search dialog if open)
-        if matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
-            && self.search_state.is_open
-        {
-            if modifiers.shift() {
-                // Shift+Tab: cycle backward
-                return Some(Action::publish(Message::SearchDialogShiftTab).and_capture());
-            } else {
-                // Tab: cycle forward
-                return Some(Action::publish(Message::SearchDialogTab).and_capture());
-            }
-        }
-
-        // Handle F3 (find next) and Shift+F3 (find previous)
-        if matches!(key, keyboard::Key::Named(keyboard::key::Named::F3))
-            && self.search_replace_enabled
-        {
-            if modifiers.shift() {
-                return Some(Action::publish(Message::FindPrevious).and_capture());
-            } else {
-                return Some(Action::publish(Message::FindNext).and_capture());
-            }
-        }
-
-        if (primary_modifier && matches!(key, keyboard::Key::Character(v) if v.as_str() == "v"))
-            || (modifiers.shift()
-                && matches!(key, keyboard::Key::Named(keyboard::key::Named::Insert)))
-        {
-            return Some(Action::publish(Message::Paste(String::new())));
-        }
-
-        if !cfg!(target_os = "macos")
-            && primary_modifier
-            && matches!(key, keyboard::Key::Named(keyboard::key::Named::Home))
-        {
-            return Some(Action::publish(Message::DocumentHome(modifiers.shift())).and_capture());
-        }
-
-        if !cfg!(target_os = "macos")
-            && primary_modifier
-            && matches!(key, keyboard::Key::Named(keyboard::key::Named::End))
-        {
-            return Some(Action::publish(Message::DocumentEnd(modifiers.shift())).and_capture());
-        }
-
-        if modifiers.shift() && matches!(key, keyboard::Key::Named(keyboard::key::Named::Delete)) {
-            return Some(Action::publish(Message::DeleteSelection).and_capture());
         }
 
         None
@@ -1162,36 +1069,19 @@ impl CodeEditor {
 
         // PRIORITY 2: Handle special named keys (navigation, editing)
         // These are only processed if text didn't contain a printable character
-        let primary_modifier = if cfg!(target_os = "macos") {
-            modifiers.command()
-        } else {
-            modifiers.control()
-        };
-        let is_word_modifier = if cfg!(target_os = "macos") {
-            modifiers.alt() && !primary_modifier
-        } else {
-            modifiers.control() && !modifiers.command()
-        };
-        let plain_editing_modifiers = !modifiers.command() && !modifiers.control() && !modifiers.alt();
+        let plain_editing_modifiers =
+            !modifiers.command() && !modifiers.control() && !modifiers.alt();
 
         let message = match key {
             keyboard::Key::Named(keyboard::key::Named::Backspace) => {
-                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
-                    Some(Message::DeleteToLineStart)
-                } else if is_word_modifier {
-                    Some(Message::DeleteWordBackward)
-                } else if plain_editing_modifiers {
+                if plain_editing_modifiers {
                     Some(Message::Backspace)
                 } else {
                     None
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::Delete) => {
-                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
-                    Some(Message::DeleteToLineEnd)
-                } else if is_word_modifier {
-                    Some(Message::DeleteWordForward)
-                } else if plain_editing_modifiers {
+                if plain_editing_modifiers {
                     Some(Message::Delete)
                 } else {
                     None
@@ -1218,46 +1108,28 @@ impl CodeEditor {
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
-                    Some(Message::DocumentHome(modifiers.shift()))
-                } else if plain_editing_modifiers {
+                if plain_editing_modifiers {
                     Some(Message::ArrowKey(ArrowDirection::Up, modifiers.shift()))
                 } else {
                     None
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
-                    Some(Message::DocumentEnd(modifiers.shift()))
-                } else if plain_editing_modifiers {
+                if plain_editing_modifiers {
                     Some(Message::ArrowKey(ArrowDirection::Down, modifiers.shift()))
                 } else {
                     None
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
-                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
-                    Some(Message::Home(modifiers.shift()))
-                } else if is_word_modifier {
-                    Some(Message::WordArrowKey(
-                        ArrowDirection::Left,
-                        modifiers.shift(),
-                    ))
-                } else if plain_editing_modifiers {
+                if plain_editing_modifiers {
                     Some(Message::ArrowKey(ArrowDirection::Left, modifiers.shift()))
                 } else {
                     None
                 }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
-                if cfg!(target_os = "macos") && primary_modifier && !modifiers.alt() {
-                    Some(Message::End(modifiers.shift()))
-                } else if is_word_modifier {
-                    Some(Message::WordArrowKey(
-                        ArrowDirection::Right,
-                        modifiers.shift(),
-                    ))
-                } else if plain_editing_modifiers {
+                if plain_editing_modifiers {
                     Some(Message::ArrowKey(ArrowDirection::Right, modifiers.shift()))
                 } else {
                     None
@@ -1409,6 +1281,28 @@ impl CodeEditor {
                     if is_jump_click {
                         return Action::publish(Message::JumpClick(position));
                     }
+
+                    let now = super::Instant::now();
+                    let is_double_click = self.last_click_at.get().is_some_and(|last_click| {
+                        now.duration_since(last_click) <= DOUBLE_CLICK_INTERVAL
+                            && self
+                                .last_click_position
+                                .borrow()
+                                .is_some_and(|last_position| {
+                                    (last_position.x - position.x).abs() <= DOUBLE_CLICK_DISTANCE
+                                        && (last_position.y - position.y).abs()
+                                            <= DOUBLE_CLICK_DISTANCE
+                                })
+                    });
+
+                    if is_double_click {
+                        self.last_click_at.set(None);
+                        *self.last_click_position.borrow_mut() = None;
+                        return Action::publish(Message::MouseDoubleClick(position));
+                    }
+
+                    self.last_click_at.set(Some(now));
+                    *self.last_click_position.borrow_mut() = Some(position);
 
                     // Don't capture the event so it can bubble up for focus management
                     // This implements focus event propagation through the widget hierarchy

@@ -11,6 +11,44 @@ pub(crate) enum ShortcutAction {
     OpenEditorFile,
     SaveEditor,
     CloseEditorTab,
+    EditorUndo,
+    EditorRedo,
+    EditorCopy,
+    EditorPaste,
+    EditorOpenSearch,
+    EditorOpenSearchReplace,
+    EditorFindNext,
+    EditorFindPrevious,
+    EditorWordLeft,
+    EditorWordRight,
+    EditorWordLeftSelect,
+    EditorWordRightSelect,
+    EditorDeleteWordBackward,
+    EditorDeleteWordForward,
+    EditorDeleteToLineStart,
+    EditorDeleteToLineEnd,
+    EditorLineStart,
+    EditorLineEnd,
+    EditorLineStartSelect,
+    EditorLineEndSelect,
+    EditorDocumentStart,
+    EditorDocumentEnd,
+    EditorDocumentStartSelect,
+    EditorDocumentEndSelect,
+    EditorDeleteSelection,
+    EditorInsertLineBelow,
+    EditorInsertLineAbove,
+    EditorDeleteLine,
+    EditorMoveLineUp,
+    EditorMoveLineDown,
+    EditorCopyLineUp,
+    EditorCopyLineDown,
+    EditorIndent,
+    EditorOutdent,
+    EditorToggleLineComment,
+    EditorToggleBlockComment,
+    EditorSelectLine,
+    EditorJumpToMatchingBracket,
     ToggleWorkspacePane(WorkspacePane),
     SwitchWorkspaceTabPrevious,
     SwitchWorkspaceTabNext,
@@ -92,9 +130,47 @@ const PIANO_ROLL_CONTEXTUAL_ACTIONS: [ShortcutAction; 5] = [
     ShortcutAction::TransportRewind,
 ];
 
-const EDITOR_CONTEXTUAL_ACTIONS: [ShortcutAction; 8] = [
+const EDITOR_CONTEXTUAL_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::NewEditor,
     ShortcutAction::OpenEditorFile,
+    ShortcutAction::EditorUndo,
+    ShortcutAction::EditorRedo,
+    ShortcutAction::EditorCopy,
+    ShortcutAction::EditorPaste,
+    ShortcutAction::EditorOpenSearch,
+    ShortcutAction::EditorOpenSearchReplace,
+    ShortcutAction::EditorFindNext,
+    ShortcutAction::EditorFindPrevious,
+    ShortcutAction::EditorWordLeft,
+    ShortcutAction::EditorWordRight,
+    ShortcutAction::EditorWordLeftSelect,
+    ShortcutAction::EditorWordRightSelect,
+    ShortcutAction::EditorDeleteWordBackward,
+    ShortcutAction::EditorDeleteWordForward,
+    ShortcutAction::EditorDeleteToLineStart,
+    ShortcutAction::EditorDeleteToLineEnd,
+    ShortcutAction::EditorLineStart,
+    ShortcutAction::EditorLineEnd,
+    ShortcutAction::EditorLineStartSelect,
+    ShortcutAction::EditorLineEndSelect,
+    ShortcutAction::EditorDocumentStart,
+    ShortcutAction::EditorDocumentEnd,
+    ShortcutAction::EditorDocumentStartSelect,
+    ShortcutAction::EditorDocumentEndSelect,
+    ShortcutAction::EditorDeleteSelection,
+    ShortcutAction::EditorInsertLineBelow,
+    ShortcutAction::EditorInsertLineAbove,
+    ShortcutAction::EditorDeleteLine,
+    ShortcutAction::EditorMoveLineUp,
+    ShortcutAction::EditorMoveLineDown,
+    ShortcutAction::EditorCopyLineUp,
+    ShortcutAction::EditorCopyLineDown,
+    ShortcutAction::EditorIndent,
+    ShortcutAction::EditorOutdent,
+    ShortcutAction::EditorToggleLineComment,
+    ShortcutAction::EditorToggleBlockComment,
+    ShortcutAction::EditorSelectLine,
+    ShortcutAction::EditorJumpToMatchingBracket,
     ShortcutAction::CloseEditorTab,
     ShortcutAction::SwitchEditorTabPrevious,
     ShortcutAction::SwitchEditorTabNext,
@@ -243,6 +319,208 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
             vec![binding_code(ShortcutKeyCode::KeyO, true, false, false)]
         }
         ShortcutAction::SaveEditor => vec![binding_code(ShortcutKeyCode::KeyS, true, false, false)],
+        ShortcutAction::EditorUndo => {
+            vec![binding_code(ShortcutKeyCode::KeyZ, true, false, false)]
+        }
+        ShortcutAction::EditorRedo => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::KeyZ, true, false, true)]
+            } else {
+                vec![
+                    binding_code(ShortcutKeyCode::KeyY, true, false, false),
+                    binding_code(ShortcutKeyCode::KeyZ, true, false, true),
+                ]
+            }
+        }
+        ShortcutAction::EditorCopy => {
+            let mut bindings = vec![binding_code(ShortcutKeyCode::KeyC, true, false, false)];
+            if !cfg!(target_os = "macos") {
+                bindings.push(binding_code(ShortcutKeyCode::Insert, true, false, false));
+            }
+            bindings
+        }
+        ShortcutAction::EditorPaste => {
+            let mut bindings = vec![binding_code(ShortcutKeyCode::KeyV, true, false, false)];
+            if !cfg!(target_os = "macos") {
+                bindings.push(binding_code(ShortcutKeyCode::Insert, false, false, true));
+            }
+            bindings
+        }
+        ShortcutAction::EditorOpenSearch => {
+            vec![binding_code(ShortcutKeyCode::KeyF, true, false, false)]
+        }
+        ShortcutAction::EditorOpenSearchReplace => {
+            vec![binding_code(ShortcutKeyCode::KeyH, true, false, false)]
+        }
+        ShortcutAction::EditorFindNext => {
+            vec![binding_code(ShortcutKeyCode::F3, false, false, false)]
+        }
+        ShortcutAction::EditorFindPrevious => {
+            vec![binding_code(ShortcutKeyCode::F3, false, false, true)]
+        }
+        ShortcutAction::EditorWordLeft => vec![binding_code(
+            ShortcutKeyCode::ArrowLeft,
+            !cfg!(target_os = "macos"),
+            cfg!(target_os = "macos"),
+            false,
+        )],
+        ShortcutAction::EditorWordRight => vec![binding_code(
+            ShortcutKeyCode::ArrowRight,
+            !cfg!(target_os = "macos"),
+            cfg!(target_os = "macos"),
+            false,
+        )],
+        ShortcutAction::EditorWordLeftSelect => vec![binding_code(
+            ShortcutKeyCode::ArrowLeft,
+            !cfg!(target_os = "macos"),
+            cfg!(target_os = "macos"),
+            true,
+        )],
+        ShortcutAction::EditorWordRightSelect => vec![binding_code(
+            ShortcutKeyCode::ArrowRight,
+            !cfg!(target_os = "macos"),
+            cfg!(target_os = "macos"),
+            true,
+        )],
+        ShortcutAction::EditorDeleteWordBackward => vec![binding_code(
+            ShortcutKeyCode::Backspace,
+            !cfg!(target_os = "macos"),
+            cfg!(target_os = "macos"),
+            false,
+        )],
+        ShortcutAction::EditorDeleteWordForward => vec![binding_code(
+            ShortcutKeyCode::Delete,
+            !cfg!(target_os = "macos"),
+            cfg!(target_os = "macos"),
+            false,
+        )],
+        ShortcutAction::EditorDeleteToLineStart => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::Backspace, true, false, false)]
+            } else {
+                Vec::new()
+            }
+        }
+        ShortcutAction::EditorDeleteToLineEnd => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::Delete, true, false, false)]
+            } else {
+                Vec::new()
+            }
+        }
+        ShortcutAction::EditorLineStart => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::ArrowLeft, true, false, false)]
+            } else {
+                Vec::new()
+            }
+        }
+        ShortcutAction::EditorLineEnd => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(
+                    ShortcutKeyCode::ArrowRight,
+                    true,
+                    false,
+                    false,
+                )]
+            } else {
+                Vec::new()
+            }
+        }
+        ShortcutAction::EditorLineStartSelect => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::ArrowLeft, true, false, true)]
+            } else {
+                Vec::new()
+            }
+        }
+        ShortcutAction::EditorLineEndSelect => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::ArrowRight, true, false, true)]
+            } else {
+                Vec::new()
+            }
+        }
+        ShortcutAction::EditorDocumentStart => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::ArrowUp, true, false, false)]
+            } else {
+                vec![binding_code(ShortcutKeyCode::Home, true, false, false)]
+            }
+        }
+        ShortcutAction::EditorDocumentEnd => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::ArrowDown, true, false, false)]
+            } else {
+                vec![binding_code(ShortcutKeyCode::End, true, false, false)]
+            }
+        }
+        ShortcutAction::EditorDocumentStartSelect => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::ArrowUp, true, false, true)]
+            } else {
+                vec![binding_code(ShortcutKeyCode::Home, true, false, true)]
+            }
+        }
+        ShortcutAction::EditorDocumentEndSelect => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::ArrowDown, true, false, true)]
+            } else {
+                vec![binding_code(ShortcutKeyCode::End, true, false, true)]
+            }
+        }
+        ShortcutAction::EditorDeleteSelection => {
+            vec![binding_code(ShortcutKeyCode::Delete, false, false, true)]
+        }
+        ShortcutAction::EditorInsertLineBelow => {
+            vec![binding_named(ShortcutNamedKey::Enter, true, false, false)]
+        }
+        ShortcutAction::EditorInsertLineAbove => {
+            vec![binding_named(ShortcutNamedKey::Enter, true, false, true)]
+        }
+        ShortcutAction::EditorDeleteLine => {
+            vec![binding_code(ShortcutKeyCode::KeyK, true, false, true)]
+        }
+        ShortcutAction::EditorMoveLineUp => {
+            vec![binding_code(ShortcutKeyCode::ArrowUp, false, true, false)]
+        }
+        ShortcutAction::EditorMoveLineDown => {
+            vec![binding_code(ShortcutKeyCode::ArrowDown, false, true, false)]
+        }
+        ShortcutAction::EditorCopyLineUp => {
+            vec![binding_code(ShortcutKeyCode::ArrowUp, false, true, true)]
+        }
+        ShortcutAction::EditorCopyLineDown => {
+            vec![binding_code(ShortcutKeyCode::ArrowDown, false, true, true)]
+        }
+        ShortcutAction::EditorIndent => {
+            vec![binding_code(
+                ShortcutKeyCode::BracketRight,
+                true,
+                false,
+                false,
+            )]
+        }
+        ShortcutAction::EditorOutdent => {
+            vec![binding_code(
+                ShortcutKeyCode::BracketLeft,
+                true,
+                false,
+                false,
+            )]
+        }
+        ShortcutAction::EditorToggleLineComment => {
+            vec![binding_code(ShortcutKeyCode::Slash, true, false, false)]
+        }
+        ShortcutAction::EditorToggleBlockComment => {
+            vec![binding_code(ShortcutKeyCode::KeyA, false, true, true)]
+        }
+        ShortcutAction::EditorSelectLine => {
+            vec![binding_code(ShortcutKeyCode::KeyL, true, false, false)]
+        }
+        ShortcutAction::EditorJumpToMatchingBracket => {
+            vec![binding_code(ShortcutKeyCode::Backslash, true, false, true)]
+        }
         ShortcutAction::CloseEditorTab => {
             vec![binding_code(ShortcutKeyCode::KeyW, true, false, false)]
         }
@@ -404,16 +682,35 @@ fn platform_alt_label() -> &'static str {
 
 fn code_label(code: ShortcutKeyCode) -> &'static str {
     match code {
+        ShortcutKeyCode::KeyA => "A",
+        ShortcutKeyCode::KeyC => "C",
+        ShortcutKeyCode::KeyF => "F",
+        ShortcutKeyCode::KeyH => "H",
+        ShortcutKeyCode::KeyK => "K",
+        ShortcutKeyCode::KeyL => "L",
         ShortcutKeyCode::KeyN => "N",
         ShortcutKeyCode::KeyO => "O",
         ShortcutKeyCode::KeyS => "S",
+        ShortcutKeyCode::KeyV => "V",
         ShortcutKeyCode::KeyW => "W",
+        ShortcutKeyCode::KeyY => "Y",
+        ShortcutKeyCode::KeyZ => "Z",
         ShortcutKeyCode::Digit1 | ShortcutKeyCode::Numpad1 => "1",
         ShortcutKeyCode::Digit2 | ShortcutKeyCode::Numpad2 => "2",
         ShortcutKeyCode::Digit3 | ShortcutKeyCode::Numpad3 => "3",
         ShortcutKeyCode::Digit4 | ShortcutKeyCode::Numpad4 => "4",
+        ShortcutKeyCode::Slash => "/",
+        ShortcutKeyCode::Backslash => "\\",
         ShortcutKeyCode::ArrowLeft => "Left",
         ShortcutKeyCode::ArrowRight => "Right",
+        ShortcutKeyCode::ArrowUp => "Up",
+        ShortcutKeyCode::ArrowDown => "Down",
+        ShortcutKeyCode::Backspace => "Backspace",
+        ShortcutKeyCode::Delete => "Delete",
+        ShortcutKeyCode::Home => "Home",
+        ShortcutKeyCode::End => "End",
+        ShortcutKeyCode::Insert => "Insert",
+        ShortcutKeyCode::F3 => "F3",
         ShortcutKeyCode::Equal | ShortcutKeyCode::NumpadAdd => "+",
         ShortcutKeyCode::Minus | ShortcutKeyCode::NumpadSubtract => "-",
         ShortcutKeyCode::Digit0 | ShortcutKeyCode::Numpad0 => "0",
@@ -460,16 +757,35 @@ const fn binding_named(
 
 fn to_iced_key_code(code: ShortcutKeyCode) -> keyboard::key::Code {
     match code {
+        ShortcutKeyCode::KeyA => keyboard::key::Code::KeyA,
+        ShortcutKeyCode::KeyC => keyboard::key::Code::KeyC,
+        ShortcutKeyCode::KeyF => keyboard::key::Code::KeyF,
+        ShortcutKeyCode::KeyH => keyboard::key::Code::KeyH,
+        ShortcutKeyCode::KeyK => keyboard::key::Code::KeyK,
+        ShortcutKeyCode::KeyL => keyboard::key::Code::KeyL,
         ShortcutKeyCode::KeyN => keyboard::key::Code::KeyN,
         ShortcutKeyCode::KeyO => keyboard::key::Code::KeyO,
         ShortcutKeyCode::KeyS => keyboard::key::Code::KeyS,
+        ShortcutKeyCode::KeyV => keyboard::key::Code::KeyV,
         ShortcutKeyCode::KeyW => keyboard::key::Code::KeyW,
+        ShortcutKeyCode::KeyY => keyboard::key::Code::KeyY,
+        ShortcutKeyCode::KeyZ => keyboard::key::Code::KeyZ,
         ShortcutKeyCode::Digit1 => keyboard::key::Code::Digit1,
         ShortcutKeyCode::Digit2 => keyboard::key::Code::Digit2,
         ShortcutKeyCode::Digit3 => keyboard::key::Code::Digit3,
         ShortcutKeyCode::Digit4 => keyboard::key::Code::Digit4,
+        ShortcutKeyCode::Slash => keyboard::key::Code::Slash,
+        ShortcutKeyCode::Backslash => keyboard::key::Code::Backslash,
         ShortcutKeyCode::ArrowLeft => keyboard::key::Code::ArrowLeft,
         ShortcutKeyCode::ArrowRight => keyboard::key::Code::ArrowRight,
+        ShortcutKeyCode::ArrowUp => keyboard::key::Code::ArrowUp,
+        ShortcutKeyCode::ArrowDown => keyboard::key::Code::ArrowDown,
+        ShortcutKeyCode::Backspace => keyboard::key::Code::Backspace,
+        ShortcutKeyCode::Delete => keyboard::key::Code::Delete,
+        ShortcutKeyCode::Home => keyboard::key::Code::Home,
+        ShortcutKeyCode::End => keyboard::key::Code::End,
+        ShortcutKeyCode::Insert => keyboard::key::Code::Insert,
+        ShortcutKeyCode::F3 => keyboard::key::Code::F3,
         ShortcutKeyCode::Numpad1 => keyboard::key::Code::Numpad1,
         ShortcutKeyCode::Numpad2 => keyboard::key::Code::Numpad2,
         ShortcutKeyCode::Numpad3 => keyboard::key::Code::Numpad3,
@@ -499,6 +815,52 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::OpenEditorFile => Some(ShortcutActionId::OpenEditorFile),
         ShortcutAction::SaveEditor => Some(ShortcutActionId::SaveEditor),
         ShortcutAction::CloseEditorTab => Some(ShortcutActionId::CloseEditorTab),
+        ShortcutAction::EditorUndo => Some(ShortcutActionId::EditorUndo),
+        ShortcutAction::EditorRedo => Some(ShortcutActionId::EditorRedo),
+        ShortcutAction::EditorCopy => Some(ShortcutActionId::EditorCopy),
+        ShortcutAction::EditorPaste => Some(ShortcutActionId::EditorPaste),
+        ShortcutAction::EditorOpenSearch => Some(ShortcutActionId::EditorOpenSearch),
+        ShortcutAction::EditorOpenSearchReplace => Some(ShortcutActionId::EditorOpenSearchReplace),
+        ShortcutAction::EditorFindNext => Some(ShortcutActionId::EditorFindNext),
+        ShortcutAction::EditorFindPrevious => Some(ShortcutActionId::EditorFindPrevious),
+        ShortcutAction::EditorWordLeft => Some(ShortcutActionId::EditorWordLeft),
+        ShortcutAction::EditorWordRight => Some(ShortcutActionId::EditorWordRight),
+        ShortcutAction::EditorWordLeftSelect => Some(ShortcutActionId::EditorWordLeftSelect),
+        ShortcutAction::EditorWordRightSelect => Some(ShortcutActionId::EditorWordRightSelect),
+        ShortcutAction::EditorDeleteWordBackward => {
+            Some(ShortcutActionId::EditorDeleteWordBackward)
+        }
+        ShortcutAction::EditorDeleteWordForward => Some(ShortcutActionId::EditorDeleteWordForward),
+        ShortcutAction::EditorDeleteToLineStart => Some(ShortcutActionId::EditorDeleteToLineStart),
+        ShortcutAction::EditorDeleteToLineEnd => Some(ShortcutActionId::EditorDeleteToLineEnd),
+        ShortcutAction::EditorLineStart => Some(ShortcutActionId::EditorLineStart),
+        ShortcutAction::EditorLineEnd => Some(ShortcutActionId::EditorLineEnd),
+        ShortcutAction::EditorLineStartSelect => Some(ShortcutActionId::EditorLineStartSelect),
+        ShortcutAction::EditorLineEndSelect => Some(ShortcutActionId::EditorLineEndSelect),
+        ShortcutAction::EditorDocumentStart => Some(ShortcutActionId::EditorDocumentStart),
+        ShortcutAction::EditorDocumentEnd => Some(ShortcutActionId::EditorDocumentEnd),
+        ShortcutAction::EditorDocumentStartSelect => {
+            Some(ShortcutActionId::EditorDocumentStartSelect)
+        }
+        ShortcutAction::EditorDocumentEndSelect => Some(ShortcutActionId::EditorDocumentEndSelect),
+        ShortcutAction::EditorDeleteSelection => Some(ShortcutActionId::EditorDeleteSelection),
+        ShortcutAction::EditorInsertLineBelow => Some(ShortcutActionId::EditorInsertLineBelow),
+        ShortcutAction::EditorInsertLineAbove => Some(ShortcutActionId::EditorInsertLineAbove),
+        ShortcutAction::EditorDeleteLine => Some(ShortcutActionId::EditorDeleteLine),
+        ShortcutAction::EditorMoveLineUp => Some(ShortcutActionId::EditorMoveLineUp),
+        ShortcutAction::EditorMoveLineDown => Some(ShortcutActionId::EditorMoveLineDown),
+        ShortcutAction::EditorCopyLineUp => Some(ShortcutActionId::EditorCopyLineUp),
+        ShortcutAction::EditorCopyLineDown => Some(ShortcutActionId::EditorCopyLineDown),
+        ShortcutAction::EditorIndent => Some(ShortcutActionId::EditorIndent),
+        ShortcutAction::EditorOutdent => Some(ShortcutActionId::EditorOutdent),
+        ShortcutAction::EditorToggleLineComment => Some(ShortcutActionId::EditorToggleLineComment),
+        ShortcutAction::EditorToggleBlockComment => {
+            Some(ShortcutActionId::EditorToggleBlockComment)
+        }
+        ShortcutAction::EditorSelectLine => Some(ShortcutActionId::EditorSelectLine),
+        ShortcutAction::EditorJumpToMatchingBracket => {
+            Some(ShortcutActionId::EditorJumpToMatchingBracket)
+        }
         ShortcutAction::ToggleWorkspacePane(WorkspacePane::Editor) => {
             Some(ShortcutActionId::ToggleEditorPane)
         }
@@ -536,5 +898,51 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         | ShortcutAction::ScoreScrollDown
         | ShortcutAction::ScorePrevPage
         | ShortcutAction::ScoreNextPage => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn code_input(
+        code: keyboard::key::Code,
+        primary: bool,
+        alt: bool,
+        shift: bool,
+    ) -> ShortcutInput<'static> {
+        let mut modifiers = keyboard::Modifiers::default();
+        if primary {
+            modifiers.insert(keyboard::Modifiers::COMMAND);
+        }
+        if alt {
+            modifiers.insert(keyboard::Modifiers::ALT);
+        }
+        if shift {
+            modifiers.insert(keyboard::Modifiers::SHIFT);
+        }
+        ShortcutInput {
+            key: Box::leak(Box::new(keyboard::Key::Character("".into()))),
+            physical_key: keyboard::key::Physical::Code(code),
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn resolves_editor_toggle_line_comment_binding() {
+        let input = code_input(keyboard::key::Code::Slash, true, false, false);
+        assert_eq!(
+            resolve_contextual(&ShortcutSettings::default(), WorkspacePane::Editor, input),
+            Some(ShortcutAction::EditorToggleLineComment)
+        );
+    }
+
+    #[test]
+    fn resolves_editor_move_line_down_binding() {
+        let input = code_input(keyboard::key::Code::ArrowDown, false, true, false);
+        assert_eq!(
+            resolve_contextual(&ShortcutSettings::default(), WorkspacePane::Editor, input),
+            Some(ShortcutAction::EditorMoveLineDown)
+        );
     }
 }

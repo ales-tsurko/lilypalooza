@@ -87,6 +87,7 @@ pub(super) enum EditorMessage {
         tab_id: u64,
         message: EditorWidgetMessage,
     },
+    ActiveWidgetMessage(EditorWidgetMessage),
     NewRequested,
     TabPressed(u64),
     TabMoved {

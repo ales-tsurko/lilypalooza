@@ -200,6 +200,8 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod canvas_editor;
+/// Shared language metadata for comments, bracket pairs, and syntax bootstrapping.
+pub mod language;
 mod text_buffer;
 
 pub mod i18n;

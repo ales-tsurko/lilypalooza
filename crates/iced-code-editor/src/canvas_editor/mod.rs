@@ -16,6 +16,7 @@ use std::time::Instant;
 use unicode_width::UnicodeWidthChar;
 
 use crate::i18n::Translations;
+use crate::language::{self, LanguageConfig};
 use crate::text_buffer::TextBuffer;
 use crate::theme::Style;
 pub use history::CommandHistory;
@@ -54,6 +55,8 @@ pub(crate) const CHAR_WIDTH: f32 = 8.4; // Monospace character width
 pub(crate) const TAB_WIDTH: usize = 4;
 pub(crate) const GUTTER_WIDTH: f32 = 45.0;
 pub(crate) const CURSOR_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(530);
+pub(crate) const DOUBLE_CLICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(350);
+pub(crate) const DOUBLE_CLICK_DISTANCE: f32 = 6.0;
 
 /// Measures the width of a single character.
 ///
@@ -236,6 +239,10 @@ pub struct CodeEditor {
     pub(crate) font: iced::Font,
     /// IME pre-edit state (for CJK input)
     pub(crate) ime_preedit: Option<ImePreedit>,
+    /// Last mouse click timestamp for double-click detection.
+    pub(crate) last_click_at: Cell<Option<Instant>>,
+    /// Last mouse click position for double-click detection.
+    pub(crate) last_click_position: RefCell<Option<iced::Point>>,
     /// Font size in pixels
     pub(crate) font_size: f32,
     /// Full character width (wide chars like CJK) in pixels
@@ -308,6 +315,8 @@ pub enum Message {
     WordArrowKey(ArrowDirection, bool),
     /// Mouse clicked at position
     MouseClick(iced::Point),
+    /// Mouse double-clicked at position
+    MouseDoubleClick(iced::Point),
     /// Mouse drag for selection
     MouseDrag(iced::Point),
     /// Mouse moved within the editor without dragging
@@ -354,6 +363,30 @@ pub enum Message {
     DeleteToLineStart,
     /// Delete from cursor to line end
     DeleteToLineEnd,
+    /// Insert a new line below the current line
+    InsertLineBelow,
+    /// Insert a new line above the current line
+    InsertLineAbove,
+    /// Delete the current line or touched lines
+    DeleteLine,
+    /// Move the current line or touched lines up
+    MoveLineUp,
+    /// Move the current line or touched lines down
+    MoveLineDown,
+    /// Copy the current line or touched lines up
+    CopyLineUp,
+    /// Copy the current line or touched lines down
+    CopyLineDown,
+    /// Join the current line with the next line or join touched lines
+    JoinLines,
+    /// Toggle a line comment
+    ToggleLineComment,
+    /// Toggle a block comment
+    ToggleBlockComment,
+    /// Select the current line
+    SelectLine,
+    /// Jump to the matching bracket if there is one
+    JumpToMatchingBracket,
     /// Open search dialog (Ctrl+F)
     OpenSearch,
     /// Open search and replace dialog (Ctrl+H)
@@ -473,6 +506,8 @@ impl CodeEditor {
             modifiers: Cell::new(iced::keyboard::Modifiers::default()),
             font: iced::Font::with_name("JetBrains Mono"),
             ime_preedit: None,
+            last_click_at: Cell::new(None),
+            last_click_position: RefCell::new(None),
             font_size: FONT_SIZE,
             full_char_width: CHAR_WIDTH * 2.0,
             line_height: LINE_HEIGHT,
@@ -1153,29 +1188,72 @@ impl CodeEditor {
         self.buffer.line(position.0).chars().nth(position.1)
     }
 
+    pub(crate) fn language_config(&self) -> &'static LanguageConfig {
+        language::config_for_syntax(&self.syntax)
+    }
+
     pub(crate) fn matching_bracket_pair(&self) -> Option<((usize, usize), (usize, usize))> {
-        let current = self.char_at(self.cursor).and_then(|ch| {
-            Self::match_from_position(self, self.cursor, ch).map(|matching| (self.cursor, matching))
-        });
+        let current = self.bracket_pair_at(self.cursor);
 
         current.or_else(|| {
             let previous = (self.cursor.0, self.cursor.1.saturating_sub(1));
-            self.char_at(previous).and_then(|ch| {
-                Self::match_from_position(self, previous, ch).map(|matching| (previous, matching))
-            })
+            self.bracket_pair_at(previous)
         })
     }
 
-    fn match_from_position(&self, position: (usize, usize), ch: char) -> Option<(usize, usize)> {
-        match ch {
-            '(' => self.find_matching_forward(position, '(', ')'),
-            '[' => self.find_matching_forward(position, '[', ']'),
-            '{' => self.find_matching_forward(position, '{', '}'),
-            ')' => self.find_matching_backward(position, '(', ')'),
-            ']' => self.find_matching_backward(position, '[', ']'),
-            '}' => self.find_matching_backward(position, '{', '}'),
-            _ => None,
+    pub(crate) fn bracket_pair_at(
+        &self,
+        position: (usize, usize),
+    ) -> Option<((usize, usize), (usize, usize))> {
+        self.char_at(position).and_then(|ch| {
+            Self::match_from_position(self, position, ch).map(|matching| (position, matching))
+        })
+    }
+
+    pub(crate) fn nearest_bracket_pair(
+        &self,
+        position: (usize, usize),
+    ) -> Option<((usize, usize), (usize, usize))> {
+        let anchor = self.document_offset(position);
+        let mut best: Option<(((usize, usize), (usize, usize)), usize)> = None;
+
+        for line in 0..self.buffer.line_count() {
+            for (col, ch) in self.buffer.line(line).chars().enumerate() {
+                if !self
+                    .language_config()
+                    .bracket_pairs
+                    .iter()
+                    .any(|(open, close)| ch == *open || ch == *close)
+                {
+                    continue;
+                }
+
+                let Some(pair) = self.bracket_pair_at((line, col)) else {
+                    continue;
+                };
+                let distance = self.document_offset((line, col)).abs_diff(anchor);
+
+                match best {
+                    Some((_, best_distance)) if best_distance <= distance => {}
+                    _ => best = Some((pair, distance)),
+                }
+            }
         }
+
+        best.map(|(pair, _)| pair)
+    }
+
+    fn match_from_position(&self, position: (usize, usize), ch: char) -> Option<(usize, usize)> {
+        for &(open, close) in self.language_config().bracket_pairs {
+            if ch == open {
+                return self.find_matching_forward(position, open, close);
+            }
+            if ch == close {
+                return self.find_matching_backward(position, open, close);
+            }
+        }
+
+        None
     }
 
     fn find_matching_forward(
@@ -1237,6 +1315,14 @@ impl CodeEditor {
         }
 
         None
+    }
+
+    fn document_offset(&self, position: (usize, usize)) -> usize {
+        let mut offset = 0usize;
+        for line in 0..position.0.min(self.buffer.line_count()) {
+            offset += self.buffer.line_len(line) + 1;
+        }
+        offset + position.1
     }
 
     /// Computes and queues the latest LSP text change for the buffer.

@@ -684,9 +684,9 @@ fn normalize_editor_path(path: &Path) -> PathBuf {
 
 fn syntax_for_path(path: &Path) -> &str {
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("ly" | "ily") => "lilypond",
-        Some("scm") => "scheme",
-        Some(extension) => extension,
+        Some(extension) => {
+            iced_code_editor::language::syntax_for_extension(extension).unwrap_or(extension)
+        }
         None => "text",
     }
 }

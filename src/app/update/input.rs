@@ -2,6 +2,16 @@ use super::*;
 use crate::app::piano_roll::{adjacent_subdivision_tick, roll_scroll_id};
 
 impl Lilypalooza {
+    fn dispatch_active_editor_widget_message(
+        &mut self,
+        message: iced_code_editor::Message,
+    ) -> Task<Message> {
+        update(
+            self,
+            Message::Editor(EditorMessage::ActiveWidgetMessage(message)),
+        )
+    }
+
     pub(in crate::app) fn sync_editor_widget_focus(&mut self) {
         if self.focused_workspace_pane == Some(WorkspacePaneKind::Editor) {
             self.editor.request_focus();
@@ -18,6 +28,11 @@ impl Lilypalooza {
             )
         {
             return update(self, Message::Editor(EditorMessage::CancelRename));
+        }
+        if self.renaming_editor_tab.is_some()
+            && matches!(key_press.status, iced::event::Status::Captured)
+        {
+            return Task::none();
         }
 
         let shortcut_input =
@@ -36,7 +51,13 @@ impl Lilypalooza {
             return Task::none();
         };
 
-        if (key_press.modifiers.command() || key_press.modifiers.control())
+        if focused_pane == WorkspacePaneKind::Editor {
+            if let Some(action) =
+                shortcuts::resolve_contextual(&self.shortcut_settings, focused_pane, shortcut_input)
+            {
+                return self.handle_shortcut_action(action);
+            }
+        } else if (key_press.modifiers.command() || key_press.modifiers.control())
             && let Some(action) =
                 shortcuts::resolve_contextual(&self.shortcut_settings, focused_pane, shortcut_input)
         {
@@ -68,6 +89,130 @@ impl Lilypalooza {
             ShortcutAction::SaveEditor => {
                 update(self, Message::Editor(EditorMessage::SaveRequested))
             }
+            ShortcutAction::EditorUndo => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::Undo)
+            }
+            ShortcutAction::EditorRedo => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::Redo)
+            }
+            ShortcutAction::EditorCopy => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::Copy)
+            }
+            ShortcutAction::EditorPaste => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::Paste(String::new()),
+            ),
+            ShortcutAction::EditorOpenSearch => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::OpenSearch)
+            }
+            ShortcutAction::EditorOpenSearchReplace => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::OpenSearchReplace,
+            ),
+            ShortcutAction::EditorFindNext => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::FindNext)
+            }
+            ShortcutAction::EditorFindPrevious => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::FindPrevious)
+            }
+            ShortcutAction::EditorWordLeft => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::WordArrowKey(
+                    iced_code_editor::ArrowDirection::Left,
+                    false,
+                ))
+            }
+            ShortcutAction::EditorWordRight => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::WordArrowKey(
+                    iced_code_editor::ArrowDirection::Right,
+                    false,
+                ))
+            }
+            ShortcutAction::EditorWordLeftSelect => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::WordArrowKey(
+                    iced_code_editor::ArrowDirection::Left,
+                    true,
+                ))
+            }
+            ShortcutAction::EditorWordRightSelect => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::WordArrowKey(
+                    iced_code_editor::ArrowDirection::Right,
+                    true,
+                ))
+            }
+            ShortcutAction::EditorDeleteWordBackward => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::DeleteWordBackward,
+            ),
+            ShortcutAction::EditorDeleteWordForward => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::DeleteWordForward,
+            ),
+            ShortcutAction::EditorDeleteToLineStart => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::DeleteToLineStart,
+            ),
+            ShortcutAction::EditorDeleteToLineEnd => self
+                .dispatch_active_editor_widget_message(iced_code_editor::Message::DeleteToLineEnd),
+            ShortcutAction::EditorLineStart => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::Home(false))
+            }
+            ShortcutAction::EditorLineEnd => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::End(false))
+            }
+            ShortcutAction::EditorLineStartSelect => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::Home(true))
+            }
+            ShortcutAction::EditorLineEndSelect => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::End(true))
+            }
+            ShortcutAction::EditorDocumentStart => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::DocumentHome(false),
+            ),
+            ShortcutAction::EditorDocumentEnd => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::DocumentEnd(false),
+            ),
+            ShortcutAction::EditorDocumentStartSelect => self
+                .dispatch_active_editor_widget_message(iced_code_editor::Message::DocumentHome(
+                    true,
+                )),
+            ShortcutAction::EditorDocumentEndSelect => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::DocumentEnd(true),
+            ),
+            ShortcutAction::EditorDeleteSelection => self
+                .dispatch_active_editor_widget_message(iced_code_editor::Message::DeleteSelection),
+            ShortcutAction::EditorInsertLineBelow => self
+                .dispatch_active_editor_widget_message(iced_code_editor::Message::InsertLineBelow),
+            ShortcutAction::EditorInsertLineAbove => self
+                .dispatch_active_editor_widget_message(iced_code_editor::Message::InsertLineAbove),
+            ShortcutAction::EditorDeleteLine => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::DeleteLine)
+            }
+            ShortcutAction::EditorMoveLineUp => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::MoveLineUp)
+            }
+            ShortcutAction::EditorMoveLineDown => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::MoveLineDown)
+            }
+            ShortcutAction::EditorCopyLineUp => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::CopyLineUp)
+            }
+            ShortcutAction::EditorCopyLineDown => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::CopyLineDown)
+            }
+            ShortcutAction::EditorIndent => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::Tab)
+            }
+            ShortcutAction::EditorOutdent => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::ShiftTab)
+            }
+            ShortcutAction::EditorToggleLineComment => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::ToggleLineComment,
+            ),
+            ShortcutAction::EditorToggleBlockComment => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::ToggleBlockComment,
+            ),
+            ShortcutAction::EditorSelectLine => {
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::SelectLine)
+            }
+            ShortcutAction::EditorJumpToMatchingBracket => self
+                .dispatch_active_editor_widget_message(
+                    iced_code_editor::Message::JumpToMatchingBracket,
+                ),
             ShortcutAction::CloseEditorTab => {
                 let Some(tab_id) = self.editor.active_tab_id() else {
                     return Task::none();
