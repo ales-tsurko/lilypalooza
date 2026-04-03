@@ -2,7 +2,7 @@
 search:
   placeholder: "Rechercher..."
   close_tooltip: "Fermer la recherche (Échap)"
-  previous_match_tooltip: "Résultat précédent (Maj+F3)"
+  previous_match_tooltip: "Résultat précédent (Maj+F3 / Maj+Entrée)"
   next_match_tooltip: "Résultat suivant (F3 / Entrée)"
 
 replace:

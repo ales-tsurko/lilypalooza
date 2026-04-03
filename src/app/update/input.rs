@@ -35,6 +35,20 @@ impl Lilypalooza {
             return Task::none();
         }
 
+        if self.focused_workspace_pane() == Some(WorkspacePaneKind::Editor)
+            && matches!(
+                key_press.key,
+                keyboard::Key::Named(keyboard::key::Named::Escape)
+            )
+        {
+            return Task::batch([
+                self.dispatch_active_editor_widget_message(iced_code_editor::Message::CloseSearch),
+                self.dispatch_active_editor_widget_message(
+                    iced_code_editor::Message::CloseGotoLine,
+                ),
+            ]);
+        }
+
         let shortcut_input =
             ShortcutInput::new(&key_press.key, key_press.physical_key, key_press.modifiers);
 

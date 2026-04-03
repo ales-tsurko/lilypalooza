@@ -206,7 +206,7 @@ impl Translations {
     /// use iced_code_editor::{Language, Translations};
     ///
     /// let en = Translations::new(Language::English);
-    /// assert_eq!(en.previous_match_tooltip(), "Previous match (Shift+F3)");
+    /// assert_eq!(en.previous_match_tooltip(), "Previous match (Shift+F3 / Shift+Enter)");
     /// ```
     #[must_use]
     pub fn previous_match_tooltip(&self) -> String {
@@ -315,7 +315,10 @@ mod tests {
         assert_eq!(t.search_placeholder(), "Search...");
         assert_eq!(t.replace_placeholder(), "Replace...");
         assert_eq!(t.case_sensitive_label(), "Case sensitive");
-        assert_eq!(t.previous_match_tooltip(), "Previous match (Shift+F3)");
+        assert_eq!(
+            t.previous_match_tooltip(),
+            "Previous match (Shift+F3 / Shift+Enter)"
+        );
         assert_eq!(t.next_match_tooltip(), "Next match (F3 / Enter)");
         assert_eq!(t.close_search_tooltip(), "Close search dialog (Esc)");
         assert_eq!(t.replace_current_tooltip(), "Replace current match");
@@ -328,7 +331,10 @@ mod tests {
         assert_eq!(t.search_placeholder(), "Rechercher...");
         assert_eq!(t.replace_placeholder(), "Remplacer...");
         assert_eq!(t.case_sensitive_label(), "Sensible à la casse");
-        assert_eq!(t.previous_match_tooltip(), "Résultat précédent (Maj+F3)");
+        assert_eq!(
+            t.previous_match_tooltip(),
+            "Résultat précédent (Maj+F3 / Maj+Entrée)"
+        );
         assert_eq!(t.next_match_tooltip(), "Résultat suivant (F3 / Entrée)");
         assert_eq!(t.close_search_tooltip(), "Fermer la recherche (Échap)");
         assert_eq!(
@@ -346,7 +352,7 @@ mod tests {
         assert_eq!(t.case_sensitive_label(), "Distinguir mayúsculas");
         assert_eq!(
             t.previous_match_tooltip(),
-            "Coincidencia anterior (Mayús+F3)"
+            "Coincidencia anterior (Mayús+F3 / Mayús+Enter)"
         );
         assert_eq!(
             t.next_match_tooltip(),
@@ -368,7 +374,7 @@ mod tests {
         assert_eq!(t.case_sensitive_label(), "Groß-/Kleinschreibung");
         assert_eq!(
             t.previous_match_tooltip(),
-            "Vorheriger Treffer (Umschalt+F3)"
+            "Vorheriger Treffer (Umschalt+F3 / Umschalt+Enter)"
         );
         assert_eq!(t.next_match_tooltip(), "Nächster Treffer (F3 / Enter)");
         assert_eq!(t.close_search_tooltip(), "Suchdialog schließen (Esc)");
@@ -384,7 +390,7 @@ mod tests {
         assert_eq!(t.case_sensitive_label(), "Distingui maiuscole");
         assert_eq!(
             t.previous_match_tooltip(),
-            "Risultato precedente (Maiusc+F3)"
+            "Risultato precedente (Maiusc+F3 / Maiusc+Invio)"
         );
         assert_eq!(t.next_match_tooltip(), "Risultato successivo (F3 / Invio)");
         assert_eq!(t.close_search_tooltip(), "Chiudi finestra di ricerca (Esc)");
@@ -403,7 +409,7 @@ mod tests {
         assert_eq!(t.case_sensitive_label(), "Diferenciar maiúsculas");
         assert_eq!(
             t.previous_match_tooltip(),
-            "Correspondência anterior (Shift+F3)"
+            "Correspondência anterior (Shift+F3 / Shift+Enter)"
         );
         assert_eq!(
             t.next_match_tooltip(),
@@ -425,7 +431,7 @@ mod tests {
         assert_eq!(t.case_sensitive_label(), "Diferenciar maiúsculas");
         assert_eq!(
             t.previous_match_tooltip(),
-            "Correspondência anterior (Shift+F3)"
+            "Correspondência anterior (Shift+F3 / Shift+Enter)"
         );
         assert_eq!(
             t.next_match_tooltip(),

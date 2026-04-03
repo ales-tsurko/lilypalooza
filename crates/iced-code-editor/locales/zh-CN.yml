@@ -1,7 +1,7 @@
 search:
   placeholder: "搜索..."
   close_tooltip: "关闭搜索对话框 (Esc)"
-  previous_match_tooltip: "上一个匹配 (Shift+F3)"
+  previous_match_tooltip: "上一个匹配 (Shift+F3 / Shift+Enter)"
   next_match_tooltip: "下一个匹配 (F3 / Enter)"
 
 replace:

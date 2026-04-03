@@ -2,7 +2,7 @@
 search:
   placeholder: "Suchen..."
   close_tooltip: "Suchdialog schließen (Esc)"
-  previous_match_tooltip: "Vorheriger Treffer (Umschalt+F3)"
+  previous_match_tooltip: "Vorheriger Treffer (Umschalt+F3 / Umschalt+Enter)"
   next_match_tooltip: "Nächster Treffer (F3 / Enter)"
 
 replace:

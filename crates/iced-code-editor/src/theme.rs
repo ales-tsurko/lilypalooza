@@ -1,4 +1,5 @@
-use iced::Color;
+use iced::widget::{button, checkbox, container, text_input};
+use iced::{Background, Border, Color, Shadow, Theme, Vector};
 use palette::{FromColor, LinSrgb, OklabHue, Oklch, Srgb};
 
 /// Global tuning parameters applied to editor syntax colors derived from an Iced theme.
@@ -92,6 +93,132 @@ pub struct Style {
     pub bracket_color: Color,
     /// Invalid/error syntax color
     pub invalid_color: Color,
+}
+
+/// Returns the shared popup surface style for editor-owned dialogs and overlays.
+pub fn popup_surface(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    let background = blend_colors(
+        Color::from_rgb(0.74, 0.75, 0.78),
+        palette.background.weakest.color,
+        0.24,
+    );
+    let border_color = blend_colors(background, palette.background.strong.color, 0.18);
+    let text_color = Color::from_rgb(0.10, 0.10, 0.12);
+
+    container::Style {
+        background: Some(
+            Color {
+                a: 0.94,
+                ..background
+            }
+            .into(),
+        ),
+        text_color: Some(text_color),
+        border: Border::default().rounded(8).width(1).color(border_color),
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.16),
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
+        },
+        ..container::Style::default()
+    }
+}
+
+/// Returns the tooltip surface style used by editor-owned popup controls.
+pub fn popup_tooltip(theme: &Theme) -> container::Style {
+    popup_surface(theme)
+}
+
+/// Returns the icon-button style used inside editor-owned popups.
+pub fn popup_icon_button(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let foreground = popup_surface(theme)
+        .text_color
+        .unwrap_or(palette.background.base.text);
+
+    let text_color = match status {
+        button::Status::Active | button::Status::Pressed => foreground,
+        button::Status::Hovered => palette.primary.strong.color,
+        button::Status::Disabled => palette.background.weak.text,
+    };
+
+    button::Style {
+        background: None,
+        text_color,
+        border: Border::default().rounded(6),
+        ..button::Style::default()
+    }
+}
+
+/// Returns the text-input style used by editor-owned dialogs.
+pub fn popup_text_input(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let palette = theme.extended_palette();
+    let surface = popup_surface(theme);
+    let value_color = surface.text_color.unwrap_or(palette.background.base.text);
+    let border_color = match status {
+        text_input::Status::Focused { .. } => palette.background.strong.color,
+        text_input::Status::Hovered => blend_colors(
+            palette.background.strong.color,
+            palette.background.base.text,
+            0.18,
+        ),
+        text_input::Status::Disabled => palette.background.weak.color,
+        text_input::Status::Active => palette.background.strong.color,
+    };
+
+    text_input::Style {
+        background: surface
+            .background
+            .unwrap_or(Background::Color(palette.background.base.color)),
+        border: Border::default().rounded(8).width(1).color(border_color),
+        icon: value_color,
+        placeholder: blend_colors(value_color, palette.background.strong.color, 0.42),
+        value: value_color,
+        selection: Color {
+            a: 0.32,
+            ..palette.primary.weak.color
+        },
+    }
+}
+
+/// Returns the checkbox style used by editor-owned dialogs.
+pub fn popup_checkbox(theme: &Theme, status: checkbox::Status) -> checkbox::Style {
+    let palette = theme.extended_palette();
+    let surface = popup_surface(theme);
+    let is_checked = match status {
+        checkbox::Status::Active { is_checked }
+        | checkbox::Status::Hovered { is_checked }
+        | checkbox::Status::Disabled { is_checked } => is_checked,
+    };
+
+    let background = if is_checked {
+        palette.primary.weak.color
+    } else {
+        match status {
+            checkbox::Status::Hovered { .. } => blend_colors(
+                palette.background.weakest.color,
+                palette.background.strong.color,
+                0.12,
+            ),
+            checkbox::Status::Disabled { .. } => palette.background.weak.color,
+            checkbox::Status::Active { .. } => palette.background.weakest.color,
+        }
+    };
+
+    checkbox::Style {
+        background: background.into(),
+        icon_color: if is_checked {
+            palette.primary.weak.text
+        } else {
+            palette.background.weak.text
+        },
+        border: Border::default()
+            .rounded(4)
+            .width(1)
+            .color(palette.background.strong.color),
+        text_color: Some(surface.text_color.unwrap_or(palette.background.base.text)),
+    }
 }
 
 /// The theme catalog of a code editor.
