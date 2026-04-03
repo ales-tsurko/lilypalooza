@@ -202,7 +202,7 @@ impl Lilypalooza {
             }
         }
 
-        for tab_id in self.editor.tab_ids() {
+        if let Some(tab_id) = self.editor.active_tab_id() {
             let task = self.editor.update(tab_id, &iced_code_editor::Message::Tick);
             tasks.push(self.map_editor_widget_task(tab_id, task));
         }
