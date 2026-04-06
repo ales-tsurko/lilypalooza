@@ -1,6 +1,7 @@
 //! Canvas rendering implementation using Iced's `canvas::Program`.
 
 use super::highlighting::{self, HighlightedDocument, StyledSpan};
+use crate::language;
 use iced::advanced::input_method;
 use iced::mouse;
 use iced::widget::canvas::{self, Geometry};
@@ -1569,18 +1570,8 @@ impl canvas::Program<Message> for CodeEditor {
                 .get("base16-ocean.dark")
                 .or_else(|| theme_set.themes.values().next());
 
-            // Normalize common language aliases/extensions used by consumers.
-            let syntax_ref = match self.syntax.as_str() {
-                "python" => syntax_set.find_syntax_by_extension("py"),
-                "rust" => syntax_set.find_syntax_by_extension("rs"),
-                "javascript" => syntax_set.find_syntax_by_extension("js"),
-                "htm" => syntax_set.find_syntax_by_extension("html"),
-                "svg" => syntax_set.find_syntax_by_extension("xml"),
-                "markdown" => syntax_set.find_syntax_by_extension("md"),
-                "text" => Some(syntax_set.find_syntax_plain_text()),
-                _ => syntax_set.find_syntax_by_extension(self.syntax.as_str()),
-            }
-            .or(Some(syntax_set.find_syntax_plain_text()));
+            let syntax_ref = language::find_syntect_syntax(self.syntax.as_str(), syntax_set)
+                .or(Some(syntax_set.find_syntax_plain_text()));
 
             let ctx = RenderContext {
                 visual_lines: visual_lines_for_content.as_ref(),

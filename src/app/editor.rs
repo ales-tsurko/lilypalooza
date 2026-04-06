@@ -691,10 +691,11 @@ fn normalize_editor_path(path: &Path) -> PathBuf {
 }
 
 fn syntax_for_path(path: &Path) -> &str {
-    match path.extension().and_then(|extension| extension.to_str()) {
-        Some(extension) => {
-            iced_code_editor::language::syntax_for_extension(extension).unwrap_or(extension)
-        }
-        None => "text",
+    if let Some(syntax) = iced_code_editor::language::syntax_for_path(path) {
+        syntax
+    } else {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("text")
     }
 }

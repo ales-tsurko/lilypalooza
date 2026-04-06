@@ -1,6 +1,7 @@
 use iced::Color;
 use tree_sitter_highlight::{Highlight, HighlightConfiguration, HighlightEvent, Highlighter};
 
+use crate::language::{self, HighlightBackend, TreeSitterBackend};
 use crate::theme::Style;
 
 const TREE_SITTER_HIGHLIGHT_NAMES: &[&str] = &[
@@ -54,28 +55,20 @@ pub(crate) fn highlight_document(
     source: &str,
     style: &Style,
 ) -> Option<HighlightedDocument> {
-    let backend = HighlightBackend::for_syntax(syntax)?;
+    let backend = match language::config_for_syntax(syntax).highlight_backend {
+        HighlightBackend::TreeSitter(backend) => backend,
+        HighlightBackend::Syntect | HighlightBackend::PlainText => return None,
+    };
     backend.highlight(source, style).ok()
 }
 
-enum HighlightBackend {
-    LilyPond,
-    Scheme,
-}
-
-impl HighlightBackend {
-    fn for_syntax(syntax: &str) -> Option<Self> {
-        match syntax {
-            "ly" | "ily" | "lilypond" => Some(Self::LilyPond),
-            "scm" | "scheme" | "lilypond_scheme" => Some(Self::Scheme),
-            _ => None,
-        }
-    }
-
+impl TreeSitterBackend {
     fn highlight(&self, source: &str, style: &Style) -> Result<HighlightedDocument, String> {
         match self {
-            Self::LilyPond => highlight_lilypond(source, style),
-            Self::Scheme => highlight_lilypond_scheme(source, style),
+            TreeSitterBackend::LilyPond => highlight_lilypond(source, style),
+            TreeSitterBackend::Scheme => highlight_lilypond_scheme(source, style),
+            TreeSitterBackend::Toml => highlight_toml(source, style),
+            TreeSitterBackend::Makefile => highlight_makefile(source, style),
         }
     }
 }
@@ -145,6 +138,79 @@ fn highlight_lilypond_scheme(source: &str, style: &Style) -> Result<HighlightedD
     let mut highlighter = Highlighter::new();
     let events = highlighter
         .highlight(&scheme_config, source.as_bytes(), None, |_| None)
+        .map_err(|error| format!("Tree-sitter highlight error: {error}"))?;
+
+    let line_infos = line_infos(source);
+    let mut styled_chars = line_infos
+        .iter()
+        .map(|info| vec![None; info.text.chars().count()])
+        .collect::<Vec<_>>();
+    let mut highlight_stack = Vec::new();
+
+    for event in events {
+        match event.map_err(|error| format!("Tree-sitter highlight event error: {error}"))? {
+            HighlightEvent::HighlightStart(highlight) => highlight_stack.push(highlight),
+            HighlightEvent::HighlightEnd => {
+                let _ = highlight_stack.pop();
+            }
+            HighlightEvent::Source { start, end } => {
+                let Some(highlight) = highlight_stack.last().copied() else {
+                    continue;
+                };
+                let color = highlight_color(highlight, style);
+                apply_highlight_range(&line_infos, &mut styled_chars, start, end, color);
+            }
+        }
+    }
+
+    Ok(HighlightedDocument {
+        lines: styled_chars
+            .into_iter()
+            .map(compress_styled_chars)
+            .collect(),
+    })
+}
+
+fn highlight_toml(source: &str, style: &Style) -> Result<HighlightedDocument, String> {
+    let language = tree_sitter_toml_ng::LANGUAGE.into();
+
+    let mut config = HighlightConfiguration::new(
+        language,
+        "toml",
+        tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+        "",
+        "",
+    )
+    .map_err(|error| format!("Tree-sitter TOML config error: {error}"))?;
+    config.configure(TREE_SITTER_HIGHLIGHT_NAMES);
+
+    highlight_with_tree_sitter_config(source, style, &config)
+}
+
+fn highlight_makefile(source: &str, style: &Style) -> Result<HighlightedDocument, String> {
+    let language = tree_sitter_make::LANGUAGE.into();
+
+    let mut config = HighlightConfiguration::new(
+        language,
+        "makefile",
+        tree_sitter_make::HIGHLIGHTS_QUERY,
+        "",
+        "",
+    )
+    .map_err(|error| format!("Tree-sitter Makefile config error: {error}"))?;
+    config.configure(TREE_SITTER_HIGHLIGHT_NAMES);
+
+    highlight_with_tree_sitter_config(source, style, &config)
+}
+
+fn highlight_with_tree_sitter_config(
+    source: &str,
+    style: &Style,
+    config: &HighlightConfiguration,
+) -> Result<HighlightedDocument, String> {
+    let mut highlighter = Highlighter::new();
+    let events = highlighter
+        .highlight(config, source.as_bytes(), None, |_| None)
         .map_err(|error| format!("Tree-sitter highlight error: {error}"))?;
 
     let line_infos = line_infos(source);
@@ -375,6 +441,27 @@ mod tests {
                 spans
             );
         }
+    }
+
+    #[test]
+    fn highlights_toml_with_tree_sitter() {
+        let style = crate::theme::from_iced_theme(&iced::Theme::Dark);
+        let highlighted = highlight_document("toml", "name = \"lily\"\n", &style).expect("toml");
+        let spans = &highlighted.lines[0];
+
+        assert!(spans.iter().any(|span| span.color == style.property_color));
+        assert!(spans.iter().any(|span| span.color == style.string_color));
+    }
+
+    #[test]
+    fn highlights_makefile_with_tree_sitter() {
+        let style = crate::theme::from_iced_theme(&iced::Theme::Dark);
+        let highlighted =
+            highlight_document("makefile", "target: dep\n\t@echo ok\n", &style).expect("make");
+        let spans = &highlighted.lines[0];
+
+        assert!(!spans.is_empty());
+        assert!(spans.iter().any(|span| span.color != style.text_color));
     }
 
     fn lilypond_sexp(source: &str) -> String {
