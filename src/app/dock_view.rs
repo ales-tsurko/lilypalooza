@@ -1648,6 +1648,30 @@ fn editor_file_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
             "Rename...",
             has_document,
             Some(Message::Editor(super::EditorMessage::RenameRequested)),
+        ))
+        .push(editor_file_menu_item(
+            shortcuts::label_for_action(
+                &app.shortcut_settings,
+                shortcuts::ShortcutAction::EditorOpenSearch,
+            )
+            .map(|shortcut| format!("Find... ({shortcut})"))
+            .unwrap_or_else(|| "Find...".to_string()),
+            has_document,
+            Some(Message::Editor(super::EditorMessage::ActiveWidgetMessage(
+                iced_code_editor::Message::OpenSearch,
+            ))),
+        ))
+        .push(editor_file_menu_item(
+            shortcuts::label_for_action(
+                &app.shortcut_settings,
+                shortcuts::ShortcutAction::EditorOpenSearchReplace,
+            )
+            .map(|shortcut| format!("Find and Replace... ({shortcut})"))
+            .unwrap_or_else(|| "Find and Replace...".to_string()),
+            has_document,
+            Some(Message::Editor(super::EditorMessage::ActiveWidgetMessage(
+                iced_code_editor::Message::OpenSearchReplace,
+            ))),
         ));
 
     let recent_row = if has_recent_files {

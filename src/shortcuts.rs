@@ -356,7 +356,11 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
             vec![binding_code(ShortcutKeyCode::KeyF, true, false, false)]
         }
         ShortcutAction::EditorOpenSearchReplace => {
-            vec![binding_code(ShortcutKeyCode::KeyH, true, false, false)]
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::KeyF, true, true, false)]
+            } else {
+                vec![binding_code(ShortcutKeyCode::KeyH, true, false, false)]
+            }
         }
         ShortcutAction::EditorOpenGotoLine => {
             vec![binding_code(ShortcutKeyCode::KeyG, true, false, false)]

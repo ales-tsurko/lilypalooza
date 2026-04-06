@@ -35,6 +35,14 @@ fn popup_symbol_button<'a>(
     .style(crate::theme::popup_tooltip)
 }
 
+fn popup_text_button<'a>(label: &'a str, message: Message) -> Element<'a, Message> {
+    button(text(label).size(POPUP_META_TEXT_SIZE))
+        .on_press(message)
+        .padding([1, 4])
+        .style(crate::theme::popup_icon_button)
+        .into()
+}
+
 /// Creates the search/replace dialog UI element.
 ///
 /// # Arguments
@@ -173,6 +181,12 @@ pub fn view<'a>(
     .delay(TOOLTIP_DELAY)
     .style(crate::theme::popup_tooltip);
 
+    let mode_toggle = if search_state.is_replace_mode {
+        popup_text_button("Find", Message::OpenSearch)
+    } else {
+        popup_text_button("Replace", Message::OpenSearchReplace)
+    };
+
     // Title bar with close button - compact with magnifying glass icon
     let title_row = row![
         text("⌕")
@@ -183,6 +197,8 @@ pub fn view<'a>(
         Space::new().width(Length::Fixed(8.0)),
         text(title_label).size(POPUP_TEXT_SIZE),
         Space::new().width(Length::Fill),
+        mode_toggle,
+        Space::new().width(Length::Fixed(2.0)),
         close_button
     ]
     .width(Length::Fixed(POPUP_WIDTH))
