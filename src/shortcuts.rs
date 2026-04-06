@@ -263,9 +263,11 @@ pub(crate) fn filtered_action_metadata(query: &str) -> Vec<ShortcutActionMetadat
         .copied()
         .filter_map(|action_id| {
             let metadata = action_metadata(action_id);
+            let action_id_key = crate::settings::shortcut_action_id_key(action_id);
             let matches = query.is_empty()
                 || metadata.name.to_lowercase().contains(&query)
-                || metadata.description.to_lowercase().contains(&query);
+                || metadata.description.to_lowercase().contains(&query)
+                || action_id_key.contains(&query);
             matches.then_some(metadata)
         })
         .collect();

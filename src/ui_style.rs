@@ -684,6 +684,17 @@ pub(crate) fn button_shortcut_palette_item(
     }
 }
 
+pub(crate) fn shortcut_action_id_label(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.strong.color.into()),
+        text_color: Some(palette.background.base.text),
+        border: border::rounded(999).width(0).color(Color::TRANSPARENT),
+        ..container::Style::default()
+    }
+}
+
 pub(crate) fn editor_tab_surface(
     theme: &Theme,
     active: bool,

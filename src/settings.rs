@@ -3,7 +3,7 @@ use std::io;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de, ser::SerializeMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub(crate) enum WorkspacePane {
@@ -387,16 +387,80 @@ impl Default for ShortcutOverride {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ShortcutSettings {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) overrides: Vec<ShortcutOverride>,
 }
 
 impl ShortcutSettings {
     pub(crate) fn is_empty(&self) -> bool {
         self.overrides.is_empty()
+    }
+}
+
+impl Serialize for ShortcutSettings {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.overrides.len()))?;
+        for override_entry in &self.overrides {
+            map.serialize_entry(
+                &shortcut_action_id_key(override_entry.action),
+                &format_shortcut_binding_override(&override_entry.binding),
+            )?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ShortcutSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct LegacyShortcutSettings {
+            overrides: Vec<ShortcutOverride>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum ShortcutConfigValue {
+            Text(String),
+            Legacy(ShortcutBindingOverride),
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum ShortcutSettingsRepr {
+            Legacy(LegacyShortcutSettings),
+            Flat(std::collections::BTreeMap<String, ShortcutConfigValue>),
+        }
+
+        match ShortcutSettingsRepr::deserialize(deserializer)? {
+            ShortcutSettingsRepr::Legacy(legacy) => Ok(Self {
+                overrides: legacy.overrides,
+            }),
+            ShortcutSettingsRepr::Flat(values) => {
+                let mut overrides = Vec::with_capacity(values.len());
+
+                for (key, value) in values {
+                    let action = parse_shortcut_action_id_key(&key).ok_or_else(|| {
+                        de::Error::custom(format!("Unknown shortcut action id: {key}"))
+                    })?;
+                    let binding = match value {
+                        ShortcutConfigValue::Text(value) => {
+                            parse_shortcut_binding_override(&value).map_err(de::Error::custom)?
+                        }
+                        ShortcutConfigValue::Legacy(value) => value,
+                    };
+                    overrides.push(ShortcutOverride { action, binding });
+                }
+
+                Ok(Self { overrides })
+            }
+        }
     }
 }
 
@@ -543,24 +607,22 @@ fn render_settings_file(settings: &AppSettings) -> Result<String, toml::ser::Err
 
     out.push_str("\n[shortcuts]\n");
     out.push_str("# Shortcut overrides. Use View > Actions to discover action ids.\n");
+    out.push_str("# Use a single shortcut string or \"Unassigned\".\n");
+    out.push_str("# Examples: \"Cmd+Shift+P\", \"Ctrl+,\", \"Alt+Up\", \"F3\", \"Space\"\n");
     if settings.shortcuts.overrides.is_empty() {
         out.push_str("# Example override:\n");
-        out.push_str(&comment_block(&toml::to_string_pretty(
-            &ShortcutSettings {
-                overrides: vec![ShortcutOverride {
-                    action: ShortcutActionId::OpenActions,
-                    binding: ShortcutBindingOverride::Assigned(ShortcutBinding {
-                        key: ShortcutKey::Code(ShortcutKeyCode::KeyP),
-                        primary: true,
-                        control: false,
-                        alt: false,
-                        shift: true,
-                    }),
-                }],
-            },
-        )?));
+        out.push_str("# open-actions = \"Cmd+Shift+P\"\n");
+        out.push_str("# open-settings-file = \"Cmd+,\"\n");
     } else {
-        out.push_str(&toml::to_string_pretty(&settings.shortcuts)?);
+        let mut overrides = settings.shortcuts.overrides.clone();
+        overrides.sort_by_key(|entry| shortcut_action_id_key(entry.action));
+        for override_entry in overrides {
+            out.push_str(&shortcut_action_id_key(override_entry.action));
+            out.push_str(" = ");
+            out.push_str(&toml::to_string(&format_shortcut_binding_override(
+                &override_entry.binding,
+            ))?);
+        }
     }
 
     Ok(out)
@@ -577,16 +639,6 @@ fn push_documented_value(out: &mut String, comment: &str, key: &str, value: &str
     out.push_str(" = ");
     out.push_str(value);
     out.push_str("\n\n");
-}
-
-fn comment_block(value: &str) -> String {
-    let mut out = String::new();
-    for line in value.lines() {
-        out.push_str("# ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
 }
 
 fn format_f32(value: f32) -> String {
@@ -630,4 +682,231 @@ fn settings_load_path() -> Result<PathBuf, String> {
     }
 
     Ok(path)
+}
+
+pub(crate) fn shortcut_action_id_key(action_id: ShortcutActionId) -> String {
+    let debug = format!("{action_id:?}");
+    let mut out = String::with_capacity(debug.len() + 8);
+
+    for (index, ch) in debug.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if index != 0 {
+                out.push('-');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+
+    out
+}
+
+fn parse_shortcut_action_id_key(key: &str) -> Option<ShortcutActionId> {
+    #[derive(Deserialize)]
+    struct ActionIdWrapper {
+        action: ShortcutActionId,
+    }
+
+    let source = format!("action = {key:?}");
+    toml::from_str::<ActionIdWrapper>(&source)
+        .ok()
+        .map(|wrapper| wrapper.action)
+}
+
+fn format_shortcut_binding_override(binding: &ShortcutBindingOverride) -> String {
+    match binding {
+        ShortcutBindingOverride::Assigned(binding) => format_shortcut_binding(binding),
+        ShortcutBindingOverride::Unassigned => "Unassigned".to_string(),
+    }
+}
+
+fn format_shortcut_binding(binding: &ShortcutBinding) -> String {
+    let mut parts = Vec::new();
+
+    if binding.primary {
+        parts.push("Cmd");
+    }
+    if binding.control {
+        parts.push("Ctrl");
+    }
+    if binding.alt {
+        parts.push("Alt");
+    }
+    if binding.shift {
+        parts.push("Shift");
+    }
+
+    parts.push(match binding.key {
+        ShortcutKey::Code(code) => shortcut_key_code_string(code),
+        ShortcutKey::Named(named) => shortcut_named_key_string(named),
+    });
+
+    parts.join("+")
+}
+
+fn parse_shortcut_binding_override(value: &str) -> Result<ShortcutBindingOverride, String> {
+    if value.trim().eq_ignore_ascii_case("unassigned") {
+        return Ok(ShortcutBindingOverride::Unassigned);
+    }
+
+    parse_shortcut_binding(value).map(ShortcutBindingOverride::Assigned)
+}
+
+fn parse_shortcut_binding(value: &str) -> Result<ShortcutBinding, String> {
+    let mut binding = ShortcutBinding {
+        key: ShortcutKey::Code(ShortcutKeyCode::KeyS),
+        primary: false,
+        control: false,
+        alt: false,
+        shift: false,
+    };
+
+    let mut tokens: Vec<_> = value
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+
+    let key_token = tokens
+        .pop()
+        .ok_or_else(|| "Shortcut must include a key".to_string())?;
+
+    for token in tokens {
+        if token.eq_ignore_ascii_case("cmd")
+            || token.eq_ignore_ascii_case("primary")
+            || (!cfg!(target_os = "macos") && token.eq_ignore_ascii_case("ctrl"))
+        {
+            binding.primary = true;
+        } else if token.eq_ignore_ascii_case("ctrl") || token.eq_ignore_ascii_case("control") {
+            binding.control = true;
+        } else if token.eq_ignore_ascii_case("alt") || token.eq_ignore_ascii_case("option") {
+            binding.alt = true;
+        } else if token.eq_ignore_ascii_case("shift") {
+            binding.shift = true;
+        } else {
+            return Err(format!("Unknown shortcut modifier: {token}"));
+        }
+    }
+
+    binding.key = parse_shortcut_key(key_token)?;
+    Ok(binding)
+}
+
+fn parse_shortcut_key(value: &str) -> Result<ShortcutKey, String> {
+    let key = if value.len() == 1 {
+        match value.chars().next().unwrap_or_default() {
+            'A' | 'a' => ShortcutKey::Code(ShortcutKeyCode::KeyA),
+            'C' | 'c' => ShortcutKey::Code(ShortcutKeyCode::KeyC),
+            ',' => ShortcutKey::Code(ShortcutKeyCode::Comma),
+            'F' | 'f' => ShortcutKey::Code(ShortcutKeyCode::KeyF),
+            'G' | 'g' => ShortcutKey::Code(ShortcutKeyCode::KeyG),
+            'H' | 'h' => ShortcutKey::Code(ShortcutKeyCode::KeyH),
+            'J' | 'j' => ShortcutKey::Code(ShortcutKeyCode::KeyJ),
+            'K' | 'k' => ShortcutKey::Code(ShortcutKeyCode::KeyK),
+            'L' | 'l' => ShortcutKey::Code(ShortcutKeyCode::KeyL),
+            'N' | 'n' => ShortcutKey::Code(ShortcutKeyCode::KeyN),
+            'O' | 'o' => ShortcutKey::Code(ShortcutKeyCode::KeyO),
+            'P' | 'p' => ShortcutKey::Code(ShortcutKeyCode::KeyP),
+            'Q' | 'q' => ShortcutKey::Code(ShortcutKeyCode::KeyQ),
+            'S' | 's' => ShortcutKey::Code(ShortcutKeyCode::KeyS),
+            'V' | 'v' => ShortcutKey::Code(ShortcutKeyCode::KeyV),
+            'W' | 'w' => ShortcutKey::Code(ShortcutKeyCode::KeyW),
+            'Y' | 'y' => ShortcutKey::Code(ShortcutKeyCode::KeyY),
+            'Z' | 'z' => ShortcutKey::Code(ShortcutKeyCode::KeyZ),
+            '0' => ShortcutKey::Code(ShortcutKeyCode::Digit0),
+            '1' => ShortcutKey::Code(ShortcutKeyCode::Digit1),
+            '2' => ShortcutKey::Code(ShortcutKeyCode::Digit2),
+            '3' => ShortcutKey::Code(ShortcutKeyCode::Digit3),
+            '4' => ShortcutKey::Code(ShortcutKeyCode::Digit4),
+            '/' => ShortcutKey::Code(ShortcutKeyCode::Slash),
+            '\\' => ShortcutKey::Code(ShortcutKeyCode::Backslash),
+            '[' => ShortcutKey::Code(ShortcutKeyCode::BracketLeft),
+            ']' => ShortcutKey::Code(ShortcutKeyCode::BracketRight),
+            '-' => ShortcutKey::Code(ShortcutKeyCode::Minus),
+            _ => return Err(format!("Unknown shortcut key: {value}")),
+        }
+    } else if value.eq_ignore_ascii_case("left") {
+        ShortcutKey::Code(ShortcutKeyCode::ArrowLeft)
+    } else if value.eq_ignore_ascii_case("right") {
+        ShortcutKey::Code(ShortcutKeyCode::ArrowRight)
+    } else if value.eq_ignore_ascii_case("up") {
+        ShortcutKey::Code(ShortcutKeyCode::ArrowUp)
+    } else if value.eq_ignore_ascii_case("down") {
+        ShortcutKey::Code(ShortcutKeyCode::ArrowDown)
+    } else if value.eq_ignore_ascii_case("backspace") {
+        ShortcutKey::Code(ShortcutKeyCode::Backspace)
+    } else if value.eq_ignore_ascii_case("delete") {
+        ShortcutKey::Code(ShortcutKeyCode::Delete)
+    } else if value.eq_ignore_ascii_case("home") {
+        ShortcutKey::Code(ShortcutKeyCode::Home)
+    } else if value.eq_ignore_ascii_case("end") {
+        ShortcutKey::Code(ShortcutKeyCode::End)
+    } else if value.eq_ignore_ascii_case("insert") {
+        ShortcutKey::Code(ShortcutKeyCode::Insert)
+    } else if value.eq_ignore_ascii_case("f3") {
+        ShortcutKey::Code(ShortcutKeyCode::F3)
+    } else if value.eq_ignore_ascii_case("plus") {
+        ShortcutKey::Code(ShortcutKeyCode::Equal)
+    } else if value.eq_ignore_ascii_case("space") {
+        ShortcutKey::Named(ShortcutNamedKey::Space)
+    } else if value.eq_ignore_ascii_case("enter") {
+        ShortcutKey::Named(ShortcutNamedKey::Enter)
+    } else {
+        return Err(format!("Unknown shortcut key: {value}"));
+    };
+
+    Ok(key)
+}
+
+fn shortcut_key_code_string(code: ShortcutKeyCode) -> &'static str {
+    match code {
+        ShortcutKeyCode::KeyA => "A",
+        ShortcutKeyCode::KeyC => "C",
+        ShortcutKeyCode::Comma => ",",
+        ShortcutKeyCode::KeyF => "F",
+        ShortcutKeyCode::KeyG => "G",
+        ShortcutKeyCode::KeyH => "H",
+        ShortcutKeyCode::KeyJ => "J",
+        ShortcutKeyCode::KeyK => "K",
+        ShortcutKeyCode::KeyL => "L",
+        ShortcutKeyCode::KeyN => "N",
+        ShortcutKeyCode::KeyO => "O",
+        ShortcutKeyCode::KeyP => "P",
+        ShortcutKeyCode::KeyQ => "Q",
+        ShortcutKeyCode::KeyS => "S",
+        ShortcutKeyCode::KeyV => "V",
+        ShortcutKeyCode::KeyW => "W",
+        ShortcutKeyCode::KeyY => "Y",
+        ShortcutKeyCode::KeyZ => "Z",
+        ShortcutKeyCode::Digit0 | ShortcutKeyCode::Numpad0 => "0",
+        ShortcutKeyCode::Digit1 | ShortcutKeyCode::Numpad1 => "1",
+        ShortcutKeyCode::Digit2 | ShortcutKeyCode::Numpad2 => "2",
+        ShortcutKeyCode::Digit3 | ShortcutKeyCode::Numpad3 => "3",
+        ShortcutKeyCode::Digit4 | ShortcutKeyCode::Numpad4 => "4",
+        ShortcutKeyCode::Slash => "/",
+        ShortcutKeyCode::Backslash => "\\",
+        ShortcutKeyCode::ArrowLeft => "Left",
+        ShortcutKeyCode::ArrowRight => "Right",
+        ShortcutKeyCode::ArrowUp => "Up",
+        ShortcutKeyCode::ArrowDown => "Down",
+        ShortcutKeyCode::Backspace => "Backspace",
+        ShortcutKeyCode::Delete => "Delete",
+        ShortcutKeyCode::Home => "Home",
+        ShortcutKeyCode::End => "End",
+        ShortcutKeyCode::Insert => "Insert",
+        ShortcutKeyCode::F3 => "F3",
+        ShortcutKeyCode::Equal | ShortcutKeyCode::NumpadAdd => "Plus",
+        ShortcutKeyCode::Minus | ShortcutKeyCode::NumpadSubtract => "-",
+        ShortcutKeyCode::BracketLeft => "[",
+        ShortcutKeyCode::BracketRight => "]",
+        ShortcutKeyCode::NumpadEnter => "Enter",
+    }
+}
+
+fn shortcut_named_key_string(named: ShortcutNamedKey) -> &'static str {
+    match named {
+        ShortcutNamedKey::Space => "Space",
+        ShortcutNamedKey::Enter => "Enter",
+    }
 }

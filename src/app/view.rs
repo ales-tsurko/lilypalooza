@@ -151,7 +151,17 @@ fn shortcuts_overlay(app: &Lilypalooza) -> Element<'_, Message> {
                     button(
                         row![
                             column![
-                                text(metadata.name).size(ui_style::FONT_SIZE_UI_SM),
+                                row![
+                                    text(metadata.name).size(ui_style::FONT_SIZE_UI_SM),
+                                    container(
+                                        text(crate::settings::shortcut_action_id_key(metadata.id))
+                                            .size(ui_style::FONT_SIZE_UI_XS)
+                                            .font(fonts::MONO),
+                                    )
+                                    .padding([1, ui_style::PADDING_XS])
+                                    .style(ui_style::shortcut_action_id_label),
+                                ]
+                                .spacing(ui_style::SPACE_XS),
                                 text(metadata.description).size(ui_style::FONT_SIZE_UI_SM)
                             ]
                             .spacing(2)
