@@ -3,8 +3,8 @@ use iced::widget::svg;
 const ARROW_LEFT: &[u8] = include_bytes!("../assets/icons/arrow-left.svg");
 const ARROW_RIGHT: &[u8] = include_bytes!("../assets/icons/arrow-right.svg");
 const BRUSH_CLEANING: &[u8] = include_bytes!("../assets/icons/brush-cleaning.svg");
+const CHEVRON_RIGHT: &[u8] = include_bytes!("../assets/icons/chevron-right.svg");
 const CHEVRON_DOWN: &[u8] = include_bytes!("../assets/icons/chevron-down.svg");
-const CHEVRON_LEFT: &[u8] = include_bytes!("../assets/icons/chevron-left.svg");
 const CIRCLE_ALERT: &[u8] = include_bytes!("../assets/icons/circle-alert.svg");
 const CIRCLE_X: &[u8] = include_bytes!("../assets/icons/circle-x.svg");
 const ELLIPSIS_VERTICAL: &[u8] = include_bytes!("../assets/icons/ellipsis-vertical.svg");
@@ -37,12 +37,12 @@ pub(crate) fn brush_cleaning() -> svg::Handle {
     svg::Handle::from_memory(BRUSH_CLEANING)
 }
 
-pub(crate) fn chevron_down() -> svg::Handle {
-    svg::Handle::from_memory(CHEVRON_DOWN)
+pub(crate) fn chevron_right() -> svg::Handle {
+    svg::Handle::from_memory(CHEVRON_RIGHT)
 }
 
-pub(crate) fn chevron_left() -> svg::Handle {
-    svg::Handle::from_memory(CHEVRON_LEFT)
+pub(crate) fn chevron_down() -> svg::Handle {
+    svg::Handle::from_memory(CHEVRON_DOWN)
 }
 
 pub(crate) fn circle_alert() -> svg::Handle {

@@ -79,6 +79,7 @@ impl Lilypalooza {
             FileMessage::Picked(None) => Task::none(),
             FileMessage::RequestCreateProject => {
                 self.open_project_menu = false;
+                self.open_project_menu_section = None;
                 self.open_project_recent = false;
                 let suggested_directory = self
                     .project_root
@@ -103,6 +104,7 @@ impl Lilypalooza {
             }
             FileMessage::RequestSaveProject => {
                 self.open_project_menu = false;
+                self.open_project_menu_section = None;
                 self.open_project_recent = false;
                 if let Some(project_root) = self.project_root.clone() {
                     self.save_project_to_root(project_root)
@@ -112,6 +114,7 @@ impl Lilypalooza {
             }
             FileMessage::RequestLoadProject => {
                 self.open_project_menu = false;
+                self.open_project_menu_section = None;
                 self.open_project_recent = false;
                 let suggested_directory = self
                     .project_root

@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::editor::EditorTabFileState;
+use crate::app::messages::ShortcutsMessage;
 use crate::app::piano_roll::{adjacent_subdivision_tick, roll_scroll_id};
 
 impl Lilypalooza {
@@ -22,6 +23,26 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn handle_key_pressed(&mut self, key_press: KeyPress) -> Task<Message> {
+        if self.open_shortcuts_dialog {
+            match key_press.key {
+                keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                    return update(self, Message::Shortcuts(ShortcutsMessage::CloseDialog));
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                    return update(self, Message::Shortcuts(ShortcutsMessage::SelectNext));
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                    return update(self, Message::Shortcuts(ShortcutsMessage::SelectPrevious));
+                }
+                keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                    return update(self, Message::Shortcuts(ShortcutsMessage::ActivateSelected));
+                }
+                _ => {}
+            }
+
+            return Task::none();
+        }
+
         if self.renaming_editor_tab.is_some()
             && matches!(
                 key_press.key,
@@ -92,12 +113,122 @@ impl Lilypalooza {
         Task::none()
     }
 
+    pub(in crate::app) fn handle_shortcuts_message(
+        &mut self,
+        message: ShortcutsMessage,
+    ) -> Task<Message> {
+        match message {
+            ShortcutsMessage::OpenDialog => {
+                self.open_project_menu = false;
+                self.open_project_menu_section = None;
+                self.open_project_recent = false;
+                self.open_header_overflow_menu = None;
+                self.open_editor_menu_section = None;
+                self.open_editor_file_menu_section = None;
+                self.hovered_editor_file_menu_section = None;
+                self.open_shortcuts_dialog = true;
+                self.editor.lose_focus();
+                self.shortcuts_search_query.clear();
+                self.shortcuts_selected_action = shortcuts::filtered_action_metadata("")
+                    .first()
+                    .map(|metadata| metadata.id);
+                Task::batch([
+                    iced::widget::operation::focus(self.shortcuts_search_input_id.clone()),
+                    self.reveal_selected_shortcut_action(),
+                ])
+            }
+            ShortcutsMessage::CloseDialog => {
+                self.open_shortcuts_dialog = false;
+                self.shortcuts_search_query.clear();
+                self.shortcuts_selected_action = None;
+                self.sync_editor_widget_focus();
+                Task::none()
+            }
+            ShortcutsMessage::SearchChanged(value) => {
+                self.shortcuts_search_query = value;
+                self.reconcile_shortcut_palette_selection()
+            }
+            ShortcutsMessage::SelectNext => self.move_shortcut_palette_selection(1),
+            ShortcutsMessage::SelectPrevious => self.move_shortcut_palette_selection(-1),
+            ShortcutsMessage::ActivateSelected => {
+                let Some(action_id) = self.shortcuts_selected_action else {
+                    return Task::none();
+                };
+                self.handle_shortcuts_message(ShortcutsMessage::ActivateAction(action_id))
+            }
+            ShortcutsMessage::ActivateAction(action_id) => {
+                self.open_shortcuts_dialog = false;
+                self.shortcuts_search_query.clear();
+                self.shortcuts_selected_action = None;
+                self.sync_editor_widget_focus();
+                self.handle_shortcut_action(shortcuts::action_for_id(action_id))
+            }
+        }
+    }
+
+    fn shortcut_palette_actions(&self) -> Vec<crate::shortcuts::ShortcutActionMetadata> {
+        shortcuts::filtered_action_metadata(&self.shortcuts_search_query)
+    }
+
+    fn reconcile_shortcut_palette_selection(&mut self) -> Task<Message> {
+        let actions = self.shortcut_palette_actions();
+        self.shortcuts_selected_action = if actions
+            .iter()
+            .any(|metadata| Some(metadata.id) == self.shortcuts_selected_action)
+        {
+            self.shortcuts_selected_action
+        } else {
+            actions.first().map(|metadata| metadata.id)
+        };
+        self.reveal_selected_shortcut_action()
+    }
+
+    fn move_shortcut_palette_selection(&mut self, delta: i32) -> Task<Message> {
+        let actions = self.shortcut_palette_actions();
+        if actions.is_empty() {
+            self.shortcuts_selected_action = None;
+            return Task::none();
+        }
+
+        let current_index = self
+            .shortcuts_selected_action
+            .and_then(|selected| actions.iter().position(|metadata| metadata.id == selected))
+            .unwrap_or(0);
+        let next_index = (current_index as i32 + delta).clamp(0, actions.len() as i32 - 1);
+        self.shortcuts_selected_action = Some(actions[next_index as usize].id);
+        self.reveal_selected_shortcut_action()
+    }
+
+    fn reveal_selected_shortcut_action(&self) -> Task<Message> {
+        let Some(selected) = self.shortcuts_selected_action else {
+            return Task::none();
+        };
+        let Some(index) = self
+            .shortcut_palette_actions()
+            .iter()
+            .position(|metadata| metadata.id == selected)
+        else {
+            return Task::none();
+        };
+
+        iced::widget::operation::scroll_to(
+            super::SHORTCUTS_SCROLLABLE_ID,
+            iced::widget::operation::AbsoluteOffset {
+                x: 0.0,
+                y: index as f32 * super::SHORTCUTS_ACTION_ROW_HEIGHT,
+            },
+        )
+    }
+
     pub(in crate::app) fn handle_shortcut_action(
         &mut self,
         action: ShortcutAction,
     ) -> Task<Message> {
         match action {
             ShortcutAction::QuitApp => self.handle_window_close_requested(),
+            ShortcutAction::OpenActions => {
+                update(self, Message::Shortcuts(ShortcutsMessage::OpenDialog))
+            }
             ShortcutAction::NewEditor => update(self, Message::Editor(EditorMessage::NewRequested)),
             ShortcutAction::OpenEditorFile => {
                 update(self, Message::Editor(EditorMessage::OpenRequested))

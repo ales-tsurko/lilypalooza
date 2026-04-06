@@ -33,6 +33,7 @@ impl Lilypalooza {
                     self.set_focused_workspace_pane(group.active);
                 }
                 self.open_project_menu = false;
+                self.open_project_menu_section = None;
                 self.open_project_recent = false;
                 self.open_header_overflow_menu = Some(group_id);
                 self.open_editor_menu_section = None;
@@ -62,13 +63,24 @@ impl Lilypalooza {
                 self.open_editor_file_menu_section = None;
                 self.hovered_editor_file_menu_section = None;
                 self.open_project_menu = !self.open_project_menu;
+                self.open_project_menu_section = self
+                    .open_project_menu
+                    .then_some(super::ProjectMenuSection::Project);
                 if !self.open_project_menu {
+                    self.open_project_menu_section = None;
                     self.open_project_recent = false;
                 }
             }
             PaneMessage::CloseProjectMenu => {
                 self.open_project_menu = false;
+                self.open_project_menu_section = None;
                 self.open_project_recent = false;
+            }
+            PaneMessage::SetProjectMenuSection(section) => {
+                self.open_project_menu_section = section;
+                if section != Some(super::ProjectMenuSection::Project) {
+                    self.open_project_recent = false;
+                }
             }
             PaneMessage::SetProjectRecentOpen(open) => {
                 self.open_project_recent = open;
@@ -85,6 +97,7 @@ impl Lilypalooza {
             }
             PaneMessage::ToggleWorkspacePane(pane) => {
                 self.open_project_menu = false;
+                self.open_project_menu_section = None;
                 self.open_project_recent = false;
                 self.open_header_overflow_menu = None;
                 self.open_editor_menu_section = None;

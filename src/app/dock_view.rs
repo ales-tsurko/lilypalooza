@@ -12,7 +12,8 @@ use iced::{
 
 use super::{
     DockDropRegion, EditorFileMenuSection, EditorHeaderMenuSection, Lilypalooza, Message,
-    PaneMessage, WorkspacePaneKind, piano_roll, score_view, transport_bar,
+    PaneMessage, ProjectMenuSection, WorkspacePaneKind, messages::ShortcutsMessage, piano_roll,
+    score_view, transport_bar,
 };
 use crate::{fonts, icons, shortcuts, ui_style};
 
@@ -33,7 +34,9 @@ const TOOLBAR_TOGGLE_ICON_SIZE: f32 = 13.0;
 const TOOLBAR_BUTTON_HEIGHT: f32 = 25.0;
 const TOOLBAR_FILE_NAME_MAX_CHARS: usize = 20;
 const TOOLBAR_PROJECT_NAME_MAX_CHARS: usize = 28;
+const PROJECT_MENU_ROOT_WIDTH: f32 = 126.0;
 const PROJECT_MENU_WIDTH: f32 = 280.0;
+const PROJECT_SETTINGS_SUBMENU_WIDTH: f32 = 220.0;
 const PROJECT_RECENT_LABEL_MAX_CHARS: usize = 40;
 const EDITOR_TAB_WIDTH: f32 = 140.0;
 const EDITOR_TAB_HEIGHT: f32 = 32.0;
@@ -151,7 +154,7 @@ fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
             .unwrap_or("No main score"),
         TOOLBAR_FILE_NAME_MAX_CHARS,
     );
-    let tooltip_text = "Project menu";
+    let tooltip_text = "Menu";
     let chevron = svg(icons::chevron_down())
         .width(Length::Fixed(12.0))
         .height(Length::Fixed(12.0))
@@ -262,6 +265,64 @@ fn project_menu_overlay(app: &Lilypalooza) -> Element<'_, Message> {
 }
 
 fn project_menu_panel<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
+    let root_menu = container(
+        Column::new()
+            .spacing(ui_style::SPACE_XS)
+            .push(project_root_menu_item(
+                "Project",
+                app.open_project_menu_section == Some(ProjectMenuSection::Project),
+                ProjectMenuSection::Project,
+            ))
+            .push(project_root_menu_item(
+                "View",
+                app.open_project_menu_section == Some(ProjectMenuSection::View),
+                ProjectMenuSection::View,
+            )),
+    )
+    .width(Length::Fixed(PROJECT_MENU_ROOT_WIDTH))
+    .padding(ui_style::PADDING_XS)
+    .style(ui_style::tooltip_popup);
+
+    match app
+        .open_project_menu_section
+        .unwrap_or(ProjectMenuSection::Project)
+    {
+        ProjectMenuSection::Project => row![
+            root_menu,
+            iced::widget::column![
+                container(text("")).height(Length::Fixed(project_submenu_offset(
+                    ProjectMenuSection::Project
+                ))),
+                container(project_project_submenu(app))
+                    .width(Length::Fixed(PROJECT_MENU_WIDTH))
+                    .padding(ui_style::PADDING_SM)
+                    .style(ui_style::tooltip_popup),
+            ]
+            .spacing(0),
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Top)
+        .into(),
+        ProjectMenuSection::View => row![
+            root_menu,
+            iced::widget::column![
+                container(text("")).height(Length::Fixed(project_submenu_offset(
+                    ProjectMenuSection::View
+                ))),
+                container(project_view_submenu())
+                    .width(Length::Fixed(PROJECT_SETTINGS_SUBMENU_WIDTH))
+                    .padding(ui_style::PADDING_SM)
+                    .style(ui_style::tooltip_popup),
+            ]
+            .spacing(0),
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Top)
+        .into(),
+    }
+}
+
+fn project_project_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
     let save_project = editor_menu_item(
         "Save Project",
         true,
@@ -313,10 +374,17 @@ fn project_menu_panel<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
         );
     }
 
-    container(column)
-        .width(Length::Fixed(PROJECT_MENU_WIDTH))
-        .padding(ui_style::PADDING_SM)
-        .style(ui_style::tooltip_popup)
+    column.into()
+}
+
+fn project_view_submenu<'a>() -> Element<'a, Message> {
+    Column::new()
+        .spacing(ui_style::SPACE_XS)
+        .push(editor_menu_item(
+            "Actions...",
+            true,
+            Some(Message::Shortcuts(ShortcutsMessage::OpenDialog)),
+        ))
         .into()
 }
 
@@ -354,6 +422,60 @@ fn project_recent_projects_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Mess
                 ))
             },
         )
+        .into()
+}
+
+fn project_submenu_offset(section: ProjectMenuSection) -> f32 {
+    let item_index = match section {
+        ProjectMenuSection::Project => 0.0,
+        ProjectMenuSection::View => 1.0,
+    };
+
+    f32::from(ui_style::PADDING_XS)
+        + item_index * (EDITOR_MENU_ITEM_HEIGHT + ui_style::SPACE_XS as f32)
+}
+
+fn project_root_menu_item<'a>(
+    label: &'a str,
+    active: bool,
+    section: ProjectMenuSection,
+) -> Element<'a, Message> {
+    let button = button(
+        row![
+            text(label).size(ui_style::FONT_SIZE_UI_XS),
+            container(text("")).width(Fill),
+            svg(icons::chevron_right())
+                .width(Length::Fixed(10.0))
+                .height(Length::Fixed(10.0))
+                .content_fit(ContentFit::Contain)
+                .style(move |theme: &Theme, _status| svg::Style {
+                    color: Some(if active {
+                        theme.extended_palette().background.weakest.text
+                    } else {
+                        Color::from_rgb(0.12, 0.12, 0.14)
+                    }),
+                }),
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .width(Fill)
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Fill)
+    .height(Length::Fixed(EDITOR_MENU_ITEM_HEIGHT))
+    .padding([
+        ui_style::PADDING_BUTTON_COMPACT_V + 2,
+        ui_style::PADDING_BUTTON_COMPACT_H,
+    ])
+    .style(move |theme: &Theme, status| ui_style::button_menu_item(theme, status, active))
+    .on_press(Message::Pane(PaneMessage::SetProjectMenuSection(Some(
+        section,
+    ))));
+
+    mouse_area(button)
+        .interaction(mouse::Interaction::Pointer)
+        .on_enter(Message::Pane(PaneMessage::SetProjectMenuSection(Some(
+            section,
+        ))))
         .into()
 }
 
@@ -1635,7 +1757,9 @@ fn editor_root_menu_item<'a>(
 ) -> Element<'a, Message> {
     let button = button(
         row![
-            svg(icons::chevron_left())
+            text(label).size(ui_style::FONT_SIZE_UI_XS),
+            container(text("")).width(Fill),
+            svg(icons::chevron_right())
                 .width(Length::Fixed(10.0))
                 .height(Length::Fixed(10.0))
                 .content_fit(ContentFit::Contain)
@@ -1646,8 +1770,6 @@ fn editor_root_menu_item<'a>(
                         Color::from_rgb(0.12, 0.12, 0.14)
                     }),
                 }),
-            text(label).size(ui_style::FONT_SIZE_UI_XS),
-            container(text("")).width(Fill),
         ]
         .spacing(ui_style::SPACE_XS)
         .width(Fill)

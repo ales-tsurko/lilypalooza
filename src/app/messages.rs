@@ -7,7 +7,9 @@ use iced::{Size, keyboard, mouse};
 use iced_code_editor::Message as EditorWidgetMessage;
 use iced_core::image;
 
-use super::{EditorFileMenuSection, EditorHeaderMenuSection, WorkspacePaneKind};
+use super::{
+    EditorFileMenuSection, EditorHeaderMenuSection, ProjectMenuSection, WorkspacePaneKind,
+};
 
 #[derive(Debug, Clone)]
 pub(super) enum Message {
@@ -20,6 +22,7 @@ pub(super) enum Message {
     PianoRoll(PianoRollMessage),
     Editor(EditorMessage),
     Logger(LoggerMessage),
+    Shortcuts(ShortcutsMessage),
     Prompt(PromptMessage),
     KeyPressed(KeyPress),
     ModifiersChanged(keyboard::Modifiers),
@@ -65,6 +68,7 @@ pub(super) enum PaneMessage {
     },
     ToggleProjectMenu,
     CloseProjectMenu,
+    SetProjectMenuSection(Option<ProjectMenuSection>),
     SetProjectRecentOpen(bool),
     TooltipHovered(Option<String>),
     CloseHeaderOverflowMenu,
@@ -188,4 +192,15 @@ pub(super) enum PromptMessage {
     Acknowledge,
     Discard,
     Cancel,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum ShortcutsMessage {
+    OpenDialog,
+    CloseDialog,
+    SearchChanged(String),
+    SelectNext,
+    SelectPrevious,
+    ActivateSelected,
+    ActivateAction(crate::settings::ShortcutActionId),
 }

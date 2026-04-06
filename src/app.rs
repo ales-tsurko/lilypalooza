@@ -46,7 +46,9 @@ const EDITOR_TABBAR_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(16);
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
 pub(super) const EDITOR_TABBAR_SCROLL_ID: &str = "editor-tabbar-scroll";
+pub(super) const SHORTCUTS_SCROLLABLE_ID: &str = "shortcuts-scrollable";
 pub(super) const KEYBOARD_SCROLL_STEP: f32 = 84.0;
+pub(super) const SHORTCUTS_ACTION_ROW_HEIGHT: f32 = 48.0;
 const MIN_SVG_ZOOM: f32 = 0.4;
 const MAX_SVG_ZOOM: f32 = 3.0;
 const SVG_ZOOM_STEP: f32 = 0.1;
@@ -71,6 +73,12 @@ enum EditorHeaderMenuSection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditorFileMenuSection {
     OpenRecent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectMenuSection {
+    Project,
+    View,
 }
 
 struct Lilypalooza {
@@ -108,7 +116,12 @@ struct Lilypalooza {
     open_editor_file_menu_section: Option<EditorFileMenuSection>,
     hovered_editor_file_menu_section: Option<EditorFileMenuSection>,
     open_project_menu: bool,
+    open_project_menu_section: Option<ProjectMenuSection>,
     open_project_recent: bool,
+    open_shortcuts_dialog: bool,
+    shortcuts_search_query: String,
+    shortcuts_search_input_id: Id,
+    shortcuts_selected_action: Option<settings::ShortcutActionId>,
     hovered_tooltip_key: Option<String>,
     open_tooltip_key: Option<String>,
     tooltip_hover_started_at: Option<Instant>,
@@ -437,7 +450,12 @@ fn new(
         open_editor_file_menu_section: None,
         hovered_editor_file_menu_section: None,
         open_project_menu: false,
+        open_project_menu_section: None,
         open_project_recent: false,
+        open_shortcuts_dialog: false,
+        shortcuts_search_query: String::new(),
+        shortcuts_search_input_id: Id::unique(),
+        shortcuts_selected_action: None,
         hovered_tooltip_key: None,
         open_tooltip_key: None,
         tooltip_hover_started_at: None,

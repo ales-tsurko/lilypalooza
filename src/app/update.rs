@@ -55,6 +55,7 @@ pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
         Message::PianoRoll(message) => app.handle_piano_roll_message(message),
         Message::Editor(message) => app.handle_editor_message(message),
         Message::Logger(message) => app.handle_logger_message(message),
+        Message::Shortcuts(message) => app.handle_shortcuts_message(message),
         Message::Prompt(message) => app.handle_prompt_message(message),
         Message::KeyPressed(key_press) => app.handle_key_pressed(key_press),
         Message::ModifiersChanged(modifiers) => app.handle_modifiers_changed(modifiers),

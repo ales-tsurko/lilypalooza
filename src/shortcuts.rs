@@ -5,9 +5,17 @@ use crate::settings::{
     ShortcutNamedKey, ShortcutSettings, WorkspacePane,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ShortcutActionMetadata {
+    pub(crate) id: ShortcutActionId,
+    pub(crate) name: &'static str,
+    pub(crate) description: &'static str,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShortcutAction {
     QuitApp,
+    OpenActions,
     NewEditor,
     OpenEditorFile,
     SaveEditor,
@@ -103,8 +111,9 @@ impl<'a> ShortcutInput<'a> {
     }
 }
 
-const GLOBAL_ACTIONS: [ShortcutAction; 6] = [
+const GLOBAL_ACTIONS: [ShortcutAction; 7] = [
     ShortcutAction::QuitApp,
+    ShortcutAction::OpenActions,
     ShortcutAction::SaveEditor,
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Editor),
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Score),
@@ -238,6 +247,124 @@ pub(crate) fn label_for_action(
     display_binding_for_action(settings, action).map(format_binding)
 }
 
+pub(crate) fn label_for_action_id(
+    settings: &ShortcutSettings,
+    action_id: ShortcutActionId,
+) -> Option<String> {
+    display_binding_for_action(settings, action_from_id(action_id)).map(format_binding)
+}
+
+pub(crate) fn filtered_action_metadata(query: &str) -> Vec<ShortcutActionMetadata> {
+    let query = query.trim().to_lowercase();
+    let mut actions: Vec<_> = ALL_ACTION_IDS
+        .iter()
+        .copied()
+        .filter_map(|action_id| {
+            let metadata = action_metadata(action_id);
+            let matches = query.is_empty()
+                || metadata.name.to_lowercase().contains(&query)
+                || metadata.description.to_lowercase().contains(&query);
+            matches.then_some(metadata)
+        })
+        .collect();
+    actions.sort_by_key(|metadata| metadata.name);
+    actions
+}
+
+pub(crate) fn action_for_id(action_id: ShortcutActionId) -> ShortcutAction {
+    action_from_id(action_id)
+}
+
+macro_rules! shortcut_metadata {
+    ($($id:ident => ($name:expr, $description:expr)),+ $(,)?) => {
+        pub(crate) const ALL_ACTION_IDS: &[ShortcutActionId] = &[
+            $(ShortcutActionId::$id,)+
+        ];
+
+        pub(crate) fn action_metadata(action_id: ShortcutActionId) -> ShortcutActionMetadata {
+            match action_id {
+                $(ShortcutActionId::$id => ShortcutActionMetadata {
+                    id: ShortcutActionId::$id,
+                    name: $name,
+                    description: $description,
+                },)+
+            }
+        }
+    };
+}
+
+shortcut_metadata! {
+    QuitApp => ("Quit App", "Global: close the application window and quit Lilypalooza."),
+    OpenActions => ("Open Actions", "Global: open the actions palette."),
+    NewEditor => ("New File", "Editor: create a new file tab in the text editor."),
+    OpenEditorFile => ("Open File", "Editor: open one or more files into editor tabs."),
+    SaveEditor => ("Save File", "Editor: save the active file tab."),
+    CloseEditorTab => ("Close Editor Tab", "Editor: close the active editor tab."),
+    EditorUndo => ("Undo", "Editor: undo the last text editing change."),
+    EditorRedo => ("Redo", "Editor: redo the last undone text editing change."),
+    EditorCopy => ("Copy", "Editor: copy the current editor selection."),
+    EditorPaste => ("Paste", "Editor: paste clipboard text into the editor."),
+    EditorOpenSearch => ("Find", "Editor: open the find dialog for the current file."),
+    EditorOpenSearchReplace => ("Find and Replace", "Editor: open the find and replace dialog for the current file."),
+    EditorOpenGotoLine => ("Go to Line", "Editor: open the go to line dialog for the current file."),
+    EditorTriggerCompletion => ("Trigger Completion", "Editor: open the autocomplete popup manually."),
+    EditorFindNext => ("Find Next", "Editor: jump to the next match in the current search."),
+    EditorFindPrevious => ("Find Previous", "Editor: jump to the previous match in the current search."),
+    EditorWordLeft => ("Move Word Left", "Editor: move the cursor one word to the left."),
+    EditorWordRight => ("Move Word Right", "Editor: move the cursor one word to the right."),
+    EditorWordLeftSelect => ("Select Word Left", "Editor: extend the selection one word to the left."),
+    EditorWordRightSelect => ("Select Word Right", "Editor: extend the selection one word to the right."),
+    EditorDeleteWordBackward => ("Delete Word Backward", "Editor: delete the previous word."),
+    EditorDeleteWordForward => ("Delete Word Forward", "Editor: delete the next word."),
+    EditorDeleteToLineStart => ("Delete to Line Start", "Editor: delete from the cursor to the start of the line."),
+    EditorDeleteToLineEnd => ("Delete to Line End", "Editor: delete from the cursor to the end of the line."),
+    EditorLineStart => ("Move to Line Start", "Editor: move the cursor to the current line start."),
+    EditorLineEnd => ("Move to Line End", "Editor: move the cursor to the current line end."),
+    EditorLineStartSelect => ("Select to Line Start", "Editor: extend the selection to the current line start."),
+    EditorLineEndSelect => ("Select to Line End", "Editor: extend the selection to the current line end."),
+    EditorDocumentStart => ("Move to Document Start", "Editor: move the cursor to the start of the file."),
+    EditorDocumentEnd => ("Move to Document End", "Editor: move the cursor to the end of the file."),
+    EditorDocumentStartSelect => ("Select to Document Start", "Editor: extend the selection to the start of the file."),
+    EditorDocumentEndSelect => ("Select to Document End", "Editor: extend the selection to the end of the file."),
+    EditorDeleteSelection => ("Delete Selection", "Editor: delete the current selection."),
+    EditorSelectAll => ("Select All", "Editor: select the whole file."),
+    EditorInsertLineBelow => ("Insert Line Below", "Editor: insert a new line below the current line."),
+    EditorInsertLineAbove => ("Insert Line Above", "Editor: insert a new line above the current line."),
+    EditorDeleteLine => ("Delete Line", "Editor: delete the current line or selected lines."),
+    EditorMoveLineUp => ("Move Line Up", "Editor: move the current line or selected lines upward."),
+    EditorMoveLineDown => ("Move Line Down", "Editor: move the current line or selected lines downward."),
+    EditorCopyLineUp => ("Copy Line Up", "Editor: duplicate the current line or selection above."),
+    EditorCopyLineDown => ("Copy Line Down", "Editor: duplicate the current line or selection below."),
+    EditorJoinLines => ("Join Lines", "Editor: join the current line with the next line."),
+    EditorIndent => ("Indent", "Editor: indent the current line or selection."),
+    EditorOutdent => ("Outdent", "Editor: outdent the current line or selection."),
+    EditorToggleLineComment => ("Toggle Line Comment", "Editor: comment or uncomment the current line or selection."),
+    EditorToggleBlockComment => ("Toggle Block Comment", "Editor: wrap or unwrap the current selection with block comments."),
+    EditorSelectLine => ("Select Line", "Editor: select the current line."),
+    EditorJumpToMatchingBracket => ("Jump to Matching Bracket", "Editor: jump to the matching bracket near the cursor."),
+    ToggleEditorPane => ("Toggle Editor Pane", "Workspace: show or hide the editor pane."),
+    ToggleScorePane => ("Toggle Score Pane", "Workspace: show or hide the score preview pane."),
+    TogglePianoRollPane => ("Toggle Piano Roll Pane", "Workspace: show or hide the piano roll pane."),
+    ToggleLoggerPane => ("Toggle Logger Pane", "Workspace: show or hide the logger pane."),
+    PreviousTab => ("Previous Workspace Tab", "Workspace: switch to the previous tab in the active pane group."),
+    NextTab => ("Next Workspace Tab", "Workspace: switch to the next tab in the active pane group."),
+    PreviousEditorTab => ("Previous Editor Tab", "Editor: switch to the previous editor file tab."),
+    NextEditorTab => ("Next Editor Tab", "Editor: switch to the next editor file tab."),
+    PreviousPane => ("Previous Pane", "Workspace: move keyboard focus to the previous pane."),
+    NextPane => ("Next Pane", "Workspace: move keyboard focus to the next pane."),
+    ScoreZoomIn => ("Zoom In Score", "Score: increase rendered score zoom."),
+    ScoreZoomOut => ("Zoom Out Score", "Score: decrease rendered score zoom."),
+    ScoreZoomReset => ("Reset Score Zoom", "Score: reset rendered score zoom."),
+    EditorZoomIn => ("Zoom In Editor", "Editor: increase editor font size."),
+    EditorZoomOut => ("Zoom Out Editor", "Editor: decrease editor font size."),
+    EditorZoomReset => ("Reset Editor Zoom", "Editor: reset editor font size."),
+    PianoRollZoomIn => ("Zoom In Piano Roll", "Piano Roll: increase piano roll zoom."),
+    PianoRollZoomOut => ("Zoom Out Piano Roll", "Piano Roll: decrease piano roll zoom."),
+    PianoRollZoomReset => ("Reset Piano Roll Zoom", "Piano Roll: reset piano roll zoom."),
+    TransportPlayPause => ("Play or Pause", "Transport: start or pause playback."),
+    TransportRewind => ("Rewind", "Transport: return playback to the start."),
+}
+
 fn fixed_contextual_action(
     pane: WorkspacePane,
     input: ShortcutInput<'_>,
@@ -289,6 +416,90 @@ fn action_matches(
     effective_bindings(settings, action)
         .iter()
         .any(|binding| binding_matches(*binding, input))
+}
+
+fn action_from_id(action_id: ShortcutActionId) -> ShortcutAction {
+    match action_id {
+        ShortcutActionId::QuitApp => ShortcutAction::QuitApp,
+        ShortcutActionId::OpenActions => ShortcutAction::OpenActions,
+        ShortcutActionId::NewEditor => ShortcutAction::NewEditor,
+        ShortcutActionId::OpenEditorFile => ShortcutAction::OpenEditorFile,
+        ShortcutActionId::SaveEditor => ShortcutAction::SaveEditor,
+        ShortcutActionId::CloseEditorTab => ShortcutAction::CloseEditorTab,
+        ShortcutActionId::EditorUndo => ShortcutAction::EditorUndo,
+        ShortcutActionId::EditorRedo => ShortcutAction::EditorRedo,
+        ShortcutActionId::EditorCopy => ShortcutAction::EditorCopy,
+        ShortcutActionId::EditorPaste => ShortcutAction::EditorPaste,
+        ShortcutActionId::EditorOpenSearch => ShortcutAction::EditorOpenSearch,
+        ShortcutActionId::EditorOpenSearchReplace => ShortcutAction::EditorOpenSearchReplace,
+        ShortcutActionId::EditorOpenGotoLine => ShortcutAction::EditorOpenGotoLine,
+        ShortcutActionId::EditorTriggerCompletion => ShortcutAction::EditorTriggerCompletion,
+        ShortcutActionId::EditorFindNext => ShortcutAction::EditorFindNext,
+        ShortcutActionId::EditorFindPrevious => ShortcutAction::EditorFindPrevious,
+        ShortcutActionId::EditorWordLeft => ShortcutAction::EditorWordLeft,
+        ShortcutActionId::EditorWordRight => ShortcutAction::EditorWordRight,
+        ShortcutActionId::EditorWordLeftSelect => ShortcutAction::EditorWordLeftSelect,
+        ShortcutActionId::EditorWordRightSelect => ShortcutAction::EditorWordRightSelect,
+        ShortcutActionId::EditorDeleteWordBackward => ShortcutAction::EditorDeleteWordBackward,
+        ShortcutActionId::EditorDeleteWordForward => ShortcutAction::EditorDeleteWordForward,
+        ShortcutActionId::EditorDeleteToLineStart => ShortcutAction::EditorDeleteToLineStart,
+        ShortcutActionId::EditorDeleteToLineEnd => ShortcutAction::EditorDeleteToLineEnd,
+        ShortcutActionId::EditorLineStart => ShortcutAction::EditorLineStart,
+        ShortcutActionId::EditorLineEnd => ShortcutAction::EditorLineEnd,
+        ShortcutActionId::EditorLineStartSelect => ShortcutAction::EditorLineStartSelect,
+        ShortcutActionId::EditorLineEndSelect => ShortcutAction::EditorLineEndSelect,
+        ShortcutActionId::EditorDocumentStart => ShortcutAction::EditorDocumentStart,
+        ShortcutActionId::EditorDocumentEnd => ShortcutAction::EditorDocumentEnd,
+        ShortcutActionId::EditorDocumentStartSelect => ShortcutAction::EditorDocumentStartSelect,
+        ShortcutActionId::EditorDocumentEndSelect => ShortcutAction::EditorDocumentEndSelect,
+        ShortcutActionId::EditorDeleteSelection => ShortcutAction::EditorDeleteSelection,
+        ShortcutActionId::EditorSelectAll => ShortcutAction::EditorSelectAll,
+        ShortcutActionId::EditorInsertLineBelow => ShortcutAction::EditorInsertLineBelow,
+        ShortcutActionId::EditorInsertLineAbove => ShortcutAction::EditorInsertLineAbove,
+        ShortcutActionId::EditorDeleteLine => ShortcutAction::EditorDeleteLine,
+        ShortcutActionId::EditorMoveLineUp => ShortcutAction::EditorMoveLineUp,
+        ShortcutActionId::EditorMoveLineDown => ShortcutAction::EditorMoveLineDown,
+        ShortcutActionId::EditorCopyLineUp => ShortcutAction::EditorCopyLineUp,
+        ShortcutActionId::EditorCopyLineDown => ShortcutAction::EditorCopyLineDown,
+        ShortcutActionId::EditorJoinLines => ShortcutAction::EditorJoinLines,
+        ShortcutActionId::EditorIndent => ShortcutAction::EditorIndent,
+        ShortcutActionId::EditorOutdent => ShortcutAction::EditorOutdent,
+        ShortcutActionId::EditorToggleLineComment => ShortcutAction::EditorToggleLineComment,
+        ShortcutActionId::EditorToggleBlockComment => ShortcutAction::EditorToggleBlockComment,
+        ShortcutActionId::EditorSelectLine => ShortcutAction::EditorSelectLine,
+        ShortcutActionId::EditorJumpToMatchingBracket => {
+            ShortcutAction::EditorJumpToMatchingBracket
+        }
+        ShortcutActionId::ToggleEditorPane => {
+            ShortcutAction::ToggleWorkspacePane(WorkspacePane::Editor)
+        }
+        ShortcutActionId::ToggleScorePane => {
+            ShortcutAction::ToggleWorkspacePane(WorkspacePane::Score)
+        }
+        ShortcutActionId::TogglePianoRollPane => {
+            ShortcutAction::ToggleWorkspacePane(WorkspacePane::PianoRoll)
+        }
+        ShortcutActionId::ToggleLoggerPane => {
+            ShortcutAction::ToggleWorkspacePane(WorkspacePane::Logger)
+        }
+        ShortcutActionId::PreviousTab => ShortcutAction::SwitchWorkspaceTabPrevious,
+        ShortcutActionId::NextTab => ShortcutAction::SwitchWorkspaceTabNext,
+        ShortcutActionId::PreviousEditorTab => ShortcutAction::SwitchEditorTabPrevious,
+        ShortcutActionId::NextEditorTab => ShortcutAction::SwitchEditorTabNext,
+        ShortcutActionId::PreviousPane => ShortcutAction::FocusWorkspacePanePrevious,
+        ShortcutActionId::NextPane => ShortcutAction::FocusWorkspacePaneNext,
+        ShortcutActionId::ScoreZoomIn => ShortcutAction::ScoreZoomIn,
+        ShortcutActionId::ScoreZoomOut => ShortcutAction::ScoreZoomOut,
+        ShortcutActionId::ScoreZoomReset => ShortcutAction::ScoreZoomReset,
+        ShortcutActionId::EditorZoomIn => ShortcutAction::EditorZoomIn,
+        ShortcutActionId::EditorZoomOut => ShortcutAction::EditorZoomOut,
+        ShortcutActionId::EditorZoomReset => ShortcutAction::EditorZoomReset,
+        ShortcutActionId::PianoRollZoomIn => ShortcutAction::PianoRollZoomIn,
+        ShortcutActionId::PianoRollZoomOut => ShortcutAction::PianoRollZoomOut,
+        ShortcutActionId::PianoRollZoomReset => ShortcutAction::PianoRollZoomReset,
+        ShortcutActionId::TransportPlayPause => ShortcutAction::TransportPlayPause,
+        ShortcutActionId::TransportRewind => ShortcutAction::TransportRewind,
+    }
 }
 
 fn effective_bindings(settings: &ShortcutSettings, action: ShortcutAction) -> Vec<ShortcutBinding> {
@@ -492,6 +703,9 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
         }
         ShortcutAction::EditorDeleteSelection => {
             vec![binding_code(ShortcutKeyCode::Delete, false, false, true)]
+        }
+        ShortcutAction::OpenActions => {
+            vec![binding_code(ShortcutKeyCode::KeyP, true, false, true)]
         }
         ShortcutAction::EditorSelectAll => {
             vec![binding_code(ShortcutKeyCode::KeyA, true, false, false)]
@@ -729,6 +943,7 @@ fn code_label(code: ShortcutKeyCode) -> &'static str {
         ShortcutKeyCode::KeyL => "L",
         ShortcutKeyCode::KeyN => "N",
         ShortcutKeyCode::KeyO => "O",
+        ShortcutKeyCode::KeyP => "P",
         ShortcutKeyCode::KeyQ => "Q",
         ShortcutKeyCode::KeyS => "S",
         ShortcutKeyCode::KeyV => "V",
@@ -819,6 +1034,7 @@ fn to_iced_key_code(code: ShortcutKeyCode) -> keyboard::key::Code {
         ShortcutKeyCode::KeyL => keyboard::key::Code::KeyL,
         ShortcutKeyCode::KeyN => keyboard::key::Code::KeyN,
         ShortcutKeyCode::KeyO => keyboard::key::Code::KeyO,
+        ShortcutKeyCode::KeyP => keyboard::key::Code::KeyP,
         ShortcutKeyCode::KeyQ => keyboard::key::Code::KeyQ,
         ShortcutKeyCode::KeyS => keyboard::key::Code::KeyS,
         ShortcutKeyCode::KeyV => keyboard::key::Code::KeyV,
@@ -867,6 +1083,7 @@ fn to_iced_named_key(named: ShortcutNamedKey) -> keyboard::key::Named {
 fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
     match action {
         ShortcutAction::QuitApp => Some(ShortcutActionId::QuitApp),
+        ShortcutAction::OpenActions => Some(ShortcutActionId::OpenActions),
         ShortcutAction::NewEditor => Some(ShortcutActionId::NewEditor),
         ShortcutAction::OpenEditorFile => Some(ShortcutActionId::OpenEditorFile),
         ShortcutAction::SaveEditor => Some(ShortcutActionId::SaveEditor),

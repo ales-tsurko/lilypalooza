@@ -624,6 +624,66 @@ pub(crate) fn button_menu_item(
     }
 }
 
+pub(crate) fn button_shortcut_palette_item(
+    theme: &Theme,
+    status: button::Status,
+    selected: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let text_color = palette.background.weak.text;
+    let selected_background = mix_color(
+        palette.background.strong.color,
+        palette.primary.base.color,
+        0.08,
+    );
+
+    let base = button::Style {
+        background: Some(
+            if selected {
+                selected_background
+            } else {
+                Color::TRANSPARENT
+            }
+            .into(),
+        ),
+        text_color,
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        shadow: Shadow::default(),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(
+                if selected {
+                    selected_background
+                } else {
+                    palette.background.strong.color
+                }
+                .into(),
+            ),
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(
+                mix_color(
+                    if selected {
+                        selected_background
+                    } else {
+                        palette.background.strong.color
+                    },
+                    palette.primary.base.color,
+                    0.10,
+                )
+                .into(),
+            ),
+            ..base
+        },
+        button::Status::Disabled => base,
+    }
+}
+
 pub(crate) fn editor_tab_surface(
     theme: &Theme,
     active: bool,

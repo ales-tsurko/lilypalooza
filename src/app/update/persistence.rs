@@ -153,6 +153,7 @@ impl Lilypalooza {
         self.open_editor_file_menu_section = None;
         self.hovered_editor_file_menu_section = None;
         self.open_project_menu = false;
+        self.open_project_menu_section = None;
         self.open_project_recent = false;
         self.sync_editor_widget_focus();
     }
@@ -272,6 +273,7 @@ impl Lilypalooza {
 
     pub(in crate::app) fn save_project_to_root(&mut self, project_root: PathBuf) -> Task<Message> {
         self.open_project_menu = false;
+        self.open_project_menu_section = None;
         self.open_project_recent = false;
         self.register_recent_project(&project_root);
         self.project_root = Some(project_root.clone());
@@ -299,6 +301,7 @@ impl Lilypalooza {
         }
 
         self.open_project_menu = false;
+        self.open_project_menu_section = None;
         self.open_project_recent = false;
         if !state::project_file_path(&project_root).is_file() {
             self.show_prompt(
