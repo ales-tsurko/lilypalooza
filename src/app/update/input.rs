@@ -97,6 +97,7 @@ impl Lilypalooza {
         action: ShortcutAction,
     ) -> Task<Message> {
         match action {
+            ShortcutAction::QuitApp => self.handle_window_close_requested(),
             ShortcutAction::NewEditor => update(self, Message::Editor(EditorMessage::NewRequested)),
             ShortcutAction::OpenEditorFile => {
                 update(self, Message::Editor(EditorMessage::OpenRequested))
@@ -490,6 +491,7 @@ impl Lilypalooza {
     pub(in crate::app) fn handle_window_resized(&mut self, size: Size) -> Task<Message> {
         self.window_width = size.width.max(1.0);
         self.window_height = size.height.max(1.0);
+        self.patch_macos_quit_menu();
         self.sync_editor_viewport_from_layout();
 
         Task::none()

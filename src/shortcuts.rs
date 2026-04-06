@@ -7,6 +7,7 @@ use crate::settings::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShortcutAction {
+    QuitApp,
     NewEditor,
     OpenEditorFile,
     SaveEditor,
@@ -101,7 +102,8 @@ impl<'a> ShortcutInput<'a> {
     }
 }
 
-const GLOBAL_ACTIONS: [ShortcutAction; 5] = [
+const GLOBAL_ACTIONS: [ShortcutAction; 6] = [
+    ShortcutAction::QuitApp,
     ShortcutAction::SaveEditor,
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Editor),
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Score),
@@ -320,6 +322,7 @@ fn binding_override(
 
 fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
     match action {
+        ShortcutAction::QuitApp => vec![binding_code(ShortcutKeyCode::KeyQ, true, false, false)],
         ShortcutAction::NewEditor => vec![binding_code(ShortcutKeyCode::KeyN, true, false, false)],
         ShortcutAction::OpenEditorFile => {
             vec![binding_code(ShortcutKeyCode::KeyO, true, false, false)]
@@ -711,6 +714,7 @@ fn code_label(code: ShortcutKeyCode) -> &'static str {
         ShortcutKeyCode::KeyL => "L",
         ShortcutKeyCode::KeyN => "N",
         ShortcutKeyCode::KeyO => "O",
+        ShortcutKeyCode::KeyQ => "Q",
         ShortcutKeyCode::KeyS => "S",
         ShortcutKeyCode::KeyV => "V",
         ShortcutKeyCode::KeyW => "W",
@@ -788,6 +792,7 @@ fn to_iced_key_code(code: ShortcutKeyCode) -> keyboard::key::Code {
         ShortcutKeyCode::KeyL => keyboard::key::Code::KeyL,
         ShortcutKeyCode::KeyN => keyboard::key::Code::KeyN,
         ShortcutKeyCode::KeyO => keyboard::key::Code::KeyO,
+        ShortcutKeyCode::KeyQ => keyboard::key::Code::KeyQ,
         ShortcutKeyCode::KeyS => keyboard::key::Code::KeyS,
         ShortcutKeyCode::KeyV => keyboard::key::Code::KeyV,
         ShortcutKeyCode::KeyW => keyboard::key::Code::KeyW,
@@ -834,6 +839,7 @@ fn to_iced_named_key(named: ShortcutNamedKey) -> keyboard::key::Named {
 
 fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
     match action {
+        ShortcutAction::QuitApp => Some(ShortcutActionId::QuitApp),
         ShortcutAction::NewEditor => Some(ShortcutActionId::NewEditor),
         ShortcutAction::OpenEditorFile => Some(ShortcutActionId::OpenEditorFile),
         ShortcutAction::SaveEditor => Some(ShortcutActionId::SaveEditor),

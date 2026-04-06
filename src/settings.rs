@@ -212,6 +212,7 @@ pub(crate) enum ShortcutKeyCode {
     KeyL,
     KeyN,
     KeyO,
+    KeyQ,
     KeyS,
     KeyV,
     KeyW,
@@ -290,6 +291,7 @@ pub(crate) enum ShortcutBindingOverride {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ShortcutActionId {
+    QuitApp,
     NewEditor,
     OpenEditorFile,
     SaveEditor,

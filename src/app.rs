@@ -152,6 +152,7 @@ struct Lilypalooza {
     pending_editor_save_as_tab: Option<u64>,
     pending_editor_rename_tab: Option<u64>,
     default_global_state: GlobalState,
+    macos_quit_menu_patched: bool,
 }
 
 struct SelectedScore {
@@ -489,6 +490,7 @@ fn new(
         pending_editor_save_as_tab: None,
         pending_editor_rename_tab: None,
         default_global_state,
+        macos_quit_menu_patched: false,
     };
 
     app.logger.push("Checking LilyPond availability");
@@ -586,6 +588,39 @@ fn runtime_event_to_message(
 }
 
 impl Lilypalooza {
+    fn patch_macos_quit_menu(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2::MainThreadMarker;
+            use objc2_app_kit::NSApplication;
+            use objc2_foundation::ns_string;
+
+            if self.macos_quit_menu_patched {
+                return;
+            }
+
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            let app = NSApplication::sharedApplication(mtm);
+            let Some(main_menu) = app.mainMenu() else {
+                return;
+            };
+            let Some(app_menu_item) = main_menu.itemAtIndex(0) else {
+                return;
+            };
+            let Some(app_menu) = app_menu_item.submenu() else {
+                return;
+            };
+            let Some(quit_item) = app_menu.itemAtIndex(app_menu.numberOfItems() - 1) else {
+                return;
+            };
+
+            quit_item.setKeyEquivalent(ns_string!(""));
+            self.macos_quit_menu_patched = true;
+        }
+    }
+
     pub(super) fn zoom_modifier_active(&self) -> bool {
         self.keyboard_modifiers.command() || self.keyboard_modifiers.control()
     }
