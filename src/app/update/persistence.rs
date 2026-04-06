@@ -290,7 +290,7 @@ impl Lilypalooza {
     ) -> Task<Message> {
         if self.pending_editor_action.is_none() && self.editor.has_dirty_tabs() {
             return self.begin_pending_editor_action(
-                self.editor.dirty_tab_ids(),
+                self.editor.tabs_requiring_resolution(),
                 EditorContinuation::LoadProject(project_root),
             );
         }
@@ -398,6 +398,7 @@ impl Lilypalooza {
         let (_tasks, warnings) =
             self.editor
                 .restore_file_tabs(paths, active_path, has_clean_untitled);
+        self.sync_editor_file_watcher();
         self.editor_font_metrics_refresh_pending = !self.editor.tab_ids().is_empty();
         for warning in warnings {
             self.logger.push(warning);

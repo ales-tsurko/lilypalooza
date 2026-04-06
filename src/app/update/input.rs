@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::editor::EditorTabFileState;
 use crate::app::piano_roll::{adjacent_subdivision_tick, roll_scroll_id};
 
 impl Lilypalooza {
@@ -454,6 +455,9 @@ impl Lilypalooza {
                             self.logger.clear();
                             Task::none()
                         }
+                        Some(PromptOkAction::ReloadEditorTab(tab_id)) => {
+                            self.reload_editor_tab_from_disk(tab_id)
+                        }
                         None => Task::none(),
                     }
                 } else {
@@ -470,7 +474,7 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn handle_window_close_requested(&mut self) -> Task<Message> {
-        let dirty_tabs = self.editor.dirty_tab_ids();
+        let dirty_tabs = self.editor.tabs_requiring_resolution();
         if dirty_tabs.is_empty() {
             return iced::exit();
         }
@@ -536,12 +540,25 @@ impl Lilypalooza {
         };
 
         let title = self.editor.tab_title(tab_id);
-        self.error_prompt = Some(ErrorPrompt::new(
-            format!("Close {title}?"),
-            format!("Save changes to {title} before continuing?"),
-            ErrorFatality::Recoverable,
-            PromptButtons::SaveDiscardCancel,
-        ));
+        let prompt = if self.editor.tab_file_state(tab_id) == Some(EditorTabFileState::MissingOnDisk) {
+            ErrorPrompt::new(
+                format!("Save {title}?"),
+                format!(
+                    "{title} is missing on disk. Save it before continuing to recreate the file?"
+                ),
+                ErrorFatality::Recoverable,
+                PromptButtons::SaveDiscardCancel,
+            )
+            .with_discard_label("Close Without Saving")
+        } else {
+            ErrorPrompt::new(
+                format!("Close {title}?"),
+                format!("Save changes to {title} before continuing?"),
+                ErrorFatality::Recoverable,
+                PromptButtons::SaveDiscardCancel,
+            )
+        };
+        self.error_prompt = Some(prompt);
         self.prompt_ok_action = None;
     }
 
@@ -611,6 +628,7 @@ impl Lilypalooza {
         match continuation {
             EditorContinuation::CloseTab(tab_id) => {
                 self.editor.close_tab(tab_id);
+                self.sync_editor_file_watcher();
                 self.editor.request_focus();
                 self.persist_settings();
                 Task::none()

@@ -580,7 +580,19 @@ fn editor_tab(app: &Lilypalooza, tab: super::editor::EditorTabSummary) -> Elemen
     let tooltip_label = app
         .editor
         .tab_path(tab.id)
-        .map(|path| path.display().to_string())
+        .map(|path| {
+            let mut label = path.display().to_string();
+            match tab.file_state {
+                super::editor::EditorTabFileState::Ok => {}
+                super::editor::EditorTabFileState::ChangedOnDisk => {
+                    label.push_str("\nChanged on disk");
+                }
+                super::editor::EditorTabFileState::MissingOnDisk => {
+                    label.push_str("\nMissing on disk");
+                }
+            }
+            label
+        })
         .unwrap_or_else(|| tab.title.clone());
 
     let title: Element<'_, Message> = if is_renaming {
@@ -615,10 +627,34 @@ fn editor_tab(app: &Lilypalooza, tab: super::editor::EditorTabSummary) -> Elemen
         .into()
     };
 
-    let dirty_marker: Element<'_, Message> = if tab.dirty && !is_renaming {
-        text("•")
+    let dirty_marker: Element<'_, Message> = if !is_renaming
+        && (tab.dirty || tab.file_state != super::editor::EditorTabFileState::Ok)
+    {
+        let marker = if tab.file_state == super::editor::EditorTabFileState::Ok {
+            "•"
+        } else {
+            "!"
+        };
+        text(marker)
             .size(ui_style::FONT_SIZE_UI_SM)
             .line_height(1.0)
+            .style(move |theme: &Theme| {
+                let palette = theme.extended_palette();
+                let title_color = if is_hovered && !is_dragged {
+                    palette.primary.weak.text
+                } else if tab.active {
+                    palette.background.base.text
+                } else {
+                    palette.background.strong.text
+                };
+                iced::widget::text::Style {
+                    color: Some(match tab.file_state {
+                        super::editor::EditorTabFileState::Ok => title_color,
+                        super::editor::EditorTabFileState::ChangedOnDisk => title_color,
+                        super::editor::EditorTabFileState::MissingOnDisk => palette.danger.base.color,
+                    }),
+                }
+            })
             .into()
     } else {
         container(text("")).width(Length::Fixed(0.0)).into()

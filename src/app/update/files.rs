@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::editor::EditorTabFileState;
 
 impl Lilypalooza {
     pub(in crate::app) fn handle_startup_checked(
@@ -51,7 +52,7 @@ impl Lilypalooza {
                 let next_project_root = state::find_project_root(&path);
                 if next_project_root != self.project_root && self.editor.has_dirty_tabs() {
                     return self.begin_pending_editor_action(
-                        self.editor.dirty_tab_ids(),
+                        self.editor.tabs_requiring_resolution(),
                         EditorContinuation::OpenScore(path),
                     );
                 }
@@ -202,6 +203,8 @@ impl Lilypalooza {
             }
         }
 
+        self.poll_editor_file_watcher(&mut tasks);
+
         if let Some(tab_id) = self.editor.active_tab_id() {
             let task = self.editor.update(tab_id, &iced_code_editor::Message::Tick);
             tasks.push(self.map_editor_widget_task(tab_id, task));
@@ -271,6 +274,7 @@ impl Lilypalooza {
         self.unload_playback_file();
         self.current_score = Some(selected_score);
         self.persist_settings();
+        self.sync_editor_file_watcher();
         self.restart_score_watcher(&watched_path);
         self.queue_compile("Score loaded, compiling SVG and MIDI");
         self.start_compile_if_queued();
@@ -340,6 +344,208 @@ impl Lilypalooza {
 
         if should_recompile {
             self.queue_compile("Score changed, recompiling");
+        }
+    }
+
+    pub(in crate::app) fn sync_editor_file_watcher(&mut self) {
+        let paths = self.editor.file_backed_tab_paths();
+
+        if paths.is_empty() {
+            self.editor_file_watcher = None;
+            return;
+        }
+
+        if self.editor_file_watcher.is_none() {
+            match crate::editor_file_watcher::EditorFileWatcher::start() {
+                Ok(watcher) => self.editor_file_watcher = Some(watcher),
+                Err(error) => {
+                    self.show_prompt(
+                        ErrorPrompt::new(
+                            "File Watcher Error",
+                            format!("Failed to watch editor file changes: {error}"),
+                            ErrorFatality::Recoverable,
+                            PromptButtons::Ok,
+                        ),
+                        None,
+                    );
+                    return;
+                }
+            }
+        }
+
+        let sync_result = if let Some(watcher) = &mut self.editor_file_watcher {
+            watcher.sync_paths(&paths)
+        } else {
+            Ok(())
+        };
+
+        if let Err(error) = sync_result {
+            self.editor_file_watcher = None;
+            self.show_prompt(
+                ErrorPrompt::new(
+                    "File Watcher Error",
+                    format!("Failed to update editor file watches: {error}"),
+                    ErrorFatality::Recoverable,
+                    PromptButtons::Ok,
+                ),
+                None,
+            );
+        }
+    }
+
+    pub(in crate::app) fn poll_editor_file_watcher(&mut self, tasks: &mut Vec<Task<Message>>) {
+        if self.editor_file_watcher.is_none() {
+            return;
+        }
+
+        let watched_tabs = self.editor.file_backed_tabs();
+        let mut affected_tabs = Vec::new();
+        let mut disconnected = false;
+
+        while let Some(watcher) = &self.editor_file_watcher {
+            let recv_result = watcher.try_recv();
+            match recv_result {
+                Ok(Ok(event)) => {
+                    for (tab_id, path) in &watched_tabs {
+                        if is_relevant_editor_file_change(&event, path)
+                            && !affected_tabs.contains(tab_id)
+                        {
+                            affected_tabs.push(*tab_id);
+                        }
+                    }
+                }
+                Ok(Err(error)) => {
+                    self.logger.push(format!("[editor-watcher:error] {error}"));
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+
+        if disconnected {
+            self.editor_file_watcher = None;
+            self.show_prompt(
+                ErrorPrompt::new(
+                    "File Watcher Error",
+                    "Editor file watcher disconnected",
+                    ErrorFatality::Recoverable,
+                    PromptButtons::Ok,
+                ),
+                None,
+            );
+            return;
+        }
+
+        for tab_id in affected_tabs {
+            if let Some(task) = self.reconcile_editor_tab_file(tab_id) {
+                tasks.push(task);
+            }
+        }
+    }
+
+    fn reconcile_editor_tab_file(&mut self, tab_id: u64) -> Option<Task<Message>> {
+        let path = self.editor.tab_path(tab_id)?.to_path_buf();
+
+        if !path.exists() {
+            if self
+                .editor
+                .set_tab_file_state(tab_id, EditorTabFileState::MissingOnDisk)
+            {
+                self.logger
+                    .push(format!("Editor file missing on disk: {}", path.display()));
+                if self.error_prompt.is_none() {
+                    self.show_prompt(
+                        ErrorPrompt::new(
+                            "File Missing on Disk",
+                            format!(
+                                "{} was removed or moved outside Lilypalooza. The tab stays open and you can save to recreate it.",
+                                path.display()
+                            ),
+                            ErrorFatality::Recoverable,
+                            PromptButtons::Ok,
+                        )
+                        .with_ok_label("Keep Editing"),
+                        None,
+                    );
+                }
+                self.persist_settings();
+            }
+            return None;
+        }
+
+        let disk_content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                self.logger.push(format!(
+                    "[editor-watcher:error] Failed to read {}: {error}",
+                    path.display()
+                ));
+                return None;
+            }
+        };
+
+        if self.editor.tab_saved_content(tab_id) == Some(disk_content.as_str()) {
+            if self
+                .editor
+                .set_tab_file_state(tab_id, EditorTabFileState::Ok)
+            {
+                self.persist_settings();
+            }
+            return None;
+        }
+
+        if self.editor.tab_is_modified(tab_id) {
+            if self
+                .editor
+                .set_tab_file_state(tab_id, EditorTabFileState::ChangedOnDisk)
+            {
+                self.logger.push(format!(
+                    "Editor file changed on disk while modified: {}",
+                    path.display()
+                ));
+                if self.error_prompt.is_none() {
+                    self.show_prompt(
+                        ErrorPrompt::new(
+                            "File Changed on Disk",
+                            format!(
+                                "{} changed on disk while this tab has unsaved changes.",
+                                path.display()
+                            ),
+                            ErrorFatality::Recoverable,
+                            PromptButtons::OkCancel,
+                        )
+                        .with_ok_label("Reload")
+                        .with_cancel_label("Keep Editor Version"),
+                        Some(PromptOkAction::ReloadEditorTab(tab_id)),
+                    );
+                }
+                self.persist_settings();
+            }
+            return None;
+        }
+
+        match self.editor.reload_tab_from_disk(tab_id) {
+            Ok(task) => {
+                self.logger
+                    .push(format!("Reloaded editor file {}", path.display()));
+                self.persist_settings();
+                Some(self.map_editor_widget_task(tab_id, task))
+            }
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "Editor Reload Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                None
+            }
         }
     }
 

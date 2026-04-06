@@ -33,6 +33,9 @@ pub(crate) struct ErrorPrompt {
     fatality: ErrorFatality,
     tone: PromptTone,
     buttons: PromptButtons,
+    ok_label: Option<String>,
+    discard_label: Option<String>,
+    cancel_label: Option<String>,
 }
 
 impl ErrorPrompt {
@@ -51,7 +54,25 @@ impl ErrorPrompt {
                 ErrorFatality::Recoverable => PromptTone::Warning,
             },
             buttons,
+            ok_label: None,
+            discard_label: None,
+            cancel_label: None,
         }
+    }
+
+    pub(crate) fn with_ok_label(mut self, label: impl Into<String>) -> Self {
+        self.ok_label = Some(label.into());
+        self
+    }
+
+    pub(crate) fn with_discard_label(mut self, label: impl Into<String>) -> Self {
+        self.discard_label = Some(label.into());
+        self
+    }
+
+    pub(crate) fn with_cancel_label(mut self, label: impl Into<String>) -> Self {
+        self.cancel_label = Some(label.into());
+        self
     }
 
     pub(crate) fn buttons(&self) -> PromptButtons {
@@ -85,10 +106,13 @@ impl ErrorPrompt {
     where
         Message: Clone + 'a,
     {
+        let save_label = self.ok_label.as_deref().unwrap_or("Save");
+        let discard_label = self.discard_label.as_deref().unwrap_or("Discard");
+        let cancel_label = self.cancel_label.as_deref().unwrap_or("Cancel");
         self.overlay_with_actions(PromptActions {
-            ok: Some(("Save", on_save)),
-            discard: Some(("Discard", on_discard)),
-            cancel: Some(("Cancel", on_cancel)),
+            ok: Some((save_label.to_string(), on_save)),
+            discard: Some((discard_label.to_string(), on_discard)),
+            cancel: Some((cancel_label.to_string(), on_cancel)),
         })
     }
 
@@ -100,10 +124,12 @@ impl ErrorPrompt {
     where
         Message: Clone + 'a,
     {
+        let ok_label = self.ok_label.as_deref().unwrap_or("OK");
+        let cancel_label = self.cancel_label.as_deref().unwrap_or("Cancel");
         self.overlay_with_actions(PromptActions {
-            ok: Some(("OK", on_ok.clone())),
+            ok: Some((ok_label.to_string(), on_ok.clone())),
             discard: None,
-            cancel: on_cancel.map(|message| ("Cancel", message)),
+            cancel: on_cancel.map(|message| (cancel_label.to_string(), message)),
         })
     }
 
@@ -262,7 +288,7 @@ impl ErrorPrompt {
 
 #[derive(Clone)]
 struct PromptActions<Message> {
-    ok: Option<(&'static str, Message)>,
-    discard: Option<(&'static str, Message)>,
-    cancel: Option<(&'static str, Message)>,
+    ok: Option<(String, Message)>,
+    discard: Option<(String, Message)>,
+    cancel: Option<(String, Message)>,
 }

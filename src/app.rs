@@ -9,6 +9,7 @@ use iced::{Point, Rectangle, Size, Subscription, Task, window};
 use iced_core::{Bytes, image};
 use tempfile::TempDir;
 
+use crate::editor_file_watcher::EditorFileWatcher;
 use crate::error_prompt::ErrorPrompt;
 use crate::lilypond;
 use crate::logger::Logger;
@@ -81,6 +82,7 @@ struct Lilypalooza {
     prompt_ok_action: Option<PromptOkAction>,
     logger: Logger,
     score_watcher: Option<ScoreWatcher>,
+    editor_file_watcher: Option<EditorFileWatcher>,
     build_dir: Option<TempDir>,
     compile_requested: bool,
     spinner_step: usize,
@@ -280,6 +282,7 @@ enum SoundfontStatus {
 enum PromptOkAction {
     ExitApp,
     ClearLogs,
+    ReloadEditorTab(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -387,6 +390,7 @@ fn new(
         prompt_ok_action: None,
         logger: Logger::new(),
         score_watcher: None,
+        editor_file_watcher: None,
         build_dir: None,
         compile_requested: false,
         spinner_step: 0,

@@ -20,13 +20,23 @@ pub(super) struct EditorTabSummary {
     pub(super) id: u64,
     pub(super) title: String,
     pub(super) dirty: bool,
+    pub(super) file_state: EditorTabFileState,
     pub(super) active: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditorTabFileState {
+    Ok,
+    ChangedOnDisk,
+    MissingOnDisk,
 }
 
 struct EditorTab {
     id: u64,
     widget: CodeEditor,
     path: Option<PathBuf>,
+    saved_content: Option<String>,
+    file_state: EditorTabFileState,
 }
 
 pub(super) struct EditorState {
@@ -106,20 +116,33 @@ impl EditorState {
         self.tab(tab_id).is_some_and(|tab| tab.widget.is_modified())
     }
 
+    pub(super) fn tab_file_state(&self, tab_id: u64) -> Option<EditorTabFileState> {
+        self.tab(tab_id).map(|tab| tab.file_state)
+    }
+
     pub(super) fn has_dirty_tabs(&self) -> bool {
         self.tabs.iter().any(|tab| tab.widget.is_modified())
     }
 
-    pub(super) fn dirty_tab_ids(&self) -> Vec<u64> {
+    pub(super) fn tabs_requiring_resolution(&self) -> Vec<u64> {
         self.tabs
             .iter()
-            .filter(|tab| tab.widget.is_modified())
+            .filter(|tab| {
+                tab.widget.is_modified() || tab.file_state == EditorTabFileState::MissingOnDisk
+            })
             .map(|tab| tab.id)
             .collect()
     }
 
     pub(super) fn tab_ids(&self) -> Vec<u64> {
         self.tabs.iter().map(|tab| tab.id).collect()
+    }
+
+    pub(super) fn file_backed_tabs(&self) -> Vec<(u64, PathBuf)> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| tab.path.clone().map(|path| (tab.id, path)))
+            .collect()
     }
 
     pub(super) fn find_tab_by_path(&self, path: &Path) -> Option<u64> {
@@ -245,6 +268,7 @@ impl EditorState {
                     id: tab.id,
                     title,
                     dirty: tab.widget.is_modified(),
+                    file_state: tab.file_state,
                     active: self.active_tab_id == Some(tab.id),
                 }
             })
@@ -298,6 +322,8 @@ impl EditorState {
                 self.theme_settings,
             ),
             path: None,
+            saved_content: None,
+            file_state: EditorTabFileState::Ok,
         };
         self.tabs.push(tab);
         self.active_tab_id = Some(tab_id);
@@ -405,6 +431,10 @@ impl EditorState {
             return self.save_to_path(tab_id, new_path);
         };
 
+        if !old_path.exists() {
+            return self.save_to_path(tab_id, new_path);
+        }
+
         fs::rename(&old_path, new_path).map_err(|error| {
             format!(
                 "Failed to rename editor file {} to {}: {error}",
@@ -416,9 +446,41 @@ impl EditorState {
         let normalized_path = normalize_editor_path(new_path);
         if let Some(tab) = self.tab_mut(tab_id) {
             tab.path = Some(normalized_path);
+            tab.file_state = EditorTabFileState::Ok;
         }
 
         Ok(iced::Task::none())
+    }
+
+    pub(super) fn reload_tab_from_disk(
+        &mut self,
+        tab_id: u64,
+    ) -> Result<iced::Task<EditorWidgetMessage>, String> {
+        let Some(path) = self.tab(tab_id).and_then(|tab| tab.path.clone()) else {
+            return Err("Editor tab is not file-backed".to_string());
+        };
+
+        let content = fs::read_to_string(&path)
+            .map_err(|error| format!("Failed to read editor file {}: {error}", path.display()))?;
+
+        self.load_document_into_tab(tab_id, &content, Some(path), false)
+    }
+
+    pub(super) fn tab_saved_content(&self, tab_id: u64) -> Option<&str> {
+        self.tab(tab_id).and_then(|tab| tab.saved_content.as_deref())
+    }
+
+    pub(super) fn set_tab_file_state(&mut self, tab_id: u64, file_state: EditorTabFileState) -> bool {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return false;
+        };
+
+        if tab.file_state == file_state {
+            return false;
+        }
+
+        tab.file_state = file_state;
+        true
     }
 
     pub(super) fn close_tab(&mut self, tab_id: u64) -> bool {
@@ -596,6 +658,8 @@ impl EditorState {
                 tab.widget.mark_saved();
             }
             tab.path = path;
+            tab.saved_content = tab.path.as_ref().map(|_| content.to_string());
+            tab.file_state = EditorTabFileState::Ok;
             task
         } else {
             let mut tab = EditorTab {
@@ -608,10 +672,13 @@ impl EditorState {
                     self.theme_settings,
                 ),
                 path,
+                saved_content: None,
+                file_state: EditorTabFileState::Ok,
             };
             if !modified {
                 tab.widget.mark_saved();
             }
+            tab.saved_content = tab.path.as_ref().map(|_| content.to_string());
             self.tabs.push(tab);
             iced::Task::none()
         };

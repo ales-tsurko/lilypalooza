@@ -622,6 +622,30 @@ fn is_relevant_score_change(event: &notify::Event, watched_path: &Path) -> bool 
     event.paths.is_empty() || event.paths.iter().any(|path| path == watched_path)
 }
 
+fn is_relevant_editor_file_change(event: &notify::Event, watched_path: &Path) -> bool {
+    let kind_matches = matches!(
+        event.kind,
+        EventKind::Any
+            | EventKind::Create(_)
+            | EventKind::Modify(_)
+            | EventKind::Remove(_)
+    );
+
+    if !kind_matches {
+        return false;
+    }
+
+    let Some(parent) = watched_path.parent() else {
+        return false;
+    };
+
+    event.paths.iter().any(|path| {
+        path == watched_path
+            || path.parent().is_some_and(|candidate| candidate == parent)
+            || path == parent
+    })
+}
+
 fn is_svg_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())

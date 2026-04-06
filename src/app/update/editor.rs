@@ -1,5 +1,6 @@
 use super::*;
 use iced::widget::operation::{focus, select_all};
+use crate::app::editor::EditorTabFileState;
 
 const EDITOR_TAB_WIDTH: f32 = 144.0;
 const EDITOR_TAB_SLOT_WIDTH: f32 = EDITOR_TAB_WIDTH + 4.0;
@@ -324,6 +325,7 @@ impl Lilypalooza {
         match self.editor.load_file(path) {
             Ok((tab_id, task, reused_existing)) => {
                 self.register_editor_recent_file(path);
+                self.sync_editor_file_watcher();
                 if reused_existing {
                     self.logger
                         .push(format!("Activated editor file {}", path.display()));
@@ -365,6 +367,7 @@ impl Lilypalooza {
             match self.editor.load_file(path) {
                 Ok((tab_id, task, reused_existing)) => {
                     self.register_editor_recent_file(path);
+                    self.sync_editor_file_watcher();
                     if reused_existing {
                         self.logger
                             .push(format!("Activated editor file {}", path.display()));
@@ -413,23 +416,20 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn request_close_editor_tab(&mut self, tab_id: u64) -> Task<Message> {
-        if self.editor.tab_is_modified(tab_id) {
-            let title = self.editor.tab_title(tab_id);
+        if self.editor.tab_is_modified(tab_id)
+            || self.editor.tab_file_state(tab_id) == Some(EditorTabFileState::MissingOnDisk)
+        {
             self.pending_editor_action = Some(PendingEditorAction::ResolveDirtyTabs {
                 dirty_tab_ids: vec![tab_id],
                 continuation: EditorContinuation::CloseTab(tab_id),
             });
-            self.error_prompt = Some(ErrorPrompt::new(
-                format!("Close {title}?"),
-                format!("Save changes to {title} before closing it?"),
-                ErrorFatality::Recoverable,
-                PromptButtons::SaveDiscardCancel,
-            ));
+            self.show_current_pending_editor_prompt();
             self.prompt_ok_action = None;
             return Task::none();
         }
 
         self.editor.close_tab(tab_id);
+        self.sync_editor_file_watcher();
         self.editor.request_focus();
         self.persist_settings();
         Task::none()
@@ -462,6 +462,7 @@ impl Lilypalooza {
             Ok((path, task)) => {
                 self.register_editor_recent_file(&path);
                 self.logger.push(format!("Saved {}", path.display()));
+                self.sync_editor_file_watcher();
                 if self.editor_tab_targets_main_score(tab_id) {
                     self.queue_compile("Editor saved, recompiling");
                     self.start_compile_if_queued();
@@ -505,6 +506,7 @@ impl Lilypalooza {
         match self.editor.save_to_path(tab_id, &path) {
             Ok(task) => {
                 self.register_editor_recent_file(&path);
+                self.sync_editor_file_watcher();
                 if log_save {
                     self.logger.push(format!("Saved {}", path.display()));
                 }
@@ -521,6 +523,31 @@ impl Lilypalooza {
                 self.show_prompt(
                     ErrorPrompt::new(
                         "Editor Save Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                Task::none()
+            }
+        }
+    }
+
+    pub(in crate::app) fn reload_editor_tab_from_disk(&mut self, tab_id: u64) -> Task<Message> {
+        match self.editor.reload_tab_from_disk(tab_id) {
+            Ok(task) => {
+                if let Some(path) = self.editor.tab_path(tab_id) {
+                    self.logger
+                        .push(format!("Reloaded editor file {}", path.display()));
+                }
+                self.persist_settings();
+                self.map_editor_widget_task(tab_id, task)
+            }
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "Editor Reload Error",
                         error,
                         ErrorFatality::Recoverable,
                         PromptButtons::Ok,
@@ -557,6 +584,7 @@ impl Lilypalooza {
             }
 
             self.editor.close_tab(existing_tab_id);
+            self.sync_editor_file_watcher();
         }
 
         let result = if self.editor.tab_path(tab_id).is_some() {
@@ -568,6 +596,7 @@ impl Lilypalooza {
         match result {
             Ok(task) => {
                 self.register_editor_recent_file(&path);
+                self.sync_editor_file_watcher();
                 self.logger.push(format!("Renamed to {}", path.display()));
                 if self.editor_tab_targets_main_score(tab_id) {
                     if let Ok(selected_score) = selected_score_from_path(path.clone()) {
