@@ -1104,6 +1104,17 @@ impl CodeEditor {
         self.reset(content)
     }
 
+    /// Updates syntax highlighting without resetting buffer, cursor, or scroll state.
+    pub fn set_syntax(&mut self, syntax: &str) {
+        if self.syntax == syntax {
+            return;
+        }
+
+        self.syntax = syntax.to_string();
+        self.content_cache.clear();
+        self.overlay_cache.clear();
+    }
+
     /// Resets the cursor blink animation.
     pub(crate) fn reset_cursor_blink(&mut self) {
         self.last_blink = Instant::now();

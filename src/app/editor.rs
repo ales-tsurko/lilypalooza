@@ -415,11 +415,15 @@ impl EditorState {
             .map_err(|error| format!("Failed to save editor file {}: {error}", path.display()))?;
 
         let normalized_path = normalize_editor_path(path);
-        let task = self.load_document_into_tab(tab_id, &content, Some(normalized_path), false)?;
         if let Some(tab) = self.tab_mut(tab_id) {
+            let next_syntax = syntax_for_path(&normalized_path);
+            tab.widget.set_syntax(&next_syntax);
+            tab.path = Some(normalized_path);
+            tab.saved_content = Some(content);
+            tab.file_state = EditorTabFileState::Ok;
             tab.widget.mark_saved();
         }
-        Ok(task)
+        Ok(iced::Task::none())
     }
 
     pub(super) fn rename_file(
