@@ -5,8 +5,8 @@
 It is built for editing LilyPond projects in one place: text editing, score
 preview, MIDI playback, piano roll, project persistence.
 
-![Screenshot 1](/Users/alestsurko/Desktop/lilypond-previewer/assets/screenshots/screenshot_1.png)
-![Screenshot 2](/Users/alestsurko/Desktop/lilypond-previewer/assets/screenshots/screenshot_2.png)
+![Screenshot 1](assets/screenshots/screenshot_1.png)
+![Screenshot 2](assets/screenshots/screenshot_2.png)
 
 ## What It Does
 
