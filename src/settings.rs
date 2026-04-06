@@ -183,11 +183,15 @@ impl Default for EditorThemeSettings {
 #[serde(default)]
 pub(crate) struct EditorViewSettings {
     pub(crate) font_size: f32,
+    pub(crate) center_cursor: bool,
 }
 
 impl Default for EditorViewSettings {
     fn default() -> Self {
-        Self { font_size: 13.0 }
+        Self {
+            font_size: 13.0,
+            center_cursor: false,
+        }
     }
 }
 

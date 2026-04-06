@@ -22,6 +22,7 @@ const HEADER_MENU_ICON_SIZE: f32 = 12.0;
 const HEADER_MENU_BUTTON_WIDTH: f32 = 26.0;
 const EDITOR_MENU_ROOT_WIDTH: f32 = 126.0;
 const EDITOR_FILE_SUBMENU_WIDTH: f32 = 320.0;
+const EDITOR_EDIT_SUBMENU_WIDTH: f32 = 220.0;
 const EDITOR_APPEARANCE_SUBMENU_WIDTH: f32 = 272.0;
 const EDITOR_MENU_ITEM_HEIGHT: f32 = 24.0;
 const EDITOR_RECENT_FILE_LABEL_MAX_CHARS: usize = 40;
@@ -1533,6 +1534,11 @@ fn editor_header_menu_panel<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
                 EditorHeaderMenuSection::File,
             ))
             .push(editor_root_menu_item(
+                "Edit",
+                app.open_editor_menu_section == Some(EditorHeaderMenuSection::Edit),
+                EditorHeaderMenuSection::Edit,
+            ))
+            .push(editor_root_menu_item(
                 "Appearance",
                 app.open_editor_menu_section == Some(EditorHeaderMenuSection::Appearance),
                 EditorHeaderMenuSection::Appearance,
@@ -1553,6 +1559,26 @@ fn editor_header_menu_panel<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
                     ))),
                     container(editor_file_submenu(app))
                         .width(Length::Fixed(file_width))
+                        .padding(ui_style::PADDING_SM)
+                        .style(ui_style::tooltip_popup),
+                ]
+                .spacing(0),
+                root_menu,
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Top)
+            .into()
+        }
+        Some(EditorHeaderMenuSection::Edit) => {
+            let submenu_width = EDITOR_EDIT_SUBMENU_WIDTH;
+
+            row![
+                iced::widget::column![
+                    container(text("")).height(Length::Fixed(editor_submenu_offset(
+                        EditorHeaderMenuSection::Edit,
+                    ))),
+                    container(editor_edit_submenu(app))
+                        .width(Length::Fixed(submenu_width))
                         .padding(ui_style::PADDING_SM)
                         .style(ui_style::tooltip_popup),
                 ]
@@ -1594,7 +1620,8 @@ fn editor_header_menu_panel<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
 fn editor_submenu_offset(section: EditorHeaderMenuSection) -> f32 {
     let item_index = match section {
         EditorHeaderMenuSection::File => 0.0,
-        EditorHeaderMenuSection::Appearance => 1.0,
+        EditorHeaderMenuSection::Edit => 1.0,
+        EditorHeaderMenuSection::Appearance => 2.0,
     };
 
     f32::from(ui_style::PADDING_XS)
@@ -1693,30 +1720,6 @@ fn editor_file_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
             "Rename...",
             has_document,
             Some(Message::Editor(super::EditorMessage::RenameRequested)),
-        ))
-        .push(editor_file_menu_item(
-            shortcuts::label_for_action(
-                &app.shortcut_settings,
-                shortcuts::ShortcutAction::EditorOpenSearch,
-            )
-            .map(|shortcut| format!("Find... ({shortcut})"))
-            .unwrap_or_else(|| "Find...".to_string()),
-            has_document,
-            Some(Message::Editor(super::EditorMessage::ActiveWidgetMessage(
-                iced_code_editor::Message::OpenSearch,
-            ))),
-        ))
-        .push(editor_file_menu_item(
-            shortcuts::label_for_action(
-                &app.shortcut_settings,
-                shortcuts::ShortcutAction::EditorOpenSearchReplace,
-            )
-            .map(|shortcut| format!("Find and Replace... ({shortcut})"))
-            .unwrap_or_else(|| "Find and Replace...".to_string()),
-            has_document,
-            Some(Message::Editor(super::EditorMessage::ActiveWidgetMessage(
-                iced_code_editor::Message::OpenSearchReplace,
-            ))),
         ));
 
     let recent_row = if has_recent_files {
@@ -2020,6 +2023,104 @@ fn editor_appearance_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
             .padding([ui_style::SPACE_SM as u16, 0]),
         )
         .push(editor_theme_controls_column(app))
+        .into()
+}
+
+fn editor_edit_submenu<'a>(app: &'a Lilypalooza) -> Element<'a, Message> {
+    let has_document = app.editor.has_document();
+    let center_cursor = app.editor.center_cursor();
+
+    Column::new()
+        .spacing(ui_style::SPACE_XS)
+        .push(editor_menu_item(
+            shortcuts::label_for_action(
+                &app.shortcut_settings,
+                shortcuts::ShortcutAction::EditorUndo,
+            )
+            .map(|shortcut| format!("Undo ({shortcut})"))
+            .unwrap_or_else(|| "Undo".to_string()),
+            has_document,
+            Some(Message::Editor(super::EditorMessage::ActiveWidgetMessage(
+                iced_code_editor::Message::Undo,
+            ))),
+        ))
+        .push(editor_menu_item(
+            shortcuts::label_for_action(
+                &app.shortcut_settings,
+                shortcuts::ShortcutAction::EditorRedo,
+            )
+            .map(|shortcut| format!("Redo ({shortcut})"))
+            .unwrap_or_else(|| "Redo".to_string()),
+            has_document,
+            Some(Message::Editor(super::EditorMessage::ActiveWidgetMessage(
+                iced_code_editor::Message::Redo,
+            ))),
+        ))
+        .push(
+            container(
+                container(text(""))
+                    .width(Fill)
+                    .height(Length::Fixed(1.0))
+                    .style(ui_style::chrome_separator),
+            )
+            .padding([ui_style::SPACE_XS as u16, 0]),
+        )
+        .push(editor_menu_item(
+            shortcuts::label_for_action(
+                &app.shortcut_settings,
+                shortcuts::ShortcutAction::EditorOpenSearch,
+            )
+            .map(|shortcut| format!("Find... ({shortcut})"))
+            .unwrap_or_else(|| "Find...".to_string()),
+            has_document,
+            Some(Message::Editor(super::EditorMessage::ActiveWidgetMessage(
+                iced_code_editor::Message::OpenSearch,
+            ))),
+        ))
+        .push(editor_menu_item(
+            shortcuts::label_for_action(
+                &app.shortcut_settings,
+                shortcuts::ShortcutAction::EditorOpenSearchReplace,
+            )
+            .map(|shortcut| format!("Find and Replace... ({shortcut})"))
+            .unwrap_or_else(|| "Find and Replace...".to_string()),
+            has_document,
+            Some(Message::Editor(super::EditorMessage::ActiveWidgetMessage(
+                iced_code_editor::Message::OpenSearchReplace,
+            ))),
+        ))
+        .push(editor_menu_item(
+            shortcuts::label_for_action(
+                &app.shortcut_settings,
+                shortcuts::ShortcutAction::EditorOpenGotoLine,
+            )
+            .map(|shortcut| format!("Go to Line... ({shortcut})"))
+            .unwrap_or_else(|| "Go to Line...".to_string()),
+            has_document,
+            Some(Message::Editor(super::EditorMessage::ActiveWidgetMessage(
+                iced_code_editor::Message::OpenGotoLine,
+            ))),
+        ))
+        .push(
+            container(
+                container(text(""))
+                    .width(Fill)
+                    .height(Length::Fixed(1.0))
+                    .style(ui_style::chrome_separator),
+            )
+            .padding([ui_style::SPACE_XS as u16, 0]),
+        )
+        .push(editor_menu_item(
+            if center_cursor {
+                "Centered Cursor: On"
+            } else {
+                "Centered Cursor: Off"
+            },
+            true,
+            Some(Message::Editor(super::EditorMessage::SetCenterCursor(
+                !center_cursor,
+            ))),
+        ))
         .into()
 }
 

@@ -255,6 +255,16 @@ impl Lilypalooza {
                 self.pending_editor_action = None;
                 Task::none()
             }
+            EditorMessage::SetCenterCursor(value) => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.editor.set_center_cursor(value);
+                self.persist_settings();
+                if let Some(tab_id) = self.editor.active_tab_id() {
+                    let task = self.editor.sync_tab_scroll_state(tab_id);
+                    return self.map_editor_widget_task(tab_id, task);
+                }
+                Task::none()
+            }
             EditorMessage::ZoomIn => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.zoom_in();

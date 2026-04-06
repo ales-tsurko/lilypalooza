@@ -64,6 +64,7 @@ type DockGroupId = u64;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditorHeaderMenuSection {
     File,
+    Edit,
     Appearance,
 }
 

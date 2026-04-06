@@ -31,6 +31,7 @@ impl CodeEditor {
     /// - `content_cache` and `overlay_cache` are cleared to rebuild canvas geometry
     pub(crate) fn finish_edit_operation(&mut self) {
         self.reset_cursor_blink();
+        self.preferred_column = self.cursor.1;
         self.refresh_search_matches_if_needed();
         // The exact revision value is not semantically meaningful; it only needs
         // to change on edits, so `wrapping_add` is sufficient and overflow-safe.
@@ -966,6 +967,7 @@ impl CodeEditor {
             ArrowDirection::Up | ArrowDirection::Down => self.cursor,
         };
 
+        self.sync_preferred_column();
         self.set_selection_after_move(original_cursor, shift_pressed);
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -991,6 +993,7 @@ impl CodeEditor {
         } else {
             first_non_ws
         };
+        self.sync_preferred_column();
         self.set_selection_after_move(original_cursor, shift_pressed);
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -1018,6 +1021,7 @@ impl CodeEditor {
         } else {
             trimmed_end
         };
+        self.sync_preferred_column();
         self.set_selection_after_move(original_cursor, shift_pressed);
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -1033,6 +1037,7 @@ impl CodeEditor {
     fn handle_document_home(&mut self, shift_pressed: bool) -> Task<Message> {
         let original_cursor = self.cursor;
         self.cursor = (0, 0);
+        self.sync_preferred_column();
         self.set_selection_after_move(original_cursor, shift_pressed);
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -1050,6 +1055,7 @@ impl CodeEditor {
         let last_line = self.buffer.line_count().saturating_sub(1);
         let last_col = self.buffer.line_len(last_line);
         self.cursor = (last_line, last_col);
+        self.sync_preferred_column();
         self.set_selection_after_move(original_cursor, shift_pressed);
         self.finish_navigation_operation();
         self.scroll_to_cursor()
@@ -2066,8 +2072,15 @@ impl CodeEditor {
         let new_height = viewport.bounds().height;
         let new_width = viewport.bounds().width;
         let scroll_changed = (self.viewport_scroll - new_scroll).abs() > 0.1;
+        let content_scroll = (new_scroll
+            - if self.center_cursor {
+                ((new_height - self.line_height) * 0.5).max(0.0)
+            } else {
+                0.0
+            })
+        .max(0.0);
         let visible_lines_count = (new_height / self.line_height).ceil() as usize + 2;
-        let first_visible_line = (new_scroll / self.line_height).floor() as usize;
+        let first_visible_line = (content_scroll / self.line_height).floor() as usize;
         let last_visible_line = first_visible_line + visible_lines_count;
         let margin = visible_lines_count * crate::canvas_editor::CACHE_WINDOW_MARGIN_MULTIPLIER;
         let window_start = first_visible_line.saturating_sub(margin);
@@ -2104,6 +2117,23 @@ impl CodeEditor {
         self.viewport_scroll = new_scroll;
         self.viewport_height = new_height;
         self.viewport_width = new_width;
+
+        if self.center_cursor && scroll_changed {
+            let visual_lines = self.visual_lines_cached(new_width);
+            if !visual_lines.is_empty() {
+                let target_visual = ((new_scroll / self.line_height).round() as usize)
+                    .min(visual_lines.len().saturating_sub(1));
+                let target_vl = &visual_lines[target_visual];
+                let target_line_len = self.buffer.line_len(target_vl.logical_line);
+                let new_col = (target_vl.start_col + self.preferred_column.min(target_vl.len()))
+                    .min(target_line_len);
+                let new_cursor = (target_vl.logical_line, new_col);
+                if self.cursor != new_cursor {
+                    self.cursor = new_cursor;
+                    self.overlay_cache.clear();
+                }
+            }
+        }
 
         if self.clamp_horizontal_scroll_offset() {
             return iced::widget::operation::scroll_to(

@@ -209,6 +209,17 @@ impl EditorState {
         (self.view_settings.font_size - self.default_view_settings.font_size).abs() > 1e-4
     }
 
+    pub(super) fn center_cursor(&self) -> bool {
+        self.view_settings.center_cursor
+    }
+
+    pub(super) fn set_center_cursor(&mut self, value: bool) {
+        self.view_settings.center_cursor = value;
+        for tab in &mut self.tabs {
+            tab.widget.set_center_cursor(value);
+        }
+    }
+
     pub(super) fn set_hue_offset_degrees(&mut self, value: f32) {
         self.theme_settings.hue_offset_degrees = value;
         self.apply_theme();
@@ -677,6 +688,7 @@ impl EditorState {
         let app_theme = self.app_theme.clone();
         let theme_settings = self.theme_settings;
         let font_size = self.view_settings.font_size;
+        let center_cursor = self.view_settings.center_cursor;
         let project_root = self.project_root.clone();
 
         let task = if let Some(tab) = self.tab_mut(tab_id) {
@@ -690,6 +702,7 @@ impl EditorState {
                     to_editor_theme_tuning(theme_settings),
                 ));
             tab.widget.set_font_size(font_size, true);
+            tab.widget.set_center_cursor(center_cursor);
             if !modified {
                 tab.widget.mark_saved();
             }
@@ -771,6 +784,7 @@ fn build_editor(
     editor.set_project_root(project_root);
     editor.set_font(fonts::MONO);
     editor.set_font_size(view_settings.font_size, true);
+    editor.set_center_cursor(view_settings.center_cursor);
     editor.set_lsp_enabled(false);
     editor.set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
         app_theme,

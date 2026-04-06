@@ -15,6 +15,43 @@ use super::wrapping::WrappingCalculator;
 use super::{ArrowDirection, CodeEditor, Message};
 
 impl CodeEditor {
+    pub(crate) fn sync_preferred_column(&mut self) {
+        self.preferred_column = self.cursor.1;
+    }
+
+    pub(crate) fn target_vertical_scroll_offset_for_cursor(&self) -> f32 {
+        let visual_lines = self.visual_lines_cached(self.viewport_width);
+        let cursor_visual =
+            WrappingCalculator::logical_to_visual(&visual_lines, self.cursor.0, self.cursor.1);
+
+        let cursor_y = if let Some(visual_idx) = cursor_visual {
+            visual_idx as f32 * self.line_height
+        } else {
+            self.cursor.0 as f32 * self.line_height
+        };
+
+        if self.center_cursor {
+            cursor_y.max(0.0)
+        } else {
+            let vertical_padding = self.centered_vertical_padding();
+            let viewport_top = self.viewport_scroll;
+            let viewport_bottom = self.viewport_scroll + self.viewport_height;
+            let top_margin = self.line_height * 2.0;
+            let bottom_margin = self.line_height * 2.0;
+
+            if cursor_y + vertical_padding < viewport_top + top_margin {
+                (cursor_y + vertical_padding - top_margin).max(0.0)
+            } else if cursor_y + vertical_padding + self.line_height
+                > viewport_bottom - bottom_margin
+            {
+                cursor_y + vertical_padding + self.line_height + bottom_margin
+                    - self.viewport_height
+            } else {
+                self.viewport_scroll
+            }
+        }
+    }
+
     /// Sets the cursor position to the specified line and column.
     ///
     /// This method ensures the new position is within the bounds of the text buffer.
@@ -35,6 +72,7 @@ impl CodeEditor {
         let col = col.min(line_len);
 
         self.cursor = (line, col);
+        self.sync_preferred_column();
         // Programmatic jumps should end any drag gesture. Otherwise, a stale
         // drag state may let subsequent hover events move the caret away.
         self.is_dragging = false;
@@ -94,6 +132,7 @@ impl CodeEditor {
 
                     let target_vl = &visual_lines[target_visual];
                     let current_vl = &visual_lines[current_visual];
+                    let preferred_column = self.preferred_column;
 
                     // Try to maintain column position, clamped to segment
                     let new_col = if target_vl.logical_line == line {
@@ -112,7 +151,8 @@ impl CodeEditor {
                     } else {
                         // Different logical line
                         let target_line_len = self.buffer.line_len(target_vl.logical_line);
-                        (target_vl.start_col + col.min(target_vl.len())).min(target_line_len)
+                        (target_vl.start_col + preferred_column.min(target_vl.len()))
+                            .min(target_line_len)
                     };
 
                     self.cursor = (target_vl.logical_line, new_col);
@@ -126,6 +166,7 @@ impl CodeEditor {
                     let prev_line_len = self.buffer.line_len(line - 1);
                     self.cursor = (line - 1, prev_line_len);
                 }
+                self.sync_preferred_column();
             }
             ArrowDirection::Right => {
                 let line_len = self.buffer.line_len(line);
@@ -135,6 +176,7 @@ impl CodeEditor {
                     // Move to start of next line
                     self.cursor = (line + 1, 0);
                 }
+                self.sync_preferred_column();
             }
         }
         // Cursor movement affects only overlay visuals (caret, current-line highlight),
@@ -155,7 +197,8 @@ impl CodeEditor {
         }
 
         // Calculate visual line number - point.y is already in canvas coordinates
-        let visual_line_idx = (point.y / self.line_height) as usize;
+        let content_y = (point.y - self.centered_vertical_padding()).max(0.0);
+        let visual_line_idx = (content_y / self.line_height) as usize;
 
         // Reuse memoized wrapping result for hit-testing. This avoids recomputing
         // visual lines on every mouse move/drag.
@@ -205,6 +248,7 @@ impl CodeEditor {
         let before = self.cursor;
         if let Some(cursor) = self.calculate_cursor_from_point(point) {
             self.cursor = cursor;
+            self.sync_preferred_column();
             if self.cursor != before {
                 // Only clear overlay when the caret actually moved.
                 self.overlay_cache.clear();
@@ -221,37 +265,14 @@ impl CodeEditor {
         let cursor_visual =
             WrappingCalculator::logical_to_visual(&visual_lines, self.cursor.0, self.cursor.1);
 
-        let cursor_y = if let Some(visual_idx) = cursor_visual {
-            visual_idx as f32 * self.line_height
-        } else {
-            // Fallback to logical line if visual not found
-            self.cursor.0 as f32 * self.line_height
-        };
+        let new_v_scroll = self.target_vertical_scroll_offset_for_cursor();
 
-        let viewport_top = self.viewport_scroll;
-        let viewport_bottom = self.viewport_scroll + self.viewport_height;
-
-        // Add margins to avoid cursor being exactly at edge
-        let top_margin = self.line_height * 2.0;
-        let bottom_margin = self.line_height * 2.0;
-
-        // Calculate new vertical scroll position if cursor is outside visible area
-        let new_v_scroll = if cursor_y < viewport_top + top_margin {
-            // Cursor is above viewport - scroll up
-            Some((cursor_y - top_margin).max(0.0))
-        } else if cursor_y + self.line_height > viewport_bottom - bottom_margin {
-            // Cursor is below viewport - scroll down
-            Some(cursor_y + self.line_height + bottom_margin - self.viewport_height)
-        } else {
-            None
-        };
-
-        let vertical_task = if let Some(new_scroll) = new_v_scroll {
+        let vertical_task = if (new_v_scroll - self.viewport_scroll).abs() > 0.1 {
             scroll_to(
                 self.scrollable_id.clone(),
                 scrollable::AbsoluteOffset {
                     x: 0.0,
-                    y: new_scroll,
+                    y: new_v_scroll,
                 },
             )
         } else {
@@ -313,7 +334,7 @@ impl CodeEditor {
         let new_line = current_line.saturating_sub(lines_per_page);
         let line_len = self.buffer.line_len(new_line);
 
-        self.cursor = (new_line, self.cursor.1.min(line_len));
+        self.cursor = (new_line, self.preferred_column.min(line_len));
         self.overlay_cache.clear();
     }
 
@@ -326,7 +347,7 @@ impl CodeEditor {
         let new_line = (current_line + lines_per_page).min(max_line);
         let line_len = self.buffer.line_len(new_line);
 
-        self.cursor = (new_line, self.cursor.1.min(line_len));
+        self.cursor = (new_line, self.preferred_column.min(line_len));
         self.overlay_cache.clear();
     }
 
@@ -336,6 +357,7 @@ impl CodeEditor {
     pub(crate) fn handle_mouse_drag(&mut self, point: Point) {
         if let Some(cursor) = self.calculate_cursor_from_point(point) {
             self.cursor = cursor;
+            self.sync_preferred_column();
             self.selection_end = Some(self.cursor);
         }
     }

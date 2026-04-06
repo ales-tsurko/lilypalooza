@@ -64,12 +64,7 @@ impl CodeEditor {
         let total_visual_lines = visual_lines.len();
         let content_height = total_visual_lines as f32 * self.line_height;
 
-        // Use max of content height and viewport height to ensure the canvas
-        // always covers the visible area (prevents visual artifacts when
-        // content is shorter than viewport after reset/file change)
-        let canvas_height = content_height.max(self.viewport_height);
-
-        (visual_lines, canvas_height)
+        (visual_lines, content_height.max(self.line_height))
     }
 
     /// Creates the canvas widget wrapped in a scrollable container.
@@ -85,8 +80,13 @@ impl CodeEditor {
         let canvas = Canvas::new(self)
             .width(Length::Fill)
             .height(Length::Fixed(canvas_height));
+        let vertical_padding = self.centered_vertical_padding();
+        let content = Column::new()
+            .push(Space::new().height(Length::Fixed(vertical_padding)))
+            .push(canvas)
+            .push(Space::new().height(Length::Fixed(vertical_padding)));
 
-        Scrollable::new(canvas)
+        Scrollable::new(content)
             .id(self.scrollable_id.clone())
             .width(Length::Fill)
             .height(Length::Fill)
@@ -239,7 +239,9 @@ impl CodeEditor {
             // Calculate visual Y position relative to the viewport
             // We subtract viewport_scroll because the content is scrolled up/down
             // but the cursor position sent to IME must be relative to the visible area
-            let cursor_y = (cursor_visual as f32 * self.line_height) - self.viewport_scroll;
+            let cursor_y = self.centered_vertical_padding()
+                + (cursor_visual as f32 * self.line_height)
+                - self.viewport_scroll;
 
             Rectangle::new(
                 iced::Point::new(cursor_x, cursor_y + 2.0),

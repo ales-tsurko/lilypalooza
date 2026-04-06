@@ -209,6 +209,10 @@ pub struct CodeEditor {
     pub(crate) viewport_height: f32,
     /// Viewport width (visible area)
     pub(crate) viewport_width: f32,
+    /// Whether the cursor should stay vertically centered while navigating.
+    pub(crate) center_cursor: bool,
+    /// Preferred logical column preserved across vertical navigation.
+    pub(crate) preferred_column: usize,
     /// Command history for undo/redo
     pub(crate) history: CommandHistory,
     /// Whether we're currently grouping commands (for smart undo)
@@ -532,6 +536,8 @@ impl CodeEditor {
             viewport_scroll: 0.0,
             viewport_height: 600.0, // Default, will be updated
             viewport_width: 800.0,  // Default, will be updated
+            center_cursor: false,
+            preferred_column: 0,
             history: CommandHistory::new(100),
             is_grouping: false,
             wrap_enabled: true,
@@ -714,6 +720,29 @@ impl CodeEditor {
         self.viewport_width
     }
 
+    /// Sets whether the cursor should stay vertically centered while navigating.
+    pub fn set_center_cursor(&mut self, enabled: bool) {
+        if self.center_cursor == enabled {
+            return;
+        }
+
+        self.center_cursor = enabled;
+        self.content_cache.clear();
+        self.overlay_cache.clear();
+    }
+
+    pub(crate) fn centered_vertical_padding(&self) -> f32 {
+        if self.center_cursor {
+            ((self.viewport_height - self.line_height) * 0.5).max(0.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub(crate) fn content_viewport_scroll(&self) -> f32 {
+        (self.viewport_scroll - self.centered_vertical_padding()).max(0.0)
+    }
+
     /// Sets the viewport size tracked by the editor.
     ///
     /// This should be updated whenever the host layout changes size or when an
@@ -742,7 +771,11 @@ impl CodeEditor {
                 self.scrollable_id.clone(),
                 iced::widget::scrollable::AbsoluteOffset {
                     x: 0.0,
-                    y: self.viewport_scroll,
+                    y: if self.center_cursor {
+                        self.target_vertical_scroll_offset_for_cursor()
+                    } else {
+                        self.viewport_scroll
+                    },
                 },
             ),
             scroll_to(
@@ -1191,7 +1224,7 @@ impl CodeEditor {
         let x = self.gutter_width()
             + 5.0
             + measure_text_width(&prefix_text, self.full_char_width, self.char_width);
-        let y = visual_index as f32 * self.line_height;
+        let y = self.centered_vertical_padding() + visual_index as f32 * self.line_height;
         Some(iced::Point::new(x, y))
     }
 

@@ -1554,7 +1554,8 @@ impl canvas::Program<Message> for CodeEditor {
         } else {
             bounds.height
         };
-        let first_visible_line = (self.viewport_scroll / self.line_height).floor() as usize;
+        let first_visible_line =
+            (self.content_viewport_scroll() / self.line_height).floor() as usize;
         let visible_lines_count =
             (effective_viewport_height / self.line_height).ceil() as usize + 2;
         let last_visible_line = (first_visible_line + visible_lines_count).min(visual_lines.len());

@@ -121,6 +121,7 @@ pub(super) enum EditorMessage {
     SaveRequested,
     SaveAsRequested,
     SaveAsPicked(Option<PathBuf>),
+    SetCenterCursor(bool),
     ZoomIn,
     ZoomOut,
     ResetZoom,
