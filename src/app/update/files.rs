@@ -558,7 +558,8 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn start_compile_if_queued(&mut self) {
-        if !self.compile_requested || self.compile_session.is_some() || self.compile_outputs_loading {
+        if !self.compile_requested || self.compile_session.is_some() || self.compile_outputs_loading
+        {
             return;
         }
 
@@ -735,7 +736,10 @@ impl Lilypalooza {
     ) -> Task<Message> {
         self.compile_outputs_loading = false;
 
-        let current_score_path = self.current_score.as_ref().map(|score| score.path.as_path());
+        let current_score_path = self
+            .current_score
+            .as_ref()
+            .map(|score| score.path.as_path());
         let matches_current_score = ready
             .result
             .as_ref()
@@ -783,7 +787,10 @@ impl Lilypalooza {
                 self.sync_playback_file();
 
                 self.score_cursor_maps = outputs.score_cursor_maps;
-                if self.score_cursor_maps.as_ref().is_some_and(ScoreCursorMaps::is_empty)
+                if self
+                    .score_cursor_maps
+                    .as_ref()
+                    .is_some_and(ScoreCursorMaps::is_empty)
                     && outputs.point_and_click_disabled
                 {
                     self.logger.push(
@@ -863,13 +870,9 @@ fn load_compile_outputs(
         .iter()
         .flat_map(|page| page.note_anchors.iter().copied())
         .collect();
-    let score_cursor_maps = score_cursor::build_score_cursor_maps(
-        &build_dir,
-        score_stem,
-        &all_anchors,
-        &midi_files,
-    )
-    .ok();
+    let score_cursor_maps =
+        score_cursor::build_score_cursor_maps(&build_dir, score_stem, &all_anchors, &midi_files)
+            .ok();
 
     Ok(super::LoadedCompileOutputs {
         score_path,
@@ -923,8 +926,8 @@ fn collect_loaded_rendered_pages(
     let mut rendered_pages = Vec::with_capacity(pages.len());
 
     for (index, path, size) in pages {
-        let bytes =
-            fs::read(&path).map_err(|error| format!("Failed to read SVG {}: {error}", path.display()))?;
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("Failed to read SVG {}: {error}", path.display()))?;
         let source = String::from_utf8_lossy(&bytes);
         let page_index = index.saturating_sub(1) as usize;
         let note_anchors = score_cursor::parse_svg_note_anchors(&source, page_index);

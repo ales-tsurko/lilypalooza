@@ -29,7 +29,7 @@ impl CodeEditor {
     /// - `buffer_revision` is bumped to invalidate layout-derived caches
     /// - `visual_lines_cache` is cleared so wrapping is recalculated on next use
     /// - `content_cache` and `overlay_cache` are cleared to rebuild canvas geometry
-    fn finish_edit_operation(&mut self) {
+    pub(crate) fn finish_edit_operation(&mut self) {
         self.reset_cursor_blink();
         self.refresh_search_matches_if_needed();
         // The exact revision value is not semantically meaningful; it only needs
@@ -51,6 +51,11 @@ impl CodeEditor {
     fn finish_navigation_operation(&mut self) {
         self.reset_cursor_blink();
         self.overlay_cache.clear();
+    }
+
+    fn close_completion_for_interaction(&mut self) {
+        self.close_completion(false);
+        self.clear_completion_suppression_if_needed();
     }
 
     pub(crate) fn max_horizontal_scroll_offset(&self) -> f32 {
@@ -97,7 +102,7 @@ impl CodeEditor {
     /// This should be called when a series of related operations is complete,
     /// or when starting a new type of operation that shouldn't be grouped
     /// with previous operations.
-    fn end_grouping_if_active(&mut self) {
+    pub(crate) fn end_grouping_if_active(&mut self) {
         if self.is_grouping {
             self.history.end_group();
             self.is_grouping = false;
@@ -126,7 +131,7 @@ impl CodeEditor {
         self.history.push(command);
     }
 
-    fn apply_replace_range(
+    pub(crate) fn apply_replace_range(
         &mut self,
         start: (usize, usize),
         end: (usize, usize),
@@ -180,7 +185,7 @@ impl CodeEditor {
             .count()
     }
 
-    fn position_after_text(start: (usize, usize), text: &str) -> (usize, usize) {
+    pub(crate) fn position_after_text(start: (usize, usize), text: &str) -> (usize, usize) {
         let lines: Vec<&str> = text.split('\n').collect();
         if lines.len() == 1 {
             (start.0, start.1 + text.chars().count())
@@ -391,10 +396,11 @@ impl CodeEditor {
         let (line, col) = self.cursor;
         self.apply_command(Box::new(InsertCharCommand::new(line, col, ch, self.cursor)));
         self.finish_edit_operation();
-
-        if ch.is_alphanumeric() || ch == '_' || ch == '.' {
-            self.lsp_flush_pending_changes();
-            self.lsp_request_completion();
+        self.clear_completion_suppression_if_needed();
+        if self.should_auto_trigger_completion(ch) {
+            self.trigger_completion(false);
+        } else {
+            self.close_completion(false);
         }
 
         self.scroll_to_cursor()
@@ -2176,12 +2182,88 @@ impl CodeEditor {
     /// # Returns
     /// A `Task<Message>` for any asynchronous operations, such as scrolling to keep the cursor visible after state updates
     pub fn update(&mut self, message: &Message) -> Task<Message> {
+        if matches!(
+            message,
+            Message::ArrowKey(..)
+                | Message::WordArrowKey(..)
+                | Message::Backspace
+                | Message::Delete
+                | Message::DeleteWordBackward
+                | Message::DeleteWordForward
+                | Message::DeleteToLineStart
+                | Message::DeleteToLineEnd
+                | Message::DeleteSelection
+                | Message::SelectAll
+                | Message::InsertLineBelow
+                | Message::InsertLineAbove
+                | Message::DeleteLine
+                | Message::MoveLineUp
+                | Message::MoveLineDown
+                | Message::CopyLineUp
+                | Message::CopyLineDown
+                | Message::JoinLines
+                | Message::ToggleLineComment
+                | Message::ToggleBlockComment
+                | Message::SelectLine
+                | Message::JumpToMatchingBracket
+                | Message::Home(..)
+                | Message::End(..)
+                | Message::DocumentHome(..)
+                | Message::DocumentEnd(..)
+                | Message::GotoPosition(..)
+                | Message::PageUp
+                | Message::PageDown
+                | Message::MouseClick(..)
+                | Message::MouseDoubleClick(..)
+                | Message::MouseTripleClick(..)
+                | Message::MouseDrag(..)
+                | Message::MouseHover(..)
+                | Message::MouseRelease
+                | Message::OpenSearch
+                | Message::OpenSearchReplace
+                | Message::OpenGotoLine
+                | Message::CloseSearch
+                | Message::CloseGotoLine
+        ) {
+            self.close_completion_for_interaction();
+        }
+
         match message {
             // Text input operations
             Message::CharacterInput(ch) => self.handle_character_input_msg(*ch),
             Message::Tab => self.handle_tab(),
             Message::ShiftTab => self.handle_shift_tab(),
             Message::Enter => self.handle_enter(),
+            Message::TriggerCompletion => {
+                self.trigger_completion(true);
+                self.completion_scroll_task()
+            }
+            Message::CloseCompletion => {
+                self.close_completion(true);
+                Task::none()
+            }
+            Message::CompletionNavigateUp => {
+                self.handle_completion_navigation(-1);
+                self.completion_scroll_task()
+            }
+            Message::CompletionNavigateDown => {
+                self.handle_completion_navigation(1);
+                self.completion_scroll_task()
+            }
+            Message::CompletionConfirm => {
+                if self.apply_selected_completion(None) {
+                    self.scroll_to_cursor()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::CompletionSelected(index) => {
+                if self.apply_selected_completion(Some(*index)) {
+                    self.scroll_to_cursor()
+                } else {
+                    Task::none()
+                }
+            }
 
             // Deletion operations
             Message::Backspace => self.handle_backspace(),

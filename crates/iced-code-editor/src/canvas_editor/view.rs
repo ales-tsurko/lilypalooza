@@ -6,6 +6,7 @@ use iced::widget::canvas::Canvas;
 use iced::widget::{Column, Row, Scrollable, Space, container, scrollable};
 use iced::{Background, Color, Element, Length, Rectangle, Shadow, Vector};
 
+use super::completion;
 use super::goto_line_dialog;
 use super::ime_requester::ImeRequester;
 use super::search_dialog;
@@ -327,6 +328,10 @@ impl CodeEditor {
             .height(Length::Shrink);
 
             editor_stack = editor_stack.push(positioned_dialog);
+        }
+
+        if self.completion_state.visible {
+            editor_stack = editor_stack.push(completion::view(&self.completion_state, self));
         }
 
         // Wrap the editor stack in a container with clip

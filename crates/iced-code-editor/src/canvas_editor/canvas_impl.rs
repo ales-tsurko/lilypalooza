@@ -1011,6 +1011,25 @@ impl CodeEditor {
         key: &keyboard::Key,
         _modifiers: &keyboard::Modifiers,
     ) -> Option<Action<Message>> {
+        if self.completion_state.visible {
+            return match key {
+                keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                    Some(Action::publish(Message::CloseCompletion).and_capture())
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                    Some(Action::publish(Message::CompletionNavigateUp).and_capture())
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                    Some(Action::publish(Message::CompletionNavigateDown).and_capture())
+                }
+                keyboard::Key::Named(keyboard::key::Named::Enter)
+                | keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                    Some(Action::publish(Message::CompletionConfirm).and_capture())
+                }
+                _ => None,
+            };
+        }
+
         // Handle Escape (close search dialog if open)
         if self.search_state.is_open
             && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))

@@ -126,6 +126,9 @@ impl Lilypalooza {
             ShortcutAction::EditorOpenGotoLine => {
                 self.dispatch_active_editor_widget_message(iced_code_editor::Message::OpenGotoLine)
             }
+            ShortcutAction::EditorTriggerCompletion => self.dispatch_active_editor_widget_message(
+                iced_code_editor::Message::TriggerCompletion,
+            ),
             ShortcutAction::EditorFindNext => {
                 self.dispatch_active_editor_widget_message(iced_code_editor::Message::FindNext)
             }
@@ -542,8 +545,9 @@ impl Lilypalooza {
         };
 
         let title = self.editor.tab_title(tab_id);
-        let prompt = if self.editor.tab_file_state(tab_id) == Some(EditorTabFileState::MissingOnDisk) {
-            ErrorPrompt::new(
+        let prompt =
+            if self.editor.tab_file_state(tab_id) == Some(EditorTabFileState::MissingOnDisk) {
+                ErrorPrompt::new(
                 format!("Save {title}?"),
                 format!(
                     "{title} is missing on disk. Save it before continuing to recreate the file?"
@@ -552,14 +556,14 @@ impl Lilypalooza {
                 PromptButtons::SaveDiscardCancel,
             )
             .with_discard_label("Close Without Saving")
-        } else {
-            ErrorPrompt::new(
-                format!("Close {title}?"),
-                format!("Save changes to {title} before continuing?"),
-                ErrorFatality::Recoverable,
-                PromptButtons::SaveDiscardCancel,
-            )
-        };
+            } else {
+                ErrorPrompt::new(
+                    format!("Close {title}?"),
+                    format!("Save changes to {title} before continuing?"),
+                    ErrorFatality::Recoverable,
+                    PromptButtons::SaveDiscardCancel,
+                )
+            };
         self.error_prompt = Some(prompt);
         self.prompt_ok_action = None;
     }

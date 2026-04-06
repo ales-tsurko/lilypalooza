@@ -30,7 +30,10 @@ impl EditorFileWatcher {
     }
 
     pub(crate) fn sync_paths(&mut self, paths: &[PathBuf]) -> Result<(), notify::Error> {
-        let next_files: HashSet<_> = paths.iter().map(|path| state::normalize_path(path)).collect();
+        let next_files: HashSet<_> = paths
+            .iter()
+            .map(|path| state::normalize_path(path))
+            .collect();
 
         let removed_files: Vec<_> = self
             .watched_files

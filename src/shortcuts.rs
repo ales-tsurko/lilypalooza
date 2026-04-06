@@ -19,6 +19,7 @@ pub(crate) enum ShortcutAction {
     EditorOpenSearch,
     EditorOpenSearchReplace,
     EditorOpenGotoLine,
+    EditorTriggerCompletion,
     EditorFindNext,
     EditorFindPrevious,
     EditorWordLeft,
@@ -145,6 +146,7 @@ const EDITOR_CONTEXTUAL_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::EditorOpenSearch,
     ShortcutAction::EditorOpenSearchReplace,
     ShortcutAction::EditorOpenGotoLine,
+    ShortcutAction::EditorTriggerCompletion,
     ShortcutAction::EditorFindNext,
     ShortcutAction::EditorFindPrevious,
     ShortcutAction::EditorWordLeft,
@@ -367,6 +369,9 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
         }
         ShortcutAction::EditorOpenGotoLine => {
             vec![binding_code(ShortcutKeyCode::KeyG, true, false, false)]
+        }
+        ShortcutAction::EditorTriggerCompletion => {
+            vec![binding_named_ctrl(ShortcutNamedKey::Space, false, false)]
         }
         ShortcutAction::EditorFindNext => {
             vec![binding_code(ShortcutKeyCode::F3, false, false, false)]
@@ -639,8 +644,15 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
 }
 
 fn binding_matches(binding: ShortcutBinding, input: ShortcutInput<'_>) -> bool {
-    let has_primary_modifier = input.modifiers.command() || input.modifiers.control();
+    let has_primary_modifier = if cfg!(target_os = "macos") {
+        input.modifiers.command()
+    } else {
+        input.modifiers.control()
+    };
+    let has_control_modifier = input.modifiers.control();
+
     if has_primary_modifier != binding.primary
+        || has_control_modifier != binding.control
         || input.modifiers.alt() != binding.alt
         || input.modifiers.shift() != binding.shift
     {
@@ -662,6 +674,9 @@ fn format_binding(binding: ShortcutBinding) -> String {
 
     if binding.primary {
         parts.push(platform_primary_label());
+    }
+    if binding.control {
+        parts.push("Ctrl");
     }
     if binding.alt {
         parts.push(platform_alt_label());
@@ -761,6 +776,7 @@ const fn binding_code(
     ShortcutBinding {
         key: ShortcutKey::Code(code),
         primary,
+        control: false,
         alt,
         shift,
     }
@@ -775,6 +791,17 @@ const fn binding_named(
     ShortcutBinding {
         key: ShortcutKey::Named(named),
         primary,
+        control: false,
+        alt,
+        shift,
+    }
+}
+
+const fn binding_named_ctrl(named: ShortcutNamedKey, alt: bool, shift: bool) -> ShortcutBinding {
+    ShortcutBinding {
+        key: ShortcutKey::Named(named),
+        primary: false,
+        control: true,
         alt,
         shift,
     }
@@ -851,6 +878,7 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::EditorOpenSearch => Some(ShortcutActionId::EditorOpenSearch),
         ShortcutAction::EditorOpenSearchReplace => Some(ShortcutActionId::EditorOpenSearchReplace),
         ShortcutAction::EditorOpenGotoLine => Some(ShortcutActionId::EditorOpenGotoLine),
+        ShortcutAction::EditorTriggerCompletion => Some(ShortcutActionId::EditorTriggerCompletion),
         ShortcutAction::EditorFindNext => Some(ShortcutActionId::EditorFindNext),
         ShortcutAction::EditorFindPrevious => Some(ShortcutActionId::EditorFindPrevious),
         ShortcutAction::EditorWordLeft => Some(ShortcutActionId::EditorWordLeft),

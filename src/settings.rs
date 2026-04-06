@@ -267,6 +267,7 @@ pub(crate) enum ShortcutKey {
 pub(crate) struct ShortcutBinding {
     pub(crate) key: ShortcutKey,
     pub(crate) primary: bool,
+    pub(crate) control: bool,
     pub(crate) alt: bool,
     pub(crate) shift: bool,
 }
@@ -276,6 +277,7 @@ impl Default for ShortcutBinding {
         Self {
             key: ShortcutKey::Code(ShortcutKeyCode::KeyS),
             primary: false,
+            control: false,
             alt: false,
             shift: false,
         }
@@ -303,6 +305,7 @@ pub(crate) enum ShortcutActionId {
     EditorOpenSearch,
     EditorOpenSearchReplace,
     EditorOpenGotoLine,
+    EditorTriggerCompletion,
     EditorFindNext,
     EditorFindPrevious,
     EditorWordLeft,

@@ -626,10 +626,7 @@ fn is_relevant_score_change(event: &notify::Event, watched_path: &Path) -> bool 
 fn is_relevant_editor_file_change(event: &notify::Event, watched_path: &Path) -> bool {
     let kind_matches = matches!(
         event.kind,
-        EventKind::Any
-            | EventKind::Create(_)
-            | EventKind::Modify(_)
-            | EventKind::Remove(_)
+        EventKind::Any | EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
     );
 
     if !kind_matches {

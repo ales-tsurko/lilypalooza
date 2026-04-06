@@ -9,6 +9,7 @@ use iced::widget::{Id, canvas};
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering as CmpOrdering;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
@@ -37,6 +38,7 @@ type BracketPair = (CursorPosition, CursorPosition);
 mod canvas_impl;
 mod clipboard;
 pub mod command;
+mod completion;
 mod cursor;
 mod goto_line;
 mod goto_line_dialog;
@@ -158,6 +160,10 @@ pub struct CodeEditor {
     pub(crate) style: Style,
     /// Syntax highlighting language
     pub(crate) syntax: String,
+    /// Resolved on-disk path for the current document, if any.
+    pub(crate) document_path: Option<PathBuf>,
+    /// Project root used for path-aware editor helpers like include completion.
+    pub(crate) project_root: Option<PathBuf>,
     /// Last cursor blink time
     pub(crate) last_blink: Instant,
     /// Cursor visible state
@@ -193,6 +199,8 @@ pub struct CodeEditor {
     pub(crate) scrollable_id: Id,
     /// ID for the horizontal scrollable widget (only used when wrap_enabled = false)
     pub(crate) horizontal_scrollable_id: Id,
+    /// ID for the completion popup scrollable.
+    pub(crate) completion_scrollable_id: Id,
     /// Cache for max content width: (buffer_revision, width_in_pixels)
     pub(crate) max_content_width_cache: RefCell<Option<(u64, f32)>>,
     /// Current viewport scroll position (Y offset)
@@ -221,6 +229,8 @@ pub struct CodeEditor {
     pub(crate) line_numbers_enabled: bool,
     /// Whether LSP support is enabled
     pub(crate) lsp_enabled: bool,
+    /// Generic completion popup state.
+    pub(crate) completion_state: completion::CompletionState,
     /// Active LSP client connection, if configured.
     pub(crate) lsp_client: Option<Box<dyn lsp::LspClient>>,
     /// Metadata for the currently open LSP document.
@@ -412,6 +422,18 @@ pub enum Message {
     OpenSearch,
     /// Open search and replace dialog (Ctrl+H)
     OpenSearchReplace,
+    /// Manually trigger completion popup.
+    TriggerCompletion,
+    /// Close completion popup.
+    CloseCompletion,
+    /// Navigate to previous completion item.
+    CompletionNavigateUp,
+    /// Navigate to next completion item.
+    CompletionNavigateDown,
+    /// Accept the selected completion item.
+    CompletionConfirm,
+    /// Accept a clicked completion item.
+    CompletionSelected(usize),
     /// Close search dialog (Escape)
     CloseSearch,
     /// Search query text changed
@@ -494,6 +516,8 @@ impl CodeEditor {
             horizontal_scroll_offset: 0.0,
             style: crate::theme::from_iced_theme(&iced::Theme::Dark),
             syntax: syntax.to_string(),
+            document_path: None,
+            project_root: None,
             last_blink: Instant::now(),
             cursor_visible: true,
             selection_start: None,
@@ -503,6 +527,7 @@ impl CodeEditor {
             overlay_cache: canvas::Cache::default(),
             scrollable_id: Id::unique(),
             horizontal_scrollable_id: Id::unique(),
+            completion_scrollable_id: Id::unique(),
             max_content_width_cache: RefCell::new(None),
             viewport_scroll: 0.0,
             viewport_height: 600.0, // Default, will be updated
@@ -517,6 +542,7 @@ impl CodeEditor {
             search_replace_enabled: true,
             line_numbers_enabled: true,
             lsp_enabled: true,
+            completion_state: completion::CompletionState::default(),
             lsp_client: None,
             lsp_document: None,
             lsp_pending_changes: Vec::new(),
@@ -1080,6 +1106,7 @@ impl CodeEditor {
         self.viewport_scroll = 0.0;
         self.history = CommandHistory::new(100);
         self.is_grouping = false;
+        self.completion_state = completion::CompletionState::default();
         self.last_blink = Instant::now();
         self.cursor_visible = true;
         self.content_cache = canvas::Cache::default();
@@ -1101,6 +1128,7 @@ impl CodeEditor {
     /// widget instance, ids, focus state, and measured viewport.
     pub fn reset_document(&mut self, content: &str, syntax: &str) -> iced::Task<Message> {
         self.syntax = syntax.to_string();
+        self.completion_state = completion::CompletionState::default();
         self.reset(content)
     }
 
@@ -1111,8 +1139,19 @@ impl CodeEditor {
         }
 
         self.syntax = syntax.to_string();
+        self.completion_state.close(false);
         self.content_cache.clear();
         self.overlay_cache.clear();
+    }
+
+    /// Sets the resolved on-disk document path used by path-aware editor helpers.
+    pub fn set_document_path(&mut self, path: Option<PathBuf>) {
+        self.document_path = path;
+    }
+
+    /// Sets the current project root used by path-aware editor helpers.
+    pub fn set_project_root(&mut self, path: Option<PathBuf>) {
+        self.project_root = path;
     }
 
     /// Resets the cursor blink animation.

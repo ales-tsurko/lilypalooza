@@ -43,6 +43,7 @@ pub(super) struct EditorState {
     tabs: Vec<EditorTab>,
     active_tab_id: Option<u64>,
     next_tab_id: u64,
+    project_root: Option<PathBuf>,
     app_theme: iced::Theme,
     view_settings: EditorViewSettings,
     default_view_settings: EditorViewSettings,
@@ -59,6 +60,7 @@ impl EditorState {
             tabs: Vec::new(),
             active_tab_id: None,
             next_tab_id: 1,
+            project_root: None,
             app_theme,
             view_settings,
             default_view_settings: EditorViewSettings::default(),
@@ -98,6 +100,13 @@ impl EditorState {
 
     pub(super) fn active_tab_id(&self) -> Option<u64> {
         self.active_tab_id
+    }
+
+    pub(super) fn set_project_root(&mut self, project_root: Option<PathBuf>) {
+        self.project_root = project_root;
+        for tab in &mut self.tabs {
+            tab.widget.set_project_root(self.project_root.clone());
+        }
     }
 
     pub(super) fn has_document(&self) -> bool {
@@ -317,6 +326,8 @@ impl EditorState {
             widget: build_editor(
                 "",
                 "lilypond",
+                None,
+                self.project_root.clone(),
                 &self.app_theme,
                 self.view_settings,
                 self.theme_settings,
@@ -418,6 +429,7 @@ impl EditorState {
         if let Some(tab) = self.tab_mut(tab_id) {
             let next_syntax = syntax_for_path(&normalized_path);
             tab.widget.set_syntax(&next_syntax);
+            tab.widget.set_document_path(Some(normalized_path.clone()));
             tab.path = Some(normalized_path);
             tab.saved_content = Some(content);
             tab.file_state = EditorTabFileState::Ok;
@@ -449,6 +461,7 @@ impl EditorState {
 
         let normalized_path = normalize_editor_path(new_path);
         if let Some(tab) = self.tab_mut(tab_id) {
+            tab.widget.set_document_path(Some(normalized_path.clone()));
             tab.path = Some(normalized_path);
             tab.file_state = EditorTabFileState::Ok;
         }
@@ -471,10 +484,15 @@ impl EditorState {
     }
 
     pub(super) fn tab_saved_content(&self, tab_id: u64) -> Option<&str> {
-        self.tab(tab_id).and_then(|tab| tab.saved_content.as_deref())
+        self.tab(tab_id)
+            .and_then(|tab| tab.saved_content.as_deref())
     }
 
-    pub(super) fn set_tab_file_state(&mut self, tab_id: u64, file_state: EditorTabFileState) -> bool {
+    pub(super) fn set_tab_file_state(
+        &mut self,
+        tab_id: u64,
+        file_state: EditorTabFileState,
+    ) -> bool {
         let Some(tab) = self.tab_mut(tab_id) else {
             return false;
         };
@@ -648,10 +666,13 @@ impl EditorState {
         let app_theme = self.app_theme.clone();
         let theme_settings = self.theme_settings;
         let font_size = self.view_settings.font_size;
+        let project_root = self.project_root.clone();
 
         let task = if let Some(tab) = self.tab_mut(tab_id) {
             let task = tab.widget.reset_document(content, &syntax);
             tab.widget.set_font(fonts::MONO);
+            tab.widget.set_document_path(path.clone());
+            tab.widget.set_project_root(project_root.clone());
             tab.widget
                 .set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
                     &app_theme,
@@ -671,6 +692,8 @@ impl EditorState {
                 widget: build_editor(
                     content,
                     &syntax,
+                    path.clone(),
+                    self.project_root.clone(),
                     &self.app_theme,
                     self.view_settings,
                     self.theme_settings,
@@ -726,11 +749,15 @@ impl EditorState {
 fn build_editor(
     content: &str,
     syntax: &str,
+    document_path: Option<PathBuf>,
+    project_root: Option<PathBuf>,
     app_theme: &iced::Theme,
     view_settings: EditorViewSettings,
     theme_settings: EditorThemeSettings,
 ) -> CodeEditor {
     let mut editor = CodeEditor::new(content, syntax).with_wrap_enabled(false);
+    editor.set_document_path(document_path);
+    editor.set_project_root(project_root);
     editor.set_font(fonts::MONO);
     editor.set_font_size(view_settings.font_size, true);
     editor.set_lsp_enabled(false);

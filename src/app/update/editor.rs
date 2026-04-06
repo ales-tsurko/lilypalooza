@@ -1,6 +1,6 @@
 use super::*;
-use iced::widget::operation::{focus, select_all};
 use crate::app::editor::EditorTabFileState;
+use iced::widget::operation::{focus, select_all};
 
 const EDITOR_TAB_WIDTH: f32 = 144.0;
 const EDITOR_TAB_SLOT_WIDTH: f32 = EDITOR_TAB_WIDTH + 4.0;
