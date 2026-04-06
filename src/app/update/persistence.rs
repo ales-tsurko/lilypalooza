@@ -191,12 +191,19 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn try_persist_settings(&self) -> Result<(), String> {
-        settings::save(&settings::AppSettings {
-            editor_view: self.editor.view_settings(),
-            editor_theme: self.editor.theme_settings(),
-            editor_recent_files_limit: self.editor_recent_files_limit,
-            shortcuts: self.shortcut_settings.clone(),
-        })?;
+        let settings_path = settings::path().ok();
+        let settings_file_open = settings_path
+            .as_deref()
+            .is_some_and(|path| self.editor.find_tab_by_path(path).is_some());
+
+        if !settings_file_open {
+            settings::save(&settings::AppSettings {
+                editor_view: self.editor.view_settings(),
+                editor_theme: self.editor.theme_settings(),
+                editor_recent_files_limit: self.editor_recent_files_limit,
+                shortcuts: self.shortcut_settings.clone(),
+            })?;
+        }
 
         if let Some(project_root) = self.project_root.as_ref() {
             state::save_project(

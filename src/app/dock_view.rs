@@ -385,6 +385,13 @@ fn project_view_submenu<'a>() -> Element<'a, Message> {
             true,
             Some(Message::Shortcuts(ShortcutsMessage::OpenDialog)),
         ))
+        .push(editor_menu_item(
+            "Settings",
+            true,
+            Some(Message::Shortcuts(ShortcutsMessage::ActivateAction(
+                crate::settings::ShortcutActionId::OpenSettingsFile,
+            ))),
+        ))
         .into()
 }
 

@@ -229,6 +229,7 @@ impl Lilypalooza {
             ShortcutAction::OpenActions => {
                 update(self, Message::Shortcuts(ShortcutsMessage::OpenDialog))
             }
+            ShortcutAction::OpenSettingsFile => self.open_settings_file_in_editor(),
             ShortcutAction::NewEditor => update(self, Message::Editor(EditorMessage::NewRequested)),
             ShortcutAction::OpenEditorFile => {
                 update(self, Message::Editor(EditorMessage::OpenRequested))
@@ -793,5 +794,69 @@ impl Lilypalooza {
             },
             EditorContinuation::ExitApp => iced::exit(),
         }
+    }
+
+    fn open_settings_file_in_editor(&mut self) -> Task<Message> {
+        let path = match settings::path() {
+            Ok(path) => path,
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "Settings Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                return Task::none();
+            }
+        };
+
+        if !path.exists() {
+            let settings = settings::AppSettings {
+                editor_view: self.editor.view_settings(),
+                editor_theme: self.editor.theme_settings(),
+                editor_recent_files_limit: self.editor_recent_files_limit,
+                shortcuts: self.shortcut_settings.clone(),
+            };
+
+            if let Err(error) = settings::save(&settings) {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "Settings Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                return Task::none();
+            }
+        }
+
+        self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+        self.open_editor_file_in_editor(&path)
+    }
+
+    pub(in crate::app) fn is_settings_file_path(&self, path: &Path) -> bool {
+        settings::path()
+            .map(|settings_path| {
+                state::normalize_path(&settings_path) == state::normalize_path(path)
+            })
+            .unwrap_or(false)
+    }
+
+    pub(in crate::app) fn reload_settings_from_disk(&mut self, path: &Path) -> Result<(), String> {
+        let loaded = settings::load_from_path(path)?;
+        self.editor.apply_view_settings(loaded.editor_view);
+        self.editor.apply_theme_settings(loaded.editor_theme);
+        self.editor_recent_files_limit = loaded.editor_recent_files_limit.max(1);
+        self.editor_recent_files
+            .truncate(self.editor_recent_files_limit);
+        self.shortcut_settings = loaded.shortcuts;
+        self.sync_editor_viewport_from_layout();
+        self.sync_editor_widget_focus();
+        Ok(())
     }
 }

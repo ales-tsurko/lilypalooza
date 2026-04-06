@@ -208,6 +208,7 @@ fn is_default_editor_recent_files_limit(value: &usize) -> bool {
 pub(crate) enum ShortcutKeyCode {
     KeyA,
     KeyC,
+    Comma,
     KeyF,
     KeyG,
     KeyH,
@@ -300,6 +301,7 @@ pub(crate) enum ShortcutBindingOverride {
 pub(crate) enum ShortcutActionId {
     QuitApp,
     OpenActions,
+    OpenSettingsFile,
     NewEditor,
     OpenEditorFile,
     SaveEditor,
@@ -426,7 +428,11 @@ impl Default for AppSettings {
 pub(crate) fn load() -> Result<AppSettings, String> {
     let path = settings_load_path()?;
 
-    match fs::read_to_string(&path) {
+    load_from_path(&path)
+}
+
+pub(crate) fn load_from_path(path: &std::path::Path) -> Result<AppSettings, String> {
+    match fs::read_to_string(path) {
         Ok(contents) => toml::from_str(&contents)
             .map_err(|error| format!("Failed to parse settings {}: {error}", path.display())),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(AppSettings::default()),
@@ -450,11 +456,152 @@ pub(crate) fn save(settings: &AppSettings) -> Result<(), String> {
         )
     })?;
 
-    let contents = toml::to_string_pretty(settings)
+    let contents = render_settings_file(settings)
         .map_err(|error| format!("Failed to serialize settings: {error}"))?;
 
     fs::write(&path, contents)
         .map_err(|error| format!("Failed to write settings {}: {error}", path.display()))
+}
+
+fn render_settings_file(settings: &AppSettings) -> Result<String, toml::ser::Error> {
+    let defaults = AppSettings::default();
+    let mut out = String::new();
+
+    out.push_str("# Lilypalooza settings\n");
+    out.push_str("#\n");
+    out.push_str("# Defaults are shown as commented lines.\n");
+    out.push_str("# Uncomment and change a line to override it.\n\n");
+
+    out.push_str("[editor_view]\n");
+    push_documented_value(
+        &mut out,
+        "Editor font size in points.",
+        "font_size",
+        &format_f32(settings.editor_view.font_size),
+        &format_f32(defaults.editor_view.font_size),
+    );
+    push_documented_value(
+        &mut out,
+        "Keep the cursor centered vertically while navigating.",
+        "center_cursor",
+        &settings.editor_view.center_cursor.to_string(),
+        &defaults.editor_view.center_cursor.to_string(),
+    );
+
+    out.push_str("\n[editor_theme]\n");
+    push_documented_value(
+        &mut out,
+        "Shift the editor theme hue in degrees.",
+        "hue_offset_degrees",
+        &format_f32(settings.editor_theme.hue_offset_degrees),
+        &format_f32(defaults.editor_theme.hue_offset_degrees),
+    );
+    push_documented_value(
+        &mut out,
+        "Overall syntax saturation multiplier.",
+        "saturation",
+        &format_f32(settings.editor_theme.saturation),
+        &format_f32(defaults.editor_theme.saturation),
+    );
+    push_documented_value(
+        &mut out,
+        "Warm or cool the editor colors.",
+        "warmth",
+        &format_f32(settings.editor_theme.warmth),
+        &format_f32(defaults.editor_theme.warmth),
+    );
+    push_documented_value(
+        &mut out,
+        "Overall editor brightness multiplier.",
+        "brightness",
+        &format_f32(settings.editor_theme.brightness),
+        &format_f32(defaults.editor_theme.brightness),
+    );
+    push_documented_value(
+        &mut out,
+        "Main text brightness multiplier.",
+        "text_dim",
+        &format_f32(settings.editor_theme.text_dim),
+        &format_f32(defaults.editor_theme.text_dim),
+    );
+    push_documented_value(
+        &mut out,
+        "Comment text brightness multiplier.",
+        "comment_dim",
+        &format_f32(settings.editor_theme.comment_dim),
+        &format_f32(defaults.editor_theme.comment_dim),
+    );
+
+    out.push('\n');
+    push_documented_value(
+        &mut out,
+        "How many recent files to keep in menus.",
+        "editor_recent_files_limit",
+        &settings.editor_recent_files_limit.to_string(),
+        &defaults.editor_recent_files_limit.to_string(),
+    );
+
+    out.push_str("\n[shortcuts]\n");
+    out.push_str("# Shortcut overrides. Use View > Actions to discover action ids.\n");
+    if settings.shortcuts.overrides.is_empty() {
+        out.push_str("# Example override:\n");
+        out.push_str(&comment_block(&toml::to_string_pretty(
+            &ShortcutSettings {
+                overrides: vec![ShortcutOverride {
+                    action: ShortcutActionId::OpenActions,
+                    binding: ShortcutBindingOverride::Assigned(ShortcutBinding {
+                        key: ShortcutKey::Code(ShortcutKeyCode::KeyP),
+                        primary: true,
+                        control: false,
+                        alt: false,
+                        shift: true,
+                    }),
+                }],
+            },
+        )?));
+    } else {
+        out.push_str(&toml::to_string_pretty(&settings.shortcuts)?);
+    }
+
+    Ok(out)
+}
+
+fn push_documented_value(out: &mut String, comment: &str, key: &str, value: &str, default: &str) {
+    out.push_str("# ");
+    out.push_str(comment);
+    out.push('\n');
+    if value == default {
+        out.push_str("# ");
+    }
+    out.push_str(key);
+    out.push_str(" = ");
+    out.push_str(value);
+    out.push_str("\n\n");
+}
+
+fn comment_block(value: &str) -> String {
+    let mut out = String::new();
+    for line in value.lines() {
+        out.push_str("# ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn format_f32(value: f32) -> String {
+    let mut s = format!("{value:.3}");
+    while s.contains('.') && s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.push('0');
+    }
+    s
+}
+
+pub(crate) fn path() -> Result<PathBuf, String> {
+    settings_path()
 }
 
 fn settings_path() -> Result<PathBuf, String> {

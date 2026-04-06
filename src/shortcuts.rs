@@ -16,6 +16,7 @@ pub(crate) struct ShortcutActionMetadata {
 pub(crate) enum ShortcutAction {
     QuitApp,
     OpenActions,
+    OpenSettingsFile,
     NewEditor,
     OpenEditorFile,
     SaveEditor,
@@ -111,9 +112,10 @@ impl<'a> ShortcutInput<'a> {
     }
 }
 
-const GLOBAL_ACTIONS: [ShortcutAction; 7] = [
+const GLOBAL_ACTIONS: [ShortcutAction; 8] = [
     ShortcutAction::QuitApp,
     ShortcutAction::OpenActions,
+    ShortcutAction::OpenSettingsFile,
     ShortcutAction::SaveEditor,
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Editor),
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Score),
@@ -296,6 +298,7 @@ macro_rules! shortcut_metadata {
 shortcut_metadata! {
     QuitApp => ("Quit App", "Global: close the application window and quit Lilypalooza."),
     OpenActions => ("Open Actions", "Global: open the actions palette."),
+    OpenSettingsFile => ("Open Settings File", "Global: open settings.toml in the editor."),
     NewEditor => ("New File", "Editor: create a new file tab in the text editor."),
     OpenEditorFile => ("Open File", "Editor: open one or more files into editor tabs."),
     SaveEditor => ("Save File", "Editor: save the active file tab."),
@@ -422,6 +425,7 @@ fn action_from_id(action_id: ShortcutActionId) -> ShortcutAction {
     match action_id {
         ShortcutActionId::QuitApp => ShortcutAction::QuitApp,
         ShortcutActionId::OpenActions => ShortcutAction::OpenActions,
+        ShortcutActionId::OpenSettingsFile => ShortcutAction::OpenSettingsFile,
         ShortcutActionId::NewEditor => ShortcutAction::NewEditor,
         ShortcutActionId::OpenEditorFile => ShortcutAction::OpenEditorFile,
         ShortcutActionId::SaveEditor => ShortcutAction::SaveEditor,
@@ -536,6 +540,12 @@ fn binding_override(
 fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
     match action {
         ShortcutAction::QuitApp => vec![binding_code(ShortcutKeyCode::KeyQ, true, false, false)],
+        ShortcutAction::OpenActions => {
+            vec![binding_code(ShortcutKeyCode::KeyP, true, false, true)]
+        }
+        ShortcutAction::OpenSettingsFile => {
+            vec![binding_code(ShortcutKeyCode::Comma, true, false, false)]
+        }
         ShortcutAction::NewEditor => vec![binding_code(ShortcutKeyCode::KeyN, true, false, false)],
         ShortcutAction::OpenEditorFile => {
             vec![binding_code(ShortcutKeyCode::KeyO, true, false, false)]
@@ -703,9 +713,6 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
         }
         ShortcutAction::EditorDeleteSelection => {
             vec![binding_code(ShortcutKeyCode::Delete, false, false, true)]
-        }
-        ShortcutAction::OpenActions => {
-            vec![binding_code(ShortcutKeyCode::KeyP, true, false, true)]
         }
         ShortcutAction::EditorSelectAll => {
             vec![binding_code(ShortcutKeyCode::KeyA, true, false, false)]
@@ -935,6 +942,7 @@ fn code_label(code: ShortcutKeyCode) -> &'static str {
     match code {
         ShortcutKeyCode::KeyA => "A",
         ShortcutKeyCode::KeyC => "C",
+        ShortcutKeyCode::Comma => ",",
         ShortcutKeyCode::KeyF => "F",
         ShortcutKeyCode::KeyG => "G",
         ShortcutKeyCode::KeyH => "H",
@@ -1026,6 +1034,7 @@ fn to_iced_key_code(code: ShortcutKeyCode) -> keyboard::key::Code {
     match code {
         ShortcutKeyCode::KeyA => keyboard::key::Code::KeyA,
         ShortcutKeyCode::KeyC => keyboard::key::Code::KeyC,
+        ShortcutKeyCode::Comma => keyboard::key::Code::Comma,
         ShortcutKeyCode::KeyF => keyboard::key::Code::KeyF,
         ShortcutKeyCode::KeyG => keyboard::key::Code::KeyG,
         ShortcutKeyCode::KeyH => keyboard::key::Code::KeyH,
@@ -1084,6 +1093,7 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
     match action {
         ShortcutAction::QuitApp => Some(ShortcutActionId::QuitApp),
         ShortcutAction::OpenActions => Some(ShortcutActionId::OpenActions),
+        ShortcutAction::OpenSettingsFile => Some(ShortcutActionId::OpenSettingsFile),
         ShortcutAction::NewEditor => Some(ShortcutActionId::NewEditor),
         ShortcutAction::OpenEditorFile => Some(ShortcutActionId::OpenEditorFile),
         ShortcutAction::SaveEditor => Some(ShortcutActionId::SaveEditor),

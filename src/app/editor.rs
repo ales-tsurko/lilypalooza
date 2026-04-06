@@ -220,6 +220,16 @@ impl EditorState {
         }
     }
 
+    pub(super) fn apply_view_settings(&mut self, settings: EditorViewSettings) {
+        self.set_font_size(settings.font_size);
+        self.set_center_cursor(settings.center_cursor);
+    }
+
+    pub(super) fn apply_theme_settings(&mut self, settings: EditorThemeSettings) {
+        self.theme_settings = settings;
+        self.apply_theme();
+    }
+
     pub(super) fn set_hue_offset_degrees(&mut self, value: f32) {
         self.theme_settings.hue_offset_degrees = value;
         self.apply_theme();
@@ -531,6 +541,15 @@ impl EditorState {
             self.active_tab_id = Some(self.tabs[next_index].id);
         }
 
+        true
+    }
+
+    pub(super) fn mark_tab_saved(&mut self, tab_id: u64) -> bool {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return false;
+        };
+
+        tab.widget.mark_saved();
         true
     }
 

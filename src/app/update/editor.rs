@@ -515,6 +515,27 @@ impl Lilypalooza {
                 self.register_editor_recent_file(&path);
                 self.logger.push(format!("Saved {}", path.display()));
                 self.sync_editor_file_watcher();
+                if self.is_settings_file_path(&path) {
+                    match self.reload_settings_from_disk(&path) {
+                        Ok(()) => {
+                            self.editor.mark_tab_saved(tab_id);
+                            self.logger
+                                .push("Reloaded settings from settings.toml".to_string());
+                        }
+                        Err(error) => {
+                            self.show_prompt(
+                                ErrorPrompt::new(
+                                    "Settings Error",
+                                    error,
+                                    ErrorFatality::Recoverable,
+                                    PromptButtons::Ok,
+                                ),
+                                None,
+                            );
+                        }
+                    }
+                    return self.map_editor_widget_task(tab_id, task);
+                }
                 if self.editor_tab_targets_main_score(tab_id) {
                     self.queue_compile("Editor saved, recompiling");
                     self.start_compile_if_queued();
@@ -562,6 +583,27 @@ impl Lilypalooza {
                 if log_save {
                     self.logger.push(format!("Saved {}", path.display()));
                 }
+                if self.is_settings_file_path(&path) {
+                    match self.reload_settings_from_disk(&path) {
+                        Ok(()) => {
+                            self.editor.mark_tab_saved(tab_id);
+                            self.logger
+                                .push("Reloaded settings from settings.toml".to_string());
+                        }
+                        Err(error) => {
+                            self.show_prompt(
+                                ErrorPrompt::new(
+                                    "Settings Error",
+                                    error,
+                                    ErrorFatality::Recoverable,
+                                    PromptButtons::Ok,
+                                ),
+                                None,
+                            );
+                        }
+                    }
+                    return self.map_editor_widget_task(tab_id, task);
+                }
                 if self.editor_tab_targets_main_score(tab_id) {
                     self.queue_compile("Editor saved, recompiling");
                     self.start_compile_if_queued();
@@ -589,9 +631,29 @@ impl Lilypalooza {
     pub(in crate::app) fn reload_editor_tab_from_disk(&mut self, tab_id: u64) -> Task<Message> {
         match self.editor.reload_tab_from_disk(tab_id) {
             Ok(task) => {
-                if let Some(path) = self.editor.tab_path(tab_id) {
+                if let Some(path) = self.editor.tab_path(tab_id).map(Path::to_path_buf) {
                     self.logger
                         .push(format!("Reloaded editor file {}", path.display()));
+                    if self.is_settings_file_path(&path) {
+                        match self.reload_settings_from_disk(&path) {
+                            Ok(()) => {
+                                self.editor.mark_tab_saved(tab_id);
+                                self.logger
+                                    .push("Reloaded settings from settings.toml".to_string());
+                            }
+                            Err(error) => {
+                                self.show_prompt(
+                                    ErrorPrompt::new(
+                                        "Settings Error",
+                                        error,
+                                        ErrorFatality::Recoverable,
+                                        PromptButtons::Ok,
+                                    ),
+                                    None,
+                                );
+                            }
+                        }
+                    }
                 }
                 self.persist_settings();
                 self.map_editor_widget_task(tab_id, task)
