@@ -327,14 +327,14 @@ pub(crate) fn find_syntect_syntax<'a>(
         HighlightBackend::TreeSitter(_) | HighlightBackend::Syntect => {}
     }
 
-    for extension in std::iter::once(syntax).chain(config.syntect_extensions.iter().copied()) {
-        if let Some(syntax_ref) = syntax_set.find_syntax_by_extension(extension) {
+    for token in std::iter::once(syntax).chain(config.syntect_extensions.iter().copied()) {
+        if let Some(syntax_ref) = syntax_set.find_syntax_by_token(token) {
             return Some(syntax_ref);
         }
     }
 
     for name in config.syntect_names {
-        if let Some(syntax_ref) = syntax_set.find_syntax_by_name(name) {
+        if let Some(syntax_ref) = syntax_set.find_syntax_by_token(name) {
             return Some(syntax_ref);
         }
     }
@@ -381,5 +381,11 @@ mod tests {
         let config = config_for_syntax("ron");
         assert_eq!(config.syntect_extensions, ["ron", "rs"]);
         assert_eq!(config.syntect_names, ["Rust"]);
+    }
+
+    #[test]
+    fn generic_syntect_fallback_supports_name_based_syntaxes() {
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        assert!(find_syntect_syntax("Dockerfile", &syntax_set).is_some());
     }
 }

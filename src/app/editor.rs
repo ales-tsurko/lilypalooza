@@ -575,13 +575,16 @@ impl EditorState {
         path: Option<PathBuf>,
         modified: bool,
     ) -> Result<iced::Task<EditorWidgetMessage>, String> {
-        let syntax = path.as_deref().map(syntax_for_path).unwrap_or("lilypond");
+        let syntax = path
+            .as_deref()
+            .map(syntax_for_path)
+            .unwrap_or_else(|| "lilypond".to_string());
         let app_theme = self.app_theme.clone();
         let theme_settings = self.theme_settings;
         let font_size = self.view_settings.font_size;
 
         let task = if let Some(tab) = self.tab_mut(tab_id) {
-            let task = tab.widget.reset_document(content, syntax);
+            let task = tab.widget.reset_document(content, &syntax);
             tab.widget.set_font(fonts::MONO);
             tab.widget
                 .set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(
@@ -599,7 +602,7 @@ impl EditorState {
                 id: tab_id,
                 widget: build_editor(
                     content,
-                    syntax,
+                    &syntax,
                     &self.app_theme,
                     self.view_settings,
                     self.theme_settings,
@@ -690,12 +693,18 @@ fn normalize_editor_path(path: &Path) -> PathBuf {
     })
 }
 
-fn syntax_for_path(path: &Path) -> &str {
+fn syntax_for_path(path: &Path) -> String {
     if let Some(syntax) = iced_code_editor::language::syntax_for_path(path) {
-        syntax
-    } else {
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or("text")
+        return syntax.to_string();
     }
+
+    if let Some(extension) = path.extension().and_then(|extension| extension.to_str()) {
+        return extension.to_string();
+    }
+
+    if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
+        return file_name.to_string();
+    }
+
+    "text".to_string()
 }
