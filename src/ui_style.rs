@@ -1,9 +1,7 @@
 use iced::widget::{button, container, scrollable, svg, text_editor};
 use iced::{Color, Shadow, Theme, Vector, border};
 
-pub(crate) const FONT_SIZE_HEADING_LG: u32 = 30;
 pub(crate) const FONT_SIZE_BODY_MD: u32 = 15;
-pub(crate) const FONT_SIZE_BODY_SM: u32 = 14;
 pub(crate) const FONT_SIZE_UI_SM: u32 = 12;
 pub(crate) const FONT_SIZE_UI_XS: u32 = 11;
 
@@ -26,24 +24,13 @@ pub(crate) const PADDING_STATUS_BAR_H: u16 = 8;
 pub(crate) fn prompt_message(theme: &Theme, critical: bool) -> container::Style {
     let palette = theme.extended_palette();
 
-    if critical {
-        container::Style {
-            background: Some(palette.danger.weak.color.into()),
-            text_color: Some(palette.danger.weak.text),
-            border: border::rounded(10)
-                .width(1)
-                .color(palette.danger.base.color),
-            ..container::Style::default()
-        }
-    } else {
-        container::Style {
-            background: Some(palette.background.weakest.color.into()),
-            text_color: Some(palette.background.weakest.text),
-            border: border::rounded(10)
-                .width(1)
-                .color(palette.background.weak.color),
-            ..container::Style::default()
-        }
+    container::Style {
+        text_color: Some(if critical {
+            palette.danger.base.color
+        } else {
+            palette.background.weak.text
+        }),
+        ..container::Style::default()
     }
 }
 
@@ -51,16 +38,35 @@ pub(crate) fn prompt_dialog(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
 
     container::Style {
-        background: Some(palette.background.base.color.into()),
-        text_color: Some(palette.background.base.text),
-        border: border::rounded(14)
+        background: Some(palette.background.weak.color.into()),
+        text_color: Some(palette.background.weak.text),
+        border: border::rounded(8)
             .width(1)
             .color(palette.background.strong.color),
         shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.30),
-            offset: Vector::new(0.0, 12.0),
-            blur_radius: 28.0,
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.16),
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
         },
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn prompt_header(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.strong.color.into()),
+        text_color: Some(palette.background.weak.text),
+        border: border::rounded(
+            border::Radius::default()
+                .top_left(8)
+                .top_right(8)
+                .bottom_left(0)
+                .bottom_right(0),
+        )
+        .width(0)
+        .color(Color::TRANSPARENT),
         ..container::Style::default()
     }
 }

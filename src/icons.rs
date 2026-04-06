@@ -5,6 +5,8 @@ const ARROW_RIGHT: &[u8] = include_bytes!("../assets/icons/arrow-right.svg");
 const BRUSH_CLEANING: &[u8] = include_bytes!("../assets/icons/brush-cleaning.svg");
 const CHEVRON_DOWN: &[u8] = include_bytes!("../assets/icons/chevron-down.svg");
 const CHEVRON_LEFT: &[u8] = include_bytes!("../assets/icons/chevron-left.svg");
+const CIRCLE_ALERT: &[u8] = include_bytes!("../assets/icons/circle-alert.svg");
+const CIRCLE_X: &[u8] = include_bytes!("../assets/icons/circle-x.svg");
 const ELLIPSIS_VERTICAL: &[u8] = include_bytes!("../assets/icons/ellipsis-vertical.svg");
 const MUSIC_4: &[u8] = include_bytes!("../assets/icons/music-4.svg");
 const METRONOME: &[u8] = include_bytes!("../assets/icons/metronome.svg");
@@ -13,6 +15,7 @@ const PLAY: &[u8] = include_bytes!("../assets/icons/play.svg");
 const PLUS: &[u8] = include_bytes!("../assets/icons/plus.svg");
 const PAUSE: &[u8] = include_bytes!("../assets/icons/pause.svg");
 const FILE_PEN: &[u8] = include_bytes!("../assets/icons/file-pen.svg");
+const INFO: &[u8] = include_bytes!("../assets/icons/info.svg");
 const LIST_MUSIC: &[u8] = include_bytes!("../assets/icons/list-music.svg");
 const SCROLL_TEXT: &[u8] = include_bytes!("../assets/icons/scroll-text.svg");
 const SKIP_BACK: &[u8] = include_bytes!("../assets/icons/skip-back.svg");
@@ -40,6 +43,14 @@ pub(crate) fn chevron_down() -> svg::Handle {
 
 pub(crate) fn chevron_left() -> svg::Handle {
     svg::Handle::from_memory(CHEVRON_LEFT)
+}
+
+pub(crate) fn circle_alert() -> svg::Handle {
+    svg::Handle::from_memory(CIRCLE_ALERT)
+}
+
+pub(crate) fn circle_x() -> svg::Handle {
+    svg::Handle::from_memory(CIRCLE_X)
 }
 
 pub(crate) fn music_4() -> svg::Handle {
@@ -72,6 +83,10 @@ pub(crate) fn pause() -> svg::Handle {
 
 pub(crate) fn file_pen() -> svg::Handle {
     svg::Handle::from_memory(FILE_PEN)
+}
+
+pub(crate) fn info() -> svg::Handle {
+    svg::Handle::from_memory(INFO)
 }
 
 pub(crate) fn list_music() -> svg::Handle {

@@ -1,12 +1,22 @@
-use iced::widget::{button, column, container, opaque, row, text};
-use iced::{Element, Fill, Theme, alignment};
+use iced::widget::{button, column, container, opaque, row, svg, text};
+use iced::{Color, Element, Fill, Length, Theme, alignment};
 
+use crate::fonts;
+use crate::icons;
 use crate::ui_style;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorFatality {
     Critical,
     Recoverable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptTone {
+    Error,
+    Warning,
+    #[expect(dead_code, reason = "Reserved for future informational prompts")]
+    Info,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +31,7 @@ pub(crate) struct ErrorPrompt {
     title: String,
     message: String,
     fatality: ErrorFatality,
+    tone: PromptTone,
     buttons: PromptButtons,
 }
 
@@ -35,6 +46,10 @@ impl ErrorPrompt {
             title: title.into(),
             message: message.into(),
             fatality,
+            tone: match fatality {
+                ErrorFatality::Critical => PromptTone::Error,
+                ErrorFatality::Recoverable => PromptTone::Warning,
+            },
             buttons,
         }
     }
@@ -102,10 +117,13 @@ impl ErrorPrompt {
         let is_critical = matches!(self.fatality, ErrorFatality::Critical);
         let critical_info = "The app cannot continue and will close after you press OK";
 
-        let error_details = container(text(&self.message).size(ui_style::FONT_SIZE_BODY_SM))
-            .width(Fill)
-            .padding(ui_style::PADDING_SM)
-            .style(move |theme: &Theme| ui_style::prompt_message(theme, is_critical));
+        let error_details = container(
+            text(&self.message)
+                .size(ui_style::FONT_SIZE_UI_SM)
+                .font(fonts::UI),
+        )
+        .width(Fill)
+        .style(move |theme: &Theme| ui_style::prompt_message(theme, is_critical));
 
         let action_row = match self.buttons {
             PromptButtons::Ok => {
@@ -113,7 +131,7 @@ impl ErrorPrompt {
                     unreachable!("OK prompt requires confirm action");
                 };
                 row![
-                    button(text(label).size(ui_style::FONT_SIZE_BODY_SM))
+                    button(text(label).size(ui_style::FONT_SIZE_UI_SM))
                         .style(if is_critical {
                             ui_style::button_danger
                         } else {
@@ -133,11 +151,11 @@ impl ErrorPrompt {
                 };
 
                 row![
-                    button(text(cancel_label).size(ui_style::FONT_SIZE_BODY_SM))
+                    button(text(cancel_label).size(ui_style::FONT_SIZE_UI_SM))
                         .style(ui_style::button_neutral)
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(cancel_message),
-                    button(text(ok_label).size(ui_style::FONT_SIZE_BODY_SM))
+                    button(text(ok_label).size(ui_style::FONT_SIZE_UI_SM))
                         .style(if is_critical {
                             ui_style::button_danger
                         } else {
@@ -160,15 +178,15 @@ impl ErrorPrompt {
                 };
 
                 row![
-                    button(text(cancel_label).size(ui_style::FONT_SIZE_BODY_SM))
+                    button(text(cancel_label).size(ui_style::FONT_SIZE_UI_SM))
                         .style(ui_style::button_neutral)
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(cancel_message),
-                    button(text(discard_label).size(ui_style::FONT_SIZE_BODY_SM))
+                    button(text(discard_label).size(ui_style::FONT_SIZE_UI_SM))
                         .style(ui_style::button_neutral)
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(discard_message),
-                    button(text(save_label).size(ui_style::FONT_SIZE_BODY_SM))
+                    button(text(save_label).size(ui_style::FONT_SIZE_UI_SM))
                         .style(ui_style::button_active)
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(save_message)
@@ -181,18 +199,50 @@ impl ErrorPrompt {
             .width(Fill)
             .align_x(alignment::Horizontal::Right);
 
-        let mut content = column![
-            text(&self.title).size(ui_style::FONT_SIZE_HEADING_LG),
-            error_details
-        ];
+        let (title_icon, title_color) = match self.tone {
+            PromptTone::Error => (icons::circle_x(), Color::from_rgb(0.84, 0.36, 0.37)),
+            PromptTone::Warning => (icons::circle_alert(), Color::from_rgb(0.86, 0.58, 0.23)),
+            PromptTone::Info => (icons::info(), Color::from_rgb(0.33, 0.56, 0.86)),
+        };
+
+        let title = container(
+            row![
+                svg(title_icon)
+                    .width(Length::Fixed(16.0))
+                    .height(Length::Fixed(16.0))
+                    .style(move |_: &Theme, _status| svg::Style {
+                        color: Some(title_color)
+                    }),
+                text(&self.title)
+                    .size(ui_style::FONT_SIZE_UI_SM)
+                    .font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..fonts::UI
+                    })
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center),
+        )
+        .width(Fill)
+        .padding([ui_style::PADDING_XS, ui_style::PADDING_SM])
+        .style(ui_style::prompt_header);
+
+        let mut content = column![error_details];
 
         if is_critical {
-            content = content.push(text(critical_info).size(ui_style::FONT_SIZE_BODY_MD));
+            content = content.push(
+                text(critical_info)
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .font(fonts::UI),
+            );
         }
 
-        let dialog = container(content.push(actions).spacing(ui_style::SPACE_MD))
+        let body = container(content.push(actions).spacing(ui_style::SPACE_MD))
+            .width(Fill)
+            .padding(ui_style::PADDING_SM);
+
+        let dialog = container(column![title, body].spacing(0))
             .width(ui_style::SIZE_SURFACE_LG)
-            .padding(ui_style::PADDING_MD)
             .style(ui_style::prompt_dialog);
 
         let centered_dialog = container(dialog)
