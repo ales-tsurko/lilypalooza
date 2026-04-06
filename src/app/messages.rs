@@ -16,6 +16,7 @@ pub(super) enum Message {
     File(FileMessage),
     Viewer(ViewerMessage),
     ScorePreviewReady(Result<ScorePreviewReady, String>),
+    CompileOutputsReady(CompileOutputsReady),
     PianoRoll(PianoRollMessage),
     Editor(EditorMessage),
     Logger(LoggerMessage),
@@ -42,6 +43,12 @@ pub(super) struct ScorePreviewReady {
     pub(super) zoom: f32,
     pub(super) tier: super::ScoreZoomPreviewTier,
     pub(super) handle: image::Handle,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CompileOutputsReady {
+    pub(super) generation: u64,
+    pub(super) result: Result<super::LoadedCompileOutputs, String>,
 }
 
 #[derive(Debug, Clone)]

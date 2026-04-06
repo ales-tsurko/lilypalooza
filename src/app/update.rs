@@ -51,6 +51,7 @@ pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
         Message::File(message) => app.handle_file_message(message),
         Message::Viewer(message) => app.handle_viewer_message(message),
         Message::ScorePreviewReady(result) => app.handle_score_preview_ready(result),
+        Message::CompileOutputsReady(result) => app.handle_compile_outputs_ready(result),
         Message::PianoRoll(message) => app.handle_piano_roll_message(message),
         Message::Editor(message) => app.handle_editor_message(message),
         Message::Logger(message) => app.handle_logger_message(message),

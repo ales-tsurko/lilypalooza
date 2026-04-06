@@ -19,14 +19,20 @@ impl Logger {
     }
 
     pub(crate) fn push(&mut self, line: impl Into<String>) {
-        self.lines.push(line.into());
+        self.push_raw(line.into());
+        self.sync_text();
+    }
 
-        if self.lines.len() > MAX_LOG_LINES {
-            let overflow = self.lines.len() - MAX_LOG_LINES;
-            self.lines.drain(0..overflow);
+    pub(crate) fn extend(&mut self, lines: impl IntoIterator<Item = String>) {
+        let mut changed = false;
+        for line in lines {
+            self.push_raw(line);
+            changed = true;
         }
 
-        self.sync_text();
+        if changed {
+            self.sync_text();
+        }
     }
 
     pub(crate) fn clear(&mut self) {
@@ -86,5 +92,14 @@ impl Logger {
     fn sync_text(&mut self) {
         let content = self.lines.join("\n");
         self.text = text_editor::Content::with_text(&content);
+    }
+
+    fn push_raw(&mut self, line: String) {
+        self.lines.push(line);
+
+        if self.lines.len() > MAX_LOG_LINES {
+            let overflow = self.lines.len() - MAX_LOG_LINES;
+            self.lines.drain(0..overflow);
+        }
     }
 }

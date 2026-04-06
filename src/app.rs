@@ -85,6 +85,8 @@ struct Lilypalooza {
     editor_file_watcher: Option<EditorFileWatcher>,
     build_dir: Option<TempDir>,
     compile_requested: bool,
+    compile_outputs_loading: bool,
+    compile_generation: u64,
     spinner_step: usize,
     compile_session: Option<lilypond::CompileSession>,
     playback: Option<MidiPlayback>,
@@ -162,15 +164,32 @@ struct RenderedScore {
     current_page: usize,
 }
 
+#[derive(Debug, Clone)]
+struct LoadedCompileOutputs {
+    score_path: PathBuf,
+    rendered_pages: Vec<LoadedRenderedPage>,
+    midi_files: Vec<crate::midi::MidiRollFile>,
+    score_cursor_maps: Option<ScoreCursorMaps>,
+    point_and_click_disabled: bool,
+    score_has_repeats: bool,
+}
+
 struct RenderedPage {
     handle: svg::Handle,
     svg_bytes: Bytes,
+    size: SvgSize,
+    system_bands: Vec<score_cursor::SystemBand>,
+}
+
+#[derive(Debug, Clone)]
+struct LoadedRenderedPage {
+    svg_bytes: Vec<u8>,
     size: SvgSize,
     note_anchors: Vec<score_cursor::SvgNoteAnchor>,
     system_bands: Vec<score_cursor::SystemBand>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct SvgSize {
     width: f32,
     height: f32,
@@ -393,6 +412,8 @@ fn new(
         editor_file_watcher: None,
         build_dir: None,
         compile_requested: false,
+        compile_outputs_loading: false,
+        compile_generation: 0,
         spinner_step: 0,
         compile_session: None,
         playback: None,
