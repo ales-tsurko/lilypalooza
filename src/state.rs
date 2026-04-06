@@ -41,7 +41,7 @@ pub(crate) struct ProjectState {
 }
 
 pub(crate) fn load_global() -> Result<GlobalState, String> {
-    let path = global_state_path()?;
+    let path = global_state_load_path()?;
 
     match fs::read_to_string(&path) {
         Ok(contents) => {
@@ -168,8 +168,29 @@ fn normalize_unique_paths(paths: &mut Vec<PathBuf>) {
 }
 
 fn global_state_path() -> Result<PathBuf, String> {
+    let project_dirs = ProjectDirs::from("", "", "lilypalooza")
+        .ok_or_else(|| "Failed to resolve user config directory".to_string())?;
+
+    Ok(project_dirs.config_dir().join("state.ron"))
+}
+
+fn legacy_global_state_path() -> Result<PathBuf, String> {
     let project_dirs = ProjectDirs::from("by", "alestsurko", "lilypalooza")
         .ok_or_else(|| "Failed to resolve user config directory".to_string())?;
 
     Ok(project_dirs.config_dir().join("state.ron"))
+}
+
+fn global_state_load_path() -> Result<PathBuf, String> {
+    let path = global_state_path()?;
+    if path.is_file() {
+        return Ok(path);
+    }
+
+    let legacy = legacy_global_state_path()?;
+    if legacy.is_file() {
+        return Ok(legacy);
+    }
+
+    Ok(path)
 }

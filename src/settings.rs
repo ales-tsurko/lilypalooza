@@ -422,7 +422,7 @@ impl Default for AppSettings {
 }
 
 pub(crate) fn load() -> Result<AppSettings, String> {
-    let path = settings_path()?;
+    let path = settings_load_path()?;
 
     match fs::read_to_string(&path) {
         Ok(contents) => toml::from_str(&contents)
@@ -456,8 +456,29 @@ pub(crate) fn save(settings: &AppSettings) -> Result<(), String> {
 }
 
 fn settings_path() -> Result<PathBuf, String> {
+    let project_dirs = ProjectDirs::from("", "", "lilypalooza")
+        .ok_or_else(|| "Failed to resolve user config directory".to_string())?;
+
+    Ok(project_dirs.config_dir().join("settings.toml"))
+}
+
+fn legacy_settings_path() -> Result<PathBuf, String> {
     let project_dirs = ProjectDirs::from("by", "alestsurko", "lilypalooza")
         .ok_or_else(|| "Failed to resolve user config directory".to_string())?;
 
     Ok(project_dirs.config_dir().join("settings.toml"))
+}
+
+fn settings_load_path() -> Result<PathBuf, String> {
+    let path = settings_path()?;
+    if path.is_file() {
+        return Ok(path);
+    }
+
+    let legacy = legacy_settings_path()?;
+    if legacy.is_file() {
+        return Ok(legacy);
+    }
+
+    Ok(path)
 }

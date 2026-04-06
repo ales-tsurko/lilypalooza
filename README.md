@@ -1,57 +1,80 @@
 # Lilypalooza
 
-**Lilypalooza** is a LilyPond IDE.
+**Lilypalooza** is a desktop LilyPond IDE.
 
-It is built for writing, previewing, navigating, and playing LilyPond projects
-in one place instead of bouncing between a text editor, a PDF viewer, and MIDI
-tools.
+It is built for editing LilyPond projects in one place: text editing, score
+preview, MIDI playback, piano roll, project persistence.
 
-![Screenshot 1](assets/screenshots/screenshot_1.png)
-![Screenshot 2](assets/screenshots/screenshot_2.png)
+![Screenshot 1](/Users/alestsurko/Desktop/lilypond-previewer/assets/screenshots/screenshot_1.png)
+![Screenshot 2](/Users/alestsurko/Desktop/lilypond-previewer/assets/screenshots/screenshot_2.png)
 
-Current features:
+## What It Does
 
-- code editor with LilyPond-focused treesitter-based syntax highlighting
-- score preview
-- piano roll visualisation
-- MIDI playback with seek, rewind, and cursor following
+- multi-tab text editor for LilyPond and related project files
+- rendered score preview with point-and-click back to source
+- piano roll and MIDI playback
 - dockable multi-pane workspace
-- project persistence
-- logger
+- project persistence and workspace restore
+- integrated compile status and logs
 
-Run it with:
+## Run
 
 ```bash
 cargo run --release
 ```
 
+## Workflow
 
+Typical workflow:
 
+1. Open or create a LilyPond file.
+2. Edit it in the built-in editor.
+3. Save to trigger recompilation.
+4. Inspect the rendered score and piano roll.
+5. Click the score to jump back to the exact source location.
+
+If the current file belongs to a saved project, Lilypalooza restores project
+state from `.lilypalooza/project.ron`. Otherwise it uses global state.
+
+## Settings
+
+App settings are stored in the platform config directory under:
+
+- `lilypalooza/settings.toml`
+
+That file contains:
+
+- editor view settings
+- editor theme tuning
+- shortcut overrides
+- recent-file limits
+
+Some editor behavior is configurable both from the UI and from the settings
+file.
 
 ## CLI Arguments
 
-They mostly exist for development. The normal workflow is through the UI.
+CLI arguments mostly exist for development and quick startup.
 
-You can preload a SoundFont on startup with `--soundfont`, for example:
+Preload a SoundFont:
 
 ```bash
 cargo run -- --soundfont assets/soundfonts/FluidR3_GM.sf2
 ```
 
-The same can be set via environment variable:
+Or:
 
 ```bash
 LILYPALOOZA_SOUNDFONT=assets/soundfonts/FluidR3_GM.sf2 cargo run
 ```
 
-You can also preload a LilyPond score file on startup with `--score` (or
-`--file`), for example:
+Preload a score file:
 
 ```bash
 cargo run -- --score path/to/score.ly
 ```
 
-The same can be set via environment variable:
+Or:
 
 ```bash
 LILYPALOOZA_SCORE=path/to/score.ly cargo run
@@ -59,11 +82,12 @@ LILYPALOOZA_SCORE=path/to/score.ly cargo run
 
 ## Tests
 
-Testing currently combines Rust unit tests and manual startup error-path checks.
-
 ```bash
 cargo test
 ```
 
-Manual startup error-path checks are provided under
-`scripts/lilypond-error-tests`.
+There are also manual startup error-path checks under:
+
+```text
+scripts/lilypond-error-tests
+```
