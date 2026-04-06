@@ -310,13 +310,33 @@ pub(super) fn score_body(app: &Lilypalooza) -> Element<'_, Message> {
         .height(Fill)
         .into()
     } else {
-        let message = if app.compile_session.is_some() {
+        let message = if app.compile_requested
+            || app.compile_session.is_some()
+            || app.compile_outputs_loading
+        {
             "Compiling score to SVG..."
         } else {
             "No SVG output yet"
         };
 
-        container(text(message).size(ui_style::FONT_SIZE_BODY_MD))
+        let content: Element<'_, Message> = if app.compile_requested
+            || app.compile_session.is_some()
+            || app.compile_outputs_loading
+        {
+            row![
+                text(app.spinner_frame())
+                    .size(ui_style::FONT_SIZE_BODY_MD)
+                    .font(crate::fonts::MONO),
+                text(message).size(ui_style::FONT_SIZE_BODY_MD),
+            ]
+            .spacing(ui_style::SPACE_SM)
+            .align_y(iced::alignment::Vertical::Center)
+            .into()
+        } else {
+            text(message).size(ui_style::FONT_SIZE_BODY_MD).into()
+        };
+
+        container(content)
             .width(Fill)
             .height(Fill)
             .center_x(Fill)

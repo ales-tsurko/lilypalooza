@@ -656,6 +656,21 @@ impl Lilypalooza {
             .unwrap_or_else(|| "Unsaved Project".to_string())
     }
 
+    pub(super) fn spinner_active(&self) -> bool {
+        self.compile_requested
+            || self.compile_outputs_loading
+            || self.compile_session.is_some()
+            || matches!(self.lilypond_status, LilypondStatus::Checking)
+    }
+
+    pub(super) fn spinner_frame(&self) -> &'static str {
+        if self.spinner_active() {
+            SPINNER_FRAMES[self.spinner_step % SPINNER_FRAMES.len()]
+        } else {
+            " "
+        }
+    }
+
     pub(super) fn is_workspace_group_focused(&self, group_id: DockGroupId) -> bool {
         let Some(focused_pane) = self.focused_workspace_pane() else {
             return false;

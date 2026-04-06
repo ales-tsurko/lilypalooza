@@ -1090,12 +1090,24 @@ fn toolbar_pane_toggle(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'s
 }
 
 fn empty_workspace_placeholder(app: &Lilypalooza) -> Element<'_, Message> {
-    let lilypond_label = match &app.lilypond_status {
-        super::LilypondStatus::Checking => "LilyPond: checking...".to_string(),
-        super::LilypondStatus::Ready { detected, .. } => {
-            format!("LilyPond: {detected}")
-        }
-        super::LilypondStatus::Unavailable => "LilyPond: unavailable".to_string(),
+    let lilypond_label: Element<'_, Message> = match &app.lilypond_status {
+        super::LilypondStatus::Checking => row![
+            text(app.spinner_frame())
+                .size(ui_style::FONT_SIZE_UI_SM)
+                .font(fonts::MONO),
+            text("LilyPond: checking...").size(ui_style::FONT_SIZE_UI_SM),
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center)
+        .into(),
+        super::LilypondStatus::Ready { detected, .. } => text(format!("LilyPond: {detected}"))
+            .size(ui_style::FONT_SIZE_UI_SM)
+            .font(fonts::MONO)
+            .into(),
+        super::LilypondStatus::Unavailable => text("LilyPond: unavailable")
+            .size(ui_style::FONT_SIZE_UI_SM)
+            .font(fonts::MONO)
+            .into(),
     };
 
     container(
@@ -1105,11 +1117,7 @@ fn empty_workspace_placeholder(app: &Lilypalooza) -> Element<'_, Message> {
                     .size(ui_style::FONT_SIZE_UI_SM)
                     .font(fonts::MONO),
             )
-            .push(
-                text(lilypond_label)
-                    .size(ui_style::FONT_SIZE_UI_SM)
-                    .font(fonts::MONO),
-            )
+            .push(lilypond_label)
             .spacing(ui_style::SPACE_SM)
             .align_x(alignment::Horizontal::Center),
     )

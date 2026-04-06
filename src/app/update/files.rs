@@ -210,7 +210,7 @@ impl Lilypalooza {
             tasks.push(self.map_editor_widget_task(tab_id, task));
         }
 
-        if self.compile_session.is_some() || self.score_watcher.is_some() {
+        if self.spinner_active() {
             self.spinner_step = self.spinner_step.wrapping_add(1);
             self.poll_score_watcher();
             tasks.push(self.poll_compile_logs());

@@ -584,7 +584,28 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
 
 pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
     let Some(file) = app.piano_roll.current_file() else {
-        return container(text("No MIDI output yet").size(ui_style::FONT_SIZE_UI_SM))
+        let is_compiling =
+            app.compile_requested || app.compile_session.is_some() || app.compile_outputs_loading;
+        let message = if is_compiling {
+            "Compiling score to MIDI..."
+        } else {
+            "No MIDI output yet"
+        };
+        let content: Element<'_, Message> = if is_compiling {
+            row![
+                text(app.spinner_frame())
+                    .size(ui_style::FONT_SIZE_UI_SM)
+                    .font(fonts::MONO),
+                text(message).size(ui_style::FONT_SIZE_UI_SM),
+            ]
+            .spacing(ui_style::SPACE_SM)
+            .align_y(alignment::Vertical::Center)
+            .into()
+        } else {
+            text(message).size(ui_style::FONT_SIZE_UI_SM).into()
+        };
+
+        return container(content)
             .width(Fill)
             .height(Fill)
             .center_x(Fill)
