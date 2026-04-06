@@ -156,17 +156,20 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn register_editor_recent_file(&mut self, path: &Path) {
-        self.editor_recent_files.retain(|existing| existing != path);
-        self.editor_recent_files.insert(0, path.to_path_buf());
+        let path = state::normalize_path(path);
+        self.editor_recent_files
+            .retain(|existing| existing != &path);
+        self.editor_recent_files.insert(0, path);
         self.editor_recent_files
             .truncate(self.editor_recent_files_limit.max(1));
         self.persist_settings();
     }
 
     pub(in crate::app) fn register_recent_project(&mut self, project_root: &Path) {
+        let project_root = state::normalize_path(project_root);
         self.recent_projects
-            .retain(|existing| existing != project_root);
-        self.recent_projects.insert(0, project_root.to_path_buf());
+            .retain(|existing| existing != &project_root);
+        self.recent_projects.insert(0, project_root);
         self.recent_projects.truncate(7);
     }
 

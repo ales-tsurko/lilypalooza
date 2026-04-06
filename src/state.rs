@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -43,8 +44,13 @@ pub(crate) fn load_global() -> Result<GlobalState, String> {
     let path = global_state_path()?;
 
     match fs::read_to_string(&path) {
-        Ok(contents) => ron::from_str(&contents)
-            .map_err(|error| format!("Failed to parse state {}: {error}", path.display())),
+        Ok(contents) => {
+            let mut state: GlobalState = ron::from_str(&contents)
+                .map_err(|error| format!("Failed to parse state {}: {error}", path.display()))?;
+            normalize_unique_paths(&mut state.editor_recent_files);
+            normalize_unique_paths(&mut state.recent_projects);
+            Ok(state)
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(GlobalState::default()),
         Err(error) => Err(format!("Failed to read state {}: {error}", path.display())),
     }
@@ -134,6 +140,31 @@ pub(crate) fn main_score_relative_to(
                 project_root.display()
             )
         })
+}
+
+pub(crate) fn normalize_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        }
+    })
+}
+
+fn normalize_unique_paths(paths: &mut Vec<PathBuf>) {
+    let mut normalized = Vec::with_capacity(paths.len());
+
+    for path in paths.drain(..) {
+        let path = normalize_path(&path);
+        if !normalized.contains(&path) {
+            normalized.push(path);
+        }
+    }
+
+    *paths = normalized;
 }
 
 fn global_state_path() -> Result<PathBuf, String> {
