@@ -353,6 +353,48 @@ impl Lilypalooza {
         }
     }
 
+    pub(in crate::app) fn open_editor_file_at_location(
+        &mut self,
+        path: &Path,
+        line: usize,
+        column: usize,
+    ) -> Task<Message> {
+        self.cancel_editor_tab_rename_state();
+        match self.editor.load_file(path) {
+            Ok((tab_id, task, reused_existing)) => {
+                self.register_editor_recent_file(path);
+                self.sync_editor_file_watcher();
+                if reused_existing {
+                    self.logger
+                        .push(format!("Activated editor file {}", path.display()));
+                } else {
+                    self.logger
+                        .push(format!("Opened editor file {}", path.display()));
+                }
+                self.editor.request_focus();
+                let sync_task = self.editor.sync_tab_scroll_state(tab_id);
+                let cursor_task = self.editor.set_tab_cursor(tab_id, line, column);
+                self.pending_reveal_editor_tab = Some(tab_id);
+                self.map_editor_widget_task(
+                    tab_id,
+                    iced::Task::batch([task, sync_task, cursor_task]),
+                )
+            }
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "Editor Open Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                Task::none()
+            }
+        }
+    }
+
     pub(in crate::app) fn open_editor_files_in_editor(
         &mut self,
         paths: &[PathBuf],

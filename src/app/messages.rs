@@ -145,6 +145,7 @@ pub(super) enum ViewerMessage {
     ScrollPositionChanged { x: f32, y: f32 },
     ViewportCursorMoved(iced::Point),
     ViewportCursorLeft,
+    OpenPointAndClick,
     PrevPage,
     NextPage,
     ZoomIn,

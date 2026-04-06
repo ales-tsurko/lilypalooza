@@ -766,6 +766,7 @@ impl Lilypalooza {
                             handle: svg::Handle::from_memory(page.svg_bytes.clone()),
                             svg_bytes: Bytes::from(page.svg_bytes),
                             size: page.size,
+                            note_anchors: page.note_anchors,
                             system_bands: page.system_bands,
                         })
                         .collect(),
@@ -868,7 +869,7 @@ fn load_compile_outputs(
 
     let all_anchors: Vec<_> = rendered_pages
         .iter()
-        .flat_map(|page| page.note_anchors.iter().copied())
+        .flat_map(|page| page.note_anchors.iter().cloned())
         .collect();
     let score_cursor_maps =
         score_cursor::build_score_cursor_maps(&build_dir, score_stem, &all_anchors, &midi_files)

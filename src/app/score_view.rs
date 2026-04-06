@@ -302,6 +302,12 @@ pub(super) fn score_body(app: &Lilypalooza) -> Element<'_, Message> {
                     .width(Fill)
                     .height(Fill),
             )
+            .interaction(if app.score_point_and_click_target_at_cursor().is_some() {
+                mouse::Interaction::Pointer
+            } else {
+                mouse::Interaction::default()
+            })
+            .on_press(Message::Viewer(ViewerMessage::OpenPointAndClick))
             .on_move(|position| Message::Viewer(ViewerMessage::ViewportCursorMoved(position)))
             .on_exit(Message::Viewer(ViewerMessage::ViewportCursorLeft))
             .into()

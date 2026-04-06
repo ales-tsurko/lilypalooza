@@ -16,7 +16,8 @@ impl Lilypalooza {
             | ViewerMessage::DecreasePageBrightness
             | ViewerMessage::IncreasePageBrightness
             | ViewerMessage::ResetZoom
-            | ViewerMessage::ResetPageBrightness => {
+            | ViewerMessage::ResetPageBrightness
+            | ViewerMessage::OpenPointAndClick => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Score);
             }
             ViewerMessage::ScrollPositionChanged { .. }
@@ -52,6 +53,9 @@ impl Lilypalooza {
             }
             ViewerMessage::ViewportCursorLeft => {
                 self.score_viewport_cursor = None;
+            }
+            ViewerMessage::OpenPointAndClick => {
+                return self.open_score_point_and_click_target();
             }
             ViewerMessage::PrevPage => {
                 if let Some(rendered_score) = self.rendered_score.as_mut()
@@ -141,6 +145,79 @@ impl Lilypalooza {
         }
 
         Task::none()
+    }
+
+    pub(in crate::app) fn score_point_and_click_target_at_cursor(
+        &self,
+    ) -> Option<(PathBuf, usize, usize)> {
+        let pointer = self.score_viewport_cursor?;
+        let rendered_score = self.rendered_score.as_ref()?;
+        let page = rendered_score.current_page()?;
+
+        let scale = crate::app::score_view::score_base_scale() * self.svg_zoom;
+        let page_x = (self.svg_scroll_x + pointer.x - f32::from(crate::ui_style::PADDING_SM))
+            / scale.max(f32::EPSILON);
+        let page_y = (self.svg_scroll_y + pointer.y - f32::from(crate::ui_style::PADDING_SM))
+            / scale.max(f32::EPSILON);
+
+        if page_x.is_sign_negative()
+            || page_y.is_sign_negative()
+            || page_x > page.size.width
+            || page_y > page.size.height
+        {
+            return None;
+        }
+
+        let target = crate::app::score_cursor::point_and_click_target_at(
+            &page.note_anchors,
+            page_x,
+            page_y,
+        )?;
+        let path = self.resolve_point_and_click_path(target.path.as_deref())?;
+
+        Some((path, target.line, target.column))
+    }
+
+    fn open_score_point_and_click_target(&mut self) -> Task<Message> {
+        let Some((path, line, column)) = self.score_point_and_click_target_at_cursor() else {
+            return Task::none();
+        };
+
+        self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+        self.open_editor_file_at_location(&path, line, column)
+    }
+
+    fn resolve_point_and_click_path(&self, raw_path: Option<&std::path::Path>) -> Option<PathBuf> {
+        let score_path = self
+            .current_score
+            .as_ref()
+            .map(|score| score.path.clone())?;
+
+        match raw_path {
+            Some(path) if path.is_absolute() => Some(path.to_path_buf()),
+            Some(path) => {
+                let score_relative = score_path.parent().map(|parent| parent.join(path));
+                if let Some(candidate) = score_relative
+                    .as_ref()
+                    .filter(|candidate| candidate.exists())
+                {
+                    return Some(candidate.clone());
+                }
+
+                let project_relative = self.project_root.as_ref().map(|root| root.join(path));
+                if let Some(candidate) = project_relative
+                    .as_ref()
+                    .filter(|candidate| candidate.exists())
+                {
+                    return Some(candidate.clone());
+                }
+
+                score_relative
+                    .or(project_relative)
+                    .or(Some(path.to_path_buf()))
+            }
+            None => Some(score_path),
+        }
     }
 
     pub(in crate::app) fn handle_score_preview_ready(

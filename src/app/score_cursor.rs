@@ -16,12 +16,20 @@ struct SourceLocation {
     column: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct SvgNoteAnchor {
     source: SourceLocation,
+    source_path: Option<PathBuf>,
     page_index: usize,
     x: f32,
     y: f32,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PointAndClickTarget {
+    pub(super) path: Option<PathBuf>,
+    pub(super) line: usize,
+    pub(super) column: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -155,7 +163,7 @@ pub(super) fn parse_svg_note_anchors(svg_source: &str, page_index: usize) -> Vec
         let Some(href) = attribute_value(anchor, "xlink:href") else {
             continue;
         };
-        let Some(source) = source_location_from_href(href) else {
+        let Some((source, source_path)) = source_location_from_href(href) else {
             continue;
         };
         let Some((x, y)) = first_translate(anchor) else {
@@ -164,6 +172,7 @@ pub(super) fn parse_svg_note_anchors(svg_source: &str, page_index: usize) -> Vec
 
         anchors.push(SvgNoteAnchor {
             source,
+            source_path,
             page_index,
             x,
             y,
@@ -171,6 +180,32 @@ pub(super) fn parse_svg_note_anchors(svg_source: &str, page_index: usize) -> Vec
     }
 
     anchors
+}
+
+pub(super) fn point_and_click_target_at(
+    anchors: &[SvgNoteAnchor],
+    x: f32,
+    y: f32,
+) -> Option<PointAndClickTarget> {
+    const CLICK_RADIUS: f32 = 4.5;
+    const CLICK_RADIUS_SQUARED: f32 = CLICK_RADIUS * CLICK_RADIUS;
+
+    let anchor = anchors
+        .iter()
+        .filter_map(|anchor| {
+            let dx = anchor.x - x;
+            let dy = anchor.y - y;
+            let distance_squared = (dx * dx) + (dy * dy);
+            (distance_squared <= CLICK_RADIUS_SQUARED).then_some((distance_squared, anchor))
+        })
+        .min_by(|left, right| left.0.total_cmp(&right.0))?
+        .1;
+
+    Some(PointAndClickTarget {
+        path: anchor.source_path.clone(),
+        line: anchor.source.line.saturating_sub(1) as usize,
+        column: anchor.source.column as usize,
+    })
 }
 
 pub(super) fn parse_svg_system_bands(svg_source: &str) -> Vec<SystemBand> {
@@ -405,7 +440,7 @@ fn index_anchors(anchors: &[SvgNoteAnchor]) -> HashMap<SourceLocation, Vec<SvgNo
     let mut index: HashMap<SourceLocation, Vec<SvgNoteAnchor>> = HashMap::new();
 
     for anchor in anchors {
-        index.entry(anchor.source).or_default().push(*anchor);
+        index.entry(anchor.source).or_default().push(anchor.clone());
     }
 
     for values in index.values_mut() {
@@ -475,7 +510,7 @@ fn map_note_file(
         };
 
         let next_index = usage.entry(event.source).or_insert(0);
-        let anchor = candidates[*next_index % candidates.len()];
+        let anchor = candidates[*next_index % candidates.len()].clone();
         *next_index += 1;
 
         let start_tick = (event.moment_whole * ticks_per_whole).round();
@@ -564,17 +599,53 @@ fn attribute_value<'a>(source: &'a str, attribute_name: &str) -> Option<&'a str>
     None
 }
 
-fn source_location_from_href(href: &str) -> Option<SourceLocation> {
-    if !href.starts_with("textedit://") {
-        return None;
-    }
+fn source_location_from_href(href: &str) -> Option<(SourceLocation, Option<PathBuf>)> {
+    let href = href.strip_prefix("textedit://")?;
 
-    let mut parts = href.rsplit(':');
+    let mut parts = href.rsplitn(4, ':');
     let _column_end = parts.next()?.parse::<u32>().ok()?;
     let column = parts.next()?.parse::<u32>().ok()?;
     let line = parts.next()?.parse::<u32>().ok()?;
+    let source_path = parts.next().and_then(decode_textedit_path);
 
-    Some(SourceLocation { line, column })
+    Some((SourceLocation { line, column }, source_path))
+}
+
+fn decode_textedit_path(source: &str) -> Option<PathBuf> {
+    let trimmed = source
+        .strip_prefix("localhost/")
+        .or_else(|| source.strip_prefix("localhost"))
+        .unwrap_or(source);
+    let decoded = percent_decode(trimmed);
+
+    if decoded.is_empty() {
+        return None;
+    }
+
+    Some(PathBuf::from(decoded))
+}
+
+fn percent_decode(source: &str) -> String {
+    let mut decoded = Vec::with_capacity(source.len());
+    let bytes = source.as_bytes();
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3])
+            && let Ok(value) = u8::from_str_radix(hex, 16)
+        {
+            decoded.push(value);
+            index += 3;
+            continue;
+        }
+
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn first_translate(source: &str) -> Option<(f32, f32)> {

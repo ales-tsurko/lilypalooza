@@ -579,6 +579,17 @@ impl EditorState {
         }
     }
 
+    pub(super) fn set_tab_cursor(
+        &mut self,
+        tab_id: u64,
+        line: usize,
+        column: usize,
+    ) -> iced::Task<EditorWidgetMessage> {
+        self.tab_mut(tab_id)
+            .map(|tab| tab.widget.set_cursor(line, column))
+            .unwrap_or_else(iced::Task::none)
+    }
+
     pub(super) fn view<'a, Message>(
         &'a self,
         open_message: Message,

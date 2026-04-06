@@ -179,6 +179,7 @@ struct RenderedPage {
     handle: svg::Handle,
     svg_bytes: Bytes,
     size: SvgSize,
+    note_anchors: Vec<score_cursor::SvgNoteAnchor>,
     system_bands: Vec<score_cursor::SystemBand>,
 }
 
