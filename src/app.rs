@@ -898,6 +898,70 @@ fn folded_pane_to_settings(state: FoldedPaneState) -> FoldedPaneSettings {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shortcuts;
+    use iced_test::simulator;
+
+    fn test_app() -> Lilypalooza {
+        let (mut app, _task) = new(None, None);
+        let _ = update(
+            &mut app,
+            Message::Shortcuts(messages::ShortcutsMessage::OpenDialog),
+        );
+        app
+    }
+
+    fn apply_messages(app: &mut Lilypalooza, messages: Vec<Message>) {
+        for message in messages {
+            let _ = update(app, message);
+        }
+    }
+
+    #[test]
+    fn actions_palette_search_input_filters_actions() {
+        let mut app = test_app();
+        let mut ui = simulator(view(&app));
+
+        ui.click("Search actions")
+            .expect("search input should be clickable");
+        let _ = ui.typewrite("settings");
+        let messages: Vec<_> = ui.into_messages().collect();
+        apply_messages(&mut app, messages);
+
+        assert_eq!(app.shortcuts_search_query, "settings");
+        assert!(
+            shortcuts::filtered_action_metadata(&app.shortcuts_search_query)
+                .iter()
+                .any(|action| action.id == settings::ShortcutActionId::OpenSettingsFile)
+        );
+    }
+
+    #[test]
+    fn actions_palette_clicking_action_emits_activation_message() {
+        let mut app = test_app();
+        let mut ui = simulator(view(&app));
+
+        ui.click("Search actions")
+            .expect("search input should be clickable");
+        let _ = ui.typewrite("settings");
+        let messages: Vec<_> = ui.into_messages().collect();
+        apply_messages(&mut app, messages);
+
+        let mut ui = simulator(view(&app));
+        ui.click("Open Settings File")
+            .expect("open settings action should be clickable");
+
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            Message::Shortcuts(messages::ShortcutsMessage::ActivateAction(
+                settings::ShortcutActionId::OpenSettingsFile
+            ))
+        )));
+    }
+}
+
 fn migrate_workspace_layout(
     root: &mut Option<DockNodeSettings>,
     folded_panes: &[FoldedPaneSettings],
