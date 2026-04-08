@@ -1744,6 +1744,19 @@ impl canvas::Program<Message> for CodeEditor {
             _ => None,
         }
     }
+
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if cursor.is_over(bounds) {
+            mouse::Interaction::Text
+        } else {
+            mouse::Interaction::None
+        }
+    }
 }
 
 /// Validates that the selection indices fall on valid UTF-8 character boundaries
