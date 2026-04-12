@@ -684,6 +684,112 @@ pub(crate) fn button_shortcut_palette_item(
     }
 }
 
+pub(crate) fn editor_file_browser_column(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.base.color.into()),
+        text_color: Some(palette.background.base.text),
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn editor_file_browser_scrollable(
+    theme: &Theme,
+    status: scrollable::Status,
+) -> scrollable::Style {
+    let palette = theme.extended_palette();
+    let mut style = scrollable::default(theme, status);
+    style.container.background = Some(palette.background.base.color.into());
+    style.container.text_color = Some(palette.background.base.text);
+    style.vertical_rail.background = Some(
+        Color {
+            a: 0.04,
+            ..palette.background.base.color
+        }
+        .into(),
+    );
+    style.vertical_rail.scroller.background = Color {
+        a: 0.14,
+        ..palette.background.base.text
+    }
+    .into();
+    style.horizontal_rail.background = Some(
+        Color {
+            a: 0.04,
+            ..palette.background.base.color
+        }
+        .into(),
+    );
+    style.horizontal_rail.scroller.background = Color {
+        a: 0.14,
+        ..palette.background.base.text
+    }
+    .into();
+
+    style
+}
+
+pub(crate) fn button_editor_file_browser_entry(
+    theme: &Theme,
+    status: button::Status,
+    selected: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let selected_background = mix_color(
+        palette.background.strong.color,
+        palette.primary.base.color,
+        0.10,
+    );
+
+    let base = button::Style {
+        background: Some(
+            if selected {
+                selected_background
+            } else {
+                Color::TRANSPARENT
+            }
+            .into(),
+        ),
+        text_color: palette.background.base.text,
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        shadow: Shadow::default(),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(
+                if selected {
+                    selected_background
+                } else {
+                    palette.background.weak.color
+                }
+                .into(),
+            ),
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(
+                mix_color(
+                    if selected {
+                        selected_background
+                    } else {
+                        palette.background.weak.color
+                    },
+                    palette.primary.base.color,
+                    0.12,
+                )
+                .into(),
+            ),
+            ..base
+        },
+        button::Status::Disabled => base,
+    }
+}
+
 pub(crate) fn shortcut_action_id_label(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
 

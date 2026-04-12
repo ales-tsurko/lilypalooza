@@ -24,6 +24,19 @@ pub(super) struct EditorTabSummary {
     pub(super) active: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct EditorBrowserColumnSummary {
+    pub(super) entries: Vec<EditorBrowserEntrySummary>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct EditorBrowserEntrySummary {
+    pub(super) path: PathBuf,
+    pub(super) name: String,
+    pub(super) is_dir: bool,
+    pub(super) selected: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EditorTabFileState {
     Ok,
@@ -39,11 +52,25 @@ struct EditorTab {
     file_state: EditorTabFileState,
 }
 
+struct EditorBrowserColumn {
+    entries: Vec<EditorBrowserEntry>,
+    selected_path: Option<PathBuf>,
+}
+
+struct EditorBrowserEntry {
+    path: PathBuf,
+    name: String,
+    is_dir: bool,
+}
+
 pub(super) struct EditorState {
     tabs: Vec<EditorTab>,
     active_tab_id: Option<u64>,
     next_tab_id: u64,
     project_root: Option<PathBuf>,
+    file_browser_expanded: bool,
+    file_browser_root: PathBuf,
+    file_browser_columns: Vec<EditorBrowserColumn>,
     app_theme: iced::Theme,
     view_settings: EditorViewSettings,
     default_view_settings: EditorViewSettings,
@@ -61,11 +88,20 @@ impl EditorState {
             active_tab_id: None,
             next_tab_id: 1,
             project_root: None,
+            file_browser_expanded: false,
+            file_browser_root: current_editor_browser_root(None),
+            file_browser_columns: Vec::new(),
             app_theme,
             view_settings,
             default_view_settings: EditorViewSettings::default(),
             theme_settings,
         }
+        .with_initialized_file_browser()
+    }
+
+    fn with_initialized_file_browser(mut self) -> Self {
+        self.rebuild_file_browser();
+        self
     }
 
     pub(super) fn update(
@@ -107,6 +143,67 @@ impl EditorState {
         for tab in &mut self.tabs {
             tab.widget.set_project_root(self.project_root.clone());
         }
+        self.rebuild_file_browser();
+    }
+
+    pub(super) fn file_browser_expanded(&self) -> bool {
+        self.file_browser_expanded
+    }
+
+    pub(super) fn file_browser_root_label(&self) -> String {
+        self.file_browser_root.display().to_string()
+    }
+
+    pub(super) fn file_browser_columns(&self) -> Vec<EditorBrowserColumnSummary> {
+        self.file_browser_columns
+            .iter()
+            .map(|column| EditorBrowserColumnSummary {
+                entries: column
+                    .entries
+                    .iter()
+                    .map(|entry| EditorBrowserEntrySummary {
+                        path: entry.path.clone(),
+                        name: entry.name.clone(),
+                        is_dir: entry.is_dir,
+                        selected: column.selected_path.as_ref() == Some(&entry.path),
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    pub(super) fn toggle_file_browser(&mut self) {
+        self.file_browser_expanded = !self.file_browser_expanded;
+    }
+
+    pub(super) fn browse_to_path(
+        &mut self,
+        column_index: usize,
+        path: &Path,
+        is_dir: bool,
+    ) -> Result<(), String> {
+        if column_index >= self.file_browser_columns.len() {
+            return Ok(());
+        }
+
+        let selected_path = normalize_editor_path(path);
+        let next_column = if is_dir {
+            Some(EditorBrowserColumn {
+                entries: read_browser_entries(&selected_path)?,
+                selected_path: None,
+            })
+        } else {
+            None
+        };
+
+        self.file_browser_columns.truncate(column_index + 1);
+        self.file_browser_columns[column_index].selected_path = Some(selected_path.clone());
+
+        if let Some(next_column) = next_column {
+            self.file_browser_columns.push(next_column);
+        }
+
+        Ok(())
     }
 
     pub(super) fn has_document(&self) -> bool {
@@ -787,6 +884,14 @@ impl EditorState {
     fn tab_mut(&mut self, tab_id: u64) -> Option<&mut EditorTab> {
         self.tabs.iter_mut().find(|tab| tab.id == tab_id)
     }
+
+    fn rebuild_file_browser(&mut self) {
+        self.file_browser_root = current_editor_browser_root(self.project_root.as_deref());
+        self.file_browser_columns = vec![EditorBrowserColumn {
+            entries: read_browser_entries(&self.file_browser_root).unwrap_or_default(),
+            selected_path: None,
+        }];
+    }
 }
 
 fn build_editor(
@@ -833,6 +938,43 @@ fn normalize_editor_path(path: &Path) -> PathBuf {
                 .unwrap_or_else(|_| path.to_path_buf())
         }
     })
+}
+
+fn current_editor_browser_root(project_root: Option<&Path>) -> PathBuf {
+    project_root
+        .map(normalize_editor_path)
+        .or_else(|| {
+            env::current_dir()
+                .ok()
+                .map(|cwd| normalize_editor_path(&cwd))
+        })
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn read_browser_entries(path: &Path) -> Result<Vec<EditorBrowserEntry>, String> {
+    let mut entries: Vec<_> = fs::read_dir(path)
+        .map_err(|error| format!("Failed to read directory {}: {error}", path.display()))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let file_type = entry.file_type().ok()?;
+            let entry_path = normalize_editor_path(&entry.path());
+            let name = entry.file_name().to_str()?.to_string();
+
+            Some(EditorBrowserEntry {
+                path: entry_path,
+                name,
+                is_dir: file_type.is_dir(),
+            })
+        })
+        .collect();
+
+    entries.sort_by(|left, right| match (left.is_dir, right.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
+    });
+
+    Ok(entries)
 }
 
 fn syntax_for_path(path: &Path) -> String {

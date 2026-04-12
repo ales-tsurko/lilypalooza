@@ -38,6 +38,10 @@ const PROJECT_MENU_ROOT_WIDTH: f32 = 126.0;
 const PROJECT_MENU_WIDTH: f32 = 280.0;
 const PROJECT_SETTINGS_SUBMENU_WIDTH: f32 = 220.0;
 const PROJECT_RECENT_LABEL_MAX_CHARS: usize = 40;
+const EDITOR_FILE_BROWSER_HEIGHT: f32 = 176.0;
+const EDITOR_FILE_BROWSER_COLUMN_WIDTH: f32 = 220.0;
+const EDITOR_FILE_BROWSER_ENTRY_HEIGHT: f32 = 26.0;
+const EDITOR_FILE_BROWSER_ICON_SIZE: f32 = 14.0;
 const EDITOR_TAB_WIDTH: f32 = 140.0;
 const EDITOR_TAB_HEIGHT: f32 = 32.0;
 const EDITOR_TAB_TITLE_MAX_CHARS: usize = 18;
@@ -588,6 +592,7 @@ fn workspace_panes(app: &Lilypalooza) -> Element<'_, Message> {
 
 fn editor_pane_body(app: &Lilypalooza) -> Element<'_, Message> {
     let content: Element<'_, Message> = iced::widget::column![
+        editor_file_browser(app),
         editor_tab_strip(app),
         app.editor.view(
             Message::Editor(super::EditorMessage::OpenRequested),
@@ -610,6 +615,157 @@ fn editor_pane_body(app: &Lilypalooza) -> Element<'_, Message> {
     } else {
         content
     }
+}
+
+fn editor_file_browser(app: &Lilypalooza) -> Element<'_, Message> {
+    let expanded = app.editor.file_browser_expanded();
+    if !expanded {
+        return container(text(""))
+            .width(Fill)
+            .height(Length::Fixed(0.0))
+            .into();
+    }
+
+    let header = container(
+        text(app.editor.file_browser_root_label())
+            .size(ui_style::FONT_SIZE_UI_XS)
+            .font(fonts::MONO)
+            .style(|theme: &Theme| {
+                let palette = theme.extended_palette();
+                iced::widget::text::Style {
+                    color: Some(palette.background.strong.text),
+                }
+            }),
+    )
+    .width(Fill)
+    .padding([ui_style::PADDING_XS, ui_style::PADDING_STATUS_BAR_H])
+    .style(ui_style::workspace_toolbar_surface);
+
+    let columns = app
+        .editor
+        .file_browser_columns()
+        .into_iter()
+        .enumerate()
+        .fold(
+            row![].spacing(0).align_y(alignment::Vertical::Top),
+            |row, (column_index, column)| {
+                row.push(editor_file_browser_column(app, column_index, column))
+            },
+        );
+
+    container(
+        iced::widget::column![
+            header,
+            scrollable(container(columns).width(Length::Shrink))
+                .id(super::EDITOR_FILE_BROWSER_SCROLL_ID)
+                .direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::new().width(4).scroller_width(4),
+                ))
+                .height(Length::Fixed(EDITOR_FILE_BROWSER_HEIGHT))
+                .style(ui_style::editor_file_browser_scrollable),
+        ]
+        .spacing(0),
+    )
+    .width(Fill)
+    .style(ui_style::pane_main_surface)
+    .into()
+}
+
+fn editor_file_browser_column(
+    _app: &Lilypalooza,
+    column_index: usize,
+    column: super::editor::EditorBrowserColumnSummary,
+) -> Element<'_, Message> {
+    let entries = column.entries.into_iter().fold(
+        iced::widget::column![].spacing(0).width(Fill),
+        |column_widget, entry| {
+            let path = entry.path.clone();
+            let name = entry.name;
+            let is_dir = entry.is_dir;
+            let selected = entry.selected;
+            let icon = if is_dir {
+                if selected {
+                    icons::folder_open()
+                } else {
+                    icons::folder()
+                }
+            } else {
+                icons::file()
+            };
+
+            let icon_color = move |theme: &Theme, _status| {
+                let palette = theme.extended_palette();
+                svg::Style {
+                    color: Some(if selected {
+                        palette.background.base.text
+                    } else {
+                        palette.background.strong.text
+                    }),
+                }
+            };
+
+            column_widget.push(
+                button(
+                    container(
+                        row![
+                            container(
+                                svg(icon)
+                                    .width(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
+                                    .height(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
+                                    .content_fit(ContentFit::Contain)
+                                    .style(icon_color),
+                            )
+                            .width(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
+                            .height(Length::Fixed(EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
+                            .center_y(Length::Fixed(EDITOR_FILE_BROWSER_ENTRY_HEIGHT)),
+                            text(name)
+                                .size(ui_style::FONT_SIZE_UI_SM)
+                                .line_height(1.0)
+                                .width(Fill),
+                        ]
+                        .spacing(ui_style::SPACE_XS)
+                        .align_y(alignment::Vertical::Center)
+                        .width(Fill),
+                    )
+                    .height(Length::Fill)
+                    .center_y(Length::Fill),
+                )
+                .width(Fill)
+                .height(Length::Fixed(EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
+                .padding([0, ui_style::PADDING_XS])
+                .style(move |theme, status| {
+                    ui_style::button_editor_file_browser_entry(theme, status, selected)
+                })
+                .on_press(Message::Editor(
+                    super::EditorMessage::FileBrowserEntryPressed {
+                        column_index,
+                        path,
+                        is_dir,
+                    },
+                )),
+            )
+        },
+    );
+
+    row![
+        container(
+            scrollable(entries)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().width(4).scroller_width(4),
+                ))
+                .style(ui_style::editor_file_browser_scrollable),
+        )
+        .width(Length::Fixed(EDITOR_FILE_BROWSER_COLUMN_WIDTH))
+        .height(Length::Fixed(EDITOR_FILE_BROWSER_HEIGHT))
+        .style(ui_style::editor_file_browser_column),
+        container(text(""))
+            .width(Length::Fixed(1.0))
+            .height(Length::Fixed(EDITOR_FILE_BROWSER_HEIGHT))
+            .style(ui_style::chrome_separator),
+    ]
+    .spacing(0)
+    .align_y(alignment::Vertical::Top)
+    .into()
 }
 
 fn editor_tab_strip(app: &Lilypalooza) -> Element<'_, Message> {
@@ -1298,7 +1454,42 @@ fn header_overflow_trigger(
     group_id: super::DockGroupId,
     is_open: bool,
 ) -> Element<'static, Message> {
-    header_overflow_button(app, group_id, is_open)
+    if app
+        .workspace_group(group_id)
+        .is_some_and(|group| group.active == WorkspacePaneKind::Editor)
+    {
+        let browser_open = app.editor.file_browser_expanded();
+        row![
+            delayed_tooltip(
+                app,
+                format!("editor-file-browser-toggle-{group_id}"),
+                container(
+                    button(header_icon(icons::folder_tree(), HEADER_MENU_ICON_SIZE))
+                        .style(if browser_open {
+                            ui_style::button_toolbar_toggle_active
+                        } else {
+                            ui_style::button_toolbar_chip
+                        })
+                        .padding([4, 7])
+                        .width(Length::Fixed(HEADER_MENU_BUTTON_WIDTH))
+                        .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
+                        .on_press(Message::Editor(super::EditorMessage::ToggleFileBrowser)),
+                )
+                .padding([0, 2])
+                .into(),
+                text("Toggle file browser")
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .into(),
+                tooltip::Position::Top,
+            ),
+            header_overflow_button(app, group_id, is_open),
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center)
+        .into()
+    } else {
+        header_overflow_button(app, group_id, is_open)
+    }
 }
 
 fn header_overflow_menu_panel<'a>(controls: Vec<Element<'a, Message>>) -> Element<'a, Message> {

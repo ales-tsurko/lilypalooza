@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::editor::EditorTabFileState;
-use iced::widget::operation::{focus, select_all};
+use iced::widget::operation::{AbsoluteOffset, focus, scroll_to, select_all};
 
 const EDITOR_TAB_WIDTH: f32 = 144.0;
 const EDITOR_TAB_SLOT_WIDTH: f32 = EDITOR_TAB_WIDTH + 4.0;
@@ -204,6 +204,40 @@ impl Lilypalooza {
                     |picked| Message::Editor(EditorMessage::OpenPicked(picked)),
                 )
             }
+            EditorMessage::ToggleFileBrowser => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.editor.toggle_file_browser();
+                Task::none()
+            }
+            EditorMessage::FileBrowserEntryPressed {
+                column_index,
+                path,
+                is_dir,
+            } => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                match self.editor.browse_to_path(column_index, &path, is_dir) {
+                    Ok(()) if is_dir => scroll_to(
+                        super::EDITOR_FILE_BROWSER_SCROLL_ID,
+                        AbsoluteOffset {
+                            x: f32::MAX,
+                            y: 0.0,
+                        },
+                    ),
+                    Ok(()) => self.open_editor_file_in_editor_internal(&path, false),
+                    Err(error) => {
+                        self.show_prompt(
+                            ErrorPrompt::new(
+                                "File Browser Error",
+                                error,
+                                ErrorFatality::Recoverable,
+                                PromptButtons::Ok,
+                            ),
+                            None,
+                        );
+                        Task::none()
+                    }
+                }
+            }
             EditorMessage::OpenPicked(Some(paths)) => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.open_editor_files_in_editor(&paths)
@@ -331,17 +365,27 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn open_editor_file_in_editor(&mut self, path: &Path) -> Task<Message> {
+        self.open_editor_file_in_editor_internal(path, true)
+    }
+
+    fn open_editor_file_in_editor_internal(
+        &mut self,
+        path: &Path,
+        log_open: bool,
+    ) -> Task<Message> {
         self.cancel_editor_tab_rename_state();
         match self.editor.load_file(path) {
             Ok((tab_id, task, reused_existing)) => {
                 self.register_editor_recent_file(path);
                 self.sync_editor_file_watcher();
-                if reused_existing {
-                    self.logger
-                        .push(format!("Activated editor file {}", path.display()));
-                } else {
-                    self.logger
-                        .push(format!("Opened editor file {}", path.display()));
+                if log_open {
+                    if reused_existing {
+                        self.logger
+                            .push(format!("Activated editor file {}", path.display()));
+                    } else {
+                        self.logger
+                            .push(format!("Opened editor file {}", path.display()));
+                    }
                 }
                 self.editor.request_focus();
                 let sync_task = self.editor.sync_tab_scroll_state(tab_id);

@@ -121,6 +121,12 @@ pub(super) enum EditorMessage {
     RenamePicked(Option<PathBuf>),
     OpenRequested,
     OpenPicked(Option<Vec<PathBuf>>),
+    ToggleFileBrowser,
+    FileBrowserEntryPressed {
+        column_index: usize,
+        path: PathBuf,
+        is_dir: bool,
+    },
     OpenRecent(PathBuf),
     SaveRequested,
     SaveAsRequested,

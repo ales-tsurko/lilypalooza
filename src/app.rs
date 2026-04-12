@@ -46,6 +46,7 @@ const EDITOR_TABBAR_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(16);
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
 pub(super) const EDITOR_TABBAR_SCROLL_ID: &str = "editor-tabbar-scroll";
+pub(super) const EDITOR_FILE_BROWSER_SCROLL_ID: &str = "editor-file-browser-scroll";
 pub(super) const SHORTCUTS_SCROLLABLE_ID: &str = "shortcuts-scrollable";
 pub(super) const KEYBOARD_SCROLL_STEP: f32 = 84.0;
 pub(super) const SHORTCUTS_ACTION_ROW_HEIGHT: f32 = 48.0;

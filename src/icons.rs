@@ -14,7 +14,11 @@ const PIANO: &[u8] = include_bytes!("../assets/icons/piano.svg");
 const PLAY: &[u8] = include_bytes!("../assets/icons/play.svg");
 const PLUS: &[u8] = include_bytes!("../assets/icons/plus.svg");
 const PAUSE: &[u8] = include_bytes!("../assets/icons/pause.svg");
+const FILE: &[u8] = include_bytes!("../assets/icons/file.svg");
 const FILE_PEN: &[u8] = include_bytes!("../assets/icons/file-pen.svg");
+const FOLDER: &[u8] = include_bytes!("../assets/icons/folder.svg");
+const FOLDER_OPEN: &[u8] = include_bytes!("../assets/icons/folder-open.svg");
+const FOLDER_TREE: &[u8] = include_bytes!("../assets/icons/folder-tree.svg");
 const INFO: &[u8] = include_bytes!("../assets/icons/info.svg");
 const LIST_MUSIC: &[u8] = include_bytes!("../assets/icons/list-music.svg");
 const SCROLL_TEXT: &[u8] = include_bytes!("../assets/icons/scroll-text.svg");
@@ -81,8 +85,24 @@ pub(crate) fn pause() -> svg::Handle {
     svg::Handle::from_memory(PAUSE)
 }
 
+pub(crate) fn file() -> svg::Handle {
+    svg::Handle::from_memory(FILE)
+}
+
 pub(crate) fn file_pen() -> svg::Handle {
     svg::Handle::from_memory(FILE_PEN)
+}
+
+pub(crate) fn folder() -> svg::Handle {
+    svg::Handle::from_memory(FOLDER)
+}
+
+pub(crate) fn folder_open() -> svg::Handle {
+    svg::Handle::from_memory(FOLDER_OPEN)
+}
+
+pub(crate) fn folder_tree() -> svg::Handle {
+    svg::Handle::from_memory(FOLDER_TREE)
 }
 
 pub(crate) fn info() -> svg::Handle {
