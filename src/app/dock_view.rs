@@ -38,9 +38,6 @@ const PROJECT_MENU_ROOT_WIDTH: f32 = 126.0;
 const PROJECT_MENU_WIDTH: f32 = 280.0;
 const PROJECT_SETTINGS_SUBMENU_WIDTH: f32 = 220.0;
 const PROJECT_RECENT_LABEL_MAX_CHARS: usize = 40;
-const EDITOR_FILE_BROWSER_HEIGHT: f32 = 176.0;
-const EDITOR_FILE_BROWSER_COLUMN_WIDTH: f32 = 220.0;
-const EDITOR_FILE_BROWSER_ENTRY_HEIGHT: f32 = 26.0;
 const EDITOR_FILE_BROWSER_ICON_SIZE: f32 = 14.0;
 const EDITOR_TAB_WIDTH: f32 = 140.0;
 const EDITOR_TAB_HEIGHT: f32 = 32.0;
@@ -653,21 +650,27 @@ fn editor_file_browser(app: &Lilypalooza) -> Element<'_, Message> {
             },
         );
 
-    container(
-        iced::widget::column![
-            header,
-            scrollable(container(columns).width(Length::Shrink))
-                .id(super::EDITOR_FILE_BROWSER_SCROLL_ID)
-                .direction(scrollable::Direction::Horizontal(
-                    scrollable::Scrollbar::new().width(4).scroller_width(4),
-                ))
-                .height(Length::Fixed(EDITOR_FILE_BROWSER_HEIGHT))
-                .style(ui_style::editor_file_browser_scrollable),
-        ]
-        .spacing(0),
+    mouse_area(
+        container(
+            iced::widget::column![
+                header,
+                scrollable(container(columns).width(Length::Shrink))
+                    .id(super::EDITOR_FILE_BROWSER_SCROLL_ID)
+                    .direction(scrollable::Direction::Horizontal(
+                        scrollable::Scrollbar::new().width(4).scroller_width(4),
+                    ))
+                    .on_scroll(|viewport| {
+                        Message::Editor(super::EditorMessage::FileBrowserScrolled(viewport))
+                    })
+                    .height(Length::Fixed(super::EDITOR_FILE_BROWSER_HEIGHT))
+                    .style(ui_style::editor_file_browser_scrollable),
+            ]
+            .spacing(0),
+        )
+        .width(Fill)
+        .style(ui_style::pane_main_surface),
     )
-    .width(Fill)
-    .style(ui_style::pane_main_surface)
+    .on_press(Message::Editor(super::EditorMessage::FileBrowserFocused))
     .into()
 }
 
@@ -676,96 +679,162 @@ fn editor_file_browser_column(
     column_index: usize,
     column: super::editor::EditorBrowserColumnSummary,
 ) -> Element<'_, Message> {
-    let entries = column.entries.into_iter().fold(
-        iced::widget::column![].spacing(0).width(Fill),
-        |column_widget, entry| {
-            let path = entry.path.clone();
-            let name = entry.name;
-            let is_dir = entry.is_dir;
-            let selected = entry.selected;
-            let icon = if is_dir {
-                if selected {
-                    icons::folder_open()
-                } else {
-                    icons::folder()
-                }
-            } else {
-                icons::file()
-            };
-
-            let icon_color = move |theme: &Theme, _status| {
-                let palette = theme.extended_palette();
-                svg::Style {
-                    color: Some(if selected {
-                        palette.background.base.text
+    match column {
+        super::editor::EditorBrowserColumnSummary::Directory { entries } => {
+            let entries = entries.into_iter().fold(
+                iced::widget::column![].spacing(0).width(Fill),
+                |column_widget, entry| {
+                    let path = entry.path.clone();
+                    let name = entry.name;
+                    let is_dir = entry.is_dir;
+                    let selected = entry.selected;
+                    let icon = if is_dir {
+                        if selected {
+                            icons::folder_open()
+                        } else {
+                            icons::folder()
+                        }
                     } else {
-                        palette.background.strong.text
-                    }),
-                }
-            };
+                        icons::file()
+                    };
 
-            column_widget.push(
-                button(
-                    container(
-                        row![
+                    let icon_color = move |theme: &Theme, _status| {
+                        let palette = theme.extended_palette();
+                        svg::Style {
+                            color: Some(if selected {
+                                palette.background.base.text
+                            } else {
+                                palette.background.strong.text
+                            }),
+                        }
+                    };
+
+                    column_widget.push(
+                        button(
                             container(
-                                svg(icon)
+                                row![
+                                    container(
+                                        svg(icon)
+                                            .width(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
+                                            .height(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
+                                            .content_fit(ContentFit::Contain)
+                                            .style(icon_color),
+                                    )
                                     .width(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
-                                    .height(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
-                                    .content_fit(ContentFit::Contain)
-                                    .style(icon_color),
-                            )
-                            .width(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
-                            .height(Length::Fixed(EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
-                            .center_y(Length::Fixed(EDITOR_FILE_BROWSER_ENTRY_HEIGHT)),
-                            text(name)
-                                .size(ui_style::FONT_SIZE_UI_SM)
-                                .line_height(1.0)
+                                    .height(Length::Fixed(super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
+                                    .center_y(Length::Fixed(
+                                        super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT
+                                    )),
+                                    text(name)
+                                        .size(ui_style::FONT_SIZE_UI_SM)
+                                        .line_height(1.0)
+                                        .width(Fill),
+                                ]
+                                .spacing(ui_style::SPACE_XS)
+                                .align_y(alignment::Vertical::Center)
                                 .width(Fill),
-                        ]
-                        .spacing(ui_style::SPACE_XS)
-                        .align_y(alignment::Vertical::Center)
-                        .width(Fill),
+                            )
+                            .height(Length::Fill)
+                            .center_y(Length::Fill),
+                        )
+                        .width(Fill)
+                        .height(Length::Fixed(super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
+                        .padding([0, ui_style::PADDING_XS])
+                        .style(move |theme, status| {
+                            ui_style::button_editor_file_browser_entry(theme, status, selected)
+                        })
+                        .on_press(Message::Editor(
+                            super::EditorMessage::FileBrowserEntryPressed {
+                                column_index,
+                                path,
+                                is_dir,
+                            },
+                        )),
                     )
-                    .height(Length::Fill)
-                    .center_y(Length::Fill),
-                )
-                .width(Fill)
-                .height(Length::Fixed(EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
-                .padding([0, ui_style::PADDING_XS])
-                .style(move |theme, status| {
-                    ui_style::button_editor_file_browser_entry(theme, status, selected)
-                })
-                .on_press(Message::Editor(
-                    super::EditorMessage::FileBrowserEntryPressed {
-                        column_index,
-                        path,
-                        is_dir,
-                    },
-                )),
-            )
-        },
-    );
+                },
+            );
 
-    row![
-        container(
-            scrollable(entries)
-                .direction(scrollable::Direction::Vertical(
-                    scrollable::Scrollbar::new().width(4).scroller_width(4),
-                ))
-                .style(ui_style::editor_file_browser_scrollable),
-        )
-        .width(Length::Fixed(EDITOR_FILE_BROWSER_COLUMN_WIDTH))
-        .height(Length::Fixed(EDITOR_FILE_BROWSER_HEIGHT))
-        .style(ui_style::editor_file_browser_column),
-        container(text(""))
-            .width(Length::Fixed(1.0))
-            .height(Length::Fixed(EDITOR_FILE_BROWSER_HEIGHT))
-            .style(ui_style::chrome_separator),
-    ]
-    .spacing(0)
-    .align_y(alignment::Vertical::Top)
-    .into()
+            row![
+                container(
+                    scrollable(entries)
+                        .id(super::editor_file_browser_column_scroll_id(column_index))
+                        .direction(scrollable::Direction::Vertical(
+                            scrollable::Scrollbar::new().width(4).scroller_width(4),
+                        ))
+                        .on_scroll(move |viewport| {
+                            Message::Editor(super::EditorMessage::FileBrowserColumnScrolled {
+                                column_index,
+                                viewport,
+                            })
+                        })
+                        .style(ui_style::editor_file_browser_scrollable),
+                )
+                .width(Length::Fixed(super::EDITOR_FILE_BROWSER_COLUMN_WIDTH))
+                .height(Length::Fixed(super::EDITOR_FILE_BROWSER_HEIGHT))
+                .style(ui_style::editor_file_browser_column),
+                container(text(""))
+                    .width(Length::Fixed(1.0))
+                    .height(Length::Fixed(super::EDITOR_FILE_BROWSER_HEIGHT))
+                    .style(ui_style::chrome_separator),
+            ]
+            .spacing(0)
+            .align_y(alignment::Vertical::Top)
+            .into()
+        }
+        super::editor::EditorBrowserColumnSummary::FilePreview { metadata } => {
+            let size_line: Element<'_, Message> = if let Some(size) = metadata.size.as_ref() {
+                text(format!("Size: {size}"))
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .into()
+            } else {
+                container(text("")).into()
+            };
+            let modified_line: Element<'_, Message> =
+                if let Some(modified) = metadata.modified.as_ref() {
+                    text(format!("Modified: {modified}"))
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .into()
+                } else {
+                    container(text("")).into()
+                };
+            let created_line: Element<'_, Message> =
+                if let Some(created) = metadata.created.as_ref() {
+                    text(format!("Created: {created}"))
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .into()
+                } else {
+                    container(text("")).into()
+                };
+
+            row![
+                container(
+                    iced::widget::column![
+                        text(metadata.name)
+                            .size(ui_style::FONT_SIZE_UI_SM)
+                            .font(iced::Font {
+                                weight: iced::font::Weight::Bold,
+                                ..fonts::UI
+                            }),
+                        size_line,
+                        modified_line,
+                        created_line,
+                    ]
+                    .spacing(ui_style::SPACE_SM)
+                    .padding(ui_style::PADDING_SM),
+                )
+                .width(Length::Fixed(super::EDITOR_FILE_BROWSER_COLUMN_WIDTH))
+                .height(Length::Fixed(super::EDITOR_FILE_BROWSER_HEIGHT))
+                .style(ui_style::editor_file_browser_column),
+                container(text(""))
+                    .width(Length::Fixed(1.0))
+                    .height(Length::Fixed(super::EDITOR_FILE_BROWSER_HEIGHT))
+                    .style(ui_style::chrome_separator),
+            ]
+            .spacing(0)
+            .align_y(alignment::Vertical::Top)
+            .into()
+        }
+    }
 }
 
 fn editor_tab_strip(app: &Lilypalooza) -> Element<'_, Message> {
@@ -2608,4 +2677,59 @@ fn editor_theme_slider<'a>(
                 .shift_step(step * 10.0),
         )
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced_test::simulator;
+    use std::fs;
+
+    #[test]
+    fn browser_column_click_emits_entry_press_message() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        let alpha = root.path().join("alpha");
+        fs::create_dir(&alpha).expect("alpha dir");
+
+        let (app, _task) = super::super::new(None, None);
+        let column = crate::app::editor::EditorBrowserColumnSummary::Directory {
+            entries: vec![crate::app::editor::EditorBrowserEntrySummary {
+                path: alpha.clone(),
+                name: "alpha".to_string(),
+                is_dir: true,
+                selected: false,
+            }],
+        };
+
+        let mut ui = simulator(editor_file_browser_column(&app, 0, column));
+        ui.click("alpha").expect("alpha should be clickable");
+
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            Message::Editor(super::super::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                is_dir: true,
+                ref path,
+            }) if path == &alpha
+        )));
+    }
+
+    #[test]
+    fn browser_header_click_emits_focus_message() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        let (mut app, _task) = super::super::new(None, None);
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        let root_label = app.editor.file_browser_root_label();
+
+        let mut ui = simulator(editor_file_browser(&app));
+        ui.click(root_label.as_str())
+            .expect("browser header should be clickable");
+
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            Message::Editor(super::super::EditorMessage::FileBrowserFocused)
+        )));
+    }
 }

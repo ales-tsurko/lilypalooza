@@ -25,8 +25,13 @@ pub(super) struct EditorTabSummary {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct EditorBrowserColumnSummary {
-    pub(super) entries: Vec<EditorBrowserEntrySummary>,
+pub(super) enum EditorBrowserColumnSummary {
+    Directory {
+        entries: Vec<EditorBrowserEntrySummary>,
+    },
+    FilePreview {
+        metadata: EditorFilePreviewSummary,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +40,14 @@ pub(super) struct EditorBrowserEntrySummary {
     pub(super) name: String,
     pub(super) is_dir: bool,
     pub(super) selected: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct EditorFilePreviewSummary {
+    pub(super) name: String,
+    pub(super) size: Option<String>,
+    pub(super) modified: Option<String>,
+    pub(super) created: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,15 +65,25 @@ struct EditorTab {
     file_state: EditorTabFileState,
 }
 
-struct EditorBrowserColumn {
-    entries: Vec<EditorBrowserEntry>,
-    selected_path: Option<PathBuf>,
+enum EditorBrowserColumn {
+    Directory {
+        entries: Vec<EditorBrowserEntry>,
+        selected_path: Option<PathBuf>,
+    },
+    FilePreview(EditorFilePreview),
 }
 
 struct EditorBrowserEntry {
     path: PathBuf,
     name: String,
     is_dir: bool,
+}
+
+struct EditorFilePreview {
+    name: String,
+    size: Option<String>,
+    modified: Option<String>,
+    created: Option<String>,
 }
 
 pub(super) struct EditorState {
@@ -71,6 +94,7 @@ pub(super) struct EditorState {
     file_browser_expanded: bool,
     file_browser_root: PathBuf,
     file_browser_columns: Vec<EditorBrowserColumn>,
+    file_browser_active_column: usize,
     app_theme: iced::Theme,
     view_settings: EditorViewSettings,
     default_view_settings: EditorViewSettings,
@@ -91,6 +115,7 @@ impl EditorState {
             file_browser_expanded: false,
             file_browser_root: current_editor_browser_root(None),
             file_browser_columns: Vec::new(),
+            file_browser_active_column: 0,
             app_theme,
             view_settings,
             default_view_settings: EditorViewSettings::default(),
@@ -157,23 +182,42 @@ impl EditorState {
     pub(super) fn file_browser_columns(&self) -> Vec<EditorBrowserColumnSummary> {
         self.file_browser_columns
             .iter()
-            .map(|column| EditorBrowserColumnSummary {
-                entries: column
-                    .entries
-                    .iter()
-                    .map(|entry| EditorBrowserEntrySummary {
-                        path: entry.path.clone(),
-                        name: entry.name.clone(),
-                        is_dir: entry.is_dir,
-                        selected: column.selected_path.as_ref() == Some(&entry.path),
-                    })
-                    .collect(),
+            .map(|column| match column {
+                EditorBrowserColumn::Directory {
+                    entries,
+                    selected_path,
+                } => EditorBrowserColumnSummary::Directory {
+                    entries: entries
+                        .iter()
+                        .map(|entry| EditorBrowserEntrySummary {
+                            path: entry.path.clone(),
+                            name: entry.name.clone(),
+                            is_dir: entry.is_dir,
+                            selected: selected_path.as_ref() == Some(&entry.path),
+                        })
+                        .collect(),
+                },
+                EditorBrowserColumn::FilePreview(preview) => {
+                    EditorBrowserColumnSummary::FilePreview {
+                        metadata: EditorFilePreviewSummary {
+                            name: preview.name.clone(),
+                            size: preview.size.clone(),
+                            modified: preview.modified.clone(),
+                            created: preview.created.clone(),
+                        },
+                    }
+                }
             })
             .collect()
     }
 
     pub(super) fn toggle_file_browser(&mut self) {
         self.file_browser_expanded = !self.file_browser_expanded;
+    }
+
+    pub(super) fn set_file_browser_active_column(&mut self, column_index: usize) {
+        self.file_browser_active_column =
+            column_index.min(self.file_browser_columns.len().saturating_sub(1));
     }
 
     pub(super) fn browse_to_path(
@@ -188,26 +232,62 @@ impl EditorState {
 
         let selected_path = normalize_editor_path(path);
         let next_column = if is_dir {
-            Some(EditorBrowserColumn {
+            EditorBrowserColumn::Directory {
                 entries: read_browser_entries(&selected_path)?,
                 selected_path: None,
-            })
+            }
         } else {
-            None
+            EditorBrowserColumn::FilePreview(build_file_preview(&selected_path)?)
         };
 
         self.file_browser_columns.truncate(column_index + 1);
-        self.file_browser_columns[column_index].selected_path = Some(selected_path.clone());
-
-        if let Some(next_column) = next_column {
-            self.file_browser_columns.push(next_column);
+        self.file_browser_active_column = column_index;
+        if let Some(EditorBrowserColumn::Directory {
+            selected_path: current,
+            ..
+        }) = self.file_browser_columns.get_mut(column_index)
+        {
+            *current = Some(selected_path.clone());
         }
+
+        self.file_browser_columns.push(next_column);
 
         Ok(())
     }
 
     pub(super) fn has_document(&self) -> bool {
         !self.tabs.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_content(&self) -> Option<String> {
+        self.active_tab().map(|tab| tab.widget.content())
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_editor_is_focused(&self) -> bool {
+        self.active_tab().is_some_and(|tab| tab.widget.is_focused())
+    }
+
+    pub(super) fn file_browser_active_column_index(&self) -> usize {
+        self.file_browser_active_column
+    }
+
+    pub(super) fn file_browser_selected_index(&self, column_index: usize) -> Option<usize> {
+        let EditorBrowserColumn::Directory {
+            entries,
+            selected_path,
+        } = self.file_browser_columns.get(column_index)?
+        else {
+            return None;
+        };
+        selected_path
+            .as_ref()
+            .and_then(|selected| entries.iter().position(|entry| &entry.path == selected))
+    }
+
+    pub(super) fn file_browser_has_preview_column(&self, column_index: usize) -> bool {
+        self.file_browser_columns.get(column_index + 1).is_some()
     }
 
     pub(super) fn path(&self) -> Option<&Path> {
@@ -887,10 +967,148 @@ impl EditorState {
 
     fn rebuild_file_browser(&mut self) {
         self.file_browser_root = current_editor_browser_root(self.project_root.as_deref());
-        self.file_browser_columns = vec![EditorBrowserColumn {
+        self.file_browser_columns = vec![EditorBrowserColumn::Directory {
             entries: read_browser_entries(&self.file_browser_root).unwrap_or_default(),
             selected_path: None,
         }];
+        self.file_browser_active_column = 0;
+    }
+
+    pub(super) fn move_file_browser_selection(&mut self, delta: i32) -> Result<(), String> {
+        if self.file_browser_columns.is_empty() {
+            return Ok(());
+        }
+
+        let column_index = self
+            .file_browser_active_column
+            .min(self.file_browser_columns.len().saturating_sub(1));
+        let EditorBrowserColumn::Directory {
+            entries,
+            selected_path,
+        } = &self.file_browser_columns[column_index]
+        else {
+            return Ok(());
+        };
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let next_index = match selected_path
+            .as_ref()
+            .and_then(|selected| entries.iter().position(|entry| &entry.path == selected))
+        {
+            Some(current_index) => {
+                (current_index as i32 + delta).clamp(0, entries.len() as i32 - 1) as usize
+            }
+            None if delta >= 0 => 0,
+            None => entries.len().saturating_sub(1),
+        };
+        let entry = &entries[next_index];
+        let path = entry.path.clone();
+        let is_dir = entry.is_dir;
+
+        self.browse_to_path(column_index, &path, is_dir)
+    }
+
+    pub(super) fn move_file_browser_column(&mut self, right: bool) -> Result<(), String> {
+        if self.file_browser_columns.is_empty() {
+            return Ok(());
+        }
+
+        if !right {
+            let active_index = self
+                .file_browser_active_column
+                .min(self.file_browser_columns.len().saturating_sub(1));
+            if let Some(EditorBrowserColumn::Directory { selected_path, .. }) =
+                self.file_browser_columns.get_mut(active_index)
+            {
+                *selected_path = None;
+            }
+            self.file_browser_active_column = self.file_browser_active_column.saturating_sub(1);
+            self.sync_file_browser_preview_from_column(self.file_browser_active_column)?;
+            return Ok(());
+        }
+
+        let column_index = self
+            .file_browser_active_column
+            .min(self.file_browser_columns.len().saturating_sub(1));
+        let EditorBrowserColumn::Directory {
+            entries,
+            selected_path,
+        } = &self.file_browser_columns[column_index]
+        else {
+            return Ok(());
+        };
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let selected_index = selected_path
+            .as_ref()
+            .and_then(|selected| entries.iter().position(|entry| &entry.path == selected))
+            .unwrap_or(0);
+        let entry = &entries[selected_index];
+        if !entry.is_dir {
+            return Ok(());
+        }
+
+        let path = entry.path.clone();
+        self.browse_to_path(column_index, &path, true)?;
+        self.file_browser_active_column =
+            (column_index + 1).min(self.file_browser_columns.len().saturating_sub(1));
+        if let Some(EditorBrowserColumn::Directory {
+            entries,
+            selected_path,
+        }) = self
+            .file_browser_columns
+            .get_mut(self.file_browser_active_column)
+            && selected_path.is_none()
+            && let Some(first_entry) = entries.first()
+        {
+            *selected_path = Some(first_entry.path.clone());
+        }
+        self.sync_file_browser_preview_from_column(self.file_browser_active_column)?;
+        Ok(())
+    }
+
+    fn sync_file_browser_preview_from_column(&mut self, column_index: usize) -> Result<(), String> {
+        if column_index >= self.file_browser_columns.len() {
+            return Ok(());
+        }
+
+        let Some(EditorBrowserColumn::Directory {
+            entries,
+            selected_path,
+        }) = self.file_browser_columns.get(column_index)
+        else {
+            self.file_browser_columns.truncate(column_index + 1);
+            return Ok(());
+        };
+
+        let Some(selected_path) = selected_path.clone() else {
+            self.file_browser_columns.truncate(column_index + 1);
+            return Ok(());
+        };
+
+        let Some((selected_path, selected_is_dir)) = entries
+            .iter()
+            .find(|entry| entry.path == selected_path)
+            .map(|entry| (entry.path.clone(), entry.is_dir))
+        else {
+            self.file_browser_columns.truncate(column_index + 1);
+            return Ok(());
+        };
+
+        self.file_browser_columns.truncate(column_index + 1);
+        self.file_browser_columns.push(if selected_is_dir {
+            EditorBrowserColumn::Directory {
+                entries: read_browser_entries(&selected_path)?,
+                selected_path: None,
+            }
+        } else {
+            EditorBrowserColumn::FilePreview(build_file_preview(&selected_path)?)
+        });
+        Ok(())
     }
 }
 
@@ -975,6 +1193,61 @@ fn read_browser_entries(path: &Path) -> Result<Vec<EditorBrowserEntry>, String> 
     });
 
     Ok(entries)
+}
+
+fn build_file_preview(path: &Path) -> Result<EditorFilePreview, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Failed to read metadata for {}: {error}", path.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Untitled")
+        .to_string();
+    Ok(EditorFilePreview {
+        name,
+        size: if metadata.is_file() {
+            Some(format_file_size(metadata.len()))
+        } else {
+            None
+        },
+        modified: metadata
+            .modified()
+            .ok()
+            .and_then(format_relative_system_time),
+        created: metadata
+            .created()
+            .ok()
+            .and_then(format_relative_system_time),
+    })
+}
+
+fn format_file_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if (bytes as f64) < MB {
+        format!("{:.1} KB", bytes as f64 / KB)
+    } else {
+        format!("{:.1} MB", bytes as f64 / MB)
+    }
+}
+
+fn format_relative_system_time(time: std::time::SystemTime) -> Option<String> {
+    let now = std::time::SystemTime::now();
+    let duration = now.duration_since(time).ok()?;
+    let seconds = duration.as_secs();
+
+    Some(if seconds < 60 {
+        "just now".to_string()
+    } else if seconds < 3_600 {
+        format!("{} min ago", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{} h ago", seconds / 3_600)
+    } else {
+        format!("{} d ago", seconds / 86_400)
+    })
 }
 
 fn syntax_for_path(path: &Path) -> String {

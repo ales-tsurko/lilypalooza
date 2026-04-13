@@ -15,11 +15,23 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn sync_editor_widget_focus(&mut self) {
-        if self.focused_workspace_pane == Some(WorkspacePaneKind::Editor) {
+        if self.focused_workspace_pane == Some(WorkspacePaneKind::Editor)
+            && !self.editor_file_browser_focused
+        {
             self.editor.request_focus();
         } else {
             self.editor.lose_focus();
         }
+    }
+
+    pub(in crate::app) fn focus_editor_file_browser(&mut self) {
+        self.editor_file_browser_focused = true;
+        self.editor.lose_focus();
+    }
+
+    pub(in crate::app) fn focus_editor_text_area(&mut self) {
+        self.editor_file_browser_focused = false;
+        self.sync_editor_widget_focus();
     }
 
     pub(in crate::app) fn handle_key_pressed(&mut self, key_press: KeyPress) -> Task<Message> {
@@ -108,6 +120,24 @@ impl Lilypalooza {
             shortcuts::resolve_contextual(&self.shortcut_settings, focused_pane, shortcut_input)
         {
             return self.handle_shortcut_action(action);
+        }
+
+        if focused_pane == WorkspacePaneKind::Editor && self.editor_file_browser_focused {
+            return match key_press.key {
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                    self.handle_editor_file_browser_move(-1)
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                    self.handle_editor_file_browser_move(1)
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                    self.handle_editor_file_browser_column(false)
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                    self.handle_editor_file_browser_column(true)
+                }
+                _ => Task::none(),
+            };
         }
 
         Task::none()
@@ -398,7 +428,7 @@ impl Lilypalooza {
                     return Task::none();
                 };
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
-                self.editor.request_focus();
+                self.focus_editor_text_area();
                 self.pending_reveal_editor_tab = Some(tab_id);
                 self.map_editor_widget_task(tab_id, self.editor.sync_tab_scroll_state(tab_id))
             }
@@ -407,7 +437,7 @@ impl Lilypalooza {
                     return Task::none();
                 };
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
-                self.editor.request_focus();
+                self.focus_editor_text_area();
                 self.pending_reveal_editor_tab = Some(tab_id);
                 self.map_editor_widget_task(tab_id, self.editor.sync_tab_scroll_state(tab_id))
             }
@@ -516,6 +546,9 @@ impl Lilypalooza {
 
     pub(in crate::app) fn set_focused_workspace_pane(&mut self, pane: WorkspacePaneKind) {
         if self.group_for_pane(pane).is_some() {
+            if pane != WorkspacePaneKind::Editor {
+                self.editor_file_browser_focused = false;
+            }
             self.focused_workspace_pane = Some(pane);
             self.sync_editor_widget_focus();
         }
@@ -767,7 +800,7 @@ impl Lilypalooza {
             EditorContinuation::CloseTab(tab_id) => {
                 self.editor.close_tab(tab_id);
                 self.sync_editor_file_watcher();
-                self.editor.request_focus();
+                self.focus_editor_text_area();
                 self.persist_settings();
                 Task::none()
             }
@@ -858,5 +891,112 @@ impl Lilypalooza {
         self.sync_editor_viewport_from_layout();
         self.sync_editor_widget_focus();
         Ok(())
+    }
+
+    fn handle_editor_file_browser_move(&mut self, delta: i32) -> Task<Message> {
+        if let Err(error) = self.editor.move_file_browser_selection(delta) {
+            self.show_prompt(
+                ErrorPrompt::new(
+                    "File Browser Error",
+                    error,
+                    ErrorFatality::Recoverable,
+                    PromptButtons::Ok,
+                ),
+                None,
+            );
+            return Task::none();
+        }
+        self.reveal_editor_file_browser_selection(
+            self.editor
+                .file_browser_has_preview_column(self.editor.file_browser_active_column_index()),
+        )
+    }
+
+    fn handle_editor_file_browser_column(&mut self, right: bool) -> Task<Message> {
+        if let Err(error) = self.editor.move_file_browser_column(right) {
+            self.show_prompt(
+                ErrorPrompt::new(
+                    "File Browser Error",
+                    error,
+                    ErrorFatality::Recoverable,
+                    PromptButtons::Ok,
+                ),
+                None,
+            );
+            return Task::none();
+        }
+
+        self.reveal_editor_file_browser_selection(right)
+    }
+
+    pub(in crate::app) fn reveal_editor_file_browser_selection(
+        &self,
+        reveal_preview: bool,
+    ) -> Task<Message> {
+        let column_index = self.editor.file_browser_active_column_index();
+        let current_x = self.editor_file_browser_scroll_x;
+        let viewport_width = if self.editor_file_browser_viewport_width > 0.0 {
+            self.editor_file_browser_viewport_width
+        } else {
+            super::EDITOR_FILE_BROWSER_COLUMN_WIDTH
+        };
+        let visible_column_count = self.editor.file_browser_columns().len();
+        let reveal_column_index = if reveal_preview && visible_column_count > column_index + 1 {
+            column_index + 1
+        } else {
+            column_index
+        };
+        let active_column_left = column_index as f32 * super::EDITOR_FILE_BROWSER_COLUMN_WIDTH;
+        let reveal_column_right =
+            (reveal_column_index + 1) as f32 * super::EDITOR_FILE_BROWSER_COLUMN_WIDTH;
+        let target_x = if active_column_left < current_x {
+            active_column_left
+        } else if reveal_column_right > current_x + viewport_width {
+            (reveal_column_right - viewport_width).max(0.0)
+        } else {
+            current_x
+        };
+        let horizontal = iced::widget::operation::scroll_to(
+            super::EDITOR_FILE_BROWSER_SCROLL_ID,
+            iced::widget::operation::AbsoluteOffset {
+                x: target_x,
+                y: 0.0,
+            },
+        );
+        let vertical = self
+            .editor
+            .file_browser_selected_index(column_index)
+            .map(|selected_index| {
+                let current_y = self
+                    .editor_file_browser_column_scroll_y
+                    .get(&column_index)
+                    .copied()
+                    .unwrap_or(0.0);
+                let viewport_height = self
+                    .editor_file_browser_column_viewport_height
+                    .get(&column_index)
+                    .copied()
+                    .filter(|height| *height > 0.0)
+                    .unwrap_or(super::EDITOR_FILE_BROWSER_HEIGHT);
+                let row_top = selected_index as f32 * super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT;
+                let row_bottom = row_top + super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT;
+                let target_y = if row_top < current_y {
+                    row_top
+                } else if row_bottom > current_y + viewport_height {
+                    (row_bottom - viewport_height).max(0.0)
+                } else {
+                    current_y
+                };
+                iced::widget::operation::scroll_to(
+                    crate::app::editor_file_browser_column_scroll_id(column_index),
+                    iced::widget::operation::AbsoluteOffset {
+                        x: 0.0,
+                        y: target_y,
+                    },
+                )
+            })
+            .unwrap_or_else(Task::none);
+
+        Task::batch([horizontal, vertical])
     }
 }

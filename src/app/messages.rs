@@ -122,6 +122,12 @@ pub(super) enum EditorMessage {
     OpenRequested,
     OpenPicked(Option<Vec<PathBuf>>),
     ToggleFileBrowser,
+    FileBrowserFocused,
+    FileBrowserScrolled(iced::widget::scrollable::Viewport),
+    FileBrowserColumnScrolled {
+        column_index: usize,
+        viewport: iced::widget::scrollable::Viewport,
+    },
     FileBrowserEntryPressed {
         column_index: usize,
         path: PathBuf,

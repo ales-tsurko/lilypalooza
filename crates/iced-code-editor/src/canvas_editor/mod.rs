@@ -1767,6 +1767,9 @@ impl CodeEditor {
     /// editor.lose_focus();
     /// ```
     pub fn lose_focus(&mut self) {
+        if FOCUSED_EDITOR_ID.load(Ordering::Relaxed) == self.editor_id {
+            FOCUSED_EDITOR_ID.store(0, Ordering::Relaxed);
+        }
         self.has_canvas_focus = false;
         self.show_cursor = false;
         self.ime_preedit = None;

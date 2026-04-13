@@ -47,6 +47,9 @@ const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
 pub(super) const EDITOR_TABBAR_SCROLL_ID: &str = "editor-tabbar-scroll";
 pub(super) const EDITOR_FILE_BROWSER_SCROLL_ID: &str = "editor-file-browser-scroll";
+pub(super) const EDITOR_FILE_BROWSER_HEIGHT: f32 = 176.0;
+pub(super) const EDITOR_FILE_BROWSER_COLUMN_WIDTH: f32 = 220.0;
+pub(super) const EDITOR_FILE_BROWSER_ENTRY_HEIGHT: f32 = 26.0;
 pub(super) const SHORTCUTS_SCROLLABLE_ID: &str = "shortcuts-scrollable";
 pub(super) const KEYBOARD_SCROLL_STEP: f32 = 84.0;
 pub(super) const SHORTCUTS_ACTION_ROW_HEIGHT: f32 = 48.0;
@@ -59,6 +62,12 @@ const SVG_PAGE_BRIGHTNESS_STEP: u8 = 10;
 const SCORE_ZOOM_PREVIEW_INTERVAL: Duration = Duration::from_millis(16);
 const SCORE_ZOOM_PREVIEW_SETTLE_DELAY: Duration = Duration::from_millis(120);
 pub(super) const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+
+pub(super) fn editor_file_browser_column_scroll_id(index: usize) -> Id {
+    Id::new(Box::leak(
+        format!("editor-file-browser-column-{index}").into_boxed_str(),
+    ))
+}
 
 pub(super) type WorkspacePaneKind = crate::settings::WorkspacePane;
 
@@ -131,6 +140,11 @@ struct Lilypalooza {
     dragged_editor_tab: Option<u64>,
     editor_tab_drag_origin: Option<Point>,
     editor_tab_drop_after: bool,
+    editor_file_browser_focused: bool,
+    editor_file_browser_scroll_x: f32,
+    editor_file_browser_viewport_width: f32,
+    editor_file_browser_column_scroll_y: HashMap<usize, f32>,
+    editor_file_browser_column_viewport_height: HashMap<usize, f32>,
     editor_tabbar_scroll_x: f32,
     editor_tabbar_viewport_width: f32,
     editor_tabbar_autoscroll_direction: i8,
@@ -465,6 +479,11 @@ fn new(
         dragged_editor_tab: None,
         editor_tab_drag_origin: None,
         editor_tab_drop_after: false,
+        editor_file_browser_focused: false,
+        editor_file_browser_scroll_x: 0.0,
+        editor_file_browser_viewport_width: 0.0,
+        editor_file_browser_column_scroll_y: HashMap::new(),
+        editor_file_browser_column_viewport_height: HashMap::new(),
         editor_tabbar_scroll_x: 0.0,
         editor_tabbar_viewport_width: 0.0,
         editor_tabbar_autoscroll_direction: 0,
@@ -983,7 +1002,9 @@ fn default_project_name(project_root: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use crate::shortcuts;
+    use iced::event;
     use iced_test::simulator;
+    use std::fs;
 
     fn test_app() -> Lilypalooza {
         let (mut app, _task) = new(None, None);
@@ -994,10 +1015,62 @@ mod tests {
         app
     }
 
+    fn test_editor_app() -> Lilypalooza {
+        let (app, _task) = new(None, None);
+        app
+    }
+
     fn apply_messages(app: &mut Lilypalooza, messages: Vec<Message>) {
         for message in messages {
             let _ = update(app, message);
         }
+    }
+
+    fn named_key_press(named: keyboard::key::Named, code: keyboard::key::Code) -> Message {
+        Message::KeyPressed(KeyPress {
+            status: event::Status::Ignored,
+            key: keyboard::Key::Named(named),
+            physical_key: keyboard::key::Physical::Code(code),
+            modifiers: keyboard::Modifiers::default(),
+        })
+    }
+
+    fn char_key_press(value: &str, code: keyboard::key::Code) -> Message {
+        Message::KeyPressed(KeyPress {
+            status: event::Status::Ignored,
+            key: keyboard::Key::Character(value.into()),
+            physical_key: keyboard::key::Physical::Code(code),
+            modifiers: keyboard::Modifiers::default(),
+        })
+    }
+
+    fn active_browser_column_index(app: &Lilypalooza) -> Option<usize> {
+        Some(app.editor.file_browser_active_column_index())
+    }
+
+    fn selected_browser_entry_name(app: &Lilypalooza, column_index: usize) -> Option<String> {
+        app.editor
+            .file_browser_columns()
+            .get(column_index)
+            .and_then(|column| match column {
+                editor::EditorBrowserColumnSummary::Directory { entries } => entries
+                    .iter()
+                    .find(|entry| entry.selected)
+                    .map(|entry| entry.name.clone()),
+                editor::EditorBrowserColumnSummary::FilePreview { .. } => None,
+            })
+    }
+
+    fn file_preview_name(app: &Lilypalooza, column_index: usize) -> Option<String> {
+        app.editor
+            .file_browser_columns()
+            .get(column_index)
+            .and_then(|column| match column {
+                editor::EditorBrowserColumnSummary::FilePreview { metadata } => {
+                    Some(metadata.name.clone())
+                }
+                editor::EditorBrowserColumnSummary::Directory { .. } => None,
+            })
     }
 
     #[test]
@@ -1040,5 +1113,167 @@ mod tests {
                 settings::ShortcutActionId::OpenSettingsFile
             ))
         )));
+    }
+
+    #[test]
+    fn browser_arrow_keys_navigate_columns_after_browser_focus_click() {
+        let root = TempDir::new().expect("tempdir");
+        fs::create_dir(root.path().join("alpha")).expect("alpha dir");
+        fs::create_dir(root.path().join("alpha").join("child")).expect("child dir");
+        fs::write(
+            root.path().join("alpha").join("child").join("inner.txt"),
+            "inner",
+        )
+        .expect("inner file");
+        fs::write(root.path().join("alpha").join("b.txt"), "b").expect("b file");
+        fs::create_dir(root.path().join("beta")).expect("beta dir");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("alpha"),
+                is_dir: true,
+            }),
+        );
+
+        assert!(app.editor_file_browser_focused);
+        assert_eq!(app.editor.file_browser_columns().len(), 2);
+        assert_eq!(active_browser_column_index(&app), Some(0));
+        assert_eq!(
+            selected_browser_entry_name(&app, 0).as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(selected_browser_entry_name(&app, 1), None);
+
+        let _ = update(
+            &mut app,
+            named_key_press(
+                keyboard::key::Named::ArrowRight,
+                keyboard::key::Code::ArrowRight,
+            ),
+        );
+        assert_eq!(active_browser_column_index(&app), Some(1));
+        assert_eq!(
+            selected_browser_entry_name(&app, 0).as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(
+            selected_browser_entry_name(&app, 1).as_deref(),
+            Some("child")
+        );
+        assert_eq!(app.editor.file_browser_columns().len(), 3);
+        assert_eq!(selected_browser_entry_name(&app, 2), None);
+
+        let _ = update(
+            &mut app,
+            named_key_press(
+                keyboard::key::Named::ArrowDown,
+                keyboard::key::Code::ArrowDown,
+            ),
+        );
+        assert_eq!(
+            selected_browser_entry_name(&app, 1).as_deref(),
+            Some("b.txt")
+        );
+        assert_eq!(app.editor.file_browser_columns().len(), 3);
+        assert_eq!(file_preview_name(&app, 2).as_deref(), Some("b.txt"));
+
+        let _ = update(
+            &mut app,
+            named_key_press(
+                keyboard::key::Named::ArrowLeft,
+                keyboard::key::Code::ArrowLeft,
+            ),
+        );
+        assert_eq!(active_browser_column_index(&app), Some(0));
+        assert_eq!(
+            selected_browser_entry_name(&app, 0).as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(selected_browser_entry_name(&app, 1), None);
+
+        let _ = update(
+            &mut app,
+            named_key_press(
+                keyboard::key::Named::ArrowRight,
+                keyboard::key::Code::ArrowRight,
+            ),
+        );
+        assert_eq!(active_browser_column_index(&app), Some(1));
+        assert_eq!(
+            selected_browser_entry_name(&app, 0).as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(
+            selected_browser_entry_name(&app, 1).as_deref(),
+            Some("child")
+        );
+        assert_eq!(app.editor.file_browser_columns().len(), 3);
+        assert_eq!(selected_browser_entry_name(&app, 2), None);
+    }
+
+    #[test]
+    fn browser_focus_blocks_editor_text_input() {
+        let root = TempDir::new().expect("tempdir");
+        fs::create_dir(root.path().join("alpha")).expect("alpha dir");
+        let file_path = root.path().join("note.txt");
+        fs::write(&file_path, "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+        let _ = app.open_editor_file_in_editor(&file_path);
+        app.editor.toggle_file_browser();
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("alpha"),
+                is_dir: true,
+            }),
+        );
+
+        let before = app.editor.active_content().expect("active content");
+        assert!(app.editor_file_browser_focused);
+        assert!(!app.editor.active_editor_is_focused());
+
+        let _ = update(&mut app, char_key_press("x", keyboard::key::Code::KeyX));
+
+        assert_eq!(
+            app.editor.active_content().as_deref(),
+            Some(before.as_str())
+        );
+        assert!(!app.editor.active_editor_is_focused());
+    }
+
+    #[test]
+    fn browser_focus_message_moves_focus_from_editor() {
+        let root = TempDir::new().expect("tempdir");
+        let file_path = root.path().join("note.txt");
+        fs::write(&file_path, "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        app.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+        let _ = app.open_editor_file_in_editor(&file_path);
+        app.editor.request_focus();
+
+        assert!(app.editor.active_editor_is_focused());
+
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserFocused),
+        );
+
+        assert!(app.editor_file_browser_focused);
+        assert!(!app.editor.active_editor_is_focused());
     }
 }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::editor::EditorTabFileState;
-use iced::widget::operation::{AbsoluteOffset, focus, scroll_to, select_all};
+use iced::widget::operation::{focus, select_all};
 
 const EDITOR_TAB_WIDTH: f32 = 144.0;
 const EDITOR_TAB_SLOT_WIDTH: f32 = EDITOR_TAB_WIDTH + 4.0;
@@ -24,6 +24,7 @@ impl Lilypalooza {
                         | iced_code_editor::Message::JumpClick(_)
                 ) {
                     self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                    self.focus_editor_text_area();
                     self.editor.activate_tab(tab_id);
                 }
 
@@ -35,6 +36,7 @@ impl Lilypalooza {
                     return Task::none();
                 };
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.focus_editor_text_area();
                 self.editor.activate_tab(tab_id);
                 let task = self.editor.update(tab_id, &message);
                 self.map_editor_widget_task(tab_id, task)
@@ -44,7 +46,7 @@ impl Lilypalooza {
                 self.cancel_editor_tab_rename_state();
                 let (tab_id, task, _reused) = self.editor.new_document();
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
-                self.editor.request_focus();
+                self.focus_editor_text_area();
                 self.pending_reveal_editor_tab = Some(tab_id);
                 self.map_editor_widget_task(tab_id, task)
             }
@@ -54,7 +56,7 @@ impl Lilypalooza {
                 }
                 self.editor.activate_tab(tab_id);
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
-                self.editor.request_focus();
+                self.focus_editor_text_area();
                 self.pending_reveal_editor_tab = Some(tab_id);
                 self.pressed_editor_tab = Some(tab_id);
                 self.editor_tab_drag_origin = None;
@@ -207,6 +209,31 @@ impl Lilypalooza {
             EditorMessage::ToggleFileBrowser => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.toggle_file_browser();
+                if self.editor.file_browser_expanded() {
+                    self.focus_editor_file_browser();
+                } else {
+                    self.focus_editor_text_area();
+                }
+                Task::none()
+            }
+            EditorMessage::FileBrowserFocused => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.focus_editor_file_browser();
+                Task::none()
+            }
+            EditorMessage::FileBrowserScrolled(viewport) => {
+                self.editor_file_browser_scroll_x = viewport.absolute_offset().x;
+                self.editor_file_browser_viewport_width = viewport.bounds().width;
+                Task::none()
+            }
+            EditorMessage::FileBrowserColumnScrolled {
+                column_index,
+                viewport,
+            } => {
+                self.editor_file_browser_column_scroll_y
+                    .insert(column_index, viewport.absolute_offset().y);
+                self.editor_file_browser_column_viewport_height
+                    .insert(column_index, viewport.bounds().height);
                 Task::none()
             }
             EditorMessage::FileBrowserEntryPressed {
@@ -215,15 +242,14 @@ impl Lilypalooza {
                 is_dir,
             } => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.focus_editor_file_browser();
+                self.editor.set_file_browser_active_column(column_index);
                 match self.editor.browse_to_path(column_index, &path, is_dir) {
-                    Ok(()) if is_dir => scroll_to(
-                        super::EDITOR_FILE_BROWSER_SCROLL_ID,
-                        AbsoluteOffset {
-                            x: f32::MAX,
-                            y: 0.0,
-                        },
-                    ),
-                    Ok(()) => self.open_editor_file_in_editor_internal(&path, false),
+                    Ok(()) if is_dir => self.reveal_editor_file_browser_selection(true),
+                    Ok(()) => Task::batch([
+                        self.reveal_editor_file_browser_selection(true),
+                        self.open_editor_file_in_editor_internal(&path, false, false),
+                    ]),
                     Err(error) => {
                         self.show_prompt(
                             ErrorPrompt::new(
@@ -365,13 +391,14 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn open_editor_file_in_editor(&mut self, path: &Path) -> Task<Message> {
-        self.open_editor_file_in_editor_internal(path, true)
+        self.open_editor_file_in_editor_internal(path, true, true)
     }
 
     fn open_editor_file_in_editor_internal(
         &mut self,
         path: &Path,
         log_open: bool,
+        focus_text_area: bool,
     ) -> Task<Message> {
         self.cancel_editor_tab_rename_state();
         match self.editor.load_file(path) {
@@ -387,7 +414,9 @@ impl Lilypalooza {
                             .push(format!("Opened editor file {}", path.display()));
                     }
                 }
-                self.editor.request_focus();
+                if focus_text_area {
+                    self.focus_editor_text_area();
+                }
                 let sync_task = self.editor.sync_tab_scroll_state(tab_id);
                 self.pending_reveal_editor_tab = Some(tab_id);
                 self.map_editor_widget_task(tab_id, iced::Task::batch([task, sync_task]))
@@ -425,7 +454,7 @@ impl Lilypalooza {
                     self.logger
                         .push(format!("Opened editor file {}", path.display()));
                 }
-                self.editor.request_focus();
+                self.focus_editor_text_area();
                 let sync_task = self.editor.sync_tab_scroll_state(tab_id);
                 let cursor_task = self.editor.set_tab_cursor(tab_id, line, column);
                 self.pending_reveal_editor_tab = Some(tab_id);
@@ -494,7 +523,7 @@ impl Lilypalooza {
         }
 
         if opened_any {
-            self.editor.request_focus();
+            self.focus_editor_text_area();
         }
         if let Some(tab_id) = last_tab_id {
             self.pending_reveal_editor_tab = Some(tab_id);
@@ -526,7 +555,7 @@ impl Lilypalooza {
 
         self.editor.close_tab(tab_id);
         self.sync_editor_file_watcher();
-        self.editor.request_focus();
+        self.focus_editor_text_area();
         self.persist_settings();
         Task::none()
     }
@@ -841,7 +870,7 @@ impl Lilypalooza {
         self.renaming_editor_tab = None;
         self.editor_tab_rename_value.clear();
         if self.focused_workspace_pane == Some(WorkspacePaneKind::Editor) {
-            self.editor.request_focus();
+            self.focus_editor_text_area();
         }
     }
 
