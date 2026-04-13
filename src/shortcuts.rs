@@ -867,19 +867,27 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
 }
 
 fn binding_matches(binding: ShortcutBinding, input: ShortcutInput<'_>) -> bool {
-    let has_primary_modifier = if cfg!(target_os = "macos") {
-        input.modifiers.command()
-    } else {
-        input.modifiers.control()
-    };
-    let has_control_modifier = input.modifiers.control();
-
-    if has_primary_modifier != binding.primary
-        || has_control_modifier != binding.control
-        || input.modifiers.alt() != binding.alt
-        || input.modifiers.shift() != binding.shift
+    #[cfg(target_os = "macos")]
     {
-        return false;
+        if input.modifiers.command() != binding.primary
+            || input.modifiers.control() != binding.control
+            || input.modifiers.alt() != binding.alt
+            || input.modifiers.shift() != binding.shift
+        {
+            return false;
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let expects_ctrl = binding.primary || binding.control;
+        if input.modifiers.control() != expects_ctrl
+            || input.modifiers.alt() != binding.alt
+            || input.modifiers.shift() != binding.shift
+            || input.modifiers.command()
+        {
+            return false;
+        }
     }
 
     match binding.key {
