@@ -181,6 +181,7 @@ struct Lilypalooza {
     pending_editor_save_as_tab: Option<u64>,
     pending_editor_rename_tab: Option<u64>,
     default_global_state: GlobalState,
+    #[cfg(target_os = "macos")]
     macos_quit_menu_patched: bool,
 }
 
@@ -530,6 +531,7 @@ fn new(
         pending_editor_save_as_tab: None,
         pending_editor_rename_tab: None,
         default_global_state,
+        #[cfg(target_os = "macos")]
         macos_quit_menu_patched: false,
     };
 

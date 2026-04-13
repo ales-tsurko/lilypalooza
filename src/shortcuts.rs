@@ -1202,7 +1202,11 @@ mod tests {
     ) -> ShortcutInput<'static> {
         let mut modifiers = keyboard::Modifiers::default();
         if primary {
-            modifiers.insert(keyboard::Modifiers::COMMAND);
+            if cfg!(target_os = "macos") {
+                modifiers.insert(keyboard::Modifiers::COMMAND);
+            } else {
+                modifiers.insert(keyboard::Modifiers::CTRL);
+            }
         }
         if alt {
             modifiers.insert(keyboard::Modifiers::ALT);
