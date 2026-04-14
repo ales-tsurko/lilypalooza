@@ -264,6 +264,9 @@ impl Lilypalooza {
             ShortcutAction::OpenEditorFile => {
                 update(self, Message::Editor(EditorMessage::OpenRequested))
             }
+            ShortcutAction::ToggleFileBrowser => {
+                update(self, Message::Editor(EditorMessage::ToggleFileBrowser))
+            }
             ShortcutAction::SaveEditor => {
                 update(self, Message::Editor(EditorMessage::SaveRequested))
             }

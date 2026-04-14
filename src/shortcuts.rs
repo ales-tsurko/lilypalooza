@@ -19,6 +19,7 @@ pub(crate) enum ShortcutAction {
     OpenSettingsFile,
     NewEditor,
     OpenEditorFile,
+    ToggleFileBrowser,
     SaveEditor,
     CloseEditorTab,
     EditorUndo,
@@ -150,6 +151,7 @@ const PIANO_ROLL_CONTEXTUAL_ACTIONS: [ShortcutAction; 5] = [
 const EDITOR_CONTEXTUAL_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::NewEditor,
     ShortcutAction::OpenEditorFile,
+    ShortcutAction::ToggleFileBrowser,
     ShortcutAction::EditorUndo,
     ShortcutAction::EditorRedo,
     ShortcutAction::EditorCopy,
@@ -303,6 +305,7 @@ shortcut_metadata! {
     OpenSettingsFile => ("Open Settings File", "Global: open settings.toml in the editor."),
     NewEditor => ("New File", "Editor: create a new file tab in the text editor."),
     OpenEditorFile => ("Open File", "Editor: open one or more files into editor tabs."),
+    ToggleFileBrowser => ("Toggle File Browser", "Editor: show or hide the file browser above the editor tabs."),
     SaveEditor => ("Save File", "Editor: save the active file tab."),
     CloseEditorTab => ("Close Editor Tab", "Editor: close the active editor tab."),
     EditorUndo => ("Undo", "Editor: undo the last text editing change."),
@@ -430,6 +433,7 @@ fn action_from_id(action_id: ShortcutActionId) -> ShortcutAction {
         ShortcutActionId::OpenSettingsFile => ShortcutAction::OpenSettingsFile,
         ShortcutActionId::NewEditor => ShortcutAction::NewEditor,
         ShortcutActionId::OpenEditorFile => ShortcutAction::OpenEditorFile,
+        ShortcutActionId::ToggleFileBrowser => ShortcutAction::ToggleFileBrowser,
         ShortcutActionId::SaveEditor => ShortcutAction::SaveEditor,
         ShortcutActionId::CloseEditorTab => ShortcutAction::CloseEditorTab,
         ShortcutActionId::EditorUndo => ShortcutAction::EditorUndo,
@@ -552,6 +556,7 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
         ShortcutAction::OpenEditorFile => {
             vec![binding_code(ShortcutKeyCode::KeyO, true, false, false)]
         }
+        ShortcutAction::ToggleFileBrowser => Vec::new(),
         ShortcutAction::SaveEditor => vec![binding_code(ShortcutKeyCode::KeyS, true, false, false)],
         ShortcutAction::EditorUndo => {
             vec![binding_code(ShortcutKeyCode::KeyZ, true, false, false)]
@@ -1106,6 +1111,7 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::OpenSettingsFile => Some(ShortcutActionId::OpenSettingsFile),
         ShortcutAction::NewEditor => Some(ShortcutActionId::NewEditor),
         ShortcutAction::OpenEditorFile => Some(ShortcutActionId::OpenEditorFile),
+        ShortcutAction::ToggleFileBrowser => Some(ShortcutActionId::ToggleFileBrowser),
         ShortcutAction::SaveEditor => Some(ShortcutActionId::SaveEditor),
         ShortcutAction::CloseEditorTab => Some(ShortcutActionId::CloseEditorTab),
         ShortcutAction::EditorUndo => Some(ShortcutActionId::EditorUndo),
