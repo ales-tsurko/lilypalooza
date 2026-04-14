@@ -2,6 +2,7 @@ use super::*;
 use crate::app::editor::EditorTabFileState;
 use crate::app::messages::ShortcutsMessage;
 use crate::app::piano_roll::{adjacent_subdivision_tick, roll_scroll_id};
+use crate::error_prompt::{PromptButtons, PromptSelectedButton};
 
 impl Lilypalooza {
     fn dispatch_active_editor_widget_message(
@@ -35,6 +36,10 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn handle_key_pressed(&mut self, key_press: KeyPress) -> Task<Message> {
+        if self.error_prompt.is_some() {
+            return self.handle_prompt_key_pressed(key_press);
+        }
+
         if self.open_shortcuts_dialog {
             match key_press.key {
                 keyboard::Key::Named(keyboard::key::Named::Escape) => {
@@ -185,6 +190,66 @@ impl Lilypalooza {
         Task::none()
     }
 
+    fn handle_prompt_key_pressed(&mut self, key_press: KeyPress) -> Task<Message> {
+        match key_press.key {
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                update(self, Message::Prompt(self.selected_prompt_message()))
+            }
+            keyboard::Key::Named(keyboard::key::Named::Tab)
+            | keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                self.cycle_prompt_selection(if key_press.modifiers.shift() { -1 } else { 1 });
+                Task::none()
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                self.cycle_prompt_selection(-1);
+                Task::none()
+            }
+            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                if self.prompt_has_button(PromptSelectedButton::Cancel) {
+                    update(self, Message::Prompt(PromptMessage::Cancel))
+                } else {
+                    Task::none()
+                }
+            }
+            _ => Task::none(),
+        }
+    }
+
+    fn selected_prompt_message(&self) -> PromptMessage {
+        match self.prompt_selected_button {
+            PromptSelectedButton::Ok => PromptMessage::Acknowledge,
+            PromptSelectedButton::Discard => PromptMessage::Discard,
+            PromptSelectedButton::Cancel => PromptMessage::Cancel,
+        }
+    }
+
+    fn prompt_has_button(&self, button: PromptSelectedButton) -> bool {
+        let Some(prompt) = &self.error_prompt else {
+            return false;
+        };
+        prompt_buttons(prompt.buttons()).contains(&button)
+    }
+
+    fn cycle_prompt_selection(&mut self, direction: i8) {
+        let Some(prompt) = &self.error_prompt else {
+            return;
+        };
+        let buttons = prompt_buttons(prompt.buttons());
+        let Some(current_index) = buttons
+            .iter()
+            .position(|candidate| *candidate == self.prompt_selected_button)
+        else {
+            self.prompt_selected_button = buttons[0];
+            return;
+        };
+        let next_index = if direction < 0 {
+            current_index.checked_sub(1).unwrap_or(buttons.len() - 1)
+        } else {
+            (current_index + 1) % buttons.len()
+        };
+        self.prompt_selected_button = buttons[next_index];
+    }
+
     pub(in crate::app) fn handle_shortcuts_message(
         &mut self,
         message: ShortcutsMessage,
@@ -312,6 +377,20 @@ impl Lilypalooza {
             ShortcutAction::ToggleFileBrowser => {
                 update(self, Message::Editor(EditorMessage::ToggleFileBrowser))
             }
+            ShortcutAction::FileBrowserUndo => self.undo_browser_operation(),
+            ShortcutAction::FileBrowserRedo => self.redo_browser_operation(),
+            ShortcutAction::FileBrowserCut => update(
+                self,
+                Message::Editor(EditorMessage::FileBrowserCutRequested),
+            ),
+            ShortcutAction::FileBrowserCopy => update(
+                self,
+                Message::Editor(EditorMessage::FileBrowserCopyRequested),
+            ),
+            ShortcutAction::FileBrowserPaste => update(
+                self,
+                Message::Editor(EditorMessage::FileBrowserPasteRequested),
+            ),
             ShortcutAction::FileBrowserRename => update(
                 self,
                 Message::Editor(EditorMessage::FileBrowserRenameRequested),
@@ -664,6 +743,7 @@ impl Lilypalooza {
                 PromptMessage::Discard => self.advance_pending_editor_action(),
                 PromptMessage::Cancel => {
                     self.error_prompt = None;
+                    self.prompt_selected_button = PromptSelectedButton::Ok;
                     self.pending_editor_action = None;
                     self.pending_editor_save_as_tab = None;
                     Task::none()
@@ -674,6 +754,7 @@ impl Lilypalooza {
         match message {
             PromptMessage::Acknowledge => {
                 if self.error_prompt.take().is_some() {
+                    self.prompt_selected_button = PromptSelectedButton::Ok;
                     match self.prompt_ok_action.take() {
                         Some(PromptOkAction::ExitApp) => iced::exit(),
                         Some(PromptOkAction::ClearLogs) => {
@@ -684,8 +765,8 @@ impl Lilypalooza {
                             self.reload_editor_tab_from_disk(tab_id)
                         }
                         Some(PromptOkAction::DeleteBrowserPath(path)) => {
-                            match super::editor::delete_browser_path(&path) {
-                                Ok(()) => self.refresh_browser_after_fs_change(),
+                            match self.delete_browser_path_with_history(&path) {
+                                Ok(task) => task,
                                 Err(error) => {
                                     self.show_prompt(
                                         ErrorPrompt::new(
@@ -710,6 +791,7 @@ impl Lilypalooza {
             PromptMessage::Cancel => {
                 self.error_prompt = None;
                 self.prompt_ok_action = None;
+                self.prompt_selected_button = PromptSelectedButton::Ok;
                 Task::none()
             }
         }
@@ -753,6 +835,7 @@ impl Lilypalooza {
     ) {
         self.error_prompt = Some(prompt);
         self.prompt_ok_action = ok_action;
+        self.prompt_selected_button = PromptSelectedButton::Ok;
     }
 
     pub(in crate::app) fn begin_pending_editor_action(
@@ -804,6 +887,7 @@ impl Lilypalooza {
             };
         self.error_prompt = Some(prompt);
         self.prompt_ok_action = None;
+        self.prompt_selected_button = PromptSelectedButton::Ok;
     }
 
     pub(in crate::app) fn handle_pending_editor_prompt_save(&mut self) -> Task<Message> {
@@ -817,6 +901,7 @@ impl Lilypalooza {
         };
 
         self.error_prompt = None;
+        self.prompt_selected_button = PromptSelectedButton::Ok;
 
         if self.editor.tab_path(tab_id).is_none() {
             self.pending_editor_save_as_tab = Some(tab_id);
@@ -862,6 +947,7 @@ impl Lilypalooza {
         };
 
         self.error_prompt = None;
+        self.prompt_selected_button = PromptSelectedButton::Ok;
         self.continue_editor_continuation(continuation)
     }
 
@@ -1079,5 +1165,17 @@ impl Lilypalooza {
                 y: 0.0,
             },
         )
+    }
+}
+
+fn prompt_buttons(buttons: PromptButtons) -> &'static [PromptSelectedButton] {
+    match buttons {
+        PromptButtons::Ok => &[PromptSelectedButton::Ok],
+        PromptButtons::OkCancel => &[PromptSelectedButton::Cancel, PromptSelectedButton::Ok],
+        PromptButtons::SaveDiscardCancel => &[
+            PromptSelectedButton::Cancel,
+            PromptSelectedButton::Discard,
+            PromptSelectedButton::Ok,
+        ],
     }
 }

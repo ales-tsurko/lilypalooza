@@ -35,12 +35,17 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
 
     let prompt_overlay: Element<'_, Message> = if let Some(prompt) = &app.error_prompt {
         match prompt.buttons() {
-            PromptButtons::Ok => prompt.overlay_ok(Message::Prompt(PromptMessage::Acknowledge)),
+            PromptButtons::Ok => prompt.overlay_ok(
+                app.prompt_selected_button,
+                Message::Prompt(PromptMessage::Acknowledge),
+            ),
             PromptButtons::OkCancel => prompt.overlay_ok_cancel(
+                app.prompt_selected_button,
                 Message::Prompt(PromptMessage::Acknowledge),
                 Message::Prompt(PromptMessage::Cancel),
             ),
             PromptButtons::SaveDiscardCancel => prompt.overlay_save_discard_cancel(
+                app.prompt_selected_button,
                 Message::Prompt(PromptMessage::Acknowledge),
                 Message::Prompt(PromptMessage::Discard),
                 Message::Prompt(PromptMessage::Cancel),

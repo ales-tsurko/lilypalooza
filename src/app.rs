@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -11,7 +12,7 @@ use tempfile::TempDir;
 
 use crate::browser_file_watcher::BrowserFileWatcher;
 use crate::editor_file_watcher::EditorFileWatcher;
-use crate::error_prompt::ErrorPrompt;
+use crate::error_prompt::{ErrorPrompt, PromptSelectedButton};
 use crate::lilypond;
 use crate::logger::Logger;
 use crate::playback::MidiPlayback;
@@ -100,10 +101,15 @@ struct Lilypalooza {
     current_score: Option<SelectedScore>,
     error_prompt: Option<ErrorPrompt>,
     prompt_ok_action: Option<PromptOkAction>,
+    prompt_selected_button: PromptSelectedButton,
     logger: Logger,
     score_watcher: Option<ScoreWatcher>,
     editor_file_watcher: Option<EditorFileWatcher>,
     browser_file_watcher: Option<BrowserFileWatcher>,
+    browser_history_dir: Option<TempDir>,
+    browser_history_next_stash_id: u64,
+    browser_undo_stack: Vec<BrowserHistoryEntry>,
+    browser_redo_stack: Vec<BrowserHistoryEntry>,
     build_dir: Option<TempDir>,
     compile_requested: bool,
     compile_outputs_loading: bool,
@@ -147,9 +153,14 @@ struct Lilypalooza {
     editor_file_browser_viewport_width: f32,
     editor_file_browser_column_scroll_y: HashMap<usize, f32>,
     editor_file_browser_column_viewport_height: HashMap<usize, f32>,
+    editor_file_browser_cursor: Option<Point>,
+    browser_clipboard: Option<BrowserClipboard>,
     browser_inline_edit: Option<BrowserInlineEdit>,
     browser_inline_edit_value: String,
     browser_inline_edit_input_id: Id,
+    browser_pressed_entry: Option<BrowserPressedEntry>,
+    browser_drag_state: Option<BrowserDragState>,
+    browser_drop_target: Option<BrowserDropTarget>,
     editor_tabbar_scroll_x: f32,
     editor_tabbar_viewport_width: f32,
     editor_tabbar_autoscroll_direction: i8,
@@ -350,11 +361,59 @@ enum BrowserInlineEditKind {
 }
 
 #[derive(Debug, Clone)]
+enum BrowserHistoryEntry {
+    Create {
+        path: PathBuf,
+        stash_path: Option<PathBuf>,
+    },
+    Move {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    Delete {
+        path: PathBuf,
+        stash_path: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserClipboardKind {
+    Cut,
+    Copy,
+}
+
+#[derive(Debug, Clone)]
+struct BrowserClipboard {
+    path: PathBuf,
+    kind: BrowserClipboardKind,
+}
+
+#[derive(Debug, Clone)]
 struct BrowserInlineEdit {
     column_index: usize,
     parent_dir: PathBuf,
     target_path: Option<PathBuf>,
     kind: BrowserInlineEditKind,
+}
+
+#[derive(Debug, Clone)]
+struct BrowserPressedEntry {
+    path: PathBuf,
+    is_dir: bool,
+    origin: Point,
+}
+
+#[derive(Debug, Clone)]
+struct BrowserDragState {
+    source_path: PathBuf,
+    source_is_dir: bool,
+}
+
+#[derive(Debug, Clone)]
+struct BrowserDropTarget {
+    column_index: usize,
+    path: PathBuf,
+    target_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -406,6 +465,10 @@ fn new(
 ) -> (Lilypalooza, Task<Message>) {
     let default_settings = settings::AppSettings::default();
     let default_global_state = GlobalState::default();
+    let browser_history_dir = tempfile::Builder::new()
+        .prefix("lilypalooza-browser-history")
+        .tempdir()
+        .ok();
     let (stored_settings, settings_error) = match settings::load() {
         Ok(settings) => (settings, None),
         Err(error) => (default_settings.clone(), Some(error)),
@@ -460,10 +523,15 @@ fn new(
         current_score: None,
         error_prompt: None,
         prompt_ok_action: None,
+        prompt_selected_button: PromptSelectedButton::Ok,
         logger: Logger::new(),
         score_watcher: None,
         editor_file_watcher: None,
         browser_file_watcher: None,
+        browser_history_dir,
+        browser_history_next_stash_id: 1,
+        browser_undo_stack: Vec::new(),
+        browser_redo_stack: Vec::new(),
         build_dir: None,
         compile_requested: false,
         compile_outputs_loading: false,
@@ -507,9 +575,14 @@ fn new(
         editor_file_browser_viewport_width: 0.0,
         editor_file_browser_column_scroll_y: HashMap::new(),
         editor_file_browser_column_viewport_height: HashMap::new(),
+        editor_file_browser_cursor: None,
+        browser_clipboard: None,
         browser_inline_edit: None,
         browser_inline_edit_value: String::new(),
         browser_inline_edit_input_id: Id::unique(),
+        browser_pressed_entry: None,
+        browser_drag_state: None,
+        browser_drop_target: None,
         editor_tabbar_scroll_x: 0.0,
         editor_tabbar_viewport_width: 0.0,
         editor_tabbar_autoscroll_direction: 0,
@@ -586,6 +659,14 @@ fn new(
         async { lilypond::check_lilypond().map_err(|error| error.to_string()) },
         Message::StartupChecked,
     )];
+    startup_tasks.push(Task::perform(
+        cleanup_stale_browser_history_dirs(
+            app.browser_history_dir
+                .as_ref()
+                .map(|dir| dir.path().to_path_buf()),
+        ),
+        Message::BrowserHistoryCleanupFinished,
+    ));
 
     if let Some(path) = startup_soundfont {
         startup_tasks.push(Task::done(Message::File(FileMessage::SoundfontPicked(
@@ -632,6 +713,39 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
     }
 
     Subscription::batch(subscriptions)
+}
+
+async fn cleanup_stale_browser_history_dirs(current_dir: Option<PathBuf>) -> Result<(), String> {
+    let temp_dir = std::env::temp_dir();
+    let entries = fs::read_dir(&temp_dir)
+        .map_err(|error| format!("Failed to read temp dir {}: {error}", temp_dir.display()))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Failed to read temp dir entry in {}: {error}",
+                temp_dir.display()
+            )
+        })?;
+        let path = entry.path();
+        if current_dir.as_ref() == Some(&path) {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if !file_name.starts_with("lilypalooza-browser-history") {
+            continue;
+        }
+        if let Ok(file_type) = entry.file_type()
+            && file_type.is_dir()
+        {
+            let _ = fs::remove_dir_all(&path);
+        }
+    }
+
+    Ok(())
 }
 
 fn runtime_event_to_message(
@@ -1472,6 +1586,227 @@ mod tests {
             app.prompt_ok_action,
             Some(PromptOkAction::DeleteBrowserPath(_))
         ));
+    }
+
+    #[test]
+    fn prompt_enter_runs_selected_button_action() {
+        let root = TempDir::new().expect("tempdir");
+        fs::write(root.path().join("note.txt"), "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("note.txt"),
+                is_dir: false,
+            }),
+        );
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserDelete);
+
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyPress {
+                status: event::Status::Ignored,
+                key: keyboard::Key::Named(keyboard::key::Named::Enter),
+                physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Enter),
+                modifiers: keyboard::Modifiers::default(),
+            }),
+        );
+
+        assert!(app.error_prompt.is_none());
+        assert!(app.browser_inline_edit.is_none());
+        assert!(!root.path().join("note.txt").exists());
+    }
+
+    #[test]
+    fn browser_copy_paste_copies_selected_entry() {
+        let root = TempDir::new().expect("tempdir");
+        fs::create_dir(root.path().join("folder")).expect("folder dir");
+        fs::write(root.path().join("note.txt"), "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("note.txt"),
+                is_dir: false,
+            }),
+        );
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserCopy);
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("folder"),
+                is_dir: true,
+            }),
+        );
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserPaste);
+
+        assert!(root.path().join("note.txt").exists());
+        assert!(root.path().join("folder").join("note.txt").exists());
+    }
+
+    #[test]
+    fn browser_cut_paste_moves_selected_entry() {
+        let root = TempDir::new().expect("tempdir");
+        fs::create_dir(root.path().join("folder")).expect("folder dir");
+        fs::write(root.path().join("note.txt"), "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("note.txt"),
+                is_dir: false,
+            }),
+        );
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserCut);
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("folder"),
+                is_dir: true,
+            }),
+        );
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserPaste);
+
+        assert!(!root.path().join("note.txt").exists());
+        assert!(root.path().join("folder").join("note.txt").exists());
+        assert!(app.browser_clipboard.is_none());
+    }
+
+    #[test]
+    fn browser_drag_release_moves_item_into_directory() {
+        let root = TempDir::new().expect("tempdir");
+        fs::create_dir(root.path().join("folder")).expect("folder dir");
+        fs::write(root.path().join("note.txt"), "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserDragMoved(Point::new(
+                0.0, 0.0,
+            ))),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("note.txt"),
+                is_dir: false,
+            }),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserDragMoved(Point::new(
+                24.0, 0.0,
+            ))),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryHovered {
+                column_index: 0,
+                path: root.path().join("folder"),
+                is_dir: true,
+            }),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserDragReleased),
+        );
+
+        assert!(!root.path().join("note.txt").exists());
+        assert!(root.path().join("folder").join("note.txt").exists());
+    }
+
+    #[test]
+    fn browser_delete_undo_redo_restores_item() {
+        let root = TempDir::new().expect("tempdir");
+        fs::write(root.path().join("note.txt"), "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("note.txt"),
+                is_dir: false,
+            }),
+        );
+
+        let _ = app.delete_browser_path_with_history(&root.path().join("note.txt"));
+        assert!(!root.path().join("note.txt").exists());
+
+        let _ = app.undo_browser_operation();
+        assert!(root.path().join("note.txt").exists());
+
+        let _ = app.redo_browser_operation();
+        assert!(!root.path().join("note.txt").exists());
+    }
+
+    #[test]
+    fn browser_cut_paste_undo_redo_moves_item_back_and_forth() {
+        let root = TempDir::new().expect("tempdir");
+        fs::create_dir(root.path().join("folder")).expect("folder dir");
+        fs::write(root.path().join("note.txt"), "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("note.txt"),
+                is_dir: false,
+            }),
+        );
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserCut);
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("folder"),
+                is_dir: true,
+            }),
+        );
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserPaste);
+
+        assert!(!root.path().join("note.txt").exists());
+        assert!(root.path().join("folder").join("note.txt").exists());
+
+        let _ = app.undo_browser_operation();
+        assert!(root.path().join("note.txt").exists());
+        assert!(!root.path().join("folder").join("note.txt").exists());
+
+        let _ = app.redo_browser_operation();
+        assert!(!root.path().join("note.txt").exists());
+        assert!(root.path().join("folder").join("note.txt").exists());
     }
 
     #[test]

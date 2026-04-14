@@ -743,6 +743,30 @@ impl EditorState {
         Ok(iced::Task::none())
     }
 
+    pub(super) fn remap_open_paths_under(&mut self, old_root: &Path, new_root: &Path) -> Vec<u64> {
+        let old_root = normalize_editor_path(old_root);
+        let new_root = normalize_editor_path(new_root);
+        let mut updated = Vec::new();
+
+        for tab in &mut self.tabs {
+            let Some(path) = tab.path.clone() else {
+                continue;
+            };
+            let Ok(relative) = path.strip_prefix(&old_root) else {
+                continue;
+            };
+            let next_path = new_root.join(relative);
+            let next_syntax = syntax_for_path(&next_path);
+            tab.widget.set_syntax(&next_syntax);
+            tab.widget.set_document_path(Some(next_path.clone()));
+            tab.path = Some(next_path);
+            tab.file_state = EditorTabFileState::Ok;
+            updated.push(tab.id);
+        }
+
+        updated
+    }
+
     pub(super) fn reload_tab_from_disk(
         &mut self,
         tab_id: u64,

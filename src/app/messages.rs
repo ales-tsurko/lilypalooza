@@ -14,6 +14,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub(super) enum Message {
     StartupChecked(Result<crate::lilypond::VersionCheck, String>),
+    BrowserHistoryCleanupFinished(Result<(), String>),
     Pane(PaneMessage),
     File(FileMessage),
     Viewer(ViewerMessage),
@@ -124,6 +125,9 @@ pub(super) enum EditorMessage {
     ToggleFileBrowser,
     FileBrowserFocused,
     FileBrowserToggleHiddenRequested,
+    FileBrowserCutRequested,
+    FileBrowserCopyRequested,
+    FileBrowserPasteRequested,
     FileBrowserNewFileRequested,
     FileBrowserNewDirectoryRequested,
     FileBrowserRenameRequested,
@@ -141,11 +145,22 @@ pub(super) enum EditorMessage {
         path: PathBuf,
         is_dir: bool,
     },
+    FileBrowserEntryHovered {
+        column_index: usize,
+        path: PathBuf,
+        is_dir: bool,
+    },
+    FileBrowserEntryDragReleased {
+        path: PathBuf,
+        is_dir: bool,
+    },
     FileBrowserEntryDoublePressed {
         column_index: usize,
         path: PathBuf,
         is_dir: bool,
     },
+    FileBrowserDragMoved(iced::Point),
+    FileBrowserDragReleased,
     OpenRecent(PathBuf),
     SaveRequested,
     SaveAsRequested,

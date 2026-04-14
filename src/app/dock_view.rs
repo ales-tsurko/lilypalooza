@@ -724,6 +724,13 @@ fn editor_file_browser(app: &Lilypalooza) -> Element<'_, Message> {
 
     mouse_area(content)
         .on_press(Message::Editor(super::EditorMessage::FileBrowserFocused))
+        .on_move(|position| Message::Editor(super::EditorMessage::FileBrowserDragMoved(position)))
+        .on_release(Message::Editor(
+            super::EditorMessage::FileBrowserDragReleased,
+        ))
+        .on_exit(Message::Editor(
+            super::EditorMessage::FileBrowserDragReleased,
+        ))
         .into()
 }
 
@@ -763,6 +770,11 @@ fn editor_file_browser_column(
                     let name = entry.name;
                     let is_dir = entry.is_dir;
                     let selected = entry.selected;
+                    let drop_targeted = is_dir
+                        && app
+                            .browser_drop_target
+                            .as_ref()
+                            .is_some_and(|target| target.path == path);
                     let icon = if is_dir {
                         if selected {
                             icons::folder_open()
@@ -813,13 +825,29 @@ fn editor_file_browser_column(
                             .height(Length::Fixed(super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
                             .padding([0, ui_style::PADDING_XS])
                             .style(move |theme| {
-                                ui_style::editor_file_browser_entry(theme, selected)
+                                ui_style::editor_file_browser_entry(
+                                    theme,
+                                    selected || drop_targeted,
+                                )
                             }),
                         )
                         .interaction(mouse::Interaction::Pointer)
+                        .on_enter(Message::Editor(
+                            super::EditorMessage::FileBrowserEntryHovered {
+                                column_index,
+                                path: path.clone(),
+                                is_dir,
+                            },
+                        ))
                         .on_press(Message::Editor(
                             super::EditorMessage::FileBrowserEntryPressed {
                                 column_index,
+                                path: path.clone(),
+                                is_dir,
+                            },
+                        ))
+                        .on_release(Message::Editor(
+                            super::EditorMessage::FileBrowserEntryDragReleased {
                                 path: path.clone(),
                                 is_dir,
                             },

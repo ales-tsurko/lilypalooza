@@ -213,6 +213,7 @@ impl Lilypalooza {
             }
             EditorMessage::ToggleFileBrowser => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.clear_browser_drag_state();
                 self.editor.toggle_file_browser();
                 self.sync_browser_file_watcher();
                 if self.editor.file_browser_expanded() {
@@ -224,6 +225,7 @@ impl Lilypalooza {
             }
             EditorMessage::FileBrowserFocused => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.clear_browser_drag_state();
                 self.focus_editor_file_browser();
                 if self.browser_inline_edit.is_some() {
                     focus(self.browser_inline_edit_input_id.clone())
@@ -254,6 +256,21 @@ impl Lilypalooza {
                     }
                 }
             }
+            EditorMessage::FileBrowserCutRequested => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.focus_editor_file_browser();
+                self.copy_or_cut_file_browser_selection(BrowserClipboardKind::Cut)
+            }
+            EditorMessage::FileBrowserCopyRequested => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.focus_editor_file_browser();
+                self.copy_or_cut_file_browser_selection(BrowserClipboardKind::Copy)
+            }
+            EditorMessage::FileBrowserPasteRequested => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.focus_editor_file_browser();
+                self.paste_file_browser_clipboard()
+            }
             EditorMessage::FileBrowserNewFileRequested => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.start_browser_inline_create(false)
@@ -275,6 +292,7 @@ impl Lilypalooza {
             }
             EditorMessage::CommitFileBrowserInlineEdit => self.commit_browser_inline_edit(),
             EditorMessage::CancelFileBrowserInlineEdit => {
+                self.clear_browser_drag_state();
                 self.cancel_browser_inline_edit_state();
                 Task::none()
             }
@@ -319,6 +337,7 @@ impl Lilypalooza {
                 is_dir,
             } => {
                 self.cancel_browser_inline_edit_state();
+                self.begin_browser_entry_press(column_index, path.clone(), is_dir);
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.focus_editor_file_browser();
                 self.editor.set_file_browser_active_column(column_index);
@@ -337,6 +356,23 @@ impl Lilypalooza {
                         Task::none()
                     }
                 }
+            }
+            EditorMessage::FileBrowserEntryHovered {
+                column_index,
+                path,
+                is_dir,
+            } => {
+                self.update_browser_drop_target(Some((column_index, path, is_dir)));
+                Task::none()
+            }
+            EditorMessage::FileBrowserEntryDragReleased { path, is_dir } => {
+                let task = if is_dir {
+                    self.move_dragged_browser_path_to_directory(&path)
+                } else {
+                    Task::none()
+                };
+                self.clear_browser_drag_state();
+                task
             }
             EditorMessage::FileBrowserEntryDoublePressed {
                 column_index,
@@ -366,6 +402,22 @@ impl Lilypalooza {
                         Task::none()
                     }
                 }
+            }
+            EditorMessage::FileBrowserDragMoved(position) => {
+                self.handle_file_browser_drag_move(position)
+            }
+            EditorMessage::FileBrowserDragReleased => {
+                let task = if let Some(target_dir) = self
+                    .browser_drop_target
+                    .as_ref()
+                    .map(|target| target.target_dir.clone())
+                {
+                    self.move_dragged_browser_path_to_directory(&target_dir)
+                } else {
+                    Task::none()
+                };
+                self.clear_browser_drag_state();
+                task
             }
             EditorMessage::OpenPicked(Some(paths)) => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
@@ -415,6 +467,7 @@ impl Lilypalooza {
             EditorMessage::SaveAsPicked(None) => {
                 self.pending_editor_save_as_tab = None;
                 self.error_prompt = None;
+                self.prompt_selected_button = crate::error_prompt::PromptSelectedButton::Ok;
                 self.pending_editor_action = None;
                 Task::none()
             }
@@ -1181,6 +1234,422 @@ impl Lilypalooza {
         ])
     }
 
+    fn copy_or_cut_file_browser_selection(&mut self, kind: BrowserClipboardKind) -> Task<Message> {
+        let Some(path) = self.editor.selected_file_browser_path() else {
+            return Task::none();
+        };
+        self.browser_clipboard = Some(BrowserClipboard { path, kind });
+        Task::none()
+    }
+
+    fn paste_file_browser_clipboard(&mut self) -> Task<Message> {
+        let Some(clipboard) = self.browser_clipboard.clone() else {
+            return Task::none();
+        };
+        let Some(file_name) = clipboard.path.file_name() else {
+            return Task::none();
+        };
+
+        let target_dir = self
+            .editor
+            .selected_file_browser_path()
+            .filter(|path| path.is_dir())
+            .unwrap_or_else(|| self.editor.current_file_browser_directory_path());
+        let destination = target_dir.join(file_name);
+
+        if destination == clipboard.path {
+            return Task::none();
+        }
+        if clipboard.path.is_dir() && destination.starts_with(&clipboard.path) {
+            self.show_prompt(
+                ErrorPrompt::new(
+                    "File Browser Error",
+                    "Cannot paste a folder into itself.".to_string(),
+                    ErrorFatality::Recoverable,
+                    PromptButtons::Ok,
+                ),
+                None,
+            );
+            return Task::none();
+        }
+
+        match clipboard.kind {
+            BrowserClipboardKind::Copy => match copy_browser_path(&clipboard.path, &destination) {
+                Ok(()) => {
+                    let column_index = self
+                        .editor
+                        .current_file_browser_directory_column_index()
+                        .unwrap_or(0);
+                    self.finish_browser_path_transfer(
+                        column_index,
+                        destination.clone(),
+                        Task::none(),
+                        Some(BrowserHistoryEntry::Create {
+                            path: destination,
+                            stash_path: None,
+                        }),
+                    )
+                }
+                Err(error) => {
+                    self.show_prompt(
+                        ErrorPrompt::new(
+                            "File Browser Error",
+                            error,
+                            ErrorFatality::Recoverable,
+                            PromptButtons::Ok,
+                        ),
+                        None,
+                    );
+                    Task::none()
+                }
+            },
+            BrowserClipboardKind::Cut => {
+                match self.move_browser_path(&clipboard.path, &destination, true) {
+                    Ok(task) => {
+                        self.browser_clipboard = None;
+                        task
+                    }
+                    Err(error) => {
+                        self.show_prompt(
+                            ErrorPrompt::new(
+                                "File Browser Error",
+                                error,
+                                ErrorFatality::Recoverable,
+                                PromptButtons::Ok,
+                            ),
+                            None,
+                        );
+                        Task::none()
+                    }
+                }
+            }
+        }
+    }
+
+    fn begin_browser_entry_press(&mut self, _column_index: usize, path: PathBuf, is_dir: bool) {
+        self.browser_pressed_entry = Some(BrowserPressedEntry {
+            path,
+            is_dir,
+            origin: self.editor_file_browser_cursor.unwrap_or(Point::ORIGIN),
+        });
+        self.browser_drag_state = None;
+        self.browser_drop_target = None;
+    }
+
+    fn handle_file_browser_drag_move(&mut self, position: iced::Point) -> Task<Message> {
+        self.editor_file_browser_cursor = Some(position);
+        if self.browser_inline_edit.is_some() {
+            return Task::none();
+        }
+        if self.browser_drag_state.is_some() {
+            return Task::none();
+        }
+        let Some(pressed) = self.browser_pressed_entry.as_ref() else {
+            return Task::none();
+        };
+        if drag_distance(pressed.origin, position) < DRAG_START_THRESHOLD {
+            return Task::none();
+        }
+        self.browser_drag_state = Some(BrowserDragState {
+            source_path: pressed.path.clone(),
+            source_is_dir: pressed.is_dir,
+        });
+        Task::none()
+    }
+
+    fn update_browser_drop_target(&mut self, hovered: Option<(usize, PathBuf, bool)>) {
+        let Some(drag) = self.browser_drag_state.as_ref() else {
+            self.browser_drop_target = None;
+            return;
+        };
+        let Some((column_index, path, is_dir)) = hovered else {
+            self.browser_drop_target = None;
+            return;
+        };
+        if !is_dir || path == drag.source_path {
+            self.browser_drop_target = None;
+            return;
+        }
+        if drag.source_is_dir && path.starts_with(&drag.source_path) {
+            self.browser_drop_target = None;
+            return;
+        }
+        self.browser_drop_target = Some(BrowserDropTarget {
+            column_index,
+            path: path.clone(),
+            target_dir: path,
+        });
+    }
+
+    fn clear_browser_drag_state(&mut self) {
+        self.browser_pressed_entry = None;
+        self.browser_drag_state = None;
+        self.browser_drop_target = None;
+    }
+
+    fn move_dragged_browser_path_to_directory(&mut self, target_dir: &Path) -> Task<Message> {
+        let Some(drag) = self.browser_drag_state.clone() else {
+            return Task::none();
+        };
+        if let Some(drop_target) = self.browser_drop_target.as_ref() {
+            let _ = self
+                .editor
+                .select_file_browser_path(drop_target.column_index, &drop_target.target_dir);
+        }
+        let Some(file_name) = drag.source_path.file_name() else {
+            return Task::none();
+        };
+        let destination = target_dir.join(file_name);
+        match self.move_browser_path(&drag.source_path, &destination, true) {
+            Ok(task) => task,
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "File Browser Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                Task::none()
+            }
+        }
+    }
+
+    fn move_browser_path(
+        &mut self,
+        source: &Path,
+        destination: &Path,
+        record_history: bool,
+    ) -> Result<Task<Message>, String> {
+        if destination.exists() {
+            return Err(format!("{} already exists", destination.display()));
+        }
+        if source == destination {
+            return Ok(Task::none());
+        }
+        if source.is_dir() && destination.starts_with(source) {
+            return Err("Cannot move a folder into itself.".to_string());
+        }
+
+        let maybe_tab_id = self.editor.find_tab_by_path(source);
+        let extra_task = if let Some(tab_id) = maybe_tab_id {
+            self.rename_editor_tab_to_path_internal(tab_id, destination.to_path_buf(), false)
+        } else {
+            move_browser_path(source, destination)?;
+            Task::none()
+        };
+
+        if source.is_dir() {
+            let _ = self.editor.remap_open_paths_under(source, destination);
+            let mut next_score_path = None;
+            if let Some(current_score) = self.current_score.as_mut()
+                && current_score.path.starts_with(source)
+                && let Ok(relative) = current_score.path.strip_prefix(source)
+            {
+                current_score.path = destination.join(relative);
+                current_score.file_name = current_score
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("score.ly")
+                    .to_string();
+                next_score_path = Some(current_score.path.clone());
+            }
+            if let Some(next_score_path) = next_score_path {
+                self.restart_score_watcher(&next_score_path);
+            }
+        }
+
+        let column_index = self
+            .editor
+            .current_file_browser_directory_column_index()
+            .unwrap_or(0);
+        Ok(self.finish_browser_path_transfer(
+            column_index,
+            destination.to_path_buf(),
+            extra_task,
+            record_history.then(|| BrowserHistoryEntry::Move {
+                from: source.to_path_buf(),
+                to: destination.to_path_buf(),
+            }),
+        ))
+    }
+
+    fn finish_browser_path_transfer(
+        &mut self,
+        column_index: usize,
+        path: PathBuf,
+        extra_task: Task<Message>,
+        history_entry: Option<BrowserHistoryEntry>,
+    ) -> Task<Message> {
+        if let Some(history_entry) = history_entry {
+            self.browser_undo_stack.push(history_entry);
+            self.browser_redo_stack.clear();
+        }
+        match self.editor.refresh_file_browser() {
+            Ok(()) => {
+                let parent_dir = path.parent().map(PathBuf::from);
+                let select_task = if let Some(selected) = self.editor.selected_file_browser_path() {
+                    if let Some(parent_dir) = parent_dir.as_ref()
+                        && selected == *parent_dir
+                        && self.editor.file_browser_has_preview_column(column_index)
+                    {
+                        self.editor
+                            .select_file_browser_path(column_index + 1, &path)
+                            .ok()
+                            .map(|()| self.reveal_editor_file_browser_selection(true))
+                            .unwrap_or_else(Task::none)
+                    } else {
+                        self.editor
+                            .select_file_browser_path(column_index, &path)
+                            .ok()
+                            .map(|()| self.reveal_editor_file_browser_selection(true))
+                            .unwrap_or_else(Task::none)
+                    }
+                } else {
+                    Task::none()
+                };
+                Task::batch([
+                    self.reveal_editor_file_browser_selection(true),
+                    select_task,
+                    extra_task,
+                ])
+            }
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "File Browser Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                extra_task
+            }
+        }
+    }
+
+    fn next_browser_stash_path(&mut self, path: &Path) -> Result<PathBuf, String> {
+        let Some(history_dir) = self.browser_history_dir.as_ref() else {
+            return Err("Browser undo history is unavailable.".to_string());
+        };
+        let id = self.browser_history_next_stash_id;
+        self.browser_history_next_stash_id = self.browser_history_next_stash_id.saturating_add(1);
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("item");
+        Ok(history_dir.path().join(format!("{id}-{file_name}")))
+    }
+
+    pub(in crate::app) fn undo_browser_operation(&mut self) -> Task<Message> {
+        let Some(entry) = self.browser_undo_stack.pop() else {
+            return Task::none();
+        };
+        match self.apply_browser_history_entry(entry, false) {
+            Ok((redo_entry, task)) => {
+                self.browser_redo_stack.push(redo_entry);
+                task
+            }
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "File Browser Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                Task::none()
+            }
+        }
+    }
+
+    pub(in crate::app) fn redo_browser_operation(&mut self) -> Task<Message> {
+        let Some(entry) = self.browser_redo_stack.pop() else {
+            return Task::none();
+        };
+        match self.apply_browser_history_entry(entry, true) {
+            Ok((undo_entry, task)) => {
+                self.browser_undo_stack.push(undo_entry);
+                task
+            }
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "File Browser Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                Task::none()
+            }
+        }
+    }
+
+    fn apply_browser_history_entry(
+        &mut self,
+        mut entry: BrowserHistoryEntry,
+        redo: bool,
+    ) -> Result<(BrowserHistoryEntry, Task<Message>), String> {
+        match &mut entry {
+            BrowserHistoryEntry::Create { path, stash_path } => {
+                if redo {
+                    let Some(stash_path) = stash_path.as_ref() else {
+                        return Ok((entry, Task::none()));
+                    };
+                    move_browser_path(stash_path, path)?;
+                    Ok((entry, self.refresh_browser_after_fs_change()))
+                } else {
+                    let stash = match stash_path.clone() {
+                        Some(stash) => stash,
+                        None => {
+                            let stash = self.next_browser_stash_path(path)?;
+                            *stash_path = Some(stash.clone());
+                            stash
+                        }
+                    };
+                    move_browser_path(path, &stash)?;
+                    Ok((entry, self.refresh_browser_after_fs_change()))
+                }
+            }
+            BrowserHistoryEntry::Move { from, to } => {
+                let (source, destination) = if redo { (&*from, &*to) } else { (&*to, &*from) };
+                self.move_browser_path(source, destination, false)
+                    .map(|task| (entry, task))
+            }
+            BrowserHistoryEntry::Delete { path, stash_path } => {
+                let (source, destination) = if redo {
+                    (&*path, &*stash_path)
+                } else {
+                    (&*stash_path, &*path)
+                };
+                move_browser_path(source, destination)?;
+                Ok((entry, self.refresh_browser_after_fs_change()))
+            }
+        }
+    }
+
+    pub(in crate::app) fn delete_browser_path_with_history(
+        &mut self,
+        path: &Path,
+    ) -> Result<Task<Message>, String> {
+        let stash_path = self.next_browser_stash_path(path)?;
+        move_browser_path(path, &stash_path)?;
+        self.browser_undo_stack.push(BrowserHistoryEntry::Delete {
+            path: path.to_path_buf(),
+            stash_path,
+        });
+        self.browser_redo_stack.clear();
+        Ok(self.refresh_browser_after_fs_change())
+    }
+
     fn commit_browser_inline_edit(&mut self) -> Task<Message> {
         let Some(edit) = self.browser_inline_edit.clone() else {
             return Task::none();
@@ -1212,6 +1681,10 @@ impl Lilypalooza {
                             edit.column_index,
                             destination.clone(),
                             rename_task,
+                            Some(BrowserHistoryEntry::Move {
+                                from: source,
+                                to: destination,
+                            }),
                         );
                     }
                     fs::rename(&source, &destination).map_err(|error| {
@@ -1259,11 +1732,30 @@ impl Lilypalooza {
             }
         };
 
+        let history_entry = match edit.kind {
+            BrowserInlineEditKind::Rename => {
+                let Some(source) = edit.target_path.clone() else {
+                    return Task::none();
+                };
+                BrowserHistoryEntry::Move {
+                    from: source,
+                    to: destination.clone(),
+                }
+            }
+            BrowserInlineEditKind::NewFile | BrowserInlineEditKind::NewDirectory => {
+                BrowserHistoryEntry::Create {
+                    path: destination.clone(),
+                    stash_path: None,
+                }
+            }
+        };
+
         match result {
             Ok(()) => self.finish_browser_inline_edit_with_selection(
                 edit.column_index,
                 destination,
                 Task::none(),
+                Some(history_entry),
             ),
             Err(error) => {
                 self.show_prompt(
@@ -1285,8 +1777,13 @@ impl Lilypalooza {
         column_index: usize,
         path: PathBuf,
         extra_task: Task<Message>,
+        history_entry: Option<BrowserHistoryEntry>,
     ) -> Task<Message> {
         self.cancel_browser_inline_edit_state();
+        if let Some(history_entry) = history_entry {
+            self.browser_undo_stack.push(history_entry);
+            self.browser_redo_stack.clear();
+        }
         let refresh = match self.editor.refresh_file_browser() {
             Ok(()) => self.reveal_editor_file_browser_selection(true),
             Err(error) => {
@@ -1355,6 +1852,61 @@ pub(in crate::app) fn delete_browser_path(path: &std::path::Path) -> Result<(), 
     } else {
         fs::remove_file(path)
             .map_err(|error| format!("Failed to delete file {}: {error}", path.display()))
+    }
+}
+
+fn copy_browser_path(source: &Path, destination: &Path) -> Result<(), String> {
+    if destination.exists() {
+        return Err(format!("{} already exists", destination.display()));
+    }
+
+    if source.is_dir() {
+        fs::create_dir(destination).map_err(|error| {
+            format!(
+                "Failed to create directory {}: {error}",
+                destination.display()
+            )
+        })?;
+
+        for entry in fs::read_dir(source)
+            .map_err(|error| format!("Failed to read directory {}: {error}", source.display()))?
+        {
+            let entry = entry.map_err(|error| {
+                format!(
+                    "Failed to read directory entry in {}: {error}",
+                    source.display()
+                )
+            })?;
+            let child_source = entry.path();
+            let child_destination = destination.join(entry.file_name());
+            copy_browser_path(&child_source, &child_destination)?;
+        }
+
+        Ok(())
+    } else {
+        fs::copy(source, destination).map(|_| ()).map_err(|error| {
+            format!(
+                "Failed to copy {} to {}: {error}",
+                source.display(),
+                destination.display()
+            )
+        })
+    }
+}
+
+fn move_browser_path(source: &Path, destination: &Path) -> Result<(), String> {
+    match fs::rename(source, destination) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            copy_browser_path(source, destination)?;
+            delete_browser_path(source).map_err(|delete_error| {
+                format!(
+                    "Failed to move {} to {}: rename failed with {rename_error}; cleanup failed with {delete_error}",
+                    source.display(),
+                    destination.display()
+                )
+            })
+        }
     }
 }
 

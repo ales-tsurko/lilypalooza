@@ -20,6 +20,11 @@ pub(crate) enum ShortcutAction {
     NewEditor,
     OpenEditorFile,
     ToggleFileBrowser,
+    FileBrowserUndo,
+    FileBrowserRedo,
+    FileBrowserCut,
+    FileBrowserCopy,
+    FileBrowserPaste,
     FileBrowserRename,
     FileBrowserDelete,
     SaveEditor,
@@ -205,6 +210,11 @@ const EDITOR_CONTEXTUAL_ACTIONS: &[ShortcutAction] = &[
 ];
 
 const EDITOR_BROWSER_ACTIONS: &[ShortcutAction] = &[
+    ShortcutAction::FileBrowserUndo,
+    ShortcutAction::FileBrowserRedo,
+    ShortcutAction::FileBrowserCut,
+    ShortcutAction::FileBrowserCopy,
+    ShortcutAction::FileBrowserPaste,
     ShortcutAction::FileBrowserRename,
     ShortcutAction::FileBrowserDelete,
 ];
@@ -323,6 +333,11 @@ shortcut_metadata! {
     NewEditor => ("New File", "Editor: create a new file tab in the text editor."),
     OpenEditorFile => ("Open File", "Editor: open one or more files into editor tabs."),
     ToggleFileBrowser => ("Toggle File Browser", "Editor: show or hide the file browser above the editor tabs."),
+    FileBrowserUndo => ("Undo Browser Operation", "File Browser: undo the last browser file operation."),
+    FileBrowserRedo => ("Redo Browser Operation", "File Browser: redo the last undone browser file operation."),
+    FileBrowserCut => ("Cut Browser Item", "File Browser: mark the selected file or folder to move on paste."),
+    FileBrowserCopy => ("Copy Browser Item", "File Browser: copy the selected file or folder on paste."),
+    FileBrowserPaste => ("Paste Browser Item", "File Browser: paste the copied or cut file or folder into the current folder."),
     FileBrowserRename => ("Rename Browser Item", "File Browser: rename the selected file or folder."),
     FileBrowserDelete => ("Delete Browser Item", "File Browser: delete the selected file or folder."),
     SaveEditor => ("Save File", "Editor: save the active file tab."),
@@ -453,6 +468,11 @@ fn action_from_id(action_id: ShortcutActionId) -> ShortcutAction {
         ShortcutActionId::NewEditor => ShortcutAction::NewEditor,
         ShortcutActionId::OpenEditorFile => ShortcutAction::OpenEditorFile,
         ShortcutActionId::ToggleFileBrowser => ShortcutAction::ToggleFileBrowser,
+        ShortcutActionId::FileBrowserUndo => ShortcutAction::FileBrowserUndo,
+        ShortcutActionId::FileBrowserRedo => ShortcutAction::FileBrowserRedo,
+        ShortcutActionId::FileBrowserCut => ShortcutAction::FileBrowserCut,
+        ShortcutActionId::FileBrowserCopy => ShortcutAction::FileBrowserCopy,
+        ShortcutActionId::FileBrowserPaste => ShortcutAction::FileBrowserPaste,
         ShortcutActionId::FileBrowserRename => ShortcutAction::FileBrowserRename,
         ShortcutActionId::FileBrowserDelete => ShortcutAction::FileBrowserDelete,
         ShortcutActionId::SaveEditor => ShortcutAction::SaveEditor,
@@ -578,6 +598,28 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
             vec![binding_code(ShortcutKeyCode::KeyO, true, false, false)]
         }
         ShortcutAction::ToggleFileBrowser => Vec::new(),
+        ShortcutAction::FileBrowserUndo => {
+            vec![binding_code(ShortcutKeyCode::KeyZ, true, false, false)]
+        }
+        ShortcutAction::FileBrowserRedo => {
+            if cfg!(target_os = "macos") {
+                vec![binding_code(ShortcutKeyCode::KeyZ, true, false, true)]
+            } else {
+                vec![
+                    binding_code(ShortcutKeyCode::KeyY, true, false, false),
+                    binding_code(ShortcutKeyCode::KeyZ, true, false, true),
+                ]
+            }
+        }
+        ShortcutAction::FileBrowserCut => {
+            vec![binding_code(ShortcutKeyCode::KeyX, true, false, false)]
+        }
+        ShortcutAction::FileBrowserCopy => {
+            vec![binding_code(ShortcutKeyCode::KeyC, true, false, false)]
+        }
+        ShortcutAction::FileBrowserPaste => {
+            vec![binding_code(ShortcutKeyCode::KeyV, true, false, false)]
+        }
         ShortcutAction::FileBrowserRename => vec![
             binding_named(ShortcutNamedKey::Enter, false, false, false),
             binding_code(ShortcutKeyCode::NumpadEnter, false, false, false),
@@ -1004,6 +1046,7 @@ fn code_label(code: ShortcutKeyCode) -> &'static str {
         ShortcutKeyCode::KeyP => "P",
         ShortcutKeyCode::KeyQ => "Q",
         ShortcutKeyCode::KeyS => "S",
+        ShortcutKeyCode::KeyX => "X",
         ShortcutKeyCode::KeyV => "V",
         ShortcutKeyCode::KeyW => "W",
         ShortcutKeyCode::KeyY => "Y",
@@ -1096,6 +1139,7 @@ fn to_iced_key_code(code: ShortcutKeyCode) -> keyboard::key::Code {
         ShortcutKeyCode::KeyP => keyboard::key::Code::KeyP,
         ShortcutKeyCode::KeyQ => keyboard::key::Code::KeyQ,
         ShortcutKeyCode::KeyS => keyboard::key::Code::KeyS,
+        ShortcutKeyCode::KeyX => keyboard::key::Code::KeyX,
         ShortcutKeyCode::KeyV => keyboard::key::Code::KeyV,
         ShortcutKeyCode::KeyW => keyboard::key::Code::KeyW,
         ShortcutKeyCode::KeyY => keyboard::key::Code::KeyY,
@@ -1147,6 +1191,11 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::NewEditor => Some(ShortcutActionId::NewEditor),
         ShortcutAction::OpenEditorFile => Some(ShortcutActionId::OpenEditorFile),
         ShortcutAction::ToggleFileBrowser => Some(ShortcutActionId::ToggleFileBrowser),
+        ShortcutAction::FileBrowserUndo => Some(ShortcutActionId::FileBrowserUndo),
+        ShortcutAction::FileBrowserRedo => Some(ShortcutActionId::FileBrowserRedo),
+        ShortcutAction::FileBrowserCut => Some(ShortcutActionId::FileBrowserCut),
+        ShortcutAction::FileBrowserCopy => Some(ShortcutActionId::FileBrowserCopy),
+        ShortcutAction::FileBrowserPaste => Some(ShortcutActionId::FileBrowserPaste),
         ShortcutAction::FileBrowserRename => Some(ShortcutActionId::FileBrowserRename),
         ShortcutAction::FileBrowserDelete => Some(ShortcutActionId::FileBrowserDelete),
         ShortcutAction::SaveEditor => Some(ShortcutActionId::SaveEditor),

@@ -26,6 +26,13 @@ pub(crate) enum PromptButtons {
     SaveDiscardCancel,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptSelectedButton {
+    Ok,
+    Discard,
+    Cancel,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ErrorPrompt {
     title: String,
@@ -79,26 +86,32 @@ impl ErrorPrompt {
         self.buttons
     }
 
-    pub(crate) fn overlay_ok<'a, Message>(&'a self, on_ok: Message) -> Element<'a, Message>
+    pub(crate) fn overlay_ok<'a, Message>(
+        &'a self,
+        selected: PromptSelectedButton,
+        on_ok: Message,
+    ) -> Element<'a, Message>
     where
         Message: Clone + 'a,
     {
-        self.overlay(on_ok, None)
+        self.overlay(selected, on_ok, None)
     }
 
     pub(crate) fn overlay_ok_cancel<'a, Message>(
         &'a self,
+        selected: PromptSelectedButton,
         on_ok: Message,
         on_cancel: Message,
     ) -> Element<'a, Message>
     where
         Message: Clone + 'a,
     {
-        self.overlay(on_ok, Some(on_cancel))
+        self.overlay(selected, on_ok, Some(on_cancel))
     }
 
     pub(crate) fn overlay_save_discard_cancel<'a, Message>(
         &'a self,
+        selected: PromptSelectedButton,
         on_save: Message,
         on_discard: Message,
         on_cancel: Message,
@@ -110,6 +123,7 @@ impl ErrorPrompt {
         let discard_label = self.discard_label.as_deref().unwrap_or("Discard");
         let cancel_label = self.cancel_label.as_deref().unwrap_or("Cancel");
         self.overlay_with_actions(PromptActions {
+            selected,
             ok: Some((save_label.to_string(), on_save)),
             discard: Some((discard_label.to_string(), on_discard)),
             cancel: Some((cancel_label.to_string(), on_cancel)),
@@ -118,6 +132,7 @@ impl ErrorPrompt {
 
     fn overlay<'a, Message>(
         &'a self,
+        selected: PromptSelectedButton,
         on_ok: Message,
         on_cancel: Option<Message>,
     ) -> Element<'a, Message>
@@ -127,6 +142,7 @@ impl ErrorPrompt {
         let ok_label = self.ok_label.as_deref().unwrap_or("OK");
         let cancel_label = self.cancel_label.as_deref().unwrap_or("Cancel");
         self.overlay_with_actions(PromptActions {
+            selected,
             ok: Some((ok_label.to_string(), on_ok.clone())),
             discard: None,
             cancel: on_cancel.map(|message| (cancel_label.to_string(), message)),
@@ -158,11 +174,14 @@ impl ErrorPrompt {
                 };
                 row![
                     button(text(label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(if is_critical {
-                            ui_style::button_danger
-                        } else {
-                            ui_style::button_active
-                        })
+                        .style(prompt_button_style(
+                            if is_critical {
+                                ui_style::button_danger
+                            } else {
+                                ui_style::button_active
+                            },
+                            actions.selected == PromptSelectedButton::Ok,
+                        ))
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(message)
                 ]
@@ -178,15 +197,21 @@ impl ErrorPrompt {
 
                 row![
                     button(text(cancel_label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(ui_style::button_neutral)
+                        .style(prompt_button_style(
+                            ui_style::button_neutral,
+                            actions.selected == PromptSelectedButton::Cancel,
+                        ))
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(cancel_message),
                     button(text(ok_label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(if is_critical {
-                            ui_style::button_danger
-                        } else {
-                            ui_style::button_active
-                        })
+                        .style(prompt_button_style(
+                            if is_critical {
+                                ui_style::button_danger
+                            } else {
+                                ui_style::button_active
+                            },
+                            actions.selected == PromptSelectedButton::Ok,
+                        ))
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(ok_message)
                 ]
@@ -205,15 +230,24 @@ impl ErrorPrompt {
 
                 row![
                     button(text(cancel_label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(ui_style::button_neutral)
+                        .style(prompt_button_style(
+                            ui_style::button_neutral,
+                            actions.selected == PromptSelectedButton::Cancel,
+                        ))
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(cancel_message),
                     button(text(discard_label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(ui_style::button_neutral)
+                        .style(prompt_button_style(
+                            ui_style::button_neutral,
+                            actions.selected == PromptSelectedButton::Discard,
+                        ))
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(discard_message),
                     button(text(save_label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(ui_style::button_active)
+                        .style(prompt_button_style(
+                            ui_style::button_active,
+                            actions.selected == PromptSelectedButton::Ok,
+                        ))
                         .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
                         .on_press(save_message)
                 ]
@@ -288,7 +322,22 @@ impl ErrorPrompt {
 
 #[derive(Clone)]
 struct PromptActions<Message> {
+    selected: PromptSelectedButton,
     ok: Option<(String, Message)>,
     discard: Option<(String, Message)>,
     cancel: Option<(String, Message)>,
+}
+
+fn prompt_button_style(
+    base: fn(&Theme, button::Status) -> button::Style,
+    selected: bool,
+) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let effective_status = if selected && matches!(status, button::Status::Active) {
+            button::Status::Pressed
+        } else {
+            status
+        };
+        base(theme, effective_status)
+    }
 }
