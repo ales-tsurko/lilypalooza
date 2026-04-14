@@ -1,6 +1,8 @@
 use super::*;
 use crate::app::editor::EditorTabFileState;
 use iced::widget::operation::{focus, select_all};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 const EDITOR_TAB_WIDTH: f32 = 144.0;
 const EDITOR_TAB_SLOT_WIDTH: f32 = EDITOR_TAB_WIDTH + 4.0;
@@ -157,6 +159,9 @@ impl Lilypalooza {
             }
             EditorMessage::StartRename(tab_id) => self.start_editor_tab_rename(tab_id),
             EditorMessage::RenameInputChanged(value) => {
+                if self.shortcut_modifier_active() {
+                    return Task::none();
+                }
                 self.editor_tab_rename_value = value;
                 Task::none()
             }
@@ -209,6 +214,7 @@ impl Lilypalooza {
             EditorMessage::ToggleFileBrowser => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.editor.toggle_file_browser();
+                self.sync_browser_file_watcher();
                 if self.editor.file_browser_expanded() {
                     self.focus_editor_file_browser();
                 } else {
@@ -219,6 +225,77 @@ impl Lilypalooza {
             EditorMessage::FileBrowserFocused => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.focus_editor_file_browser();
+                if self.browser_inline_edit.is_some() {
+                    focus(self.browser_inline_edit_input_id.clone())
+                } else {
+                    Task::none()
+                }
+            }
+            EditorMessage::FileBrowserToggleHiddenRequested => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.focus_editor_file_browser();
+                match self.editor.toggle_file_browser_show_hidden() {
+                    Ok(()) => self.reveal_editor_file_browser_selection(
+                        self.editor.file_browser_has_preview_column(
+                            self.editor.file_browser_active_column_index(),
+                        ),
+                    ),
+                    Err(error) => {
+                        self.show_prompt(
+                            ErrorPrompt::new(
+                                "File Browser Error",
+                                error,
+                                ErrorFatality::Recoverable,
+                                PromptButtons::Ok,
+                            ),
+                            None,
+                        );
+                        Task::none()
+                    }
+                }
+            }
+            EditorMessage::FileBrowserNewFileRequested => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.start_browser_inline_create(false)
+            }
+            EditorMessage::FileBrowserNewDirectoryRequested => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.start_browser_inline_create(true)
+            }
+            EditorMessage::FileBrowserRenameRequested => {
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.start_browser_inline_rename()
+            }
+            EditorMessage::FileBrowserInlineEditChanged(value) => {
+                if self.shortcut_modifier_active() {
+                    return Task::none();
+                }
+                self.browser_inline_edit_value = value;
+                Task::none()
+            }
+            EditorMessage::CommitFileBrowserInlineEdit => self.commit_browser_inline_edit(),
+            EditorMessage::CancelFileBrowserInlineEdit => {
+                self.cancel_browser_inline_edit_state();
+                Task::none()
+            }
+            EditorMessage::FileBrowserTrashRequested => {
+                let Some(path) = self.editor.selected_file_browser_path() else {
+                    return Task::none();
+                };
+                let title = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("item")
+                    .to_string();
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        format!("Delete {title}?"),
+                        format!("{title} will be deleted immediately."),
+                        ErrorFatality::Recoverable,
+                        PromptButtons::OkCancel,
+                    ),
+                    Some(PromptOkAction::DeleteBrowserPath(path)),
+                );
                 Task::none()
             }
             EditorMessage::FileBrowserScrolled(viewport) => {
@@ -241,6 +318,32 @@ impl Lilypalooza {
                 path,
                 is_dir,
             } => {
+                self.cancel_browser_inline_edit_state();
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
+                self.focus_editor_file_browser();
+                self.editor.set_file_browser_active_column(column_index);
+                match self.editor.browse_to_path(column_index, &path, is_dir) {
+                    Ok(()) => self.reveal_editor_file_browser_selection(true),
+                    Err(error) => {
+                        self.show_prompt(
+                            ErrorPrompt::new(
+                                "File Browser Error",
+                                error,
+                                ErrorFatality::Recoverable,
+                                PromptButtons::Ok,
+                            ),
+                            None,
+                        );
+                        Task::none()
+                    }
+                }
+            }
+            EditorMessage::FileBrowserEntryDoublePressed {
+                column_index,
+                path,
+                is_dir,
+            } => {
+                self.cancel_browser_inline_edit_state();
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.focus_editor_file_browser();
                 self.editor.set_file_browser_active_column(column_index);
@@ -751,6 +854,15 @@ impl Lilypalooza {
         tab_id: u64,
         path: PathBuf,
     ) -> Task<Message> {
+        self.rename_editor_tab_to_path_internal(tab_id, path, true)
+    }
+
+    fn rename_editor_tab_to_path_internal(
+        &mut self,
+        tab_id: u64,
+        path: PathBuf,
+        log_rename: bool,
+    ) -> Task<Message> {
         if let Some(existing_tab_id) = self.editor.find_tab_by_path(&path)
             && existing_tab_id != tab_id
         {
@@ -784,7 +896,9 @@ impl Lilypalooza {
             Ok(task) => {
                 self.register_editor_recent_file(&path);
                 self.sync_editor_file_watcher();
-                self.logger.push(format!("Renamed to {}", path.display()));
+                if log_rename {
+                    self.logger.push(format!("Renamed to {}", path.display()));
+                }
                 if self.editor_tab_targets_main_score(tab_id) {
                     if let Ok(selected_score) = selected_score_from_path(path.clone()) {
                         self.current_score = Some(selected_score);
@@ -1005,6 +1119,242 @@ impl Lilypalooza {
                 y: 0.0,
             },
         )
+    }
+
+    fn start_browser_inline_create(&mut self, directory: bool) -> Task<Message> {
+        let Some(column_index) = self.editor.current_file_browser_directory_column_index() else {
+            return Task::none();
+        };
+        let parent_dir = self.editor.current_file_browser_directory_path();
+        self.browser_inline_edit = Some(BrowserInlineEdit {
+            column_index,
+            parent_dir,
+            target_path: None,
+            kind: if directory {
+                BrowserInlineEditKind::NewDirectory
+            } else {
+                BrowserInlineEditKind::NewFile
+            },
+        });
+        self.browser_inline_edit_value = if directory {
+            "New Folder".to_string()
+        } else {
+            "untitled".to_string()
+        };
+        self.editor.set_file_browser_active_column(column_index);
+        self.focus_editor_file_browser();
+        Task::batch([
+            iced::widget::operation::scroll_to(
+                super::editor_file_browser_column_scroll_id(column_index),
+                iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+            ),
+            focus(self.browser_inline_edit_input_id.clone()),
+            select_all(self.browser_inline_edit_input_id.clone()),
+        ])
+    }
+
+    fn start_browser_inline_rename(&mut self) -> Task<Message> {
+        let Some(target_path) = self.editor.selected_file_browser_path() else {
+            return Task::none();
+        };
+        let Some(parent_dir) = target_path.parent().map(PathBuf::from) else {
+            return Task::none();
+        };
+        let Some(column_index) = self.editor.current_file_browser_directory_column_index() else {
+            return Task::none();
+        };
+        self.browser_inline_edit = Some(BrowserInlineEdit {
+            column_index,
+            parent_dir,
+            target_path: Some(target_path.clone()),
+            kind: BrowserInlineEditKind::Rename,
+        });
+        self.browser_inline_edit_value = target_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Untitled")
+            .to_string();
+        self.focus_editor_file_browser();
+        Task::batch([
+            focus(self.browser_inline_edit_input_id.clone()),
+            select_all(self.browser_inline_edit_input_id.clone()),
+        ])
+    }
+
+    fn commit_browser_inline_edit(&mut self) -> Task<Message> {
+        let Some(edit) = self.browser_inline_edit.clone() else {
+            return Task::none();
+        };
+        let Some(name) = normalize_editor_tab_file_name(&self.browser_inline_edit_value) else {
+            return Task::none();
+        };
+
+        let destination = edit.parent_dir.join(name);
+        let result = match edit.kind {
+            BrowserInlineEditKind::Rename => {
+                let Some(source) = edit.target_path.clone() else {
+                    return Task::none();
+                };
+                if source == destination {
+                    self.cancel_browser_inline_edit_state();
+                    return Task::none();
+                }
+                if destination.exists() {
+                    Err(format!("{} already exists", destination.display()))
+                } else if source.is_file() {
+                    if let Some(tab_id) = self.editor.find_tab_by_path(&source) {
+                        let rename_task = self.rename_editor_tab_to_path_internal(
+                            tab_id,
+                            destination.clone(),
+                            false,
+                        );
+                        return self.finish_browser_inline_edit_with_selection(
+                            edit.column_index,
+                            destination.clone(),
+                            rename_task,
+                        );
+                    }
+                    fs::rename(&source, &destination).map_err(|error| {
+                        format!(
+                            "Failed to rename {} to {}: {error}",
+                            source.display(),
+                            destination.display()
+                        )
+                    })
+                } else {
+                    fs::rename(&source, &destination).map_err(|error| {
+                        format!(
+                            "Failed to rename {} to {}: {error}",
+                            source.display(),
+                            destination.display()
+                        )
+                    })
+                }
+            }
+            BrowserInlineEditKind::NewFile => {
+                if destination.exists() {
+                    Err(format!("{} already exists", destination.display()))
+                } else {
+                    fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&destination)
+                        .map(|_| ())
+                        .map_err(|error| {
+                            format!("Failed to create file {}: {error}", destination.display())
+                        })
+                }
+            }
+            BrowserInlineEditKind::NewDirectory => {
+                if destination.exists() {
+                    Err(format!("{} already exists", destination.display()))
+                } else {
+                    fs::create_dir(&destination).map_err(|error| {
+                        format!(
+                            "Failed to create directory {}: {error}",
+                            destination.display()
+                        )
+                    })
+                }
+            }
+        };
+
+        match result {
+            Ok(()) => self.finish_browser_inline_edit_with_selection(
+                edit.column_index,
+                destination,
+                Task::none(),
+            ),
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "File Browser Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                Task::none()
+            }
+        }
+    }
+
+    fn finish_browser_inline_edit_with_selection(
+        &mut self,
+        column_index: usize,
+        path: PathBuf,
+        extra_task: Task<Message>,
+    ) -> Task<Message> {
+        self.cancel_browser_inline_edit_state();
+        let refresh = match self.editor.refresh_file_browser() {
+            Ok(()) => self.reveal_editor_file_browser_selection(true),
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "File Browser Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                Task::none()
+            }
+        };
+        let select = match self.editor.select_file_browser_path(column_index, &path) {
+            Ok(()) => self.reveal_editor_file_browser_selection(true),
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "File Browser Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                Task::none()
+            }
+        };
+        Task::batch([refresh, select, extra_task])
+    }
+
+    fn cancel_browser_inline_edit_state(&mut self) {
+        self.browser_inline_edit = None;
+        self.browser_inline_edit_value.clear();
+    }
+
+    pub(in crate::app) fn refresh_browser_after_fs_change(&mut self) -> Task<Message> {
+        match self.editor.refresh_file_browser() {
+            Ok(()) => self.reveal_editor_file_browser_selection(
+                self.editor.file_browser_has_preview_column(
+                    self.editor.file_browser_active_column_index(),
+                ),
+            ),
+            Err(error) => {
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "File Browser Error",
+                        error,
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+                Task::none()
+            }
+        }
+    }
+}
+
+pub(in crate::app) fn delete_browser_path(path: &std::path::Path) -> Result<(), String> {
+    if path.is_dir() {
+        fs::remove_dir_all(path)
+            .map_err(|error| format!("Failed to delete directory {}: {error}", path.display()))
+    } else {
+        fs::remove_file(path)
+            .map_err(|error| format!("Failed to delete file {}: {error}", path.display()))
     }
 }
 

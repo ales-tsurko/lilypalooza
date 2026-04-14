@@ -622,17 +622,55 @@ fn editor_file_browser(app: &Lilypalooza) -> Element<'_, Message> {
             .height(Length::Fixed(0.0))
             .into();
     }
+    let hidden_toggle = editor_file_browser_toolbar_button(
+        app,
+        "browser-hidden-toggle",
+        icons::hat_glasses(),
+        "Hidden",
+        Message::Editor(super::EditorMessage::FileBrowserToggleHiddenRequested),
+        app.editor.file_browser_show_hidden(),
+    );
 
-    let header = container(
-        text(app.editor.file_browser_root_label())
-            .size(ui_style::FONT_SIZE_UI_XS)
-            .font(fonts::MONO)
-            .style(|theme: &Theme| {
-                let palette = theme.extended_palette();
-                iced::widget::text::Style {
-                    color: Some(palette.background.strong.text),
-                }
-            }),
+    let toolbar = container(
+        row![
+            editor_file_browser_toolbar_button(
+                app,
+                "browser-new-file",
+                icons::file_plus(),
+                "New File",
+                Message::Editor(super::EditorMessage::FileBrowserNewFileRequested),
+                false,
+            ),
+            editor_file_browser_toolbar_button(
+                app,
+                "browser-new-folder",
+                icons::folder_plus(),
+                "New Folder",
+                Message::Editor(super::EditorMessage::FileBrowserNewDirectoryRequested),
+                false,
+            ),
+            editor_file_browser_toolbar_button(
+                app,
+                "browser-rename",
+                icons::pencil(),
+                "Rename",
+                Message::Editor(super::EditorMessage::FileBrowserRenameRequested),
+                false,
+            ),
+            editor_file_browser_toolbar_button(
+                app,
+                "browser-trash",
+                icons::trash_2(),
+                "Delete",
+                Message::Editor(super::EditorMessage::FileBrowserTrashRequested),
+                false,
+            ),
+            hidden_toggle,
+            container(text("")).width(Fill),
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center)
+        .width(Fill),
     )
     .width(Fill)
     .padding([ui_style::PADDING_XS, ui_style::PADDING_STATUS_BAR_H])
@@ -650,41 +688,78 @@ fn editor_file_browser(app: &Lilypalooza) -> Element<'_, Message> {
             },
         );
 
-    mouse_area(
-        container(
-            iced::widget::column![
-                header,
-                scrollable(container(columns).width(Length::Shrink))
-                    .id(super::EDITOR_FILE_BROWSER_SCROLL_ID)
-                    .direction(scrollable::Direction::Horizontal(
-                        scrollable::Scrollbar::new().width(4).scroller_width(4),
-                    ))
-                    .on_scroll(|viewport| {
-                        Message::Editor(super::EditorMessage::FileBrowserScrolled(viewport))
-                    })
-                    .height(Length::Fixed(super::EDITOR_FILE_BROWSER_HEIGHT))
-                    .style(ui_style::editor_file_browser_scrollable),
-            ]
-            .spacing(0),
-        )
-        .width(Fill)
-        .style(ui_style::pane_main_surface),
+    let browser_body: Element<'_, Message> = scrollable(container(columns).width(Length::Shrink))
+        .id(super::EDITOR_FILE_BROWSER_SCROLL_ID)
+        .direction(scrollable::Direction::Horizontal(
+            scrollable::Scrollbar::new().width(4).scroller_width(4),
+        ))
+        .on_scroll(|viewport| Message::Editor(super::EditorMessage::FileBrowserScrolled(viewport)))
+        .height(Length::Fixed(super::EDITOR_FILE_BROWSER_HEIGHT))
+        .style(ui_style::editor_file_browser_scrollable)
+        .into();
+
+    let status_line = container(
+        row![
+            text(app.editor.file_browser_root_label())
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .font(fonts::MONO)
+                .style(|theme: &Theme| {
+                    let palette = theme.extended_palette();
+                    iced::widget::text::Style {
+                        color: Some(palette.background.strong.text),
+                    }
+                }),
+            container(text("")).width(Fill),
+        ]
+        .align_y(alignment::Vertical::Center)
+        .spacing(ui_style::SPACE_XS),
     )
-    .on_press(Message::Editor(super::EditorMessage::FileBrowserFocused))
-    .into()
+    .width(Fill)
+    .padding([ui_style::PADDING_XS, ui_style::PADDING_STATUS_BAR_H])
+    .style(ui_style::workspace_toolbar_surface);
+
+    let content = container(iced::widget::column![toolbar, browser_body, status_line,].spacing(0))
+        .width(Fill)
+        .style(ui_style::pane_main_surface);
+
+    mouse_area(content)
+        .on_press(Message::Editor(super::EditorMessage::FileBrowserFocused))
+        .into()
 }
 
 fn editor_file_browser_column(
-    _app: &Lilypalooza,
+    app: &Lilypalooza,
     column_index: usize,
     column: super::editor::EditorBrowserColumnSummary,
 ) -> Element<'_, Message> {
     match column {
         super::editor::EditorBrowserColumnSummary::Directory { entries } => {
+            let inline_create = app
+                .browser_inline_edit
+                .as_ref()
+                .filter(|edit| edit.column_index == column_index && edit.target_path.is_none());
             let entries = entries.into_iter().fold(
-                iced::widget::column![].spacing(0).width(Fill),
+                {
+                    let mut column = iced::widget::column![].spacing(0).width(Fill);
+                    if let Some(edit) = inline_create {
+                        column = column.push(editor_file_browser_inline_entry(
+                            app,
+                            matches!(edit.kind, super::BrowserInlineEditKind::NewDirectory),
+                        ));
+                    }
+                    column
+                },
                 |column_widget, entry| {
                     let path = entry.path.clone();
+                    let editing = app.browser_inline_edit.as_ref().is_some_and(|edit| {
+                        edit.column_index == column_index
+                            && edit.target_path.as_ref() == Some(&entry.path)
+                    });
+                    if editing {
+                        return column_widget
+                            .push(editor_file_browser_inline_entry(app, entry.is_dir));
+                    }
+
                     let name = entry.name;
                     let is_dir = entry.is_dir;
                     let selected = entry.selected;
@@ -710,7 +785,7 @@ fn editor_file_browser_column(
                     };
 
                     column_widget.push(
-                        button(
+                        mouse_area(
                             container(
                                 row![
                                     container(
@@ -734,17 +809,23 @@ fn editor_file_browser_column(
                                 .align_y(alignment::Vertical::Center)
                                 .width(Fill),
                             )
-                            .height(Length::Fill)
-                            .center_y(Length::Fill),
+                            .width(Fill)
+                            .height(Length::Fixed(super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
+                            .padding([0, ui_style::PADDING_XS])
+                            .style(move |theme| {
+                                ui_style::editor_file_browser_entry(theme, selected)
+                            }),
                         )
-                        .width(Fill)
-                        .height(Length::Fixed(super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
-                        .padding([0, ui_style::PADDING_XS])
-                        .style(move |theme, status| {
-                            ui_style::button_editor_file_browser_entry(theme, status, selected)
-                        })
+                        .interaction(mouse::Interaction::Pointer)
                         .on_press(Message::Editor(
                             super::EditorMessage::FileBrowserEntryPressed {
+                                column_index,
+                                path: path.clone(),
+                                is_dir,
+                            },
+                        ))
+                        .on_double_click(Message::Editor(
+                            super::EditorMessage::FileBrowserEntryDoublePressed {
                                 column_index,
                                 path,
                                 is_dir,
@@ -835,6 +916,110 @@ fn editor_file_browser_column(
             .into()
         }
     }
+}
+
+fn editor_file_browser_toolbar_button<'a>(
+    app: &'a Lilypalooza,
+    key: impl Into<String>,
+    icon: svg::Handle,
+    tooltip_label: &'static str,
+    on_press: Message,
+    active: bool,
+) -> Element<'a, Message> {
+    delayed_tooltip(
+        app,
+        key.into(),
+        button(
+            svg(icon)
+                .width(Length::Fixed(14.0))
+                .height(Length::Fixed(14.0))
+                .content_fit(ContentFit::Contain)
+                .style(|theme: &Theme, status| {
+                    let palette = theme.extended_palette();
+                    let color = match status {
+                        svg::Status::Idle => palette.background.base.text,
+                        svg::Status::Hovered => palette.background.base.text,
+                    };
+                    svg::Style { color: Some(color) }
+                }),
+        )
+        .style(if active {
+            ui_style::button_toolbar_toggle_active
+        } else {
+            ui_style::button_toolbar_chip
+        })
+        .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
+        .padding([6, 8])
+        .on_press(on_press)
+        .into(),
+        text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS).into(),
+        tooltip::Position::Bottom,
+    )
+}
+
+fn editor_file_browser_inline_entry(app: &Lilypalooza, is_dir: bool) -> Element<'_, Message> {
+    let icon = if is_dir {
+        icons::folder_open()
+    } else {
+        icons::file()
+    };
+
+    container(
+        row![
+            container(
+                svg(icon)
+                    .width(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
+                    .height(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
+                    .content_fit(ContentFit::Contain)
+                    .style(|theme: &Theme, _status| {
+                        let palette = theme.extended_palette();
+                        svg::Style {
+                            color: Some(palette.background.base.text),
+                        }
+                    }),
+            )
+            .width(Length::Fixed(EDITOR_FILE_BROWSER_ICON_SIZE))
+            .height(Length::Fixed(super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
+            .center_y(Length::Fixed(super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT)),
+            text_input("", &app.browser_inline_edit_value)
+                .id(app.browser_inline_edit_input_id.clone())
+                .on_input(|value| {
+                    Message::Editor(super::EditorMessage::FileBrowserInlineEditChanged(value))
+                })
+                .on_submit(Message::Editor(
+                    super::EditorMessage::CommitFileBrowserInlineEdit,
+                ))
+                .size(ui_style::FONT_SIZE_UI_SM)
+                .padding([2, 0])
+                .width(Fill),
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center)
+        .width(Fill),
+    )
+    .width(Fill)
+    .height(Length::Fixed(super::EDITOR_FILE_BROWSER_ENTRY_HEIGHT))
+    .padding([0, ui_style::PADDING_XS])
+    .style(|theme: &Theme| {
+        let palette = theme.extended_palette();
+        let selected_background = Color {
+            r: palette.background.strong.color.r
+                + (palette.primary.base.color.r - palette.background.strong.color.r) * 0.10,
+            g: palette.background.strong.color.g
+                + (palette.primary.base.color.g - palette.background.strong.color.g) * 0.10,
+            b: palette.background.strong.color.b
+                + (palette.primary.base.color.b - palette.background.strong.color.b) * 0.10,
+            a: palette.background.strong.color.a
+                + (palette.primary.base.color.a - palette.background.strong.color.a) * 0.10,
+        };
+        container::Style {
+            background: Some(selected_background.into()),
+            text_color: Some(palette.background.base.text),
+            border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+            ..container::Style::default()
+        }
+    })
+    .into()
 }
 
 fn editor_tab_strip(app: &Lilypalooza) -> Element<'_, Message> {

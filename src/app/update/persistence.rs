@@ -63,6 +63,7 @@ impl Lilypalooza {
     pub(in crate::app) fn apply_global_state(&mut self, state: GlobalState) {
         self.project_root = None;
         self.editor.set_project_root(None);
+        self.sync_browser_file_watcher();
         self.project_name = None;
         self.editor_recent_files = state.editor_recent_files;
         self.recent_projects = state.recent_projects;
@@ -86,6 +87,7 @@ impl Lilypalooza {
         self.register_recent_project(&project_root);
         self.project_root = Some(project_root);
         self.editor.set_project_root(self.project_root.clone());
+        self.sync_browser_file_watcher();
         self.project_name = state
             .project_name
             .or_else(|| self.project_root.as_deref().map(default_project_name));

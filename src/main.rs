@@ -7,6 +7,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 mod app;
+mod browser_file_watcher;
 mod editor_file_watcher;
 mod error_prompt;
 mod fonts;

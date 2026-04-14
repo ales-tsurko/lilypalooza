@@ -9,6 +9,7 @@ use iced::{Point, Rectangle, Size, Subscription, Task, window};
 use iced_core::{Bytes, image};
 use tempfile::TempDir;
 
+use crate::browser_file_watcher::BrowserFileWatcher;
 use crate::editor_file_watcher::EditorFileWatcher;
 use crate::error_prompt::ErrorPrompt;
 use crate::lilypond;
@@ -102,6 +103,7 @@ struct Lilypalooza {
     logger: Logger,
     score_watcher: Option<ScoreWatcher>,
     editor_file_watcher: Option<EditorFileWatcher>,
+    browser_file_watcher: Option<BrowserFileWatcher>,
     build_dir: Option<TempDir>,
     compile_requested: bool,
     compile_outputs_loading: bool,
@@ -145,6 +147,9 @@ struct Lilypalooza {
     editor_file_browser_viewport_width: f32,
     editor_file_browser_column_scroll_y: HashMap<usize, f32>,
     editor_file_browser_column_viewport_height: HashMap<usize, f32>,
+    browser_inline_edit: Option<BrowserInlineEdit>,
+    browser_inline_edit_value: String,
+    browser_inline_edit_input_id: Id,
     editor_tabbar_scroll_x: f32,
     editor_tabbar_viewport_width: f32,
     editor_tabbar_autoscroll_direction: i8,
@@ -329,11 +334,27 @@ enum SoundfontStatus {
     Error(String),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum PromptOkAction {
     ExitApp,
     ClearLogs,
     ReloadEditorTab(u64),
+    DeleteBrowserPath(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserInlineEditKind {
+    Rename,
+    NewFile,
+    NewDirectory,
+}
+
+#[derive(Debug, Clone)]
+struct BrowserInlineEdit {
+    column_index: usize,
+    parent_dir: PathBuf,
+    target_path: Option<PathBuf>,
+    kind: BrowserInlineEditKind,
 }
 
 #[derive(Debug, Clone)]
@@ -442,6 +463,7 @@ fn new(
         logger: Logger::new(),
         score_watcher: None,
         editor_file_watcher: None,
+        browser_file_watcher: None,
         build_dir: None,
         compile_requested: false,
         compile_outputs_loading: false,
@@ -485,6 +507,9 @@ fn new(
         editor_file_browser_viewport_width: 0.0,
         editor_file_browser_column_scroll_y: HashMap::new(),
         editor_file_browser_column_viewport_height: HashMap::new(),
+        browser_inline_edit: None,
+        browser_inline_edit_value: String::new(),
+        browser_inline_edit_input_id: Id::unique(),
         editor_tabbar_scroll_x: 0.0,
         editor_tabbar_viewport_width: 0.0,
         editor_tabbar_autoscroll_direction: 0,
@@ -580,7 +605,12 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
         event::listen_with(runtime_event_to_message),
     ];
 
-    if app.compile_session.is_some() || app.score_watcher.is_some() || app.editor.has_document() {
+    if app.compile_session.is_some()
+        || app.score_watcher.is_some()
+        || app.browser_file_watcher.is_some()
+        || app.editor.has_document()
+        || app.spinner_active()
+    {
         subscriptions.push(iced::time::every(BACKGROUND_POLL_INTERVAL).map(|_| Message::Tick));
     }
 
@@ -664,6 +694,10 @@ impl Lilypalooza {
     }
 
     pub(super) fn zoom_modifier_active(&self) -> bool {
+        self.keyboard_modifiers.command() || self.keyboard_modifiers.control()
+    }
+
+    pub(super) fn shortcut_modifier_active(&self) -> bool {
         self.keyboard_modifiers.command() || self.keyboard_modifiers.control()
     }
 
@@ -1075,6 +1109,22 @@ mod tests {
             })
     }
 
+    fn browser_entry_names(app: &Lilypalooza, column_index: usize) -> Vec<String> {
+        app.editor
+            .file_browser_columns()
+            .get(column_index)
+            .and_then(|column| match column {
+                editor::EditorBrowserColumnSummary::Directory { entries } => Some(
+                    entries
+                        .iter()
+                        .map(|entry| entry.name.clone())
+                        .collect::<Vec<_>>(),
+                ),
+                editor::EditorBrowserColumnSummary::FilePreview { .. } => None,
+            })
+            .unwrap_or_default()
+    }
+
     #[test]
     fn actions_palette_search_input_filters_actions() {
         let mut app = test_app();
@@ -1255,6 +1305,176 @@ mod tests {
     }
 
     #[test]
+    fn browser_single_click_selects_file_and_double_click_opens_it() {
+        let root = TempDir::new().expect("tempdir");
+        let file_path = root.path().join("note.txt");
+        fs::write(&file_path, "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        let before = app.editor.active_content();
+
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: file_path.clone(),
+                is_dir: false,
+            }),
+        );
+
+        assert_eq!(
+            selected_browser_entry_name(&app, 0).as_deref(),
+            Some("note.txt")
+        );
+        assert_eq!(file_preview_name(&app, 1).as_deref(), Some("note.txt"));
+        assert_eq!(app.editor.active_content(), before);
+
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryDoublePressed {
+                column_index: 0,
+                path: file_path,
+                is_dir: false,
+            }),
+        );
+
+        assert_eq!(app.editor.active_content().as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn browser_rename_action_starts_inline_rename() {
+        let root = TempDir::new().expect("tempdir");
+        fs::write(root.path().join("note.txt"), "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("note.txt"),
+                is_dir: false,
+            }),
+        );
+
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserRename);
+
+        assert!(matches!(
+            app.browser_inline_edit.as_ref().map(|edit| edit.kind),
+            Some(BrowserInlineEditKind::Rename)
+        ));
+    }
+
+    #[test]
+    fn browser_inline_rename_enter_commits_edit() {
+        let root = TempDir::new().expect("tempdir");
+        fs::write(root.path().join("note.txt"), "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("note.txt"),
+                is_dir: false,
+            }),
+        );
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserRename);
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserInlineEditChanged(
+                "renamed.txt".to_string(),
+            )),
+        );
+
+        let _ = update(
+            &mut app,
+            named_key_press(keyboard::key::Named::Enter, keyboard::key::Code::Enter),
+        );
+
+        assert!(app.browser_inline_edit.is_none());
+        assert!(root.path().join("renamed.txt").exists());
+    }
+
+    #[test]
+    fn browser_captured_enter_after_commit_does_not_restart_rename() {
+        let root = TempDir::new().expect("tempdir");
+        fs::write(root.path().join("note.txt"), "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("note.txt"),
+                is_dir: false,
+            }),
+        );
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserRename);
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserInlineEditChanged(
+                "renamed.txt".to_string(),
+            )),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::CommitFileBrowserInlineEdit),
+        );
+
+        let _ = update(
+            &mut app,
+            Message::KeyPressed(KeyPress {
+                status: event::Status::Captured,
+                key: keyboard::Key::Named(keyboard::key::Named::Enter),
+                physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Enter),
+                modifiers: keyboard::Modifiers::default(),
+            }),
+        );
+
+        assert!(app.browser_inline_edit.is_none());
+        assert!(root.path().join("renamed.txt").exists());
+    }
+
+    #[test]
+    fn browser_delete_action_opens_delete_prompt() {
+        let root = TempDir::new().expect("tempdir");
+        fs::write(root.path().join("note.txt"), "hello").expect("note file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("note.txt"),
+                is_dir: false,
+            }),
+        );
+
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::FileBrowserDelete);
+
+        assert!(app.error_prompt.is_some());
+        assert!(matches!(
+            app.prompt_ok_action,
+            Some(PromptOkAction::DeleteBrowserPath(_))
+        ));
+    }
+
+    #[test]
     fn browser_focus_message_moves_focus_from_editor() {
         let root = TempDir::new().expect("tempdir");
         let file_path = root.path().join("note.txt");
@@ -1277,5 +1497,123 @@ mod tests {
 
         assert!(app.editor_file_browser_focused);
         assert!(!app.editor.active_editor_is_focused());
+    }
+
+    #[test]
+    fn browser_toolbar_hidden_toggle_updates_entries() {
+        let root = TempDir::new().expect("tempdir");
+        fs::create_dir(root.path().join("alpha")).expect("alpha dir");
+        fs::write(root.path().join("beta.txt"), "b").expect("beta file");
+        fs::write(root.path().join(".hidden.txt"), "h").expect("hidden file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+
+        assert_eq!(browser_entry_names(&app, 0), vec!["alpha", "beta.txt"]);
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserToggleHiddenRequested),
+        );
+        assert_eq!(
+            browser_entry_names(&app, 0),
+            vec!["alpha", ".hidden.txt", "beta.txt"]
+        );
+    }
+
+    #[test]
+    fn browser_new_file_requested_starts_inline_edit() {
+        let root = TempDir::new().expect("tempdir");
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserNewFileRequested),
+        );
+
+        assert!(matches!(
+            app.browser_inline_edit.as_ref().map(|edit| edit.kind),
+            Some(BrowserInlineEditKind::NewFile)
+        ));
+        assert_eq!(app.browser_inline_edit_value, "untitled");
+        assert!(app.editor_file_browser_focused);
+        assert!(!app.editor.active_editor_is_focused());
+    }
+
+    #[test]
+    fn browser_commit_new_file_creates_and_selects_file() {
+        let root = TempDir::new().expect("tempdir");
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserNewFileRequested),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserInlineEditChanged(
+                "created.txt".to_string(),
+            )),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::CommitFileBrowserInlineEdit),
+        );
+
+        assert!(root.path().join("created.txt").exists());
+        assert_eq!(
+            selected_browser_entry_name(&app, 0).as_deref(),
+            Some("created.txt")
+        );
+        assert_eq!(file_preview_name(&app, 1).as_deref(), Some("created.txt"));
+    }
+
+    #[test]
+    fn browser_commit_rename_renames_selected_entry() {
+        let root = TempDir::new().expect("tempdir");
+        fs::write(root.path().join("old.txt"), "old").expect("old file");
+
+        let mut app = test_editor_app();
+        app.project_root = Some(root.path().to_path_buf());
+        app.editor.set_project_root(Some(root.path().to_path_buf()));
+        app.editor.toggle_file_browser();
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserEntryPressed {
+                column_index: 0,
+                path: root.path().join("old.txt"),
+                is_dir: false,
+            }),
+        );
+
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserRenameRequested),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::FileBrowserInlineEditChanged(
+                "renamed.txt".to_string(),
+            )),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(messages::EditorMessage::CommitFileBrowserInlineEdit),
+        );
+
+        assert!(!root.path().join("old.txt").exists());
+        assert!(root.path().join("renamed.txt").exists());
+        assert_eq!(
+            selected_browser_entry_name(&app, 0).as_deref(),
+            Some("renamed.txt")
+        );
+        assert_eq!(file_preview_name(&app, 1).as_deref(), Some("renamed.txt"));
     }
 }

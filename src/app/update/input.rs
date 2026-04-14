@@ -63,8 +63,44 @@ impl Lilypalooza {
         {
             return update(self, Message::Editor(EditorMessage::CancelRename));
         }
+        if self.browser_inline_edit.is_some()
+            && matches!(
+                key_press.key,
+                keyboard::Key::Named(keyboard::key::Named::Escape)
+            )
+        {
+            return update(
+                self,
+                Message::Editor(EditorMessage::CancelFileBrowserInlineEdit),
+            );
+        }
+        if self.browser_inline_edit.is_some()
+            && matches!(
+                key_press.key,
+                keyboard::Key::Named(keyboard::key::Named::Enter)
+            )
+        {
+            return update(
+                self,
+                Message::Editor(EditorMessage::CommitFileBrowserInlineEdit),
+            );
+        }
         if self.renaming_editor_tab.is_some()
             && matches!(key_press.status, iced::event::Status::Captured)
+        {
+            return Task::none();
+        }
+        if self.browser_inline_edit.is_some()
+            && matches!(key_press.status, iced::event::Status::Captured)
+        {
+            return Task::none();
+        }
+        if self.editor_file_browser_focused
+            && matches!(key_press.status, iced::event::Status::Captured)
+            && matches!(
+                key_press.key,
+                keyboard::Key::Named(keyboard::key::Named::Enter)
+            )
         {
             return Task::none();
         }
@@ -100,6 +136,12 @@ impl Lilypalooza {
         };
 
         if focused_pane == WorkspacePaneKind::Editor {
+            if self.editor_file_browser_focused
+                && let Some(action) =
+                    shortcuts::resolve_editor_browser(&self.shortcut_settings, shortcut_input)
+            {
+                return self.handle_shortcut_action(action);
+            }
             if let Some(action) =
                 shortcuts::resolve_contextual(&self.shortcut_settings, focused_pane, shortcut_input)
             {
@@ -175,6 +217,9 @@ impl Lilypalooza {
                 Task::none()
             }
             ShortcutsMessage::SearchChanged(value) => {
+                if self.shortcut_modifier_active() {
+                    return Task::none();
+                }
                 self.shortcuts_search_query = value;
                 self.reconcile_shortcut_palette_selection()
             }
@@ -267,6 +312,14 @@ impl Lilypalooza {
             ShortcutAction::ToggleFileBrowser => {
                 update(self, Message::Editor(EditorMessage::ToggleFileBrowser))
             }
+            ShortcutAction::FileBrowserRename => update(
+                self,
+                Message::Editor(EditorMessage::FileBrowserRenameRequested),
+            ),
+            ShortcutAction::FileBrowserDelete => update(
+                self,
+                Message::Editor(EditorMessage::FileBrowserTrashRequested),
+            ),
             ShortcutAction::SaveEditor => {
                 update(self, Message::Editor(EditorMessage::SaveRequested))
             }
@@ -630,6 +683,23 @@ impl Lilypalooza {
                         Some(PromptOkAction::ReloadEditorTab(tab_id)) => {
                             self.reload_editor_tab_from_disk(tab_id)
                         }
+                        Some(PromptOkAction::DeleteBrowserPath(path)) => {
+                            match super::editor::delete_browser_path(&path) {
+                                Ok(()) => self.refresh_browser_after_fs_change(),
+                                Err(error) => {
+                                    self.show_prompt(
+                                        ErrorPrompt::new(
+                                            "File Browser Error",
+                                            error,
+                                            ErrorFatality::Recoverable,
+                                            PromptButtons::Ok,
+                                        ),
+                                        None,
+                                    );
+                                    Task::none()
+                                }
+                            }
+                        }
                         None => Task::none(),
                     }
                 } else {
@@ -936,36 +1006,8 @@ impl Lilypalooza {
         &self,
         reveal_preview: bool,
     ) -> Task<Message> {
+        let horizontal = self.reveal_editor_file_browser_columns(reveal_preview);
         let column_index = self.editor.file_browser_active_column_index();
-        let current_x = self.editor_file_browser_scroll_x;
-        let viewport_width = if self.editor_file_browser_viewport_width > 0.0 {
-            self.editor_file_browser_viewport_width
-        } else {
-            super::EDITOR_FILE_BROWSER_COLUMN_WIDTH
-        };
-        let visible_column_count = self.editor.file_browser_columns().len();
-        let reveal_column_index = if reveal_preview && visible_column_count > column_index + 1 {
-            column_index + 1
-        } else {
-            column_index
-        };
-        let active_column_left = column_index as f32 * super::EDITOR_FILE_BROWSER_COLUMN_WIDTH;
-        let reveal_column_right =
-            (reveal_column_index + 1) as f32 * super::EDITOR_FILE_BROWSER_COLUMN_WIDTH;
-        let target_x = if active_column_left < current_x {
-            active_column_left
-        } else if reveal_column_right > current_x + viewport_width {
-            (reveal_column_right - viewport_width).max(0.0)
-        } else {
-            current_x
-        };
-        let horizontal = iced::widget::operation::scroll_to(
-            super::EDITOR_FILE_BROWSER_SCROLL_ID,
-            iced::widget::operation::AbsoluteOffset {
-                x: target_x,
-                y: 0.0,
-            },
-        );
         let vertical = self
             .editor
             .file_browser_selected_index(column_index)
@@ -1001,5 +1043,41 @@ impl Lilypalooza {
             .unwrap_or_else(Task::none);
 
         Task::batch([horizontal, vertical])
+    }
+
+    pub(in crate::app) fn reveal_editor_file_browser_columns(
+        &self,
+        reveal_preview: bool,
+    ) -> Task<Message> {
+        let column_index = self.editor.file_browser_active_column_index();
+        let current_x = self.editor_file_browser_scroll_x;
+        let viewport_width = if self.editor_file_browser_viewport_width > 0.0 {
+            self.editor_file_browser_viewport_width
+        } else {
+            super::EDITOR_FILE_BROWSER_COLUMN_WIDTH
+        };
+        let visible_column_count = self.editor.file_browser_columns().len();
+        let reveal_column_index = if reveal_preview && visible_column_count > column_index + 1 {
+            column_index + 1
+        } else {
+            column_index
+        };
+        let active_column_left = column_index as f32 * super::EDITOR_FILE_BROWSER_COLUMN_WIDTH;
+        let reveal_column_right =
+            (reveal_column_index + 1) as f32 * super::EDITOR_FILE_BROWSER_COLUMN_WIDTH;
+        let target_x = if active_column_left < current_x {
+            active_column_left
+        } else if reveal_column_right > current_x + viewport_width {
+            (reveal_column_right - viewport_width).max(0.0)
+        } else {
+            current_x
+        };
+        iced::widget::operation::scroll_to(
+            super::EDITOR_FILE_BROWSER_SCROLL_ID,
+            iced::widget::operation::AbsoluteOffset {
+                x: target_x,
+                y: 0.0,
+            },
+        )
     }
 }

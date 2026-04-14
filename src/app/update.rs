@@ -645,6 +645,23 @@ fn is_relevant_editor_file_change(event: &notify::Event, watched_path: &Path) ->
     })
 }
 
+fn is_relevant_browser_file_change(event: &notify::Event, watched_root: &Path) -> bool {
+    let kind_matches = matches!(
+        event.kind,
+        EventKind::Any | EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+    );
+
+    if !kind_matches {
+        return false;
+    }
+
+    event.paths.is_empty()
+        || event
+            .paths
+            .iter()
+            .any(|path| path == watched_root || path.starts_with(watched_root))
+}
+
 fn is_svg_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())

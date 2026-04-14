@@ -731,11 +731,7 @@ pub(crate) fn editor_file_browser_scrollable(
     style
 }
 
-pub(crate) fn button_editor_file_browser_entry(
-    theme: &Theme,
-    status: button::Status,
-    selected: bool,
-) -> button::Style {
+pub(crate) fn editor_file_browser_entry(theme: &Theme, selected: bool) -> container::Style {
     let palette = theme.extended_palette();
     let selected_background = mix_color(
         palette.background.strong.color,
@@ -743,7 +739,7 @@ pub(crate) fn button_editor_file_browser_entry(
         0.10,
     );
 
-    let base = button::Style {
+    container::Style {
         background: Some(
             if selected {
                 selected_background
@@ -752,41 +748,9 @@ pub(crate) fn button_editor_file_browser_entry(
             }
             .into(),
         ),
-        text_color: palette.background.base.text,
+        text_color: Some(palette.background.base.text),
         border: border::rounded(0).width(0).color(Color::TRANSPARENT),
-        shadow: Shadow::default(),
-        ..button::Style::default()
-    };
-
-    match status {
-        button::Status::Active => base,
-        button::Status::Hovered => button::Style {
-            background: Some(
-                if selected {
-                    selected_background
-                } else {
-                    palette.background.weak.color
-                }
-                .into(),
-            ),
-            ..base
-        },
-        button::Status::Pressed => button::Style {
-            background: Some(
-                mix_color(
-                    if selected {
-                        selected_background
-                    } else {
-                        palette.background.weak.color
-                    },
-                    palette.primary.base.color,
-                    0.12,
-                )
-                .into(),
-            ),
-            ..base
-        },
-        button::Status::Disabled => base,
+        ..container::Style::default()
     }
 }
 

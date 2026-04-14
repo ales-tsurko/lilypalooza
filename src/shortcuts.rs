@@ -20,6 +20,8 @@ pub(crate) enum ShortcutAction {
     NewEditor,
     OpenEditorFile,
     ToggleFileBrowser,
+    FileBrowserRename,
+    FileBrowserDelete,
     SaveEditor,
     CloseEditorTab,
     EditorUndo,
@@ -202,6 +204,11 @@ const EDITOR_CONTEXTUAL_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::EditorZoomReset,
 ];
 
+const EDITOR_BROWSER_ACTIONS: &[ShortcutAction] = &[
+    ShortcutAction::FileBrowserRename,
+    ShortcutAction::FileBrowserDelete,
+];
+
 pub(crate) fn resolve_global(
     settings: &ShortcutSettings,
     input: ShortcutInput<'_>,
@@ -242,6 +249,16 @@ pub(crate) fn resolve_contextual(
     };
 
     remappable_match.or_else(|| fixed_contextual_action(pane, input))
+}
+
+pub(crate) fn resolve_editor_browser(
+    settings: &ShortcutSettings,
+    input: ShortcutInput<'_>,
+) -> Option<ShortcutAction> {
+    EDITOR_BROWSER_ACTIONS
+        .iter()
+        .copied()
+        .find(|action| action_matches(settings, *action, input))
 }
 
 pub(crate) fn label_for_action(
@@ -306,6 +323,8 @@ shortcut_metadata! {
     NewEditor => ("New File", "Editor: create a new file tab in the text editor."),
     OpenEditorFile => ("Open File", "Editor: open one or more files into editor tabs."),
     ToggleFileBrowser => ("Toggle File Browser", "Editor: show or hide the file browser above the editor tabs."),
+    FileBrowserRename => ("Rename Browser Item", "File Browser: rename the selected file or folder."),
+    FileBrowserDelete => ("Delete Browser Item", "File Browser: delete the selected file or folder."),
     SaveEditor => ("Save File", "Editor: save the active file tab."),
     CloseEditorTab => ("Close Editor Tab", "Editor: close the active editor tab."),
     EditorUndo => ("Undo", "Editor: undo the last text editing change."),
@@ -434,6 +453,8 @@ fn action_from_id(action_id: ShortcutActionId) -> ShortcutAction {
         ShortcutActionId::NewEditor => ShortcutAction::NewEditor,
         ShortcutActionId::OpenEditorFile => ShortcutAction::OpenEditorFile,
         ShortcutActionId::ToggleFileBrowser => ShortcutAction::ToggleFileBrowser,
+        ShortcutActionId::FileBrowserRename => ShortcutAction::FileBrowserRename,
+        ShortcutActionId::FileBrowserDelete => ShortcutAction::FileBrowserDelete,
         ShortcutActionId::SaveEditor => ShortcutAction::SaveEditor,
         ShortcutActionId::CloseEditorTab => ShortcutAction::CloseEditorTab,
         ShortcutActionId::EditorUndo => ShortcutAction::EditorUndo,
@@ -557,6 +578,20 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
             vec![binding_code(ShortcutKeyCode::KeyO, true, false, false)]
         }
         ShortcutAction::ToggleFileBrowser => Vec::new(),
+        ShortcutAction::FileBrowserRename => vec![
+            binding_named(ShortcutNamedKey::Enter, false, false, false),
+            binding_code(ShortcutKeyCode::NumpadEnter, false, false, false),
+        ],
+        ShortcutAction::FileBrowserDelete => {
+            if cfg!(target_os = "macos") {
+                vec![
+                    binding_code(ShortcutKeyCode::Backspace, true, false, false),
+                    binding_code(ShortcutKeyCode::Delete, true, false, false),
+                ]
+            } else {
+                vec![binding_code(ShortcutKeyCode::Delete, false, false, false)]
+            }
+        }
         ShortcutAction::SaveEditor => vec![binding_code(ShortcutKeyCode::KeyS, true, false, false)],
         ShortcutAction::EditorUndo => {
             vec![binding_code(ShortcutKeyCode::KeyZ, true, false, false)]
@@ -1112,6 +1147,8 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::NewEditor => Some(ShortcutActionId::NewEditor),
         ShortcutAction::OpenEditorFile => Some(ShortcutActionId::OpenEditorFile),
         ShortcutAction::ToggleFileBrowser => Some(ShortcutActionId::ToggleFileBrowser),
+        ShortcutAction::FileBrowserRename => Some(ShortcutActionId::FileBrowserRename),
+        ShortcutAction::FileBrowserDelete => Some(ShortcutActionId::FileBrowserDelete),
         ShortcutAction::SaveEditor => Some(ShortcutActionId::SaveEditor),
         ShortcutAction::CloseEditorTab => Some(ShortcutActionId::CloseEditorTab),
         ShortcutAction::EditorUndo => Some(ShortcutActionId::EditorUndo),
@@ -1235,6 +1272,16 @@ mod tests {
         }
     }
 
+    fn named_input(named: keyboard::key::Named) -> ShortcutInput<'static> {
+        ShortcutInput {
+            key: Box::leak(Box::new(keyboard::Key::Named(named))),
+            physical_key: keyboard::key::Physical::Unidentified(
+                keyboard::key::NativeCode::Unidentified,
+            ),
+            modifiers: keyboard::Modifiers::default(),
+        }
+    }
+
     #[test]
     fn resolves_editor_toggle_line_comment_binding() {
         let input = code_input(keyboard::key::Code::Slash, true, false, false);
@@ -1250,6 +1297,28 @@ mod tests {
         assert_eq!(
             resolve_contextual(&ShortcutSettings::default(), WorkspacePane::Editor, input),
             Some(ShortcutAction::EditorMoveLineDown)
+        );
+    }
+
+    #[test]
+    fn resolves_browser_rename_binding() {
+        let input = named_input(keyboard::key::Named::Enter);
+        assert_eq!(
+            resolve_editor_browser(&ShortcutSettings::default(), input),
+            Some(ShortcutAction::FileBrowserRename)
+        );
+    }
+
+    #[test]
+    fn resolves_browser_delete_binding() {
+        let input = if cfg!(target_os = "macos") {
+            code_input(keyboard::key::Code::Delete, true, false, false)
+        } else {
+            code_input(keyboard::key::Code::Delete, false, false, false)
+        };
+        assert_eq!(
+            resolve_editor_browser(&ShortcutSettings::default(), input),
+            Some(ShortcutAction::FileBrowserDelete)
         );
     }
 }

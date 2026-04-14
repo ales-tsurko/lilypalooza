@@ -207,6 +207,7 @@ impl Lilypalooza {
         }
 
         self.poll_editor_file_watcher(&mut tasks);
+        self.poll_browser_file_watcher(&mut tasks);
 
         if let Some(tab_id) = self.editor.active_tab_id() {
             let task = self.editor.update(tab_id, &iced_code_editor::Message::Tick);
@@ -215,6 +216,9 @@ impl Lilypalooza {
 
         if self.spinner_active() {
             self.spinner_step = self.spinner_step.wrapping_add(1);
+        }
+
+        if self.spinner_active() {
             self.poll_score_watcher();
             tasks.push(self.poll_compile_logs());
             self.start_compile_if_queued();
@@ -397,6 +401,38 @@ impl Lilypalooza {
         }
     }
 
+    pub(in crate::app) fn sync_browser_file_watcher(&mut self) {
+        if !self.editor.file_browser_expanded() {
+            self.browser_file_watcher = None;
+            return;
+        }
+
+        let root = self.editor.file_browser_root().to_path_buf();
+        if self
+            .browser_file_watcher
+            .as_ref()
+            .is_some_and(|watcher| watcher.watched_root() == root)
+        {
+            return;
+        }
+
+        match crate::browser_file_watcher::BrowserFileWatcher::start(&root) {
+            Ok(watcher) => self.browser_file_watcher = Some(watcher),
+            Err(error) => {
+                self.browser_file_watcher = None;
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "File Browser Error",
+                        format!("Failed to watch browser directory changes: {error}"),
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+            }
+        }
+    }
+
     pub(in crate::app) fn poll_editor_file_watcher(&mut self, tasks: &mut Vec<Task<Message>>) {
         if self.editor_file_watcher.is_none() {
             return;
@@ -447,6 +483,50 @@ impl Lilypalooza {
             if let Some(task) = self.reconcile_editor_tab_file(tab_id) {
                 tasks.push(task);
             }
+        }
+    }
+
+    pub(in crate::app) fn poll_browser_file_watcher(&mut self, tasks: &mut Vec<Task<Message>>) {
+        let Some(watcher) = &self.browser_file_watcher else {
+            return;
+        };
+
+        let watched_root = watcher.watched_root().to_path_buf();
+        let mut changed = false;
+        let mut disconnected = false;
+
+        while let Some(watcher) = &self.browser_file_watcher {
+            match watcher.try_recv() {
+                Ok(Ok(event)) => {
+                    if is_relevant_browser_file_change(&event, &watched_root) {
+                        changed = true;
+                    }
+                }
+                Ok(Err(_error)) => {}
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+
+        if disconnected {
+            self.browser_file_watcher = None;
+            self.show_prompt(
+                ErrorPrompt::new(
+                    "File Browser Error",
+                    "Browser directory watcher disconnected",
+                    ErrorFatality::Recoverable,
+                    PromptButtons::Ok,
+                ),
+                None,
+            );
+            return;
+        }
+
+        if changed {
+            tasks.push(self.refresh_browser_after_fs_change());
         }
     }
 

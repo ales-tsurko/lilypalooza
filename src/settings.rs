@@ -305,6 +305,8 @@ pub(crate) enum ShortcutActionId {
     NewEditor,
     OpenEditorFile,
     ToggleFileBrowser,
+    FileBrowserRename,
+    FileBrowserDelete,
     SaveEditor,
     CloseEditorTab,
     EditorUndo,
