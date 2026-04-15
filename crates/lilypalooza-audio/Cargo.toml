@@ -8,4 +8,8 @@ workspace = true
 
 [dependencies]
 knyst = { git = "https://github.com/ales-tsurko/knyst", rev = "b6b5354c", default-features = false, features = ["cpal"] }
+serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0.18"
+
+[dev-dependencies]
+ron = "0.8.1"

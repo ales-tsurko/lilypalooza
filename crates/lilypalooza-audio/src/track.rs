@@ -1,12 +1,13 @@
 //! Mixer track primitives.
 
 use crate::instrument::InstrumentConfig;
+use serde::{Deserialize, Serialize};
 
 /// Number of fixed instrument tracks.
 pub const INSTRUMENT_TRACK_COUNT: usize = 128;
 
 /// Stable fixed instrument-track identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TrackId(pub u16);
 
 impl TrackId {
@@ -24,11 +25,11 @@ impl TrackId {
 }
 
 /// Stable dynamic bus identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BusId(pub u16);
 
 /// Main output routing target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TrackRoute {
     /// Route directly to master.
     #[default]
@@ -38,7 +39,7 @@ pub enum TrackRoute {
 }
 
 /// One parallel send to a bus.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BusSend {
     /// Bus destination.
     pub bus_id: BusId,
@@ -61,7 +62,7 @@ impl BusSend {
 }
 
 /// Routing state.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct TrackRouting {
     /// Main output route.
     pub main: TrackRoute,
@@ -70,7 +71,7 @@ pub struct TrackRouting {
 }
 
 /// Shared strip state used by tracks, buses, and the master.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TrackState {
     /// Fader gain in dB.
     pub gain_db: f32,
@@ -94,7 +95,7 @@ impl Default for TrackState {
 }
 
 /// One fixed instrument track.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MixerTrack {
     /// Stable mixer track identifier.
     pub id: TrackId,
@@ -123,7 +124,7 @@ impl MixerTrack {
 }
 
 /// One dynamic bus track.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BusTrack {
     /// Stable bus identifier.
     pub id: BusId,
@@ -149,7 +150,7 @@ impl BusTrack {
 }
 
 /// Dedicated master track.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MasterTrack {
     /// User-visible name.
     pub name: String,

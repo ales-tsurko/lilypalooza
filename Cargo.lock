@@ -2825,6 +2825,8 @@ name = "lilypalooza-audio"
 version = "0.1.0"
 dependencies = [
  "knyst",
+ "ron",
+ "serde",
  "thiserror 2.0.18",
 ]
 

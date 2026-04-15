@@ -1,7 +1,9 @@
 //! Instrument abstractions for mixer tracks.
 
+use serde::{Deserialize, Serialize};
+
 /// Track instrument configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstrumentConfig {
     /// Which instrument backend this track uses.
     pub kind: InstrumentKind,
@@ -20,7 +22,7 @@ impl Default for InstrumentConfig {
 }
 
 /// Supported instrument backends.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InstrumentKind {
     /// Shared SoundFont resource with per-track bank/program selection.
     SoundFont {

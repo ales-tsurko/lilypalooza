@@ -4,6 +4,7 @@ use crate::track::{
     BusId, BusSend, BusTrack, INSTRUMENT_TRACK_COUNT, MasterTrack, MixerTrack, TrackId, TrackRoute,
     TrackRouting,
 };
+use serde::{Deserialize, Serialize};
 
 /// Mixer model error.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
@@ -28,7 +29,7 @@ pub enum MixerError {
 }
 
 /// Mixer model with fixed instrument tracks, dynamic buses, and a dedicated master.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Mixer {
     /// Fixed instrument tracks.
     pub tracks: Vec<MixerTrack>,
@@ -372,5 +373,22 @@ mod tests {
         let track = mixer.track(TrackId(0)).expect("track should exist");
         assert_eq!(track.routing.main, TrackRoute::Master);
         assert!(track.routing.sends.is_empty());
+    }
+
+    #[test]
+    fn mixer_roundtrips_through_ron() {
+        let mut mixer = Mixer::new();
+        let bus_id = mixer.add_bus("Verb");
+        mixer
+            .set_track_route(TrackId(0), TrackRoute::Bus(bus_id))
+            .expect("bus route should succeed");
+        mixer
+            .add_track_bus_send(TrackId(1), BusSend::new(bus_id, -3.0, true))
+            .expect("bus send should succeed");
+
+        let ron = ron::to_string(&mixer).expect("mixer should serialize");
+        let restored: Mixer = ron::from_str(&ron).expect("mixer should deserialize");
+
+        assert_eq!(restored, mixer);
     }
 }
