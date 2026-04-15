@@ -103,6 +103,7 @@ impl<'a> SequencerHandle<'a> {
 
         let mut sequences = Vec::new();
         let mut tempo_points = Vec::new();
+        let mut total_ticks = 0_u64;
 
         for (index, track) in smf.tracks.iter().enumerate() {
             if let Some(sequence) = Sequence::from_midi_track(index, track, ppq) {
@@ -112,6 +113,7 @@ impl<'a> SequencerHandle<'a> {
             let mut absolute_ticks = 0_u64;
             for event in track {
                 absolute_ticks = absolute_ticks.saturating_add(u64::from(event.delta.as_int()));
+                total_ticks = total_ticks.max(absolute_ticks);
                 let TrackEventKind::Meta(MetaMessage::Tempo(micros_per_quarter)) = event.kind
                 else {
                     continue;
@@ -136,10 +138,40 @@ impl<'a> SequencerHandle<'a> {
             .expect("sequencer mutex poisoned");
         inner.sequences = sequences;
         inner.next_indices = vec![0; inner.sequences.len()];
+        inner.ppq = ppq;
+        inner.total_ticks = total_ticks;
         inner.scheduled_until = Beats::ZERO;
         inner.last_position = None;
         inner.dirty = true;
         Ok(())
+    }
+
+    /// Returns the current playback position in MIDI ticks.
+    pub fn playback_tick(&mut self) -> Result<u64, SequencerError> {
+        let ppq = self
+            .sequencer
+            .inner
+            .lock()
+            .expect("sequencer mutex poisoned")
+            .ppq;
+        if ppq == 0 {
+            return Ok(0);
+        }
+
+        let beats = Transport::new(self.commands, None)
+            .snapshot()?
+            .beats_position;
+        Ok(beats_to_ticks(beats, ppq))
+    }
+
+    /// Returns the total loaded MIDI duration in ticks.
+    #[must_use]
+    pub fn total_ticks(&self) -> u64 {
+        self.sequencer
+            .inner
+            .lock()
+            .expect("sequencer mutex poisoned")
+            .total_ticks
     }
 
     /// Clears the loaded score and scheduling state.
@@ -151,6 +183,8 @@ impl<'a> SequencerHandle<'a> {
             .expect("sequencer mutex poisoned");
         inner.sequences.clear();
         inner.next_indices.clear();
+        inner.ppq = 0;
+        inner.total_ticks = 0;
         inner.scheduled_until = Beats::ZERO;
         inner.last_position = None;
         inner.dirty = true;
@@ -178,6 +212,8 @@ impl<'a> SequencerHandle<'a> {
 struct SequencerState {
     sequences: Vec<Sequence>,
     next_indices: Vec<usize>,
+    ppq: u16,
+    total_ticks: u64,
     scheduled_until: Beats,
     lookahead: Beats,
     refill_margin: Beats,
@@ -191,6 +227,8 @@ impl SequencerState {
         Self {
             sequences: Vec::new(),
             next_indices: Vec::new(),
+            ppq: 0,
+            total_ticks: 0,
             scheduled_until: Beats::ZERO,
             lookahead: Beats::from_beats(4),
             refill_margin: Beats::from_beats(1),
@@ -410,11 +448,15 @@ fn ticks_to_beats(ticks: u64, ppq: u16) -> Beats {
     Beats::new(beats, beat_tesimals)
 }
 
+fn beats_to_ticks(beats: Beats, ppq: u16) -> u64 {
+    (beats.as_beats_f64() * f64::from(ppq.max(1))).round() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use knyst::prelude::Beats;
 
-    use super::ticks_to_beats;
+    use super::{beats_to_ticks, ticks_to_beats};
 
     #[test]
     fn ticks_to_beats_maps_whole_and_fractional_beats() {
@@ -423,6 +465,16 @@ mod tests {
         assert_eq!(
             ticks_to_beats(240, 480),
             Beats::from_fractional_beats::<2>(0, 1)
+        );
+    }
+
+    #[test]
+    fn beats_to_ticks_maps_whole_and_fractional_beats() {
+        assert_eq!(beats_to_ticks(Beats::ZERO, 480), 0);
+        assert_eq!(beats_to_ticks(Beats::from_beats(1), 480), 480);
+        assert_eq!(
+            beats_to_ticks(Beats::from_fractional_beats::<2>(0, 1), 480),
+            240
         );
     }
 }
