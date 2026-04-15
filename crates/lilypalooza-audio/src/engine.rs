@@ -2,22 +2,51 @@
 
 use crate::mixer::MixerConfig;
 use crate::transport::Transport;
+use knyst::audio_backend::{AudioBackend, AudioBackendError};
+use knyst::modal_interface::SphereError;
+use knyst::prelude::{KnystSphere, MultiThreadedKnystCommands, SphereSettings};
+
+/// Startup options for the audio engine.
+#[derive(Debug, Clone, Default)]
+pub struct AudioEngineOptions {
+    /// Knyst sphere settings.
+    pub sphere_settings: SphereSettings,
+}
 
 /// Top-level audio engine container.
-#[derive(Debug, Clone)]
 pub struct AudioEngine {
     mixer: MixerConfig,
-    transport: Transport,
+    backend: Box<dyn AudioBackend>,
+    _sphere: KnystSphere,
+    commands: MultiThreadedKnystCommands,
+}
+
+/// Errors returned by the audio engine facade.
+#[derive(thiserror::Error, Debug)]
+pub enum AudioEngineError {
+    /// Failed to create or start the audio backend.
+    #[error(transparent)]
+    AudioBackend(#[from] AudioBackendError),
+    /// Failed to initialize or run the Knyst sphere.
+    #[error(transparent)]
+    Sphere(#[from] SphereError),
 }
 
 impl AudioEngine {
-    /// Creates a new audio engine with the provided mixer configuration.
-    #[must_use]
-    pub fn new(mixer: MixerConfig) -> Self {
-        Self {
+    /// Starts the audio engine on the provided backend.
+    pub fn start<B: AudioBackend + 'static>(
+        mixer: MixerConfig,
+        mut backend: B,
+        options: AudioEngineOptions,
+    ) -> Result<Self, AudioEngineError> {
+        let sphere = KnystSphere::start(&mut backend, options.sphere_settings, |_| {})?;
+        let commands = sphere.commands();
+        Ok(Self {
             mixer,
-            transport: Transport::default(),
-        }
+            backend: Box::new(backend),
+            _sphere: sphere,
+            commands,
+        })
     }
 
     /// Returns the mixer configuration.
@@ -26,9 +55,14 @@ impl AudioEngine {
         &self.mixer
     }
 
-    /// Returns the transport state.
-    #[must_use]
-    pub fn transport(&self) -> &Transport {
-        &self.transport
+    /// Returns the transport control handle.
+    pub fn transport(&mut self) -> Transport<'_> {
+        Transport::new(&mut self.commands)
+    }
+}
+
+impl Drop for AudioEngine {
+    fn drop(&mut self) {
+        let _ = self.backend.stop();
     }
 }

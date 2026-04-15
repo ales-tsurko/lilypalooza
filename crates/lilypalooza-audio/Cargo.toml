@@ -7,3 +7,5 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+knyst = { git = "https://github.com/ales-tsurko/knyst", rev = "2f75b0f5b9d1d405fc60e87d48211b9da9098666", default-features = false }
+thiserror = "2.0.18"

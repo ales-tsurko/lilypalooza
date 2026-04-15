@@ -9,8 +9,8 @@ pub mod mixer;
 pub mod track;
 pub mod transport;
 
-pub use engine::AudioEngine;
+pub use engine::{AudioEngine, AudioEngineError, AudioEngineOptions};
 pub use instrument::{InstrumentConfig, InstrumentKind};
 pub use mixer::{MixerConfig, MixerTrackConfig};
 pub use track::{TrackId, TrackState};
-pub use transport::{PlaybackState, Transport};
+pub use transport::{PlaybackState, Transport, TransportError, TransportSnapshot};
