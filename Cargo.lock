@@ -100,9 +100,9 @@ dependencies = [
  "jni-sys",
  "libc",
  "log",
- "ndk",
+ "ndk 0.9.0",
  "ndk-context",
- "ndk-sys",
+ "ndk-sys 0.6.0+11769913",
  "num_enum",
  "thiserror 1.0.69",
 ]
@@ -430,7 +430,7 @@ dependencies = [
  "anyhow",
  "arrayvec",
  "log",
- "nom",
+ "nom 8.0.0",
  "num-rational",
  "v_frame",
 ]
@@ -469,6 +469,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "bindgen"
+version = "0.72.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
+dependencies = [
+ "bitflags 2.11.0",
+ "cexpr",
+ "clang-sys",
+ "itertools 0.11.0",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "rustc-hash 2.1.1",
+ "shlex",
+ "syn",
 ]
 
 [[package]]
@@ -715,6 +733,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
 
 [[package]]
+name = "cexpr"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fac387a98bb7c37292057cffc56d62ecb629900026402633ae9160df93a8766"
+dependencies = [
+ "nom 7.1.3",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -737,6 +764,17 @@ dependencies = [
  "num-traits",
  "wasm-bindgen",
  "windows-link",
+]
+
+[[package]]
+name = "clang-sys"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b023947811758c97c59bf9d1c188fd619ad4718dcaa767947df1cadb14f39f4"
+dependencies = [
+ "glob",
+ "libc",
+ "libloading",
 ]
 
 [[package]]
@@ -895,6 +933,17 @@ dependencies = [
 
 [[package]]
 name = "coreaudio-rs"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "321077172d79c662f64f5071a03120748d5bb652f5231570141be24cfcd2bace"
+dependencies = [
+ "bitflags 1.3.2",
+ "core-foundation-sys",
+ "coreaudio-sys",
+]
+
+[[package]]
+name = "coreaudio-rs"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aae284fbaf7d27aa0e292f7677dfbe26503b0d555026f702940805a630eac17"
@@ -905,6 +954,15 @@ dependencies = [
  "objc2-core-audio",
  "objc2-core-audio-types",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "coreaudio-sys"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ceec7a6067e62d6f931a2baf6f3a751f4a892595bcec1461a3c94ef9949864b6"
+dependencies = [
+ "bindgen",
 ]
 
 [[package]]
@@ -933,18 +991,41 @@ dependencies = [
 
 [[package]]
 name = "cpal"
-version = "0.16.0"
+version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbd307f43cc2a697e2d1f8bc7a1d824b5269e052209e28883e5bc04d095aaa3f"
+checksum = "873dab07c8f743075e57f524c583985fbaf745602acbe916a01539364369a779"
 dependencies = [
  "alsa",
- "coreaudio-rs",
+ "core-foundation-sys",
+ "coreaudio-rs 0.11.3",
  "dasp_sample",
  "jni",
  "js-sys",
  "libc",
  "mach2",
- "ndk",
+ "ndk 0.8.0",
+ "ndk-context",
+ "oboe",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows 0.54.0",
+]
+
+[[package]]
+name = "cpal"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbd307f43cc2a697e2d1f8bc7a1d824b5269e052209e28883e5bc04d095aaa3f"
+dependencies = [
+ "alsa",
+ "coreaudio-rs 0.13.0",
+ "dasp_sample",
+ "jni",
+ "js-sys",
+ "libc",
+ "mach2",
+ "ndk 0.9.0",
  "ndk-context",
  "num-derive",
  "num-traits",
@@ -1271,7 +1352,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2169,7 +2250,7 @@ dependencies = [
  "iced_renderer",
  "iced_runtime",
  "iced_selector",
- "nom",
+ "nom 8.0.0",
  "png 0.18.1",
  "sha2",
  "thiserror 2.0.18",
@@ -2573,8 +2654,9 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 [[package]]
 name = "knyst"
 version = "0.5.1"
-source = "git+https://github.com/ales-tsurko/knyst?rev=2f75b0f5b9d1d405fc60e87d48211b9da9098666#2f75b0f5b9d1d405fc60e87d48211b9da9098666"
+source = "git+https://github.com/ales-tsurko/knyst?rev=b6b5354c#b6b5354c90498053e6d0e68af6d9426028997bd0"
 dependencies = [
+ "cpal 0.15.3",
  "crossbeam-channel",
  "downcast-rs",
  "fastapprox",
@@ -2718,7 +2800,7 @@ dependencies = [
 name = "lilypalooza"
 version = "0.1.0"
 dependencies = [
- "cpal",
+ "cpal 0.16.0",
  "directories",
  "iced",
  "iced-code-editor",
@@ -2978,6 +3060,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "minimal-lexical"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3068,6 +3156,20 @@ dependencies = [
 
 [[package]]
 name = "ndk"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2076a31b7010b17a38c01907c45b945e8f11495ee4dd588309718901b1f7a5b7"
+dependencies = [
+ "bitflags 2.11.0",
+ "jni-sys",
+ "log",
+ "ndk-sys 0.5.0+25.2.9519653",
+ "num_enum",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3f42e7bbe13d351b6bead8286a43aac9534b82bd3cc43e47037f012ebfd62d4"
@@ -3075,7 +3177,7 @@ dependencies = [
  "bitflags 2.11.0",
  "jni-sys",
  "log",
- "ndk-sys",
+ "ndk-sys 0.6.0+11769913",
  "num_enum",
  "raw-window-handle",
  "thiserror 1.0.69",
@@ -3086,6 +3188,15 @@ name = "ndk-context"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
+
+[[package]]
+name = "ndk-sys"
+version = "0.5.0+25.2.9519653"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c196769dd60fd4f363e11d948139556a344e79d451aeb2fa2fd040738ef7691"
+dependencies = [
+ "jni-sys",
+]
 
 [[package]]
 name = "ndk-sys"
@@ -3109,6 +3220,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c239c2e3375e623350d34298cdeee95ea102111d69ffc1d8335cf417dc346b70"
 dependencies = [
  "midly",
+]
+
+[[package]]
+name = "nom"
+version = "7.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
+dependencies = [
+ "memchr",
+ "minimal-lexical",
 ]
 
 [[package]]
@@ -3654,6 +3775,29 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-core-location",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "oboe"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8b61bebd49e5d43f5f8cc7ee2891c16e0f41ec7954d36bcb6c14c5e0de867fb"
+dependencies = [
+ "jni",
+ "ndk 0.8.0",
+ "ndk-context",
+ "num-derive",
+ "num-traits",
+ "oboe-sys",
+]
+
+[[package]]
+name = "oboe-sys"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c8bb09a4a2b1d668170cfe0a7d5bc103f8999fb316c98099b6a9939c9f2e79d"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -4430,7 +4574,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4772,7 +4916,7 @@ dependencies = [
  "fastrand",
  "js-sys",
  "memmap2",
- "ndk",
+ "ndk 0.9.0",
  "objc2 0.6.3",
  "objc2-core-foundation",
  "objc2-core-graphics",
@@ -5069,7 +5213,7 @@ dependencies = [
  "getrandom 0.4.1",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6073,7 +6217,7 @@ dependencies = [
  "log",
  "metal",
  "naga",
- "ndk-sys",
+ "ndk-sys 0.6.0+11769913",
  "objc",
  "once_cell",
  "ordered-float",
@@ -6129,7 +6273,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -6674,7 +6818,7 @@ dependencies = [
  "js-sys",
  "libc",
  "memmap2",
- "ndk",
+ "ndk 0.9.0",
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
