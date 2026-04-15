@@ -12,7 +12,8 @@ use knyst::prelude::{
 };
 
 use crate::instrument::{
-    InstrumentKind, InstrumentProcessorNode, InstrumentRuntimeHandle, ProcessorStateError,
+    EffectProcessorNode, EffectRuntimeHandle, InstrumentKind, InstrumentProcessorNode,
+    InstrumentRuntimeHandle, ProcessorStateError, create_effect_processor,
 };
 use crate::mixer::{
     BusId, BusSend, BusTrack, MixerError, MixerState, MixerTrack, TrackId, TrackRoute,
@@ -44,13 +45,16 @@ impl MixerRuntime {
         mixer: &MixerState,
     ) -> Result<Self, MixerRuntimeError> {
         context.with_activation(|| {
-            let master = MasterRuntime::new(commands, mixer);
+            let master = MasterRuntime::new(context, commands, mixer);
             let soundfont_settings =
                 SoundfontSynthSettings::new(settings.sample_rate as i32, settings.block_size);
 
             let mut buses = HashMap::with_capacity(mixer.buses.len());
             for bus_track in &mixer.buses {
-                buses.insert(bus_track.id, BusRuntime::new(commands, bus_track, mixer));
+                buses.insert(
+                    bus_track.id,
+                    BusRuntime::new(context, commands, bus_track, mixer),
+                );
             }
 
             let mut runtime = Self {
@@ -138,7 +142,7 @@ impl MixerRuntime {
         let bus_track = mixer.bus(bus_id)?;
         context.with_activation(|| {
             self.buses
-                .insert(bus_id, BusRuntime::new(commands, bus_track, mixer));
+                .insert(bus_id, BusRuntime::new(context, commands, bus_track, mixer));
         });
         self.sync_bus_routing(context, commands, mixer, bus_id)?;
         self.sync_all_levels(commands, mixer);
@@ -181,6 +185,22 @@ impl MixerRuntime {
         Ok(())
     }
 
+    pub(crate) fn sync_track_effects(
+        &mut self,
+        context: &KnystContext,
+        commands: &mut MultiThreadedKnystCommands,
+        mixer: &MixerState,
+        track_id: TrackId,
+    ) -> Result<(), MixerRuntimeError> {
+        let track = mixer.track(track_id)?;
+        let runtime = self
+            .tracks
+            .get_mut(track_id.index())
+            .ok_or(MixerError::InvalidTrackId(track_id))?;
+        runtime.rebuild_effects(context, commands, &track.effects);
+        Ok(())
+    }
+
     pub(crate) fn sync_track_strip(
         &mut self,
         commands: &mut MultiThreadedKnystCommands,
@@ -210,6 +230,33 @@ impl MixerRuntime {
             .get_mut(&bus_id)
             .ok_or(MixerError::InvalidBusId(bus_id))?;
         runtime.apply_strip(commands, bus, amplitude);
+        Ok(())
+    }
+
+    pub(crate) fn sync_bus_effects(
+        &mut self,
+        context: &KnystContext,
+        commands: &mut MultiThreadedKnystCommands,
+        mixer: &MixerState,
+        bus_id: BusId,
+    ) -> Result<(), MixerRuntimeError> {
+        let bus = mixer.bus(bus_id)?;
+        let runtime = self
+            .buses
+            .get_mut(&bus_id)
+            .ok_or(MixerError::InvalidBusId(bus_id))?;
+        runtime.rebuild_effects(context, commands, &bus.effects);
+        Ok(())
+    }
+
+    pub(crate) fn sync_master_effects(
+        &mut self,
+        context: &KnystContext,
+        commands: &mut MultiThreadedKnystCommands,
+        mixer: &MixerState,
+    ) -> Result<(), MixerRuntimeError> {
+        self.master
+            .rebuild_effects(context, commands, &mixer.master.effects);
         Ok(())
     }
 
@@ -350,18 +397,28 @@ impl MixerRuntime {
 
 struct MasterRuntime {
     input: Handle<GenericHandle>,
+    effects: Vec<EffectRuntimeHandle>,
     strip: Handle<GenericHandle>,
 }
 
 impl MasterRuntime {
-    fn new(commands: &mut MultiThreadedKnystCommands, mixer: &MixerState) -> Self {
+    fn new(
+        context: &KnystContext,
+        commands: &mut MultiThreadedKnystCommands,
+        mixer: &MixerState,
+    ) -> Self {
         let input = bus(2);
         let strip = handle(StereoBalanceGain::new());
-        connect_stereo(commands, node_id_of(input), node_id_of(strip));
         set_scalar(strip, 2, db_to_amplitude(mixer.master.state.gain_db));
         set_scalar(strip, 3, mixer.master.state.pan);
         graph_output(0, strip.channels(2));
-        Self { input, strip }
+        let mut runtime = Self {
+            input,
+            effects: Vec::new(),
+            strip,
+        };
+        runtime.rebuild_effects(context, commands, &mixer.master.effects);
+        runtime
     }
 
     fn input_node(&self) -> NodeId {
@@ -372,10 +429,36 @@ impl MasterRuntime {
         set_scalar(self.strip, 2, gain);
         set_scalar(self.strip, 3, pan);
     }
+
+    fn rebuild_effects(
+        &mut self,
+        context: &KnystContext,
+        commands: &mut MultiThreadedKnystCommands,
+        effects: &[crate::instrument::EffectSlotState],
+    ) {
+        commands.disconnect(Connection::clear_from_nodes(node_id_of(self.input)));
+        for effect in self.effects.drain(..) {
+            free_effect(effect, commands);
+        }
+        let mut previous = node_id_of(self.input);
+        context.with_activation(|| {
+            for effect in effects {
+                let Some(effect) = create_effect_runtime(effect) else {
+                    continue;
+                };
+                let node = effect.node_id();
+                connect_stereo(commands, previous, node);
+                previous = node;
+                self.effects.push(effect);
+            }
+        });
+        connect_stereo(commands, previous, node_id_of(self.strip));
+    }
 }
 
 struct TrackRuntime {
     source_bus: Handle<GenericHandle>,
+    effects: Vec<EffectRuntimeHandle>,
     strip: Handle<GenericHandle>,
     route_bus: Handle<GenericHandle>,
     instrument: Option<TrackInstrumentRuntime>,
@@ -395,18 +478,19 @@ impl TrackRuntime {
         let strip = handle(StereoBalanceGain::new());
         let route_bus = bus(2);
 
-        connect_stereo(commands, node_id_of(source_bus), node_id_of(strip));
         connect_stereo(commands, node_id_of(strip), node_id_of(route_bus));
         set_scalar(strip, 2, db_to_amplitude(track.state.gain_db));
         set_scalar(strip, 3, track.state.pan);
 
         let mut runtime = Self {
             source_bus,
+            effects: Vec::new(),
             strip,
             route_bus,
             instrument: None,
             send_nodes: Vec::new(),
         };
+        runtime.rebuild_effects(context, commands, &track.effects);
         runtime.sync_source(context, commands, track, soundfonts, soundfont_settings)?;
         runtime.apply_strip(commands, track, track_effective_amplitude(mixer, track));
         Ok(runtime)
@@ -433,6 +517,31 @@ impl TrackRuntime {
         instrument.connect(commands, node_id_of(self.source_bus));
         self.instrument = Some(instrument);
         Ok(())
+    }
+
+    fn rebuild_effects(
+        &mut self,
+        context: &KnystContext,
+        commands: &mut MultiThreadedKnystCommands,
+        effects: &[crate::instrument::EffectSlotState],
+    ) {
+        commands.disconnect(Connection::clear_from_nodes(node_id_of(self.source_bus)));
+        for effect in self.effects.drain(..) {
+            free_effect(effect, commands);
+        }
+        let mut previous = node_id_of(self.source_bus);
+        context.with_activation(|| {
+            for effect in effects {
+                let Some(effect) = create_effect_runtime(effect) else {
+                    continue;
+                };
+                let node = effect.node_id();
+                connect_stereo(commands, previous, node);
+                previous = node;
+                self.effects.push(effect);
+            }
+        });
+        connect_stereo(commands, previous, node_id_of(self.strip));
     }
 
     fn apply_strip(
@@ -556,8 +665,24 @@ impl TrackInstrumentRuntime {
     }
 }
 
+fn create_effect_runtime(
+    effect: &crate::instrument::EffectSlotState,
+) -> Option<EffectRuntimeHandle> {
+    let processor = create_effect_processor(effect).ok()??;
+    let node = handle(EffectProcessorNode::new(processor));
+    Some(EffectRuntimeHandle::new(node))
+}
+
+fn free_effect(effect: EffectRuntimeHandle, commands: &mut MultiThreadedKnystCommands) {
+    let node = effect.node_id();
+    commands.disconnect(Connection::clear_from_nodes(node));
+    commands.disconnect(Connection::clear_to_nodes(node));
+    commands.free_node(node);
+}
+
 struct BusRuntime {
     input: Handle<GenericHandle>,
+    effects: Vec<EffectRuntimeHandle>,
     strip: Handle<GenericHandle>,
     route_bus: Handle<GenericHandle>,
     send_nodes: Vec<NodeId>,
@@ -565,6 +690,7 @@ struct BusRuntime {
 
 impl BusRuntime {
     fn new(
+        context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
         bus_track: &BusTrack,
         _mixer: &MixerState,
@@ -572,16 +698,18 @@ impl BusRuntime {
         let input = bus(2);
         let strip = handle(StereoBalanceGain::new());
         let route_bus = bus(2);
-        connect_stereo(commands, node_id_of(input), node_id_of(strip));
         connect_stereo(commands, node_id_of(strip), node_id_of(route_bus));
         set_scalar(strip, 2, db_to_amplitude(bus_track.state.gain_db));
         set_scalar(strip, 3, bus_track.state.pan);
-        Self {
+        let mut runtime = Self {
             input,
+            effects: Vec::new(),
             strip,
             route_bus,
             send_nodes: Vec::new(),
-        }
+        };
+        runtime.rebuild_effects(context, commands, &bus_track.effects);
+        runtime
     }
 
     fn input_node(&self) -> NodeId {
@@ -596,6 +724,31 @@ impl BusRuntime {
     ) {
         set_scalar(self.strip, 2, gain);
         set_scalar(self.strip, 3, bus_track.state.pan);
+    }
+
+    fn rebuild_effects(
+        &mut self,
+        context: &KnystContext,
+        commands: &mut MultiThreadedKnystCommands,
+        effects: &[crate::instrument::EffectSlotState],
+    ) {
+        commands.disconnect(Connection::clear_from_nodes(node_id_of(self.input)));
+        for effect in self.effects.drain(..) {
+            free_effect(effect, commands);
+        }
+        let mut previous = node_id_of(self.input);
+        context.with_activation(|| {
+            for effect in effects {
+                let Some(effect) = create_effect_runtime(effect) else {
+                    continue;
+                };
+                let node = effect.node_id();
+                connect_stereo(commands, previous, node);
+                previous = node;
+                self.effects.push(effect);
+            }
+        });
+        connect_stereo(commands, previous, node_id_of(self.strip));
     }
 
     fn sync_routing(
@@ -673,6 +826,9 @@ impl BusRuntime {
     }
 
     fn free(self, commands: &mut MultiThreadedKnystCommands) {
+        for effect in self.effects {
+            free_effect(effect, commands);
+        }
         for node in self.send_nodes {
             commands.disconnect(Connection::clear_from_nodes(node));
             commands.disconnect(Connection::clear_to_nodes(node));

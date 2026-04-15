@@ -6,7 +6,7 @@ mod track;
 use std::ops::Deref;
 
 use crate::engine::{AudioEngineError, AudioEngineSettings};
-use crate::instrument::{InstrumentSlotState, SoundfontResource};
+use crate::instrument::{EffectSlotState, InstrumentSlotState, SoundfontResource};
 use knyst::modal_interface::KnystContext;
 use knyst::prelude::MultiThreadedKnystCommands;
 use runtime::{MixerRuntime, MixerRuntimeError};
@@ -473,6 +473,21 @@ impl MixerHandle<'_> {
         Ok(())
     }
 
+    pub fn set_track_effects(
+        &mut self,
+        id: TrackId,
+        effects: Vec<EffectSlotState>,
+    ) -> Result<(), AudioEngineError> {
+        self.mixer.state.track_mut(id)?.effects = effects;
+        self.mixer.runtime.sync_track_effects(
+            self.context,
+            self.commands,
+            &self.mixer.state,
+            id,
+        )?;
+        Ok(())
+    }
+
     pub fn set_track_gain_db(&mut self, id: TrackId, gain_db: f32) -> Result<(), AudioEngineError> {
         self.mixer.state.track_mut(id)?.state.gain_db = gain_db;
         self.mixer
@@ -585,6 +600,18 @@ impl MixerHandle<'_> {
         Ok(())
     }
 
+    pub fn set_bus_effects(
+        &mut self,
+        id: BusId,
+        effects: Vec<EffectSlotState>,
+    ) -> Result<(), AudioEngineError> {
+        self.mixer.state.bus_mut(id)?.effects = effects;
+        self.mixer
+            .runtime
+            .sync_bus_effects(self.context, self.commands, &self.mixer.state, id)?;
+        Ok(())
+    }
+
     pub fn set_bus_pan(&mut self, id: BusId, pan: f32) -> Result<(), AudioEngineError> {
         self.mixer.state.bus_mut(id)?.state.pan = pan.clamp(-1.0, 1.0);
         self.mixer
@@ -675,12 +702,23 @@ impl MixerHandle<'_> {
             .runtime
             .sync_all_levels(self.commands, &self.mixer.state);
     }
+
+    pub fn set_master_effects(
+        &mut self,
+        effects: Vec<EffectSlotState>,
+    ) -> Result<(), AudioEngineError> {
+        self.mixer.state.master.effects = effects;
+        self.mixer
+            .runtime
+            .sync_master_effects(self.context, self.commands, &self.mixer.state)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{MixerError, MixerState};
-    use crate::instrument::SoundfontResource;
+    use crate::instrument::{EffectKind, EffectSlotState, ProcessorState, SoundfontResource};
     use crate::mixer::{BusId, BusSend, INSTRUMENT_TRACK_COUNT, TrackId, TrackRoute};
     use std::path::PathBuf;
 
@@ -795,5 +833,24 @@ mod tests {
 
         assert_eq!(mixer.soundfonts().len(), 1);
         assert_eq!(mixer.soundfonts()[0].name, "GeneralUser");
+    }
+
+    #[test]
+    fn mixer_roundtrips_effect_slots() {
+        let mut mixer = MixerState::new();
+        mixer
+            .track_mut(TrackId(0))
+            .expect("track should exist")
+            .effects
+            .push(EffectSlotState {
+                kind: EffectKind::BuiltIn {
+                    effect_id: "gain".to_string(),
+                },
+                state: ProcessorState::default(),
+            });
+
+        let ron = ron::to_string(&mixer).expect("mixer should serialize");
+        let restored: MixerState = ron::from_str(&ron).expect("mixer should deserialize");
+        assert_eq!(restored, mixer);
     }
 }

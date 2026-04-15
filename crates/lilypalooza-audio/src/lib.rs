@@ -10,10 +10,10 @@ pub mod transport;
 
 pub use engine::{AudioEngine, AudioEngineError, AudioEngineOptions, AudioEngineSettings};
 pub use instrument::{
-    EffectProcessor, InstrumentKind, InstrumentProcessor, InstrumentRuntimeHandle,
-    InstrumentSlotState, MidiEvent, ParamValue, ParameterDescriptor, Processor,
-    ProcessorDescriptor, ProcessorState, ProcessorStateError, SoundfontProcessorState,
-    SoundfontResource,
+    EffectKind, EffectProcessor, EffectRuntimeHandle, EffectSlotState, InstrumentKind,
+    InstrumentProcessor, InstrumentRuntimeHandle, InstrumentSlotState, MidiEvent, ParamValue,
+    ParameterDescriptor, Processor, ProcessorDescriptor, ProcessorState, ProcessorStateError,
+    SoundfontProcessorState, SoundfontResource,
 };
 pub use mixer::{
     BusId, BusSend, BusTrack, INSTRUMENT_TRACK_COUNT, MasterTrack, MixerTrack, TrackId, TrackRoute,

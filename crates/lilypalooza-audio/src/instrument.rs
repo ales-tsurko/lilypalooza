@@ -1,5 +1,6 @@
 //! Instrument and effect processor abstractions.
 
+mod gain_effect;
 pub(crate) mod soundfont_synth;
 
 use knyst::handles::{GenericHandle, Handle, HandleData};
@@ -152,6 +153,30 @@ impl Default for InstrumentSlotState {
     }
 }
 
+/// Supported effect backends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EffectKind {
+    /// Built-in effect processor.
+    BuiltIn {
+        /// Engine-defined effect identifier.
+        effect_id: String,
+    },
+    /// Hosted external plugin effect.
+    Plugin {
+        /// Engine-defined plugin instance identifier.
+        plugin_id: String,
+    },
+}
+
+/// Persisted effect slot state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EffectSlotState {
+    /// Which effect backend this slot uses.
+    pub kind: EffectKind,
+    /// Opaque persisted processor state.
+    pub state: ProcessorState,
+}
+
 /// Knyst node wrapper for any instrument processor.
 pub(crate) struct InstrumentProcessorNode {
     processor: Box<dyn InstrumentProcessor>,
@@ -277,6 +302,48 @@ impl InstrumentProcessorNode {
     }
 }
 
+/// Knyst node wrapper for any effect processor.
+pub(crate) struct EffectProcessorNode {
+    processor: Box<dyn EffectProcessor>,
+    scratch_left: Vec<Sample>,
+    scratch_right: Vec<Sample>,
+}
+
+#[impl_gen]
+impl EffectProcessorNode {
+    #[new]
+    pub(crate) fn new(processor: Box<dyn EffectProcessor>) -> Self {
+        Self {
+            processor,
+            scratch_left: Vec::new(),
+            scratch_right: Vec::new(),
+        }
+    }
+
+    #[process]
+    fn process(
+        &mut self,
+        left_in: &[Sample],
+        right_in: &[Sample],
+        left_out: &mut [Sample],
+        right_out: &mut [Sample],
+        block_size: BlockSize,
+    ) -> GenState {
+        let frames = block_size.0;
+        self.scratch_left.resize(frames, 0.0);
+        self.scratch_right.resize(frames, 0.0);
+        self.processor.process(
+            &left_in[..frames],
+            &right_in[..frames],
+            &mut self.scratch_left[..frames],
+            &mut self.scratch_right[..frames],
+        );
+        left_out[..frames].copy_from_slice(&self.scratch_left[..frames]);
+        right_out[..frames].copy_from_slice(&self.scratch_right[..frames]);
+        GenState::Continue
+    }
+}
+
 /// Typed Knyst handle for instrument runtime nodes.
 #[derive(Clone, Copy, Debug)]
 pub struct InstrumentRuntimeHandle(Handle<GenericHandle>);
@@ -380,5 +447,33 @@ impl InstrumentRuntimeHandle {
                     .trig("reset_all_controllers");
             }
         }
+    }
+}
+
+/// Typed Knyst handle for effect runtime nodes.
+#[derive(Clone, Copy, Debug)]
+pub struct EffectRuntimeHandle(Handle<GenericHandle>);
+
+impl EffectRuntimeHandle {
+    pub(crate) fn new(handle: Handle<GenericHandle>) -> Self {
+        Self(handle)
+    }
+
+    pub(crate) fn node_id(self) -> knyst::prelude::NodeId {
+        self.0
+            .node_ids()
+            .next()
+            .expect("effect handle should always own one node")
+    }
+}
+
+pub(crate) fn create_effect_processor(
+    effect: &EffectSlotState,
+) -> Result<Option<Box<dyn EffectProcessor>>, ProcessorStateError> {
+    match &effect.kind {
+        EffectKind::BuiltIn { effect_id } if effect_id == "gain" => Ok(Some(Box::new(
+            gain_effect::GainEffectProcessor::from_state(&effect.state)?,
+        ))),
+        EffectKind::BuiltIn { .. } | EffectKind::Plugin { .. } => Ok(None),
     }
 }

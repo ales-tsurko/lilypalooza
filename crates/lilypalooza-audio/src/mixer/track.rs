@@ -1,6 +1,6 @@
 //! Mixer track primitives.
 
-use crate::instrument::InstrumentSlotState;
+use crate::instrument::{EffectSlotState, InstrumentSlotState};
 use serde::{Deserialize, Serialize};
 
 /// Number of fixed instrument tracks.
@@ -107,6 +107,8 @@ pub struct MixerTrack {
     pub routing: TrackRouting,
     /// Instrument slot.
     pub instrument: InstrumentSlotState,
+    /// Effect slots in processing order.
+    pub effects: Vec<EffectSlotState>,
 }
 
 impl MixerTrack {
@@ -119,6 +121,7 @@ impl MixerTrack {
             state: TrackState::default(),
             routing: TrackRouting::default(),
             instrument: InstrumentSlotState::default(),
+            effects: Vec::new(),
         }
     }
 }
@@ -134,6 +137,8 @@ pub struct BusTrack {
     pub state: TrackState,
     /// Routing state.
     pub routing: TrackRouting,
+    /// Effect slots in processing order.
+    pub effects: Vec<EffectSlotState>,
 }
 
 impl BusTrack {
@@ -145,6 +150,7 @@ impl BusTrack {
             name: name.into(),
             state: TrackState::default(),
             routing: TrackRouting::default(),
+            effects: Vec::new(),
         }
     }
 }
@@ -156,6 +162,8 @@ pub struct MasterTrack {
     pub name: String,
     /// Strip state.
     pub state: TrackState,
+    /// Effect slots in processing order.
+    pub effects: Vec<EffectSlotState>,
 }
 
 impl Default for MasterTrack {
@@ -163,6 +171,7 @@ impl Default for MasterTrack {
         Self {
             name: String::from("Master"),
             state: TrackState::default(),
+            effects: Vec::new(),
         }
     }
 }
