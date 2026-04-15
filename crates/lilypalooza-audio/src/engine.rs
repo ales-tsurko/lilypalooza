@@ -14,10 +14,20 @@ pub struct AudioEngineOptions {
     pub sphere_settings: SphereSettings,
 }
 
+/// Shared runtime settings for the audio engine and mixer.
+#[derive(Debug, Clone, Copy)]
+pub struct AudioEngineSettings {
+    /// Backend sample rate.
+    pub sample_rate: usize,
+    /// Backend block size.
+    pub block_size: usize,
+}
+
 /// Top-level audio engine container.
 pub struct AudioEngine {
     mixer: Mixer,
     backend: Box<dyn AudioBackend>,
+    settings: AudioEngineSettings,
     // Keeps the Knyst runtime alive; context and commands do not own it.
     #[allow(dead_code)]
     sphere: KnystSphere,
@@ -49,17 +59,27 @@ impl AudioEngine {
         mut backend: B,
         options: AudioEngineOptions,
     ) -> Result<Self, AudioEngineError> {
+        let settings = AudioEngineSettings {
+            sample_rate: backend.sample_rate(),
+            block_size: backend.block_size().unwrap_or(64),
+        };
         let sphere = KnystSphere::start(&mut backend, options.sphere_settings, |_| {})?;
         let context = sphere.context();
         let mut commands = sphere.commands();
-        let mixer = Mixer::new(&context, &mut commands, mixer)?;
+        let mixer = Mixer::new(&context, &mut commands, &settings, mixer)?;
         Ok(Self {
             mixer,
             backend: Box::new(backend),
+            settings,
             sphere,
             context,
             commands,
         })
+    }
+
+    /// Returns the shared runtime settings.
+    pub fn settings(&self) -> AudioEngineSettings {
+        self.settings
     }
 
     /// Returns the transport control handle.

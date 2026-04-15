@@ -2824,8 +2824,10 @@ dependencies = [
 name = "lilypalooza-audio"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "knyst",
  "ron",
+ "rustysynth",
  "serde",
  "thiserror 2.0.18",
 ]

@@ -1,5 +1,9 @@
 use std::collections::HashMap;
 
+use crate::engine::AudioEngineSettings;
+use crate::instrument::soundfont_synth::{
+    LoadedSoundfont, SoundfontProcessor, SoundfontSynthError, SoundfontSynthSettings,
+};
 use knyst::modal_interface::KnystContext;
 use knyst::prelude::{
     BlockSize, Connection, GenState, GenericHandle, Handle, HandleData, KnystCommands,
@@ -7,7 +11,9 @@ use knyst::prelude::{
     oscillator,
 };
 
-use crate::instrument::InstrumentKind;
+use crate::instrument::{
+    InstrumentKind, InstrumentProcessorNode, InstrumentRuntimeHandle, ProcessorStateError,
+};
 use crate::mixer::{
     BusId, BusSend, BusTrack, MixerError, MixerState, MixerTrack, TrackId, TrackRoute,
 };
@@ -16,42 +22,110 @@ use crate::mixer::{
 pub(crate) enum MixerRuntimeError {
     #[error(transparent)]
     Mixer(#[from] MixerError),
+    #[error(transparent)]
+    Soundfont(#[from] SoundfontSynthError),
+    #[error(transparent)]
+    ProcessorState(#[from] ProcessorStateError),
 }
 
 pub(crate) struct MixerRuntime {
     master: MasterRuntime,
     tracks: Vec<TrackRuntime>,
     buses: HashMap<BusId, BusRuntime>,
+    soundfonts: HashMap<String, LoadedSoundfont>,
+    soundfont_settings: SoundfontSynthSettings,
 }
 
 impl MixerRuntime {
     pub(crate) fn attach(
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
+        settings: &AudioEngineSettings,
         mixer: &MixerState,
     ) -> Result<Self, MixerRuntimeError> {
         context.with_activation(|| {
             let master = MasterRuntime::new(commands, mixer);
+            let soundfont_settings =
+                SoundfontSynthSettings::new(settings.sample_rate as i32, settings.block_size);
 
             let mut buses = HashMap::with_capacity(mixer.buses.len());
             for bus_track in &mixer.buses {
                 buses.insert(bus_track.id, BusRuntime::new(commands, bus_track, mixer));
             }
 
-            let mut tracks = Vec::with_capacity(mixer.tracks.len());
-            for track in &mixer.tracks {
-                tracks.push(TrackRuntime::new(context, commands, track, mixer));
-            }
-
             let mut runtime = Self {
                 master,
-                tracks,
+                tracks: Vec::with_capacity(mixer.tracks.len()),
                 buses,
+                soundfonts: HashMap::new(),
+                soundfont_settings,
             };
+            runtime.sync_soundfonts(mixer)?;
+
+            let mut tracks = Vec::with_capacity(mixer.tracks.len());
+            for track in &mixer.tracks {
+                tracks.push(TrackRuntime::new(
+                    context,
+                    commands,
+                    track,
+                    mixer,
+                    &runtime.soundfonts,
+                    runtime.soundfont_settings,
+                )?);
+            }
+            runtime.tracks = tracks;
             runtime.sync_all_routing(context, commands, mixer)?;
             runtime.sync_all_levels(commands, mixer);
             Ok(runtime)
         })
+    }
+
+    pub(crate) fn sync_soundfonts(&mut self, mixer: &MixerState) -> Result<(), MixerRuntimeError> {
+        let resources: HashMap<_, _> = mixer
+            .soundfonts()
+            .iter()
+            .map(|resource| (resource.id.clone(), resource))
+            .collect();
+
+        self.soundfonts.retain(|id, _| resources.contains_key(id));
+
+        for resource in mixer.soundfonts() {
+            let should_reload = self
+                .soundfonts
+                .get(&resource.id)
+                .is_none_or(|loaded| loaded.path != resource.path);
+            if should_reload {
+                let loaded = LoadedSoundfont::load(resource)?;
+                self.soundfonts.insert(resource.id.clone(), loaded);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn sync_tracks_for_soundfont(
+        &mut self,
+        context: &KnystContext,
+        commands: &mut MultiThreadedKnystCommands,
+        mixer: &MixerState,
+        soundfont_id: &str,
+    ) -> Result<(), MixerRuntimeError> {
+        for track in &mixer.tracks {
+            let InstrumentKind::BuiltIn { instrument_id } = &track.instrument.kind else {
+                continue;
+            };
+            if instrument_id != "soundfont" {
+                continue;
+            }
+            let Ok(state) = SoundfontProcessor::decode_state(&track.instrument.state) else {
+                continue;
+            };
+            let track_soundfont_id = state.soundfont_id;
+            if track_soundfont_id == soundfont_id {
+                self.sync_track_instrument(context, commands, mixer, track.id)?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn add_bus(
@@ -97,7 +171,13 @@ impl MixerRuntime {
             .tracks
             .get_mut(track_id.index())
             .ok_or(MixerError::InvalidTrackId(track_id))?;
-        runtime.sync_source(context, commands, track);
+        runtime.sync_source(
+            context,
+            commands,
+            track,
+            &self.soundfonts,
+            self.soundfont_settings,
+        )?;
         Ok(())
     }
 
@@ -295,11 +375,10 @@ impl MasterRuntime {
 }
 
 struct TrackRuntime {
-    panner: Handle<GenericHandle>,
-    pre_bus: Handle<GenericHandle>,
+    source_bus: Handle<GenericHandle>,
     strip: Handle<GenericHandle>,
     route_bus: Handle<GenericHandle>,
-    source: Option<NodeId>,
+    instrument: Option<TrackInstrumentRuntime>,
     send_nodes: Vec<NodeId>,
 }
 
@@ -309,29 +388,28 @@ impl TrackRuntime {
         commands: &mut MultiThreadedKnystCommands,
         track: &MixerTrack,
         mixer: &MixerState,
-    ) -> Self {
-        let panner = handle(MonoToStereoPanner::new());
-        let pre_bus = bus(2);
-        let strip = handle(StereoGain::new());
+        soundfonts: &HashMap<String, LoadedSoundfont>,
+        soundfont_settings: SoundfontSynthSettings,
+    ) -> Result<Self, MixerRuntimeError> {
+        let source_bus = bus(2);
+        let strip = handle(StereoBalanceGain::new());
         let route_bus = bus(2);
 
-        connect_stereo(commands, node_id_of(panner), node_id_of(pre_bus));
-        connect_stereo(commands, node_id_of(pre_bus), node_id_of(strip));
+        connect_stereo(commands, node_id_of(source_bus), node_id_of(strip));
         connect_stereo(commands, node_id_of(strip), node_id_of(route_bus));
-        set_scalar(panner, 1, track.state.pan);
         set_scalar(strip, 2, db_to_amplitude(track.state.gain_db));
+        set_scalar(strip, 3, track.state.pan);
 
         let mut runtime = Self {
-            panner,
-            pre_bus,
+            source_bus,
             strip,
             route_bus,
-            source: None,
+            instrument: None,
             send_nodes: Vec::new(),
         };
-        runtime.sync_source(context, commands, track);
+        runtime.sync_source(context, commands, track, soundfonts, soundfont_settings)?;
         runtime.apply_strip(commands, track, track_effective_amplitude(mixer, track));
-        runtime
+        Ok(runtime)
     }
 
     fn sync_source(
@@ -339,17 +417,22 @@ impl TrackRuntime {
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
         track: &MixerTrack,
-    ) {
-        commands.disconnect(Connection::clear_from_nodes(node_id_of(self.panner)));
-        if let Some(source) = self.source.take() {
-            commands.free_node(source);
+        soundfonts: &HashMap<String, LoadedSoundfont>,
+        soundfont_settings: SoundfontSynthSettings,
+    ) -> Result<(), MixerRuntimeError> {
+        if let Some(instrument) = self.instrument.take() {
+            instrument.free(commands);
         }
+        commands.disconnect(Connection::clear_to_nodes(node_id_of(self.source_bus)));
 
-        let Some(source) = create_test_source(context, track) else {
-            return;
+        let Some(instrument) =
+            create_track_instrument(context, commands, track, soundfonts, soundfont_settings)?
+        else {
+            return Ok(());
         };
-        commands.connect(source.to(node_id_of(self.panner)).to_index(0));
-        self.source = Some(source);
+        instrument.connect(commands, node_id_of(self.source_bus));
+        self.instrument = Some(instrument);
+        Ok(())
     }
 
     fn apply_strip(
@@ -358,8 +441,8 @@ impl TrackRuntime {
         track: &MixerTrack,
         gain: f32,
     ) {
-        set_scalar(self.panner, 1, track.state.pan);
         set_scalar(self.strip, 2, gain);
+        set_scalar(self.strip, 3, track.state.pan);
     }
 
     fn sync_routing(
@@ -377,7 +460,7 @@ impl TrackRuntime {
             commands,
             bus_inputs,
             &track.routing.sends,
-            node_id_of(self.pre_bus),
+            node_id_of(self.source_bus),
             node_id_of(self.strip),
         );
         Ok(())
@@ -433,6 +516,43 @@ impl TrackRuntime {
                 self.send_nodes.push(gain_node);
             }
         });
+    }
+}
+
+enum TrackInstrumentRuntime {
+    BuiltInMono { source: NodeId, stereoizer: NodeId },
+    Processor { handle: InstrumentRuntimeHandle },
+}
+
+impl TrackInstrumentRuntime {
+    fn connect(&self, commands: &mut MultiThreadedKnystCommands, destination: NodeId) {
+        match self {
+            Self::BuiltInMono { stereoizer, .. } => {
+                connect_stereo(commands, *stereoizer, destination);
+            }
+            Self::Processor { handle } => {
+                connect_stereo(commands, handle.node_id(), destination);
+            }
+        }
+    }
+
+    fn free(self, commands: &mut MultiThreadedKnystCommands) {
+        match self {
+            Self::BuiltInMono { source, stereoizer } => {
+                commands.disconnect(Connection::clear_from_nodes(source));
+                commands.disconnect(Connection::clear_to_nodes(source));
+                commands.disconnect(Connection::clear_from_nodes(stereoizer));
+                commands.disconnect(Connection::clear_to_nodes(stereoizer));
+                commands.free_node(source);
+                commands.free_node(stereoizer);
+            }
+            Self::Processor { handle } => {
+                let node = handle.node_id();
+                commands.disconnect(Connection::clear_from_nodes(node));
+                commands.disconnect(Connection::clear_to_nodes(node));
+                commands.free_node(node);
+            }
+        }
     }
 }
 
@@ -570,19 +690,47 @@ impl BusRuntime {
     }
 }
 
-fn create_test_source(context: &KnystContext, track: &MixerTrack) -> Option<NodeId> {
-    let InstrumentKind::BuiltIn { instrument_id } = &track.instrument.kind else {
-        return None;
-    };
-    if instrument_id != "test-tone" && instrument_id != "test-sine" {
-        return None;
+fn create_track_instrument(
+    context: &KnystContext,
+    commands: &mut MultiThreadedKnystCommands,
+    track: &MixerTrack,
+    soundfonts: &HashMap<String, LoadedSoundfont>,
+    soundfont_settings: SoundfontSynthSettings,
+) -> Result<Option<TrackInstrumentRuntime>, MixerRuntimeError> {
+    match &track.instrument.kind {
+        InstrumentKind::BuiltIn { instrument_id } => {
+            if instrument_id == "soundfont" {
+                let state = SoundfontProcessor::decode_state(&track.instrument.state)?;
+                let Some(loaded) = soundfonts.get(&state.soundfont_id) else {
+                    return Ok(None);
+                };
+                let processor =
+                    SoundfontProcessor::new(&loaded.soundfont, soundfont_settings, state)?;
+                let instrument = context.with_activation(|| {
+                    let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
+                    TrackInstrumentRuntime::Processor {
+                        handle: InstrumentRuntimeHandle::new(node),
+                    }
+                });
+                return Ok(Some(instrument));
+            }
+            if instrument_id != "test-tone" && instrument_id != "test-sine" {
+                return Ok(None);
+            }
+            let instrument = context.with_activation(|| {
+                let frequency = test_tone_frequency(track.id);
+                let source = oscillator(WavetableId::cos()).freq(frequency) * 0.12;
+                let stereoizer = handle(MonoToStereo::new());
+                commands.connect(node_id_of(source).to(node_id_of(stereoizer)).to_index(0));
+                TrackInstrumentRuntime::BuiltInMono {
+                    source: node_id_of(source),
+                    stereoizer: node_id_of(stereoizer),
+                }
+            });
+            Ok(Some(instrument))
+        }
+        InstrumentKind::Plugin { .. } => Ok(None),
     }
-
-    context.with_activation(|| {
-        let frequency = test_tone_frequency(track.id);
-        let source = oscillator(WavetableId::cos()).freq(frequency) * 0.12;
-        Some(node_id_of(source))
-    })
 }
 
 fn destination_node(
@@ -660,10 +808,10 @@ fn db_to_amplitude(db: f32) -> f32 {
     knyst::db_to_amplitude(db)
 }
 
-pub(super) struct MonoToStereoPanner;
+pub(super) struct MonoToStereo;
 
 #[impl_gen]
-impl MonoToStereoPanner {
+impl MonoToStereo {
     #[new]
     fn new() -> Self {
         Self
@@ -673,16 +821,12 @@ impl MonoToStereoPanner {
     fn process(
         &mut self,
         signal: &[Sample],
-        pan: &[Sample],
         left: &mut [Sample],
         right: &mut [Sample],
         block_size: BlockSize,
     ) -> GenState {
-        for frame in 0..block_size.0 {
-            let pan = (pan[frame].clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
-            left[frame] = signal[frame] * pan.cos();
-            right[frame] = signal[frame] * pan.sin();
-        }
+        left[..block_size.0].copy_from_slice(&signal[..block_size.0]);
+        right[..block_size.0].copy_from_slice(&signal[..block_size.0]);
         GenState::Continue
     }
 }

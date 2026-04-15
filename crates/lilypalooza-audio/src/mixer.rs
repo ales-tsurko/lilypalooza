@@ -5,8 +5,8 @@ mod track;
 
 use std::ops::Deref;
 
-use crate::engine::AudioEngineError;
-use crate::instrument::InstrumentConfig;
+use crate::engine::{AudioEngineError, AudioEngineSettings};
+use crate::instrument::{InstrumentSlotState, SoundfontResource};
 use knyst::modal_interface::KnystContext;
 use knyst::prelude::MultiThreadedKnystCommands;
 use runtime::{MixerRuntime, MixerRuntimeError};
@@ -36,6 +36,9 @@ pub enum MixerError {
         /// Current send count.
         len: usize,
     },
+    /// SoundFont id does not exist.
+    #[error("soundfont id `{0}` does not exist")]
+    InvalidSoundfontId(String),
 }
 
 /// Serializable mixer state with fixed instrument tracks, dynamic buses, and a dedicated master.
@@ -44,6 +47,7 @@ pub struct MixerState {
     tracks: Vec<MixerTrack>,
     buses: Vec<BusTrack>,
     master: MasterTrack,
+    soundfonts: Vec<SoundfontResource>,
     next_bus_id: u16,
 }
 
@@ -64,6 +68,7 @@ impl MixerState {
             tracks,
             buses: Vec::new(),
             master: MasterTrack::default(),
+            soundfonts: Vec::new(),
             next_bus_id: 1,
         }
     }
@@ -118,6 +123,12 @@ impl MixerState {
     #[must_use]
     pub fn master(&self) -> &MasterTrack {
         &self.master
+    }
+
+    /// Returns all configured shared SoundFonts.
+    #[must_use]
+    pub fn soundfonts(&self) -> &[SoundfontResource] {
+        &self.soundfonts
     }
 
     /// Returns mutable access to one bus.
@@ -336,6 +347,25 @@ impl MixerState {
         self.bus(send.bus_id)?;
         Ok(())
     }
+
+    pub(crate) fn set_soundfont(&mut self, resource: SoundfontResource) {
+        if let Some(existing) = self.soundfonts.iter_mut().find(|sf| sf.id == resource.id) {
+            *existing = resource;
+        } else {
+            self.soundfonts.push(resource);
+            self.soundfonts
+                .sort_by(|left, right| left.id.cmp(&right.id));
+        }
+    }
+
+    pub(crate) fn remove_soundfont(&mut self, id: &str) -> Result<SoundfontResource, MixerError> {
+        let index = self
+            .soundfonts
+            .iter()
+            .position(|sf| sf.id == id)
+            .ok_or_else(|| MixerError::InvalidSoundfontId(id.to_string()))?;
+        Ok(self.soundfonts.remove(index))
+    }
 }
 
 pub(crate) struct Mixer {
@@ -347,9 +377,10 @@ impl Mixer {
     pub(crate) fn new(
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
+        settings: &AudioEngineSettings,
         state: MixerState,
     ) -> Result<Self, MixerRuntimeError> {
-        let runtime = MixerRuntime::attach(context, commands, &state)?;
+        let runtime = MixerRuntime::attach(context, commands, settings, &state)?;
         Ok(Self { state, runtime })
     }
 }
@@ -386,6 +417,31 @@ impl Deref for MixerHandle<'_> {
 
 #[allow(missing_docs)]
 impl MixerHandle<'_> {
+    pub fn set_soundfont(&mut self, resource: SoundfontResource) -> Result<(), AudioEngineError> {
+        let soundfont_id = resource.id.clone();
+        self.mixer.state.set_soundfont(resource);
+        self.mixer.runtime.sync_soundfonts(&self.mixer.state)?;
+        self.mixer.runtime.sync_tracks_for_soundfont(
+            self.context,
+            self.commands,
+            &self.mixer.state,
+            &soundfont_id,
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_soundfont(&mut self, id: &str) -> Result<SoundfontResource, AudioEngineError> {
+        let removed = self.mixer.state.remove_soundfont(id)?;
+        self.mixer.runtime.sync_soundfonts(&self.mixer.state)?;
+        self.mixer.runtime.sync_tracks_for_soundfont(
+            self.context,
+            self.commands,
+            &self.mixer.state,
+            &removed.id,
+        )?;
+        Ok(removed)
+    }
+
     pub fn add_bus(&mut self, name: impl Into<String>) -> Result<BusId, AudioEngineError> {
         let bus_id = self.mixer.state.add_bus(name);
         self.mixer
@@ -405,7 +461,7 @@ impl MixerHandle<'_> {
     pub fn set_track_instrument(
         &mut self,
         id: TrackId,
-        instrument: InstrumentConfig,
+        instrument: InstrumentSlotState,
     ) -> Result<(), AudioEngineError> {
         self.mixer.state.track_mut(id)?.instrument = instrument;
         self.mixer.runtime.sync_track_instrument(
@@ -624,7 +680,9 @@ impl MixerHandle<'_> {
 #[cfg(test)]
 mod tests {
     use super::{MixerError, MixerState};
+    use crate::instrument::SoundfontResource;
     use crate::mixer::{BusId, BusSend, INSTRUMENT_TRACK_COUNT, TrackId, TrackRoute};
+    use std::path::PathBuf;
 
     #[test]
     fn mixer_preallocates_instrument_tracks_and_master() {
@@ -703,6 +761,11 @@ mod tests {
     fn mixer_roundtrips_through_ron() {
         let mut mixer = MixerState::new();
         let bus_id = mixer.add_bus("Verb");
+        mixer.set_soundfont(SoundfontResource {
+            id: "fluid".to_string(),
+            name: "FluidR3".to_string(),
+            path: PathBuf::from("/tmp/FluidR3.sf2"),
+        });
         mixer
             .set_track_route(TrackId(0), TrackRoute::Bus(bus_id))
             .expect("bus route should succeed");
@@ -714,5 +777,23 @@ mod tests {
         let restored: MixerState = ron::from_str(&ron).expect("mixer should deserialize");
 
         assert_eq!(restored, mixer);
+    }
+
+    #[test]
+    fn replacing_soundfont_keeps_one_entry_per_id() {
+        let mut mixer = MixerState::new();
+        mixer.set_soundfont(SoundfontResource {
+            id: "fluid".to_string(),
+            name: "FluidR3".to_string(),
+            path: PathBuf::from("/tmp/FluidR3.sf2"),
+        });
+        mixer.set_soundfont(SoundfontResource {
+            id: "fluid".to_string(),
+            name: "GeneralUser".to_string(),
+            path: PathBuf::from("/tmp/GeneralUser.sf2"),
+        });
+
+        assert_eq!(mixer.soundfonts().len(), 1);
+        assert_eq!(mixer.soundfonts()[0].name, "GeneralUser");
     }
 }

@@ -1,6 +1,6 @@
 //! Mixer track primitives.
 
-use crate::instrument::InstrumentConfig;
+use crate::instrument::InstrumentSlotState;
 use serde::{Deserialize, Serialize};
 
 /// Number of fixed instrument tracks.
@@ -106,7 +106,7 @@ pub struct MixerTrack {
     /// Routing state.
     pub routing: TrackRouting,
     /// Instrument slot.
-    pub instrument: InstrumentConfig,
+    pub instrument: InstrumentSlotState,
 }
 
 impl MixerTrack {
@@ -118,7 +118,7 @@ impl MixerTrack {
             name: format!("Track {}", id.index() + 1),
             state: TrackState::default(),
             routing: TrackRouting::default(),
-            instrument: InstrumentConfig::default(),
+            instrument: InstrumentSlotState::default(),
         }
     }
 }
