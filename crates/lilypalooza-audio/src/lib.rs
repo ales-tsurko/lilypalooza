@@ -11,6 +11,9 @@ pub mod transport;
 
 pub use engine::{AudioEngine, AudioEngineError, AudioEngineOptions};
 pub use instrument::{InstrumentConfig, InstrumentKind};
-pub use mixer::{MixerConfig, MixerTrackConfig};
-pub use track::{TrackId, TrackState};
+pub use mixer::{Mixer, MixerError};
+pub use track::{
+    BusId, BusSend, BusTrack, INSTRUMENT_TRACK_COUNT, MasterTrack, MixerTrack, TrackId, TrackRoute,
+    TrackRouting, TrackState,
+};
 pub use transport::{PlaybackState, Transport, TransportError, TransportSnapshot};

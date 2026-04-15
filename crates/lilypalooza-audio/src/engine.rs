@@ -1,6 +1,6 @@
 //! Top-level audio engine state.
 
-use crate::mixer::MixerConfig;
+use crate::mixer::Mixer;
 use crate::transport::Transport;
 use knyst::audio_backend::{AudioBackend, AudioBackendError};
 use knyst::modal_interface::SphereError;
@@ -15,7 +15,7 @@ pub struct AudioEngineOptions {
 
 /// Top-level audio engine container.
 pub struct AudioEngine {
-    mixer: MixerConfig,
+    mixer: Mixer,
     backend: Box<dyn AudioBackend>,
     _sphere: KnystSphere,
     commands: MultiThreadedKnystCommands,
@@ -35,7 +35,7 @@ pub enum AudioEngineError {
 impl AudioEngine {
     /// Starts the audio engine on the provided backend.
     pub fn start<B: AudioBackend + 'static>(
-        mixer: MixerConfig,
+        mixer: Mixer,
         mut backend: B,
         options: AudioEngineOptions,
     ) -> Result<Self, AudioEngineError> {
@@ -49,9 +49,9 @@ impl AudioEngine {
         })
     }
 
-    /// Returns the mixer configuration.
+    /// Returns the mixer.
     #[must_use]
-    pub fn mixer(&self) -> &MixerConfig {
+    pub fn mixer(&self) -> &Mixer {
         &self.mixer
     }
 
