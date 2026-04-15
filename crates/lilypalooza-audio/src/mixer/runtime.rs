@@ -1,16 +1,15 @@
 use std::collections::HashMap;
 
+use knyst::modal_interface::KnystContext;
+use knyst::prelude::{
+    BlockSize, Connection, GenState, GenericHandle, Handle, HandleData, KnystCommands,
+    MultiThreadedKnystCommands, NodeId, Sample, bus, graph_output, handle, impl_gen,
+};
+
 use crate::engine::AudioEngineSettings;
 use crate::instrument::soundfont_synth::{
     LoadedSoundfont, SoundfontProcessor, SoundfontSynthError, SoundfontSynthSettings,
 };
-use knyst::modal_interface::KnystContext;
-use knyst::prelude::{
-    BlockSize, Connection, GenState, GenericHandle, Handle, HandleData, KnystCommands,
-    MultiThreadedKnystCommands, NodeId, Sample, WavetableId, bus, graph_output, handle, impl_gen,
-    oscillator,
-};
-
 use crate::instrument::{
     EffectProcessorNode, EffectRuntimeHandle, InstrumentKind, InstrumentProcessorNode,
     InstrumentRuntimeHandle, ProcessorStateError, create_effect_processor,
@@ -38,6 +37,16 @@ pub(crate) struct MixerRuntime {
 }
 
 impl MixerRuntime {
+    pub(crate) fn instrument_handle(&self, track_id: TrackId) -> Option<InstrumentRuntimeHandle> {
+        Some(
+            self.tracks
+                .get(track_id.index())?
+                .instrument
+                .as_ref()?
+                .handle,
+        )
+    }
+
     pub(crate) fn attach(
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
@@ -510,7 +519,7 @@ impl TrackRuntime {
         commands.disconnect(Connection::clear_to_nodes(node_id_of(self.source_bus)));
 
         let Some(instrument) =
-            create_track_instrument(context, commands, track, soundfonts, soundfont_settings)?
+            create_track_instrument(context, track, soundfonts, soundfont_settings)?
         else {
             return Ok(());
         };
@@ -628,40 +637,20 @@ impl TrackRuntime {
     }
 }
 
-enum TrackInstrumentRuntime {
-    BuiltInMono { source: NodeId, stereoizer: NodeId },
-    Processor { handle: InstrumentRuntimeHandle },
+struct TrackInstrumentRuntime {
+    handle: InstrumentRuntimeHandle,
 }
 
 impl TrackInstrumentRuntime {
     fn connect(&self, commands: &mut MultiThreadedKnystCommands, destination: NodeId) {
-        match self {
-            Self::BuiltInMono { stereoizer, .. } => {
-                connect_stereo(commands, *stereoizer, destination);
-            }
-            Self::Processor { handle } => {
-                connect_stereo(commands, handle.node_id(), destination);
-            }
-        }
+        connect_stereo(commands, self.handle.node_id(), destination);
     }
 
     fn free(self, commands: &mut MultiThreadedKnystCommands) {
-        match self {
-            Self::BuiltInMono { source, stereoizer } => {
-                commands.disconnect(Connection::clear_from_nodes(source));
-                commands.disconnect(Connection::clear_to_nodes(source));
-                commands.disconnect(Connection::clear_from_nodes(stereoizer));
-                commands.disconnect(Connection::clear_to_nodes(stereoizer));
-                commands.free_node(source);
-                commands.free_node(stereoizer);
-            }
-            Self::Processor { handle } => {
-                let node = handle.node_id();
-                commands.disconnect(Connection::clear_from_nodes(node));
-                commands.disconnect(Connection::clear_to_nodes(node));
-                commands.free_node(node);
-            }
-        }
+        let node = self.handle.node_id();
+        commands.disconnect(Connection::clear_from_nodes(node));
+        commands.disconnect(Connection::clear_to_nodes(node));
+        commands.free_node(node);
     }
 }
 
@@ -848,39 +837,24 @@ impl BusRuntime {
 
 fn create_track_instrument(
     context: &KnystContext,
-    commands: &mut MultiThreadedKnystCommands,
     track: &MixerTrack,
     soundfonts: &HashMap<String, LoadedSoundfont>,
     soundfont_settings: SoundfontSynthSettings,
 ) -> Result<Option<TrackInstrumentRuntime>, MixerRuntimeError> {
     match &track.instrument.kind {
         InstrumentKind::BuiltIn { instrument_id } => {
-            if instrument_id == "soundfont" {
-                let state = SoundfontProcessor::decode_state(&track.instrument.state)?;
-                let Some(loaded) = soundfonts.get(&state.soundfont_id) else {
-                    return Ok(None);
-                };
-                let processor =
-                    SoundfontProcessor::new(&loaded.soundfont, soundfont_settings, state)?;
-                let instrument = context.with_activation(|| {
-                    let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
-                    TrackInstrumentRuntime::Processor {
-                        handle: InstrumentRuntimeHandle::new(node),
-                    }
-                });
-                return Ok(Some(instrument));
-            }
-            if instrument_id != "test-tone" && instrument_id != "test-sine" {
+            if instrument_id != "soundfont" {
                 return Ok(None);
             }
+            let state = SoundfontProcessor::decode_state(&track.instrument.state)?;
+            let Some(loaded) = soundfonts.get(&state.soundfont_id) else {
+                return Ok(None);
+            };
+            let processor = SoundfontProcessor::new(&loaded.soundfont, soundfont_settings, state)?;
             let instrument = context.with_activation(|| {
-                let frequency = test_tone_frequency(track.id);
-                let source = oscillator(WavetableId::cos()).freq(frequency) * 0.12;
-                let stereoizer = handle(MonoToStereo::new());
-                commands.connect(node_id_of(source).to(node_id_of(stereoizer)).to_index(0));
-                TrackInstrumentRuntime::BuiltInMono {
-                    source: node_id_of(source),
-                    stereoizer: node_id_of(stereoizer),
+                let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
+                TrackInstrumentRuntime {
+                    handle: InstrumentRuntimeHandle::new(node),
                 }
             });
             Ok(Some(instrument))
@@ -923,11 +897,6 @@ fn node_id_of<H: HandleData + Copy>(handle: Handle<H>) -> NodeId {
         .expect("runtime handles should always own one node")
 }
 
-fn test_tone_frequency(track_id: TrackId) -> f32 {
-    let semitones = (track_id.index() % 24) as f32;
-    110.0 * 2.0f32.powf(semitones / 12.0)
-}
-
 fn track_effective_amplitude(mixer: &MixerState, track: &MixerTrack) -> f32 {
     let any_solo = mixer.tracks.iter().any(|track| track.state.soloed)
         || mixer.buses.iter().any(|bus| bus.state.soloed);
@@ -962,29 +931,6 @@ fn route_bus_id(route: TrackRoute) -> Option<BusId> {
 
 fn db_to_amplitude(db: f32) -> f32 {
     knyst::db_to_amplitude(db)
-}
-
-pub(super) struct MonoToStereo;
-
-#[impl_gen]
-impl MonoToStereo {
-    #[new]
-    fn new() -> Self {
-        Self
-    }
-
-    #[process]
-    fn process(
-        &mut self,
-        signal: &[Sample],
-        left: &mut [Sample],
-        right: &mut [Sample],
-        block_size: BlockSize,
-    ) -> GenState {
-        left[..block_size.0].copy_from_slice(&signal[..block_size.0]);
-        right[..block_size.0].copy_from_slice(&signal[..block_size.0]);
-        GenState::Continue
-    }
 }
 
 pub(super) struct StereoGain;

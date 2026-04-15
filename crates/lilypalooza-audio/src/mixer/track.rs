@@ -1,7 +1,8 @@
 //! Mixer track primitives.
 
-use crate::instrument::{EffectSlotState, InstrumentSlotState};
 use serde::{Deserialize, Serialize};
+
+use crate::instrument::{EffectSlotState, InstrumentSlotState};
 
 /// Number of fixed instrument tracks.
 pub const INSTRUMENT_TRACK_COUNT: usize = 128;

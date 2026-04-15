@@ -3,8 +3,11 @@
 mod gain_effect;
 pub(crate) mod soundfont_synth;
 
+use knyst::graph::{NodeChanges, SimultaneousChanges};
 use knyst::handles::{GenericHandle, Handle, HandleData};
-use knyst::prelude::{BlockSize, GenState, Sample, impl_gen};
+use knyst::prelude::{
+    Beats, BlockSize, GenState, KnystCommands, MultiThreadedKnystCommands, Sample, impl_gen,
+};
 use knyst::trig::is_trigger;
 use serde::{Deserialize, Serialize};
 pub use soundfont_synth::{SoundfontProcessorState, SoundfontResource};
@@ -358,6 +361,80 @@ impl InstrumentRuntimeHandle {
             .node_ids()
             .next()
             .expect("instrument handle should always own one node")
+    }
+
+    fn node_changes(self, event: MidiEvent) -> NodeChanges {
+        let node = self.node_id();
+        match event {
+            MidiEvent::NoteOn {
+                channel,
+                note,
+                velocity,
+            } => NodeChanges::new(node)
+                .set("channel", f32::from(channel))
+                .set("note", f32::from(note))
+                .set("velocity", f32::from(velocity))
+                .trigger("note_on"),
+            MidiEvent::NoteOff {
+                channel,
+                note,
+                velocity,
+            } => NodeChanges::new(node)
+                .set("channel", f32::from(channel))
+                .set("note", f32::from(note))
+                .set("velocity", f32::from(velocity))
+                .trigger("note_off"),
+            MidiEvent::ControlChange {
+                channel,
+                controller,
+                value,
+            } => NodeChanges::new(node)
+                .set("channel", f32::from(channel))
+                .set("controller", f32::from(controller))
+                .set("value", f32::from(value))
+                .trigger("control_change"),
+            MidiEvent::ProgramChange { channel, program } => NodeChanges::new(node)
+                .set("channel", f32::from(channel))
+                .set("program", f32::from(program))
+                .trigger("program_change"),
+            MidiEvent::ChannelPressure { channel, pressure } => NodeChanges::new(node)
+                .set("channel", f32::from(channel))
+                .set("pressure", f32::from(pressure))
+                .trigger("channel_pressure"),
+            MidiEvent::PolyPressure {
+                channel,
+                note,
+                pressure,
+            } => NodeChanges::new(node)
+                .set("channel", f32::from(channel))
+                .set("note", f32::from(note))
+                .set("pressure", f32::from(pressure))
+                .trigger("poly_pressure"),
+            MidiEvent::PitchBend { channel, value } => NodeChanges::new(node)
+                .set("channel", f32::from(channel))
+                .set("pitch_bend", f32::from(value))
+                .trigger("pitch_bend_set"),
+            MidiEvent::AllNotesOff { channel } => NodeChanges::new(node)
+                .set("channel", f32::from(channel))
+                .trigger("all_notes_off"),
+            MidiEvent::AllSoundOff { channel } => NodeChanges::new(node)
+                .set("channel", f32::from(channel))
+                .trigger("all_sound_off"),
+            MidiEvent::ResetAllControllers { channel } => NodeChanges::new(node)
+                .set("channel", f32::from(channel))
+                .trigger("reset_all_controllers"),
+        }
+    }
+
+    pub(crate) fn schedule_midi(
+        &self,
+        commands: &mut MultiThreadedKnystCommands,
+        at: Beats,
+        event: MidiEvent,
+    ) {
+        let mut changes = SimultaneousChanges::beats(at);
+        changes.push(self.node_changes(event));
+        commands.schedule_changes(changes);
     }
 
     /// Sends one note-on.

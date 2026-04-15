@@ -2,6 +2,8 @@
 
 use knyst::prelude::{Beats, KnystCommands, MultiThreadedKnystCommands, Seconds, TransportState};
 
+use crate::sequencer::Sequencer;
+
 /// Playback state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlaybackState {
@@ -13,25 +15,47 @@ pub enum PlaybackState {
 }
 
 /// Read-only transport state snapshot.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TransportSnapshot {
     /// Current playback state.
     pub playback_state: PlaybackState,
     /// Current absolute transport position in seconds.
-    pub seconds_position: f64,
+    pub seconds_position: Seconds,
     /// Current absolute transport position in beats.
-    pub beats_position: f64,
+    pub beats_position: Beats,
 }
 
 impl TransportSnapshot {
     /// Creates a transport snapshot value.
     #[must_use]
-    pub fn new(playback_state: PlaybackState, seconds_position: f64, beats_position: f64) -> Self {
+    pub fn new(
+        playback_state: PlaybackState,
+        seconds_position: Seconds,
+        beats_position: Beats,
+    ) -> Self {
         Self {
             playback_state,
             seconds_position,
             beats_position,
         }
+    }
+
+    /// Returns the current absolute transport position in seconds as `f64`.
+    #[must_use]
+    pub fn seconds_position_f64(self) -> f64 {
+        self.seconds_position.to_seconds_f64()
+    }
+
+    /// Returns the current absolute transport position in beats as `f64`.
+    #[must_use]
+    pub fn beats_position_f64(self) -> f64 {
+        self.beats_position.as_beats_f64()
+    }
+}
+
+impl Default for TransportSnapshot {
+    fn default() -> Self {
+        Self::new(PlaybackState::Paused, Seconds::ZERO, Beats::ZERO)
     }
 }
 
@@ -49,11 +73,18 @@ pub enum TransportError {
 /// Mutable transport control handle.
 pub struct Transport<'a> {
     commands: &'a mut MultiThreadedKnystCommands,
+    sequencer: Option<&'a Sequencer>,
 }
 
 impl<'a> Transport<'a> {
-    pub(crate) fn new(commands: &'a mut MultiThreadedKnystCommands) -> Self {
-        Self { commands }
+    pub(crate) fn new(
+        commands: &'a mut MultiThreadedKnystCommands,
+        sequencer: Option<&'a Sequencer>,
+    ) -> Self {
+        Self {
+            commands,
+            sequencer,
+        }
     }
 
     /// Starts playback.
@@ -70,18 +101,27 @@ impl<'a> Transport<'a> {
     pub fn rewind(&mut self) {
         self.commands.transport_pause();
         self.commands.transport_seek_to_seconds(Seconds::ZERO);
+        if let Some(sequencer) = self.sequencer {
+            sequencer.mark_dirty();
+        }
     }
 
     /// Seeks transport to an absolute seconds position.
     pub fn seek_seconds(&mut self, position: f64) {
         self.commands
             .transport_seek_to_seconds(Seconds::from_seconds_f64(position.max(0.0)));
+        if let Some(sequencer) = self.sequencer {
+            sequencer.mark_dirty();
+        }
     }
 
     /// Seeks transport to an absolute beats position.
     pub fn seek_beats(&mut self, position: f64) {
         self.commands
             .transport_seek_to_beats(Beats::from_beats_f64(position.max(0.0)));
+        if let Some(sequencer) = self.sequencer {
+            sequencer.mark_dirty();
+        }
     }
 
     /// Reads current transport state from Knyst.
@@ -96,8 +136,8 @@ impl<'a> Transport<'a> {
                 TransportState::Playing => PlaybackState::Playing,
                 TransportState::Paused => PlaybackState::Paused,
             },
-            snapshot.seconds.to_seconds_f64(),
-            snapshot.beats.unwrap_or(Beats::ZERO).as_beats_f64(),
+            snapshot.seconds,
+            snapshot.beats.unwrap_or(Beats::ZERO),
         ))
     }
 }

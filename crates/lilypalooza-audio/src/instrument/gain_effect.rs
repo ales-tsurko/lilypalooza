@@ -1,8 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 use crate::instrument::{
     EffectProcessor, ParamValue, ParameterDescriptor, Processor, ProcessorDescriptor,
     ProcessorState, ProcessorStateError,
 };
-use serde::{Deserialize, Serialize};
 
 const GAIN_EFFECT_PARAMS: &[ParameterDescriptor] = &[ParameterDescriptor {
     id: "gain_db",

@@ -1,11 +1,20 @@
 //! Top-level audio engine state.
 #![allow(missing_docs)]
 
-use crate::mixer::{Mixer, MixerError, MixerHandle, MixerState};
-use crate::transport::Transport;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
 use knyst::audio_backend::{AudioBackend, AudioBackendError};
 use knyst::modal_interface::{KnystContext, SphereError};
 use knyst::prelude::{KnystSphere, MultiThreadedKnystCommands, SphereSettings};
+
+use crate::mixer::{Mixer, MixerError, MixerHandle, MixerState};
+use crate::sequencer::{Sequencer, SequencerHandle};
+use crate::transport::Transport;
 
 /// Startup options for the audio engine.
 #[derive(Debug, Clone, Default)]
@@ -26,8 +35,11 @@ pub struct AudioEngineSettings {
 /// Top-level audio engine container.
 pub struct AudioEngine {
     mixer: Mixer,
+    sequencer: Sequencer,
     backend: Box<dyn AudioBackend>,
     settings: AudioEngineSettings,
+    scheduler_stop: Arc<AtomicBool>,
+    scheduler_thread: Option<JoinHandle<()>>,
     // Keeps the Knyst runtime alive; context and commands do not own it.
     #[allow(dead_code)]
     sphere: KnystSphere,
@@ -67,10 +79,23 @@ impl AudioEngine {
         let context = sphere.context();
         let mut commands = sphere.commands();
         let mixer = Mixer::new(&context, &mut commands, &settings, mixer)?;
+        let sequencer = Sequencer::new();
+        for track in mixer.state.tracks() {
+            sequencer.sync_track_handle(track.id, mixer.instrument_handle(track.id));
+        }
+        let scheduler_stop = Arc::new(AtomicBool::new(false));
+        let scheduler_thread = Some(start_scheduler_thread(
+            sphere.commands(),
+            sequencer.clone(),
+            Arc::clone(&scheduler_stop),
+        ));
         Ok(Self {
             mixer,
+            sequencer,
             backend: Box::new(backend),
             settings,
+            scheduler_stop,
+            scheduler_thread,
             sphere,
             context,
             commands,
@@ -84,12 +109,22 @@ impl AudioEngine {
 
     /// Returns the transport control handle.
     pub fn transport(&mut self) -> Transport<'_> {
-        Transport::new(&mut self.commands)
+        Transport::new(&mut self.commands, Some(&self.sequencer))
     }
 
     /// Returns the mixer control handle.
     pub fn mixer(&mut self) -> MixerHandle<'_> {
-        MixerHandle::new(&mut self.mixer, &self.context, &mut self.commands)
+        MixerHandle::new(
+            &mut self.mixer,
+            &self.sequencer,
+            &self.context,
+            &mut self.commands,
+        )
+    }
+
+    /// Returns the sequencer control handle.
+    pub fn sequencer(&mut self) -> SequencerHandle<'_> {
+        SequencerHandle::new(&self.sequencer, &mut self.commands)
     }
 }
 
@@ -101,6 +136,23 @@ impl From<crate::mixer::runtime::MixerRuntimeError> for AudioEngineError {
 
 impl Drop for AudioEngine {
     fn drop(&mut self) {
+        self.scheduler_stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.scheduler_thread.take() {
+            let _ = thread.join();
+        }
         let _ = self.backend.stop();
     }
+}
+
+fn start_scheduler_thread(
+    mut commands: MultiThreadedKnystCommands,
+    sequencer: Sequencer,
+    stop: Arc<AtomicBool>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let _ = sequencer.process_tick(&mut commands);
+            thread::sleep(Duration::from_millis(25));
+        }
+    })
 }

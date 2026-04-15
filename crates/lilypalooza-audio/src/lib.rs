@@ -6,6 +6,7 @@
 pub mod engine;
 pub mod instrument;
 pub mod mixer;
+pub mod sequencer;
 pub mod transport;
 
 pub use engine::{AudioEngine, AudioEngineError, AudioEngineOptions, AudioEngineSettings};
@@ -20,4 +21,5 @@ pub use mixer::{
     TrackRouting, TrackState,
 };
 pub use mixer::{MixerError, MixerHandle, MixerState};
+pub use sequencer::{Sequencer, SequencerError, SequencerHandle};
 pub use transport::{PlaybackState, Transport, TransportError, TransportSnapshot};

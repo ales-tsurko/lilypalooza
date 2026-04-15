@@ -5,12 +5,16 @@ mod track;
 
 use std::ops::Deref;
 
-use crate::engine::{AudioEngineError, AudioEngineSettings};
-use crate::instrument::{EffectSlotState, InstrumentSlotState, SoundfontResource};
 use knyst::modal_interface::KnystContext;
 use knyst::prelude::MultiThreadedKnystCommands;
-use runtime::{MixerRuntime, MixerRuntimeError};
 use serde::{Deserialize, Serialize};
+
+use crate::engine::{AudioEngineError, AudioEngineSettings};
+use crate::instrument::{
+    EffectSlotState, InstrumentRuntimeHandle, InstrumentSlotState, SoundfontResource,
+};
+use crate::sequencer::Sequencer;
+use runtime::{MixerRuntime, MixerRuntimeError};
 pub use track::{
     BusId, BusSend, BusTrack, INSTRUMENT_TRACK_COUNT, MasterTrack, MixerTrack, TrackId, TrackRoute,
     TrackRouting, TrackState,
@@ -383,12 +387,17 @@ impl Mixer {
         let runtime = MixerRuntime::attach(context, commands, settings, &state)?;
         Ok(Self { state, runtime })
     }
+
+    pub(crate) fn instrument_handle(&self, track_id: TrackId) -> Option<InstrumentRuntimeHandle> {
+        self.runtime.instrument_handle(track_id)
+    }
 }
 
 /// Mutable mixer control handle.
 #[allow(missing_docs)]
 pub struct MixerHandle<'a> {
     mixer: &'a mut Mixer,
+    sequencer: &'a Sequencer,
     context: &'a KnystContext,
     commands: &'a mut MultiThreadedKnystCommands,
 }
@@ -396,11 +405,13 @@ pub struct MixerHandle<'a> {
 impl<'a> MixerHandle<'a> {
     pub(crate) fn new(
         mixer: &'a mut Mixer,
+        sequencer: &'a Sequencer,
         context: &'a KnystContext,
         commands: &'a mut MultiThreadedKnystCommands,
     ) -> MixerHandle<'a> {
         Self {
             mixer,
+            sequencer,
             context,
             commands,
         }
@@ -427,6 +438,10 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             &soundfont_id,
         )?;
+        for track in self.mixer.state.tracks() {
+            self.sequencer
+                .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
+        }
         Ok(())
     }
 
@@ -439,6 +454,10 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             &removed.id,
         )?;
+        for track in self.mixer.state.tracks() {
+            self.sequencer
+                .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
+        }
         Ok(removed)
     }
 
@@ -470,6 +489,8 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             id,
         )?;
+        self.sequencer
+            .sync_track_handle(id, self.mixer.instrument_handle(id));
         Ok(())
     }
 
