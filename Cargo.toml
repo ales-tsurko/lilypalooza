@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["crates/iced-code-editor"]
+members = ["crates/iced-code-editor", "crates/lilypalooza-audio"]
 
 [workspace.dependencies]
 iced = "0.14"
