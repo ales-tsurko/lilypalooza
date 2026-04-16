@@ -106,11 +106,17 @@ impl<'a> Transport<'a> {
             self.commands.transport_seek_to_beats(start_beat);
             wait_for_transport_beats(self.commands, start_beat);
         }
+        self.commands.clear_scheduled_changes();
+        wait_for_controller_barrier(self.commands);
         if let Some(sequencer) = self.sequencer {
             sequencer.prepare_for_play(self.commands, start_beat);
+        }
+        wait_for_controller_barrier(self.commands);
+        self.commands.transport_play();
+        if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(true);
         }
-        self.commands.transport_play();
+        wait_for_transport_playing(self.commands);
     }
 
     /// Pauses playback.
@@ -120,110 +126,129 @@ impl<'a> Transport<'a> {
             .map(|snapshot| snapshot.beats_position)
             .unwrap_or(Beats::ZERO);
         if let Some(sequencer) = self.sequencer {
-            sequencer.reset_notes(self.commands);
-            dispatch_immediate_changes(self.commands);
             sequencer.set_playing(false);
-            sequencer.mark_dirty_at(current_beat);
+        }
+        self.commands.clear_scheduled_changes();
+        wait_for_controller_barrier(self.commands);
+        if let Some(sequencer) = self.sequencer {
+            sequencer.prepare_for_pause(self.commands, current_beat);
+            wait_for_controller_barrier(self.commands);
+            wait_for_transport_advance(self.commands, Duration::from_millis(250));
         }
         self.commands.transport_pause();
+        wait_for_transport_paused(self.commands);
+        self.commands.transport_seek_to_beats(current_beat);
+        wait_for_transport_beats(self.commands, current_beat);
+        if let Some(sequencer) = self.sequencer {
+            sequencer.mark_dirty_for_seek(current_beat, false);
+        }
     }
 
     /// Rewinds to the start and pauses playback.
     pub fn rewind(&mut self) {
-        let was_playing = self
-            .snapshot()
-            .map(|snapshot| snapshot.playback_state == PlaybackState::Playing)
-            .unwrap_or(false);
-        if let Some(sequencer) = self.sequencer {
-            sequencer.reset_notes(self.commands);
-            dispatch_immediate_changes(self.commands);
-            sequencer.set_playing(false);
-        }
-        self.commands.transport_pause();
-        flush_scheduled_events(self.commands);
-        self.commands.transport_seek_to_beats(Beats::ZERO);
-        wait_for_transport_beats(self.commands, Beats::ZERO);
-        if let Some(sequencer) = self.sequencer {
-            sequencer.mark_dirty_at(Beats::ZERO);
-            if was_playing {
-                sequencer.prepare_for_play(self.commands, Beats::ZERO);
-                sequencer.set_playing(true);
-            }
-        }
+        let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
         if was_playing {
-            self.commands.transport_play();
+            self.seek_beats(0.0);
+        } else {
+            self.commands.transport_pause();
+            wait_for_transport_paused(self.commands);
+            self.commands.clear_scheduled_changes();
+            wait_for_controller_barrier(self.commands);
+            if let Some(sequencer) = self.sequencer {
+                sequencer.set_playing(false);
+                self.commands.transport_seek_to_beats(Beats::ZERO);
+                wait_for_transport_beats(self.commands, Beats::ZERO);
+                sequencer.mark_dirty_for_seek(Beats::ZERO, false);
+            } else {
+                self.commands.transport_seek_to_beats(Beats::ZERO);
+                wait_for_transport_beats(self.commands, Beats::ZERO);
+            }
         }
     }
 
     /// Seeks transport to an absolute seconds position.
     pub fn seek_seconds(&mut self, position: f64) {
-        let was_playing = self
-            .snapshot()
-            .map(|snapshot| snapshot.playback_state == PlaybackState::Playing)
-            .unwrap_or(false);
+        let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
         if !was_playing {
             self.flush_runtime_if_dirty();
         }
         let position = Seconds::from_seconds_f64(position.max(0.0));
-        if was_playing && let Some(sequencer) = self.sequencer {
-            sequencer.reset_notes(self.commands);
-            dispatch_immediate_changes(self.commands);
+        if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(false);
         }
-        self.commands.transport_pause();
-        if was_playing {
-            flush_scheduled_events(self.commands);
+        self.commands.clear_scheduled_changes();
+        wait_for_controller_barrier(self.commands);
+        if was_playing && let Some(sequencer) = self.sequencer {
+            let current_beat = self
+                .snapshot()
+                .map(|snapshot| snapshot.beats_position)
+                .unwrap_or(Beats::ZERO);
+            sequencer.prepare_for_pause(self.commands, current_beat);
+            wait_for_controller_barrier(self.commands);
+            wait_for_transport_advance(self.commands, Duration::from_millis(80));
         }
+        self.commands.transport_pause();
+        wait_for_transport_paused(self.commands);
         self.commands.transport_seek_to_seconds(position);
         let target_beat = wait_for_transport_seconds(self.commands, position)
             .map(|snapshot| snapshot.beats_position)
             .unwrap_or(Beats::ZERO);
         if let Some(sequencer) = self.sequencer {
-            sequencer.mark_dirty_at(target_beat);
+            sequencer.mark_dirty_for_seek(target_beat, was_playing);
             if was_playing {
                 sequencer.prepare_for_play(self.commands, target_beat);
-                sequencer.set_playing(true);
-            } else {
-                sequencer.set_playing(false);
             }
+            sequencer.set_playing(false);
         }
         if was_playing {
+            wait_for_controller_barrier(self.commands);
             self.commands.transport_play();
+            if let Some(sequencer) = self.sequencer {
+                sequencer.set_playing(true);
+            }
+            wait_for_transport_playing(self.commands);
         }
     }
 
     /// Seeks transport to an absolute beats position.
     pub fn seek_beats(&mut self, position: f64) {
-        let was_playing = self
-            .snapshot()
-            .map(|snapshot| snapshot.playback_state == PlaybackState::Playing)
-            .unwrap_or(false);
+        let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
         if !was_playing {
             self.flush_runtime_if_dirty();
         }
         let position = Beats::from_beats_f64(position.max(0.0));
-        if was_playing && let Some(sequencer) = self.sequencer {
-            sequencer.reset_notes(self.commands);
-            dispatch_immediate_changes(self.commands);
+        if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(false);
         }
-        self.commands.transport_pause();
-        if was_playing {
-            flush_scheduled_events(self.commands);
+        self.commands.clear_scheduled_changes();
+        wait_for_controller_barrier(self.commands);
+        if was_playing && let Some(sequencer) = self.sequencer {
+            let current_beat = self
+                .snapshot()
+                .map(|snapshot| snapshot.beats_position)
+                .unwrap_or(Beats::ZERO);
+            sequencer.prepare_for_pause(self.commands, current_beat);
+            wait_for_controller_barrier(self.commands);
+            wait_for_transport_advance(self.commands, Duration::from_millis(80));
         }
+        self.commands.transport_pause();
+        wait_for_transport_paused(self.commands);
         self.commands.transport_seek_to_beats(position);
         wait_for_transport_beats(self.commands, position);
         if let Some(sequencer) = self.sequencer {
-            sequencer.mark_dirty_at(position);
+            sequencer.mark_dirty_for_seek(position, was_playing);
             if was_playing {
                 sequencer.prepare_for_play(self.commands, position);
-                sequencer.set_playing(true);
-            } else {
-                sequencer.set_playing(false);
             }
+            sequencer.set_playing(false);
         }
         if was_playing {
+            wait_for_controller_barrier(self.commands);
             self.commands.transport_play();
+            if let Some(sequencer) = self.sequencer {
+                sequencer.set_playing(true);
+            }
+            wait_for_transport_playing(self.commands);
         }
     }
 
@@ -231,8 +256,7 @@ impl<'a> Transport<'a> {
     pub fn snapshot(&mut self) -> Result<TransportSnapshot, TransportError> {
         let snapshot = self
             .commands
-            .request_transport_snapshot()
-            .recv()?
+            .current_transport_snapshot()
             .ok_or(TransportError::SnapshotUnavailable)?;
         Ok(TransportSnapshot::new(
             match snapshot.state {
@@ -254,17 +278,12 @@ impl<'a> Transport<'a> {
     }
 }
 
-fn flush_scheduled_events(commands: &mut MultiThreadedKnystCommands) {
-    let flush_beat = Beats::from_beats(1_000_000);
-    commands.transport_seek_to_beats(flush_beat);
-    wait_for_transport_beats(commands, flush_beat);
-}
-
 fn flush_pending_runtime_changes(commands: &mut MultiThreadedKnystCommands, target_beat: Beats) {
     commands.transport_play();
     wait_for_transport_playing(commands);
     std::thread::sleep(Duration::from_millis(25));
     commands.transport_pause();
+    wait_for_controller_barrier(commands);
     commands.transport_seek_to_beats(Beats::ZERO);
     wait_for_transport_beats(commands, Beats::ZERO);
     if target_beat != Beats::ZERO {
@@ -273,28 +292,15 @@ fn flush_pending_runtime_changes(commands: &mut MultiThreadedKnystCommands, targ
     }
 }
 
-fn dispatch_immediate_changes(commands: &mut MultiThreadedKnystCommands) {
-    commands.transport_play();
-    for _ in 0..10 {
-        std::thread::sleep(Duration::from_millis(2));
-        let Ok(Some(snapshot)) = commands
-            .request_transport_snapshot()
-            .recv_timeout(Duration::from_millis(2))
-        else {
-            continue;
-        };
-        if snapshot.state == TransportState::Playing {
-            break;
-        }
-    }
+fn wait_for_controller_barrier(commands: &mut MultiThreadedKnystCommands) {
+    let receiver = commands.request_transport_snapshot();
+    let _ = receiver.recv_timeout(Duration::from_millis(50));
 }
 
 fn wait_for_transport_beats(commands: &mut MultiThreadedKnystCommands, target_beats: Beats) {
     for _ in 0..50 {
-        let Ok(Some(snapshot)) = commands
-            .request_transport_snapshot()
-            .recv_timeout(Duration::from_millis(2))
-        else {
+        let Some(snapshot) = commands.current_transport_snapshot() else {
+            std::thread::sleep(Duration::from_millis(2));
             continue;
         };
 
@@ -307,14 +313,25 @@ fn wait_for_transport_beats(commands: &mut MultiThreadedKnystCommands, target_be
 
 fn wait_for_transport_playing(commands: &mut MultiThreadedKnystCommands) {
     for _ in 0..50 {
-        let Ok(Some(snapshot)) = commands
-            .request_transport_snapshot()
-            .recv_timeout(Duration::from_millis(2))
-        else {
+        let Some(snapshot) = commands.current_transport_snapshot() else {
+            std::thread::sleep(Duration::from_millis(2));
             continue;
         };
 
         if snapshot.state == TransportState::Playing {
+            return;
+        }
+    }
+}
+
+fn wait_for_transport_paused(commands: &mut MultiThreadedKnystCommands) {
+    for _ in 0..50 {
+        let Some(snapshot) = commands.current_transport_snapshot() else {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        };
+
+        if snapshot.state == TransportState::Paused {
             return;
         }
     }
@@ -325,10 +342,8 @@ fn wait_for_transport_seconds(
     target_seconds: Seconds,
 ) -> Option<TransportSnapshot> {
     for _ in 0..50 {
-        let Ok(Some(snapshot)) = commands
-            .request_transport_snapshot()
-            .recv_timeout(Duration::from_millis(2))
-        else {
+        let Some(snapshot) = commands.current_transport_snapshot() else {
+            std::thread::sleep(Duration::from_millis(2));
             continue;
         };
 
@@ -345,4 +360,23 @@ fn wait_for_transport_seconds(
     }
 
     None
+}
+
+fn wait_for_transport_advance(commands: &mut MultiThreadedKnystCommands, duration: Duration) {
+    let Some(start) = commands.current_transport_snapshot() else {
+        std::thread::sleep(duration);
+        return;
+    };
+    let start_seconds = start.seconds.to_seconds_f64();
+    let target_seconds = start_seconds + duration.as_secs_f64();
+    for _ in 0..100 {
+        let Some(snapshot) = commands.current_transport_snapshot() else {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        };
+        if snapshot.seconds.to_seconds_f64() >= target_seconds {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }

@@ -80,14 +80,12 @@ impl Lilypalooza {
         match fs::read(&selected_file) {
             Ok(bytes) => {
                 match rebuild_playback_engine(soundfont_path, &bytes) {
-                    Ok(mut playback) => {
+                    Ok(playback) => {
                         self.soundfont_status = SoundfontStatus::Ready(soundfont_path.clone());
                         self.logger.push(format!(
                             "Loaded MIDI for playback {}",
                             selected_file.display()
                         ));
-                        playback.transport().pause();
-                        playback.transport().rewind();
                         self.playback = Some(playback);
                         let total_ticks = self.current_midi_total_ticks();
                         self.piano_roll.set_playback_position(0, total_ticks, false);

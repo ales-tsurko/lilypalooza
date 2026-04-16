@@ -214,6 +214,7 @@ impl Processor for SoundfontProcessor {
     }
 
     fn reset(&mut self) {
+        self.synthesizer.note_off_all(true);
         self.synthesizer.reset();
     }
 }
@@ -402,5 +403,39 @@ mod tests {
                 .all(|sample| sample.abs() <= 1.0e-6),
             "soundfont processor reset should silence active notes"
         );
+    }
+
+    #[test]
+    fn soundfont_processor_renders_after_reset_then_note_on() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut processor = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            SoundfontSynthSettings::new(44_100, 64),
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+
+        processor.reset();
+        processor.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+
+        let mut left = vec![0.0; 64];
+        let mut right = vec![0.0; 64];
+        for _ in 0..8 {
+            processor.render(&mut left, &mut right);
+            if left
+                .iter()
+                .chain(right.iter())
+                .any(|sample| sample.abs() > 1.0e-6)
+            {
+                return;
+            }
+        }
+
+        panic!("soundfont processor produced silence after reset then note on");
     }
 }

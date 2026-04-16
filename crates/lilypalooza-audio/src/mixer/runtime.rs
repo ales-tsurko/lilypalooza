@@ -540,14 +540,12 @@ impl TrackRuntime {
         soundfonts: &HashMap<String, LoadedSoundfont>,
         soundfont_settings: SoundfontSynthSettings,
     ) -> Result<Self, MixerRuntimeError> {
+        let initial_gain = track_effective_amplitude(mixer, track);
         let source_bus = bus(2);
         let strip = handle_with_inputs(
             commands,
             StereoBalanceGain::new(),
-            inputs!(
-                (2 : db_to_amplitude(track.state.gain_db)),
-                (3 : track.state.pan)
-            ),
+            inputs!((2 : initial_gain), (3 : track.state.pan)),
         );
         let route_bus = bus(2);
 
@@ -775,14 +773,12 @@ impl BusRuntime {
         bus_track: &BusTrack,
         _mixer: &MixerState,
     ) -> Self {
+        let initial_gain = bus_effective_amplitude(bus_track);
         let input = bus(2);
         let strip = handle_with_inputs(
             commands,
             StereoBalanceGain::new(),
-            inputs!(
-                (2 : db_to_amplitude(bus_track.state.gain_db)),
-                (3 : bus_track.state.pan)
-            ),
+            inputs!((2 : initial_gain), (3 : bus_track.state.pan)),
         );
         let route_bus = bus(2);
         connect_stereo(node_id_of(strip), node_id_of(route_bus));
@@ -1285,7 +1281,7 @@ mod tests {
             .instrument_handle(TrackId(0))
             .expect("track instrument should exist");
         harness.commands().transport_play();
-        harness.process_block();
+        harness.process_blocks(4);
 
         handle.send_midi(
             harness.commands(),

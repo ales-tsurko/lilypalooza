@@ -1,5 +1,8 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use knyst::KnystError;
 use knyst::audio_backend::{AudioBackend, AudioBackendError};
@@ -150,6 +153,54 @@ pub(crate) fn delayed_note_midi_bytes(ppq: u16, start_tick: u32) -> Vec<u8> {
     midi_bytes_with_note(ppq, start_tick)
 }
 
+pub(crate) fn sustained_note_midi_bytes(ppq: u16, duration_ticks: u32) -> Vec<u8> {
+    let header = Header::new(Format::Parallel, Timing::Metrical(u15::from(ppq)));
+    let tempo_track: Track<'static> = vec![
+        TrackEvent {
+            delta: u28::from(0),
+            kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::from(500_000))),
+        },
+        TrackEvent {
+            delta: u28::from(0),
+            kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+        },
+    ];
+    let note_track: Track<'static> = vec![
+        TrackEvent {
+            delta: u28::from(0),
+            kind: TrackEventKind::Midi {
+                channel: u4::from(0),
+                message: MidiMessage::NoteOn {
+                    key: u7::from(60),
+                    vel: u7::from(100),
+                },
+            },
+        },
+        TrackEvent {
+            delta: u28::from(duration_ticks),
+            kind: TrackEventKind::Midi {
+                channel: u4::from(0),
+                message: MidiMessage::NoteOff {
+                    key: u7::from(60),
+                    vel: u7::from(0),
+                },
+            },
+        },
+        TrackEvent {
+            delta: u28::from(0),
+            kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+        },
+    ];
+    let smf = Smf {
+        header,
+        tracks: vec![tempo_track, note_track],
+    };
+    let mut bytes = Vec::new();
+    smf.write_std(&mut bytes)
+        .expect("test MIDI should serialize");
+    bytes
+}
+
 pub(crate) fn four_track_midi_bytes(ppq: u16) -> Vec<u8> {
     let header = Header::new(Format::Parallel, Timing::Metrical(u15::from(ppq)));
     let tempo_track: Track<'static> = vec![
@@ -266,11 +317,18 @@ pub(crate) struct SharedTestBackend {
 }
 
 pub(crate) struct SharedTestBackendHandle {
+    block_size: usize,
+    sample_rate: usize,
     shared: Arc<Mutex<SharedTestBackendState>>,
 }
 
 struct SharedTestBackendState {
     run_graph: Option<RunGraph>,
+}
+
+pub(crate) struct SharedTestBackendDriver {
+    shutdown: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl SharedTestBackend {
@@ -287,7 +345,11 @@ impl SharedTestBackend {
                 num_outputs,
                 shared: Arc::clone(&shared),
             },
-            SharedTestBackendHandle { shared },
+            SharedTestBackendHandle {
+                block_size,
+                sample_rate,
+                shared,
+            },
         )
     }
 }
@@ -321,6 +383,40 @@ impl SharedTestBackendHandle {
             .into_iter()
             .chain(self.output_channel(1))
             .any(|sample| sample.abs() > 1.0e-6)
+    }
+
+    pub(crate) fn start_realtime(&self) -> SharedTestBackendDriver {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shared = Arc::clone(&self.shared);
+        let shutdown_flag = Arc::clone(&shutdown);
+        let block_duration =
+            Duration::from_secs_f64(self.block_size as f64 / self.sample_rate as f64);
+        let thread = thread::spawn(move || {
+            while !shutdown_flag.load(Ordering::Acquire) {
+                let mut state = shared
+                    .lock()
+                    .expect("shared test backend state should not be poisoned");
+                if let Some(run_graph) = &mut state.run_graph {
+                    run_graph.run_resources_communication(10_000);
+                    run_graph.process_block();
+                }
+                drop(state);
+                thread::sleep(block_duration);
+            }
+        });
+        SharedTestBackendDriver {
+            shutdown,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for SharedTestBackendDriver {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 

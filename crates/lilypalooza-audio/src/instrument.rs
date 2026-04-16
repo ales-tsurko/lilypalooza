@@ -3,14 +3,15 @@
 mod gain_effect;
 pub(crate) mod soundfont_synth;
 
+#[cfg(test)]
 use std::time::Duration;
 
-use knyst::graph::{SimultaneousChanges, TimeOffset};
+use knyst::r#gen::{Gen, GenContext};
+use knyst::graph::{EventChange, EventPayload};
 use knyst::handles::{GenericHandle, Handle, HandleData};
 use knyst::prelude::{
-    BlockSize, GenState, KnystCommands, MultiThreadedKnystCommands, Sample, impl_gen,
+    BlockSize, GenState, KnystCommands, MultiThreadedKnystCommands, Resources, Sample, impl_gen,
 };
-use knyst::trig::is_trigger;
 use serde::{Deserialize, Serialize};
 pub use soundfont_synth::{SoundfontProcessorState, SoundfontResource};
 
@@ -213,9 +214,7 @@ pub(crate) struct InstrumentProcessorNode {
     scratch_right: Vec<Sample>,
 }
 
-#[impl_gen]
 impl InstrumentProcessorNode {
-    #[new]
     pub(crate) fn new(processor: Box<dyn InstrumentProcessor>) -> Self {
         Self {
             active_generation: 0,
@@ -224,123 +223,69 @@ impl InstrumentProcessorNode {
             scratch_right: Vec::new(),
         }
     }
+}
 
-    #[process]
-    #[allow(clippy::too_many_arguments)]
-    fn process(
-        &mut self,
-        generation: &[Sample],
-        activate_generation: &[Sample],
-        channel: &[Sample],
-        note: &[Sample],
-        velocity: &[Sample],
-        controller: &[Sample],
-        value: &[Sample],
-        note_on: &[Sample],
-        note_off: &[Sample],
-        control_change: &[Sample],
-        program: &[Sample],
-        program_change: &[Sample],
-        pressure: &[Sample],
-        channel_pressure: &[Sample],
-        poly_pressure: &[Sample],
-        pitch_bend: &[Sample],
-        pitch_bend_set: &[Sample],
-        all_notes_off: &[Sample],
-        all_sound_off: &[Sample],
-        reset_all_controllers: &[Sample],
-        reset: &[Sample],
-        left: &mut [Sample],
-        right: &mut [Sample],
-        block_size: BlockSize,
-    ) -> GenState {
-        let frames = block_size.0;
-        for frame in 0..frames {
-            let generation = generation[frame].max(0.0) as u32;
-            if is_trigger(activate_generation[frame]) {
-                self.active_generation = generation;
-            }
-            if is_trigger(reset[frame]) {
-                self.processor.reset();
-            }
+impl Gen for InstrumentProcessorNode {
+    fn process(&mut self, ctx: GenContext<'_, '_, '_>, _resources: &mut Resources) -> GenState {
+        let frames = ctx.outputs.block_size();
+        self.scratch_left.resize(frames, 0.0);
+        self.scratch_right.resize(frames, 0.0);
 
-            let channel = channel[frame].clamp(0.0, 15.0) as u8;
-            let note = note[frame].clamp(0.0, 127.0) as u8;
-            let velocity = velocity[frame].clamp(0.0, 127.0) as u8;
-            let controller = controller[frame].clamp(0.0, 127.0) as u8;
-            let value = value[frame].clamp(0.0, 127.0) as u8;
-            let program = program[frame].clamp(0.0, 127.0) as u8;
-            let pressure = pressure[frame].clamp(0.0, 127.0) as u8;
-            let pitch_bend = pitch_bend[frame]
-                .round()
-                .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-            let generation_matches = generation == self.active_generation;
-
-            if generation_matches && is_trigger(note_on[frame]) {
-                self.processor.handle_midi(MidiEvent::NoteOn {
-                    channel,
-                    note,
-                    velocity,
-                });
+        for event in ctx.events {
+            if event.input != 0 {
+                continue;
             }
-            if generation_matches && is_trigger(note_off[frame]) {
-                self.processor.handle_midi(MidiEvent::NoteOff {
-                    channel,
-                    note,
-                    velocity,
-                });
-            }
-            if generation_matches && is_trigger(control_change[frame]) {
-                self.processor.handle_midi(MidiEvent::ControlChange {
-                    channel,
-                    controller,
-                    value,
-                });
-            }
-            if generation_matches && is_trigger(program_change[frame]) {
-                self.processor
-                    .handle_midi(MidiEvent::ProgramChange { channel, program });
-            }
-            if generation_matches && is_trigger(channel_pressure[frame]) {
-                self.processor
-                    .handle_midi(MidiEvent::ChannelPressure { channel, pressure });
-            }
-            if generation_matches && is_trigger(poly_pressure[frame]) {
-                self.processor.handle_midi(MidiEvent::PolyPressure {
-                    channel,
-                    note,
-                    pressure,
-                });
-            }
-            if generation_matches && is_trigger(pitch_bend_set[frame]) {
-                self.processor.handle_midi(MidiEvent::PitchBend {
-                    channel,
-                    value: pitch_bend,
-                });
-            }
-            if generation_matches && is_trigger(all_notes_off[frame]) {
-                self.processor
-                    .handle_midi(MidiEvent::AllNotesOff { channel });
-            }
-            if generation_matches && is_trigger(all_sound_off[frame]) {
-                self.processor
-                    .handle_midi(MidiEvent::AllSoundOff { channel });
-            }
-            if generation_matches && is_trigger(reset_all_controllers[frame]) {
-                self.processor
-                    .handle_midi(MidiEvent::ResetAllControllers { channel });
+            let EventPayload::Bytes(bytes) = &event.payload else {
+                continue;
+            };
+            let Some(event) = decode_instrument_event(bytes) else {
+                continue;
+            };
+            match event {
+                ScheduledInstrumentEvent::Reset { generation } => {
+                    self.active_generation = generation;
+                    self.processor.reset();
+                }
+                ScheduledInstrumentEvent::Midi { generation, event } => {
+                    if generation == self.active_generation {
+                        self.processor.handle_midi(event);
+                    }
+                }
             }
         }
 
-        self.scratch_left.resize(frames, 0.0);
-        self.scratch_right.resize(frames, 0.0);
         self.processor.render(
             &mut self.scratch_left[..frames],
             &mut self.scratch_right[..frames],
         );
-        left[..frames].copy_from_slice(&self.scratch_left[..frames]);
-        right[..frames].copy_from_slice(&self.scratch_right[..frames]);
+        for frame in 0..frames {
+            ctx.outputs.write(self.scratch_left[frame], 0, frame);
+            ctx.outputs.write(self.scratch_right[frame], 1, frame);
+        }
         GenState::Continue
+    }
+
+    fn num_inputs(&self) -> usize {
+        0
+    }
+
+    fn num_outputs(&self) -> usize {
+        2
+    }
+
+    fn num_event_inputs(&self) -> usize {
+        1
+    }
+
+    fn event_input_desc(&self, input: usize) -> &'static str {
+        match input {
+            0 => "event",
+            _ => "",
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "InstrumentProcessorNode"
     }
 }
 
@@ -391,6 +336,11 @@ impl EffectProcessorNode {
 pub struct InstrumentRuntimeHandle(Handle<GenericHandle>);
 
 impl InstrumentRuntimeHandle {
+    #[cfg(test)]
+    const IMMEDIATE_EVENT_LEAD: Duration = Duration::from_millis(30);
+    #[cfg(test)]
+    const IMMEDIATE_EVENT_STEP: Duration = Duration::from_millis(2);
+
     pub(crate) fn new(handle: Handle<GenericHandle>) -> Self {
         Self(handle)
     }
@@ -407,254 +357,107 @@ impl InstrumentRuntimeHandle {
             .expect("instrument handle should always own one node")
     }
 
-    fn schedule_midi_inner(
-        self,
-        commands: &mut MultiThreadedKnystCommands,
-        mut changes: SimultaneousChanges,
-        generation: Option<u32>,
-        frame_offset: i32,
-        event: MidiEvent,
-    ) {
-        let mut parameter_changes = self.node_id().change();
-        if let Some(generation) = generation {
-            parameter_changes = parameter_changes.set("generation", generation as f32);
-        }
-        let trigger = match event {
-            MidiEvent::NoteOn {
-                channel,
-                note,
-                velocity,
-            } => {
-                parameter_changes = parameter_changes
-                    .set("channel", f32::from(channel))
-                    .set("note", f32::from(note))
-                    .set("velocity", f32::from(velocity));
-                "note_on"
-            }
-            MidiEvent::NoteOff {
-                channel,
-                note,
-                velocity,
-            } => {
-                parameter_changes = parameter_changes
-                    .set("channel", f32::from(channel))
-                    .set("note", f32::from(note))
-                    .set("velocity", f32::from(velocity));
-                "note_off"
-            }
-            MidiEvent::ControlChange {
-                channel,
-                controller,
-                value,
-            } => {
-                parameter_changes = parameter_changes
-                    .set("channel", f32::from(channel))
-                    .set("controller", f32::from(controller))
-                    .set("value", f32::from(value));
-                "control_change"
-            }
-            MidiEvent::ProgramChange { channel, program } => {
-                parameter_changes = parameter_changes
-                    .set("channel", f32::from(channel))
-                    .set("program", f32::from(program));
-                "program_change"
-            }
-            MidiEvent::ChannelPressure { channel, pressure } => {
-                parameter_changes = parameter_changes
-                    .set("channel", f32::from(channel))
-                    .set("pressure", f32::from(pressure));
-                "channel_pressure"
-            }
-            MidiEvent::PolyPressure {
-                channel,
-                note,
-                pressure,
-            } => {
-                parameter_changes = parameter_changes
-                    .set("channel", f32::from(channel))
-                    .set("note", f32::from(note))
-                    .set("pressure", f32::from(pressure));
-                "poly_pressure"
-            }
-            MidiEvent::PitchBend { channel, value } => {
-                parameter_changes = parameter_changes
-                    .set("channel", f32::from(channel))
-                    .set("pitch_bend", f32::from(value));
-                "pitch_bend_set"
-            }
-            MidiEvent::AllNotesOff { channel } => {
-                parameter_changes = parameter_changes.set("channel", f32::from(channel));
-                "all_notes_off"
-            }
-            MidiEvent::AllSoundOff { channel } => {
-                parameter_changes = parameter_changes.set("channel", f32::from(channel));
-                "all_sound_off"
-            }
-            MidiEvent::ResetAllControllers { channel } => {
-                parameter_changes = parameter_changes.set("channel", f32::from(channel));
-                "reset_all_controllers"
-            }
-        };
-
-        let parameter_changes = if frame_offset == 0 {
-            parameter_changes
-        } else {
-            parameter_changes.time_offset(TimeOffset::Frames(i64::from(frame_offset)))
-        };
-
-        changes.push(parameter_changes);
-        changes.push(
-            self.node_id()
-                .change()
-                .trigger(trigger)
-                .time_offset(TimeOffset::Frames(i64::from(frame_offset + 1))),
-        );
-        commands.schedule_changes(changes);
-    }
-
     pub(crate) fn schedule_midi_at_with_offset(
         &self,
         commands: &mut MultiThreadedKnystCommands,
-        at: knyst::prelude::Beats,
+        scheduled_at: knyst::prelude::Beats,
         generation: u32,
-        frame_offset: i32,
         event: MidiEvent,
     ) {
-        self.schedule_midi_inner(
-            commands,
-            SimultaneousChanges::beats(at),
-            Some(generation),
-            frame_offset,
-            event,
+        let change = EventChange::beats(
+            self.node_id().event_input("event"),
+            encode_instrument_event(ScheduledInstrumentEvent::Midi { generation, event }),
+            scheduled_at,
         );
+        commands.schedule_event(change);
     }
 
-    pub(crate) fn send_midi_now_with_offset(
+    pub(crate) fn schedule_reset_at(
+        &self,
+        commands: &mut MultiThreadedKnystCommands,
+        scheduled_at: knyst::prelude::Beats,
+        generation: u32,
+    ) {
+        commands.schedule_event(EventChange::beats(
+            self.node_id().event_input("event"),
+            encode_instrument_event(ScheduledInstrumentEvent::Reset { generation }),
+            scheduled_at,
+        ));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn send_midi_immediate(
         &self,
         commands: &mut MultiThreadedKnystCommands,
         generation: u32,
-        frame_offset: i32,
         event: MidiEvent,
+        delay: Duration,
     ) {
-        self.schedule_midi_inner(
-            commands,
-            SimultaneousChanges::duration_from_now(Duration::ZERO),
-            Some(generation),
-            frame_offset,
-            event,
-        );
+        commands.schedule_event(EventChange::duration_from_now(
+            self.node_id().event_input("event"),
+            encode_instrument_event(ScheduledInstrumentEvent::Midi { generation, event }),
+            delay,
+        ));
     }
 
     #[cfg(test)]
     pub(crate) fn send_midi(&self, commands: &mut MultiThreadedKnystCommands, event: MidiEvent) {
-        self.schedule_midi_inner(
-            commands,
-            SimultaneousChanges::duration_from_now(Duration::ZERO),
-            None,
-            0,
-            event,
-        );
+        self.send_midi_immediate(commands, 0, event, Self::IMMEDIATE_EVENT_LEAD);
     }
 
+    #[cfg(test)]
     pub(crate) fn send_reset(&self, commands: &mut MultiThreadedKnystCommands, generation: u32) {
-        let mut changes = SimultaneousChanges::now();
-        changes.push(
-            self.node_id()
-                .change()
-                .set("generation", generation as f32)
-                .trigger("activate_generation"),
-        );
-        changes.push(self.node_id().change().trigger("reset"));
-        commands.schedule_changes(changes);
+        commands.schedule_event(EventChange::duration_from_now(
+            self.node_id().event_input("event"),
+            encode_instrument_event(ScheduledInstrumentEvent::Reset { generation }),
+            Self::IMMEDIATE_EVENT_LEAD,
+        ));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn immediate_event_delay(step: u32) -> Duration {
+        Self::IMMEDIATE_EVENT_LEAD + Self::IMMEDIATE_EVENT_STEP.saturating_mul(step)
     }
 
     /// Sends one note-on.
     pub fn note_on(&self, channel: u8, note: u8, velocity: u8) {
-        self.0
-            .set("channel", f32::from(channel))
-            .set("note", f32::from(note))
-            .set("velocity", f32::from(velocity))
-            .trig("note_on");
+        self.0.event(
+            "event",
+            encode_instrument_event(ScheduledInstrumentEvent::Midi {
+                generation: 0,
+                event: MidiEvent::NoteOn {
+                    channel,
+                    note,
+                    velocity,
+                },
+            }),
+        );
     }
 
     /// Sends one note-off.
     pub fn note_off(&self, channel: u8, note: u8, velocity: u8) {
-        self.0
-            .set("channel", f32::from(channel))
-            .set("note", f32::from(note))
-            .set("velocity", f32::from(velocity))
-            .trig("note_off");
+        self.0.event(
+            "event",
+            encode_instrument_event(ScheduledInstrumentEvent::Midi {
+                generation: 0,
+                event: MidiEvent::NoteOff {
+                    channel,
+                    note,
+                    velocity,
+                },
+            }),
+        );
     }
 
     /// Sends one generic MIDI event.
     pub fn midi(&self, event: MidiEvent) {
-        match event {
-            MidiEvent::NoteOn {
-                channel,
-                note,
-                velocity,
-            } => self.note_on(channel, note, velocity),
-            MidiEvent::NoteOff {
-                channel,
-                note,
-                velocity,
-            } => self.note_off(channel, note, velocity),
-            MidiEvent::ControlChange {
-                channel,
-                controller,
-                value,
-            } => {
-                self.0
-                    .set("channel", f32::from(channel))
-                    .set("controller", f32::from(controller))
-                    .set("value", f32::from(value))
-                    .trig("control_change");
-            }
-            MidiEvent::ProgramChange { channel, program } => {
-                self.0
-                    .set("channel", f32::from(channel))
-                    .set("program", f32::from(program))
-                    .trig("program_change");
-            }
-            MidiEvent::ChannelPressure { channel, pressure } => {
-                self.0
-                    .set("channel", f32::from(channel))
-                    .set("pressure", f32::from(pressure))
-                    .trig("channel_pressure");
-            }
-            MidiEvent::PolyPressure {
-                channel,
-                note,
-                pressure,
-            } => {
-                self.0
-                    .set("channel", f32::from(channel))
-                    .set("note", f32::from(note))
-                    .set("pressure", f32::from(pressure))
-                    .trig("poly_pressure");
-            }
-            MidiEvent::PitchBend { channel, value } => {
-                self.0
-                    .set("channel", f32::from(channel))
-                    .set("pitch_bend", f32::from(value))
-                    .trig("pitch_bend_set");
-            }
-            MidiEvent::AllNotesOff { channel } => {
-                self.0
-                    .set("channel", f32::from(channel))
-                    .trig("all_notes_off");
-            }
-            MidiEvent::AllSoundOff { channel } => {
-                self.0
-                    .set("channel", f32::from(channel))
-                    .trig("all_sound_off");
-            }
-            MidiEvent::ResetAllControllers { channel } => {
-                self.0
-                    .set("channel", f32::from(channel))
-                    .trig("reset_all_controllers");
-            }
-        }
+        self.0.event(
+            "event",
+            encode_instrument_event(ScheduledInstrumentEvent::Midi {
+                generation: 0,
+                event,
+            }),
+        );
     }
 }
 
@@ -683,5 +486,345 @@ pub(crate) fn create_effect_processor(
             gain_effect::GainEffectProcessor::from_state(&effect.state)?,
         ))),
         EffectKind::BuiltIn { .. } | EffectKind::Plugin { .. } => Ok(None),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScheduledInstrumentEvent {
+    Midi { generation: u32, event: MidiEvent },
+    Reset { generation: u32 },
+}
+
+fn encode_instrument_event(event: ScheduledInstrumentEvent) -> EventPayload {
+    let mut bytes = [0_u8; 10];
+    match event {
+        ScheduledInstrumentEvent::Midi { generation, event } => {
+            bytes[0] = 0;
+            bytes[1..5].copy_from_slice(&generation.to_le_bytes());
+            encode_midi_event(event, &mut bytes[5..10]);
+        }
+        ScheduledInstrumentEvent::Reset { generation } => {
+            bytes[0] = 1;
+            bytes[1..5].copy_from_slice(&generation.to_le_bytes());
+        }
+    }
+    EventPayload::Bytes(Box::new(bytes))
+}
+
+fn decode_instrument_event(bytes: &[u8]) -> Option<ScheduledInstrumentEvent> {
+    if bytes.len() != 10 {
+        return None;
+    }
+    let generation = u32::from_le_bytes(bytes[1..5].try_into().ok()?);
+    match bytes[0] {
+        0 => Some(ScheduledInstrumentEvent::Midi {
+            generation,
+            event: decode_midi_event(&bytes[5..10])?,
+        }),
+        1 => Some(ScheduledInstrumentEvent::Reset { generation }),
+        _ => None,
+    }
+}
+
+fn encode_midi_event(event: MidiEvent, bytes: &mut [u8]) {
+    match event {
+        MidiEvent::NoteOn {
+            channel,
+            note,
+            velocity,
+        } => {
+            bytes.copy_from_slice(&[0, channel, note, velocity, 0]);
+        }
+        MidiEvent::NoteOff {
+            channel,
+            note,
+            velocity,
+        } => {
+            bytes.copy_from_slice(&[1, channel, note, velocity, 0]);
+        }
+        MidiEvent::ControlChange {
+            channel,
+            controller,
+            value,
+        } => {
+            bytes.copy_from_slice(&[2, channel, controller, value, 0]);
+        }
+        MidiEvent::ProgramChange { channel, program } => {
+            bytes.copy_from_slice(&[3, channel, program, 0, 0]);
+        }
+        MidiEvent::ChannelPressure { channel, pressure } => {
+            bytes.copy_from_slice(&[4, channel, pressure, 0, 0]);
+        }
+        MidiEvent::PolyPressure {
+            channel,
+            note,
+            pressure,
+        } => {
+            bytes.copy_from_slice(&[5, channel, note, pressure, 0]);
+        }
+        MidiEvent::PitchBend { channel, value } => {
+            let [lo, hi] = value.to_le_bytes();
+            bytes.copy_from_slice(&[6, channel, lo, hi, 0]);
+        }
+        MidiEvent::AllNotesOff { channel } => {
+            bytes.copy_from_slice(&[7, channel, 0, 0, 0]);
+        }
+        MidiEvent::AllSoundOff { channel } => {
+            bytes.copy_from_slice(&[8, channel, 0, 0, 0]);
+        }
+        MidiEvent::ResetAllControllers { channel } => {
+            bytes.copy_from_slice(&[9, channel, 0, 0, 0]);
+        }
+    }
+}
+
+fn decode_midi_event(bytes: &[u8]) -> Option<MidiEvent> {
+    if bytes.len() != 5 {
+        return None;
+    }
+    Some(match bytes[0] {
+        0 => MidiEvent::NoteOn {
+            channel: bytes[1],
+            note: bytes[2],
+            velocity: bytes[3],
+        },
+        1 => MidiEvent::NoteOff {
+            channel: bytes[1],
+            note: bytes[2],
+            velocity: bytes[3],
+        },
+        2 => MidiEvent::ControlChange {
+            channel: bytes[1],
+            controller: bytes[2],
+            value: bytes[3],
+        },
+        3 => MidiEvent::ProgramChange {
+            channel: bytes[1],
+            program: bytes[2],
+        },
+        4 => MidiEvent::ChannelPressure {
+            channel: bytes[1],
+            pressure: bytes[2],
+        },
+        5 => MidiEvent::PolyPressure {
+            channel: bytes[1],
+            note: bytes[2],
+            pressure: bytes[3],
+        },
+        6 => MidiEvent::PitchBend {
+            channel: bytes[1],
+            value: i16::from_le_bytes([bytes[2], bytes[3]]),
+        },
+        7 => MidiEvent::AllNotesOff { channel: bytes[1] },
+        8 => MidiEvent::AllSoundOff { channel: bytes[1] },
+        9 => MidiEvent::ResetAllControllers { channel: bytes[1] },
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+    use std::time::Duration;
+
+    use knyst::controller::KnystCommands;
+    use knyst::prelude::{Beats, graph_output, handle};
+
+    use super::{
+        InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle, MidiEvent,
+        ParamValue, Processor, ProcessorDescriptor, ProcessorState, ProcessorStateError,
+        soundfont_synth::{
+            LoadedSoundfont, SoundfontProcessor, SoundfontProcessorState, SoundfontSynthSettings,
+        },
+    };
+    use crate::test_utils::{OfflineHarness, test_soundfont_resource};
+
+    struct GateProcessor {
+        active: bool,
+    }
+
+    impl Processor for GateProcessor {
+        fn descriptor(&self) -> &'static ProcessorDescriptor {
+            static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+                name: "Gate",
+                params: &[],
+            };
+            &DESCRIPTOR
+        }
+
+        fn set_param(&mut self, _id: &str, _value: ParamValue) {}
+
+        fn save_state(&self) -> ProcessorState {
+            ProcessorState::default()
+        }
+
+        fn load_state(&mut self, _state: &ProcessorState) -> Result<(), ProcessorStateError> {
+            Ok(())
+        }
+
+        fn reset(&mut self) {
+            self.active = false;
+        }
+    }
+
+    impl InstrumentProcessor for GateProcessor {
+        fn handle_midi(&mut self, event: MidiEvent) {
+            match event {
+                MidiEvent::NoteOn { .. } => self.active = true,
+                MidiEvent::NoteOff { .. } | MidiEvent::AllNotesOff { .. } => self.active = false,
+                _ => {}
+            }
+        }
+
+        fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+            let value = if self.active { 1.0 } else { 0.0 };
+            left.fill(value);
+            right.fill(value);
+        }
+    }
+
+    #[test]
+    fn reset_then_note_on_in_same_block_produces_signal() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let handle = harness.context().with_activation(|| {
+            let node = handle(InstrumentProcessorNode::new(Box::new(GateProcessor {
+                active: true,
+            })));
+            graph_output(0, node.channels(2));
+            InstrumentRuntimeHandle::new(node)
+        });
+
+        harness.commands().transport_pause();
+        harness
+            .commands()
+            .transport_seek_to_beats(Beats::from_beats(1));
+        thread::sleep(Duration::from_millis(10));
+
+        handle.schedule_reset_at(harness.commands(), Beats::from_beats_f64(1.01), 1);
+        handle.schedule_midi_at_with_offset(
+            harness.commands(),
+            Beats::from_beats_f64(1.02),
+            1,
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
+        harness.commands().transport_play();
+
+        for _ in 0..512 {
+            harness.process_block();
+            if harness.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        panic!("reset then note-on in same block should produce signal");
+    }
+
+    #[test]
+    fn immediate_reset_and_panic_silence_active_node() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let handle = harness.context().with_activation(|| {
+            let node = handle(InstrumentProcessorNode::new(Box::new(GateProcessor {
+                active: false,
+            })));
+            graph_output(0, node.channels(2));
+            InstrumentRuntimeHandle::new(node)
+        });
+
+        harness.commands().transport_play();
+        handle.send_midi(
+            harness.commands(),
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
+
+        for _ in 0..256 {
+            harness.process_block();
+            if harness.output_has_signal() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(harness.output_has_signal(), "note on should produce signal");
+
+        handle.send_reset(harness.commands(), 1);
+        handle.send_midi_immediate(
+            harness.commands(),
+            1,
+            MidiEvent::AllSoundOff { channel: 0 },
+            InstrumentRuntimeHandle::immediate_event_delay(1),
+        );
+
+        for _ in 0..256 {
+            harness.process_block();
+            if !harness.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        panic!("immediate reset and panic should silence active node");
+    }
+
+    #[test]
+    fn immediate_reset_and_panic_silence_active_soundfont_node() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let handle = harness.context().with_activation(|| {
+            let loaded = LoadedSoundfont::load(&test_soundfont_resource())
+                .expect("test soundfont should load");
+            let processor = SoundfontProcessor::new(
+                &loaded.soundfont,
+                SoundfontSynthSettings::new(44_100, 64),
+                SoundfontProcessorState::default(),
+            )
+            .expect("soundfont processor should initialize");
+            let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
+            graph_output(0, node.channels(2));
+            InstrumentRuntimeHandle::new(node)
+        });
+
+        harness.commands().transport_play();
+        handle.send_midi(
+            harness.commands(),
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
+
+        for _ in 0..256 {
+            harness.process_block();
+            if harness.output_has_signal() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(harness.output_has_signal(), "note on should produce signal");
+
+        handle.send_reset(harness.commands(), 1);
+        handle.send_midi_immediate(
+            harness.commands(),
+            1,
+            MidiEvent::AllSoundOff { channel: 0 },
+            InstrumentRuntimeHandle::immediate_event_delay(1),
+        );
+
+        for _ in 0..256 {
+            harness.process_block();
+            if !harness.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        panic!("immediate reset and panic should silence active soundfont node");
     }
 }
