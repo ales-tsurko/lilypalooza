@@ -117,7 +117,6 @@ impl Lilypalooza {
                 ),
                 None,
             );
-            return;
         }
     }
 
