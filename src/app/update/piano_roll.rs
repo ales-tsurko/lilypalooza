@@ -7,6 +7,8 @@ impl Lilypalooza {
         message: PianoRollMessage,
     ) -> Task<Message> {
         let mut task = Task::none();
+        let focus_only_click = matches!(message, PianoRollMessage::SetCursorTicks(_))
+            && self.focused_workspace_pane != Some(WorkspacePaneKind::PianoRoll);
 
         match message {
             PianoRollMessage::ZoomIn
@@ -32,6 +34,10 @@ impl Lilypalooza {
             PianoRollMessage::ViewportCursorMoved(_)
             | PianoRollMessage::ViewportCursorLeft
             | PianoRollMessage::RollScrolled { .. } => {}
+        }
+
+        if focus_only_click {
+            return task;
         }
 
         match message {
@@ -148,6 +154,10 @@ impl Lilypalooza {
                         playback.transport().play();
                     }
 
+                    let current_tick = self.piano_roll.playback_tick();
+                    let total_ticks = self.current_midi_total_ticks();
+                    self.piano_roll
+                        .set_playback_position(current_tick, total_ticks, !is_playing);
                     self.refresh_playback_position();
                 } else {
                     self.show_prompt(
@@ -166,22 +176,18 @@ impl Lilypalooza {
                 let target_tick = self.rewind_target_tick();
 
                 if let Some(playback) = self.playback.as_mut() {
-                    let was_playing = playback
-                        .transport()
-                        .snapshot()
-                        .map(|snapshot| {
-                            snapshot.playback_state == lilypalooza_audio::PlaybackState::Playing
-                        })
-                        .unwrap_or(false);
-                    playback.transport().pause();
-                    if let Some(current_file) = self.piano_roll.current_file() {
+                    if target_tick == 0 {
+                        playback.transport().rewind();
+                    } else if let Some(current_file) = self.piano_roll.current_file() {
                         let ppq = f64::from(current_file.data.ppq.max(1));
-                        let beats = target_tick as f64 / ppq;
-                        playback.transport().seek_beats(beats);
+                        playback.transport().seek_beats(target_tick as f64 / ppq);
                     }
-                    if was_playing {
-                        playback.transport().play();
-                    }
+                    let total_ticks = self.current_midi_total_ticks();
+                    self.piano_roll.set_playback_position(
+                        target_tick.min(total_ticks),
+                        total_ticks,
+                        false,
+                    );
                     self.refresh_playback_position();
                 } else {
                     self.seek_playback_ticks(target_tick);

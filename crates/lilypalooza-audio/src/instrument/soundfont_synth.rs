@@ -42,10 +42,6 @@ impl Default for SoundfontProcessorState {
     }
 }
 
-pub(crate) fn default_soundfont_state() -> ProcessorState {
-    encode_soundfont_state(&SoundfontProcessorState::default())
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum SoundfontSynthError {
     #[error("failed to read soundfont `{path}`: {source}")]
@@ -138,6 +134,8 @@ const SOUNDFONT_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
 };
 
 impl SoundfontProcessor {
+    const TRACK_CHANNEL: i32 = 0;
+
     pub fn new(
         soundfont: &Arc<SoundFont>,
         settings: SoundfontSynthSettings,
@@ -168,10 +166,18 @@ impl SoundfontProcessor {
     fn apply_program(&mut self) {
         self.synthesizer.note_off_all(true);
         self.synthesizer.reset();
-        self.synthesizer
-            .process_midi_message(0, 0xB0, 0x00, i32::from(self.state.bank.min(127)));
-        self.synthesizer
-            .process_midi_message(0, 0xC0, i32::from(self.state.program), 0);
+        self.synthesizer.process_midi_message(
+            Self::TRACK_CHANNEL,
+            0xB0,
+            0x00,
+            i32::from(self.state.bank.min(127)),
+        );
+        self.synthesizer.process_midi_message(
+            Self::TRACK_CHANNEL,
+            0xC0,
+            i32::from(self.state.program),
+            0,
+        );
     }
 }
 
@@ -215,70 +221,62 @@ impl Processor for SoundfontProcessor {
 impl InstrumentProcessor for SoundfontProcessor {
     fn handle_midi(&mut self, event: MidiEvent) {
         match event {
-            MidiEvent::NoteOn {
-                channel,
-                note,
-                velocity,
-            } => self
-                .synthesizer
-                .note_on(i32::from(channel), i32::from(note), i32::from(velocity)),
-            MidiEvent::NoteOff {
-                channel,
-                note,
-                velocity,
-            } => self.synthesizer.process_midi_message(
-                i32::from(channel),
+            MidiEvent::NoteOn { note, velocity, .. } => {
+                self.synthesizer
+                    .note_on(Self::TRACK_CHANNEL, i32::from(note), i32::from(velocity))
+            }
+            MidiEvent::NoteOff { note, velocity, .. } => self.synthesizer.process_midi_message(
+                Self::TRACK_CHANNEL,
                 0x80,
                 i32::from(note),
                 i32::from(velocity),
             ),
             MidiEvent::ControlChange {
-                channel,
-                controller,
-                value,
+                controller, value, ..
             } => self.synthesizer.process_midi_message(
-                i32::from(channel),
+                Self::TRACK_CHANNEL,
                 0xB0,
                 i32::from(controller),
                 i32::from(value),
             ),
-            MidiEvent::ProgramChange { channel, program } => self.synthesizer.process_midi_message(
-                i32::from(channel),
+            MidiEvent::ProgramChange { program, .. } => self.synthesizer.process_midi_message(
+                Self::TRACK_CHANNEL,
                 0xC0,
                 i32::from(program),
                 0,
             ),
-            MidiEvent::ChannelPressure { channel, pressure } => self
-                .synthesizer
-                .process_midi_message(i32::from(channel), 0xD0, i32::from(pressure), 0),
-            MidiEvent::PolyPressure {
-                channel,
-                note,
-                pressure,
-            } => self.synthesizer.process_midi_message(
-                i32::from(channel),
-                0xA0,
-                i32::from(note),
+            MidiEvent::ChannelPressure { pressure, .. } => self.synthesizer.process_midi_message(
+                Self::TRACK_CHANNEL,
+                0xD0,
                 i32::from(pressure),
+                0,
             ),
-            MidiEvent::PitchBend { channel, value } => {
+            MidiEvent::PolyPressure { note, pressure, .. } => {
+                self.synthesizer.process_midi_message(
+                    Self::TRACK_CHANNEL,
+                    0xA0,
+                    i32::from(note),
+                    i32::from(pressure),
+                )
+            }
+            MidiEvent::PitchBend { value, .. } => {
                 let midi_value = (i32::from(value) + 8192).clamp(0, 16_383);
                 self.synthesizer.process_midi_message(
-                    i32::from(channel),
+                    Self::TRACK_CHANNEL,
                     0xE0,
                     midi_value & 0x7F,
                     (midi_value >> 7) & 0x7F,
                 );
             }
-            MidiEvent::AllNotesOff { channel } => self
+            MidiEvent::AllNotesOff { .. } => self
                 .synthesizer
-                .note_off_all_channel(i32::from(channel), false),
-            MidiEvent::AllSoundOff { channel } => self
+                .note_off_all_channel(Self::TRACK_CHANNEL, false),
+            MidiEvent::AllSoundOff { .. } => self
                 .synthesizer
-                .note_off_all_channel(i32::from(channel), true),
-            MidiEvent::ResetAllControllers { channel } => {
+                .note_off_all_channel(Self::TRACK_CHANNEL, true),
+            MidiEvent::ResetAllControllers { .. } => {
                 self.synthesizer
-                    .process_midi_message(i32::from(channel), 0xB0, 121, 0)
+                    .process_midi_message(Self::TRACK_CHANNEL, 0xB0, 121, 0)
             }
         }
     }
@@ -299,7 +297,7 @@ mod tests {
     use super::{
         LoadedSoundfont, SoundfontProcessor, SoundfontProcessorState, SoundfontSynthSettings,
     };
-    use crate::instrument::{InstrumentProcessor, MidiEvent};
+    use crate::instrument::{InstrumentProcessor, MidiEvent, Processor};
     use crate::test_utils::test_soundfont_resource;
 
     #[test]
@@ -333,5 +331,76 @@ mod tests {
         }
 
         panic!("soundfont processor produced silence after note on");
+    }
+
+    #[test]
+    fn soundfont_processor_renders_after_note_on_on_nonzero_channel() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut processor = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            SoundfontSynthSettings::new(44_100, 64),
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+
+        processor.handle_midi(MidiEvent::NoteOn {
+            channel: 3,
+            note: 60,
+            velocity: 100,
+        });
+
+        let mut left = vec![0.0; 64];
+        let mut right = vec![0.0; 64];
+        for _ in 0..8 {
+            processor.render(&mut left, &mut right);
+            if left
+                .iter()
+                .chain(right.iter())
+                .any(|sample| sample.abs() > 1.0e-6)
+            {
+                return;
+            }
+        }
+
+        panic!("soundfont processor produced silence after nonzero-channel note on");
+    }
+
+    #[test]
+    fn soundfont_processor_reset_silences_active_note() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut processor = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            SoundfontSynthSettings::new(44_100, 64),
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+
+        processor.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+
+        let mut left = vec![0.0; 64];
+        let mut right = vec![0.0; 64];
+        for _ in 0..8 {
+            processor.render(&mut left, &mut right);
+        }
+
+        processor.reset();
+        left.fill(0.0);
+        right.fill(0.0);
+        for _ in 0..8 {
+            processor.render(&mut left, &mut right);
+        }
+
+        assert!(
+            left.iter()
+                .chain(right.iter())
+                .all(|sample| sample.abs() <= 1.0e-6),
+            "soundfont processor reset should silence active notes"
+        );
     }
 }

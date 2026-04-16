@@ -88,3 +88,28 @@ impl EffectProcessor for GainEffectProcessor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::GainEffectProcessor;
+    use crate::instrument::{EffectProcessor, Processor, ProcessorState};
+
+    #[test]
+    fn gain_effect_scales_expected_signal() {
+        let mut processor =
+            GainEffectProcessor::from_state(&ProcessorState::default()).expect("processor");
+        processor.set_param("gain_db", crate::instrument::ParamValue::Float(-6.0));
+
+        let left_in = [0.0, 0.25, -0.5, 1.0];
+        let right_in = [1.0, -0.5, 0.25, 0.0];
+        let mut left_out = [0.0; 4];
+        let mut right_out = [0.0; 4];
+        processor.process(&left_in, &right_in, &mut left_out, &mut right_out);
+
+        let gain = knyst::db_to_amplitude(-6.0);
+        for index in 0..left_in.len() {
+            assert!((left_out[index] - left_in[index] * gain).abs() < 1.0e-6);
+            assert!((right_out[index] - right_in[index] * gain).abs() < 1.0e-6);
+        }
+    }
+}

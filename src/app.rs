@@ -691,6 +691,7 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
         || app.browser_file_watcher.is_some()
         || app.editor.has_document()
         || app.spinner_active()
+        || app.playback.is_some()
     {
         subscriptions.push(iced::time::every(BACKGROUND_POLL_INTERVAL).map(|_| Message::Tick));
     }
@@ -708,7 +709,7 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
         subscriptions.push(iced::time::every(SCORE_ZOOM_PREVIEW_INTERVAL).map(|_| Message::Tick));
     }
 
-    if app.playback.is_some() && app.piano_roll.playback_is_playing() {
+    if app.playback.is_some() {
         subscriptions.push(window::frames().map(Message::Frame));
     }
 

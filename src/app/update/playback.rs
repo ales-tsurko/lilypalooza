@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use lilypalooza_audio::{
     AudioEngine, AudioEngineOptions, INSTRUMENT_TRACK_COUNT, InstrumentSlotState, MixerState,
-    PlaybackState, SoundfontResource, TrackId,
+    SoundfontResource, TrackId,
 };
 
 use super::*;
@@ -49,84 +49,12 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn initialize_playback(&mut self, soundfont_path: PathBuf) {
-        let previous_playback = self.playback.take();
-
-        match previous_playback {
-            Some(mut playback) => {
-                match configure_soundfont(&mut playback, &soundfont_path, false) {
-                    Ok(()) => {
-                        self.playback = Some(playback);
-                        self.soundfont_status = SoundfontStatus::Ready(soundfont_path.clone());
-                        self.logger.push(format!(
-                            "Updated playback soundfont to {}",
-                            soundfont_path.display()
-                        ));
-                        self.sync_playback_file();
-                        self.refresh_playback_position();
-                    }
-                    Err(error) => {
-                        self.playback = Some(playback);
-                        self.soundfont_status = SoundfontStatus::Error(error.clone());
-                        self.logger
-                            .push(format!("Failed to update playback soundfont: {error}"));
-                        self.show_prompt(
-                            ErrorPrompt::new(
-                                "MIDI Playback Error",
-                                error,
-                                ErrorFatality::Recoverable,
-                                PromptButtons::Ok,
-                            ),
-                            None,
-                        );
-                    }
-                }
-            }
-            None => match AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
-            {
-                Ok(mut playback) => match configure_soundfont(&mut playback, &soundfont_path, true)
-                {
-                    Ok(()) => {
-                        self.playback = Some(playback);
-                        self.soundfont_status = SoundfontStatus::Ready(soundfont_path.clone());
-                        self.logger.push(format!(
-                            "Playback engine ready with soundfont {}",
-                            soundfont_path.display()
-                        ));
-                        self.sync_playback_file();
-                        self.refresh_playback_position();
-                    }
-                    Err(error) => {
-                        self.soundfont_status = SoundfontStatus::Error(error.clone());
-                        self.logger
-                            .push(format!("Failed to initialize playback engine: {error}"));
-                        self.show_prompt(
-                            ErrorPrompt::new(
-                                "MIDI Playback Error",
-                                error,
-                                ErrorFatality::Recoverable,
-                                PromptButtons::Ok,
-                            ),
-                            None,
-                        );
-                    }
-                },
-                Err(error) => {
-                    let error = error.to_string();
-                    self.soundfont_status = SoundfontStatus::Error(error.clone());
-                    self.logger
-                        .push(format!("Failed to initialize playback engine: {error}"));
-                    self.show_prompt(
-                        ErrorPrompt::new(
-                            "MIDI Playback Error",
-                            error,
-                            ErrorFatality::Recoverable,
-                            PromptButtons::Ok,
-                        ),
-                        None,
-                    );
-                }
-            },
-        }
+        self.soundfont_status = SoundfontStatus::Ready(soundfont_path.clone());
+        self.logger.push(format!(
+            "Selected playback soundfont {}",
+            soundfont_path.display()
+        ));
+        self.sync_playback_file();
     }
 
     pub(in crate::app) fn unload_playback_file(&mut self) {
@@ -135,72 +63,62 @@ impl Lilypalooza {
             playback.transport().rewind();
             playback.sequencer().clear();
         }
-
-        self.refresh_playback_position();
     }
 
     pub(in crate::app) fn sync_playback_file(&mut self) {
         let selected_file = self.current_midi_file_path();
-
-        let Some(playback) = self.playback.as_mut() else {
-            self.refresh_playback_position();
-            return;
-        };
-
         let Some(selected_file) = selected_file else {
-            playback.transport().pause();
-            playback.transport().rewind();
-            playback.sequencer().clear();
-            self.refresh_playback_position();
+            self.playback = None;
             return;
         };
+        let SoundfontStatus::Ready(soundfont_path) = &self.soundfont_status else {
+            return;
+        };
+
+        let mut load_error = None;
 
         match fs::read(&selected_file) {
             Ok(bytes) => {
-                let result = playback.sequencer().replace_from_midi_bytes(&bytes);
-                match result {
-                    Ok(()) => {
+                match rebuild_playback_engine(soundfont_path, &bytes) {
+                    Ok(mut playback) => {
+                        self.soundfont_status = SoundfontStatus::Ready(soundfont_path.clone());
                         self.logger.push(format!(
                             "Loaded MIDI for playback {}",
                             selected_file.display()
                         ));
+                        playback.transport().pause();
+                        playback.transport().rewind();
+                        self.playback = Some(playback);
+                        let total_ticks = self.current_midi_total_ticks();
+                        self.piano_roll.set_playback_position(0, total_ticks, false);
+                        self.refresh_score_cursor_overlay();
                         self.sync_playback_track_mix();
                     }
-                    Err(error) => {
-                        let error = error.to_string();
-                        self.logger
-                            .push(format!("Failed to load MIDI for playback: {error}"));
-                        self.show_prompt(
-                            ErrorPrompt::new(
-                                "MIDI Playback Error",
-                                error,
-                                ErrorFatality::Recoverable,
-                                PromptButtons::Ok,
-                            ),
-                            None,
-                        );
-                    }
-                }
+                    Err(error) => load_error = Some(error),
+                };
             }
             Err(error) => {
-                let error = format!(
+                load_error = Some(format!(
                     "Failed to read MIDI file {}: {error}",
                     selected_file.display()
-                );
-                self.logger.push(error.clone());
-                self.show_prompt(
-                    ErrorPrompt::new(
-                        "MIDI Playback Error",
-                        error,
-                        ErrorFatality::Recoverable,
-                        PromptButtons::Ok,
-                    ),
-                    None,
-                );
+                ));
             }
         }
 
-        self.refresh_playback_position();
+        if let Some(error) = load_error {
+            self.soundfont_status = SoundfontStatus::Error(error.clone());
+            self.logger.push(error.clone());
+            self.show_prompt(
+                ErrorPrompt::new(
+                    "MIDI Playback Error",
+                    error,
+                    ErrorFatality::Recoverable,
+                    PromptButtons::Ok,
+                ),
+                None,
+            );
+            return;
+        }
     }
 
     pub(in crate::app) fn sync_playback_track_mix(&mut self) {
@@ -246,46 +164,51 @@ impl Lilypalooza {
 
     pub(in crate::app) fn seek_playback_ticks(&mut self, tick: u64) {
         self.transport_seek_preview = None;
+        let total_ticks = self.current_midi_total_ticks();
+        let tick = tick.min(total_ticks);
 
-        if let Some(playback) = self.playback.as_mut()
-            && let Some(current_file) = self.piano_roll.current_file()
+        if let (Some(playback), Some(current_file)) =
+            (self.playback.as_mut(), self.piano_roll.current_file())
         {
             let ppq = f64::from(current_file.data.ppq.max(1));
-            let beats = tick as f64 / ppq;
-            playback.transport().seek_beats(beats);
-            self.refresh_playback_position();
-            return;
+            playback.transport().seek_beats(tick as f64 / ppq);
         }
 
-        let total_ticks = self.current_midi_total_ticks();
+        let is_playing = self
+            .playback
+            .as_mut()
+            .and_then(|playback| playback.transport().snapshot().ok())
+            .is_some_and(|snapshot| {
+                snapshot.playback_state == lilypalooza_audio::PlaybackState::Playing
+            });
         self.piano_roll
-            .set_playback_position(tick.min(total_ticks), total_ticks, false);
+            .set_playback_position(tick, total_ticks, is_playing);
         self.refresh_score_cursor_overlay();
     }
 
     pub(in crate::app) fn refresh_playback_position(&mut self) {
         let total_ticks = self.current_midi_total_ticks();
-
-        if let Some(playback) = self.playback.as_mut() {
-            let tick = playback
-                .sequencer()
-                .playback_tick()
-                .unwrap_or_else(|_| self.piano_roll.playback_tick().min(total_ticks));
-            let is_playing = playback
-                .transport()
-                .snapshot()
-                .map(|snapshot| snapshot.playback_state == PlaybackState::Playing)
-                .unwrap_or_else(|_| self.piano_roll.playback_is_playing());
-
+        let Some(playback) = self.playback.as_mut() else {
+            let current_tick = self.piano_roll.playback_tick().min(total_ticks);
             self.piano_roll
-                .set_playback_position(tick.min(total_ticks), total_ticks, is_playing);
+                .set_playback_position(current_tick, total_ticks, false);
             self.refresh_score_cursor_overlay();
             return;
-        }
+        };
 
-        let current_tick = self.piano_roll.playback_tick().min(total_ticks);
+        let is_playing = playback
+            .transport()
+            .snapshot()
+            .map(|snapshot| snapshot.playback_state == lilypalooza_audio::PlaybackState::Playing)
+            .unwrap_or_else(|_| self.piano_roll.playback_is_playing());
+        let current_tick = playback
+            .sequencer()
+            .playback_tick()
+            .map(|tick| tick.min(total_ticks))
+            .unwrap_or_else(|_| self.piano_roll.playback_tick().min(total_ticks));
+
         self.piano_roll
-            .set_playback_position(current_tick, total_ticks, false);
+            .set_playback_position(current_tick, total_ticks, is_playing);
         self.refresh_score_cursor_overlay();
     }
 
@@ -301,11 +224,7 @@ impl Lilypalooza {
     }
 }
 
-fn configure_soundfont(
-    playback: &mut AudioEngine,
-    soundfont_path: &Path,
-    configure_default_tracks: bool,
-) -> Result<(), String> {
+fn configure_soundfont(playback: &mut AudioEngine, soundfont_path: &Path) -> Result<(), String> {
     let soundfont = SoundfontResource {
         id: DEFAULT_SOUNDFONT_ID.to_string(),
         name: soundfont_name(soundfont_path),
@@ -318,19 +237,37 @@ fn configure_soundfont(
             .set_soundfont(soundfont)
             .map_err(|error| error.to_string())?;
 
-        if configure_default_tracks {
-            for (track_index, program) in DEFAULT_PIANO_PROGRAMS.into_iter().enumerate() {
-                mixer
-                    .set_track_instrument(
-                        TrackId(track_index as u16),
-                        InstrumentSlotState::soundfont(DEFAULT_SOUNDFONT_ID, 0, program),
-                    )
-                    .map_err(|error| error.to_string())?;
-            }
+        for track_index in 0..DEFAULT_PIANO_PROGRAMS.len() {
+            let program = DEFAULT_PIANO_PROGRAMS
+                .get(track_index)
+                .copied()
+                .unwrap_or(DEFAULT_PIANO_PROGRAMS[0]);
+            mixer
+                .set_track_instrument(
+                    TrackId(track_index as u16),
+                    InstrumentSlotState::soundfont(DEFAULT_SOUNDFONT_ID, 0, program),
+                )
+                .map_err(|error| error.to_string())?;
         }
     }
 
+    playback.flush();
+
     Ok(())
+}
+
+fn rebuild_playback_engine(
+    soundfont_path: &Path,
+    midi_bytes: &[u8],
+) -> Result<AudioEngine, String> {
+    let mut playback = AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+        .map_err(|error| error.to_string())?;
+    configure_soundfont(&mut playback, soundfont_path)?;
+    playback
+        .sequencer()
+        .replace_from_midi_bytes(midi_bytes)
+        .map_err(|error| error.to_string())?;
+    Ok(playback)
 }
 
 fn soundfont_name(path: &Path) -> String {

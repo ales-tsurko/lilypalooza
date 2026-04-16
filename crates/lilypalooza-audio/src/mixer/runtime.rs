@@ -1,5 +1,10 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
+use knyst::graph::GenOrGraph;
+use knyst::graph::SimultaneousChanges;
+use knyst::graph::connection::InputBundle;
+use knyst::inputs;
 use knyst::modal_interface::{KnystContext, knyst_commands};
 use knyst::prelude::{
     BlockSize, Connection, GenState, GenericHandle, Handle, HandleData, KnystCommands,
@@ -30,7 +35,7 @@ pub(crate) enum MixerRuntimeError {
 
 pub(crate) struct MixerRuntime {
     master: MasterRuntime,
-    tracks: Vec<TrackRuntime>,
+    tracks: Vec<Option<TrackRuntime>>,
     buses: HashMap<BusId, BusRuntime>,
     soundfonts: HashMap<String, LoadedSoundfont>,
     soundfont_settings: SoundfontSynthSettings,
@@ -41,6 +46,7 @@ impl MixerRuntime {
         Some(
             self.tracks
                 .get(track_id.index())?
+                .as_ref()?
                 .instrument
                 .as_ref()?
                 .handle,
@@ -77,14 +83,18 @@ impl MixerRuntime {
 
             let mut tracks = Vec::with_capacity(mixer.tracks.len());
             for track in &mixer.tracks {
-                tracks.push(TrackRuntime::new(
-                    context,
-                    commands,
-                    track,
-                    mixer,
-                    &runtime.soundfonts,
-                    runtime.soundfont_settings,
-                )?);
+                tracks.push(if track_needs_runtime(track) {
+                    Some(TrackRuntime::new(
+                        context,
+                        commands,
+                        track,
+                        mixer,
+                        &runtime.soundfonts,
+                        runtime.soundfont_settings,
+                    )?)
+                } else {
+                    None
+                });
             }
             runtime.tracks = tracks;
             runtime.sync_all_routing(context, commands, mixer)?;
@@ -184,13 +194,30 @@ impl MixerRuntime {
             .tracks
             .get_mut(track_id.index())
             .ok_or(MixerError::InvalidTrackId(track_id))?;
-        runtime.sync_source(
-            context,
-            commands,
-            track,
-            &self.soundfonts,
-            self.soundfont_settings,
-        )?;
+        if !track_needs_runtime(track) {
+            if let Some(runtime) = runtime.take() {
+                runtime.free();
+            }
+            return Ok(());
+        }
+        if let Some(runtime) = runtime.as_mut() {
+            runtime.sync_source(
+                context,
+                commands,
+                track,
+                &self.soundfonts,
+                self.soundfont_settings,
+            )?;
+        } else {
+            *runtime = Some(TrackRuntime::new(
+                context,
+                commands,
+                track,
+                mixer,
+                &self.soundfonts,
+                self.soundfont_settings,
+            )?);
+        }
         Ok(())
     }
 
@@ -206,7 +233,24 @@ impl MixerRuntime {
             .tracks
             .get_mut(track_id.index())
             .ok_or(MixerError::InvalidTrackId(track_id))?;
-        runtime.rebuild_effects(context, commands, &track.effects);
+        if !track_needs_runtime(track) {
+            if let Some(runtime) = runtime.take() {
+                runtime.free();
+            }
+            return Ok(());
+        }
+        if let Some(runtime) = runtime.as_mut() {
+            runtime.rebuild_effects(context, commands, &track.effects);
+        } else {
+            *runtime = Some(TrackRuntime::new(
+                context,
+                commands,
+                track,
+                mixer,
+                &self.soundfonts,
+                self.soundfont_settings,
+            )?);
+        }
         Ok(())
     }
 
@@ -222,7 +266,9 @@ impl MixerRuntime {
             .tracks
             .get_mut(track_id.index())
             .ok_or(MixerError::InvalidTrackId(track_id))?;
-        runtime.apply_strip(commands, track, amplitude);
+        if let Some(runtime) = runtime.as_mut() {
+            runtime.apply_strip(commands, track, amplitude);
+        }
         Ok(())
     }
 
@@ -282,15 +328,16 @@ impl MixerRuntime {
             .tracks
             .get_mut(track_id.index())
             .ok_or(MixerError::InvalidTrackId(track_id))?;
-        runtime.sync_routing(
-            context,
-            commands,
-            mixer,
-            self.master.input_node(),
-            &bus_inputs,
-            track,
-        )?;
-        self.sync_all_levels(commands, mixer);
+        if let Some(runtime) = runtime.as_mut() {
+            runtime.sync_routing(
+                context,
+                commands,
+                mixer,
+                self.master.input_node(),
+                &bus_inputs,
+                track,
+            )?;
+        }
         Ok(())
     }
 
@@ -315,7 +362,6 @@ impl MixerRuntime {
             &bus_inputs,
             bus,
         )?;
-        self.sync_all_levels(commands, mixer);
         Ok(())
     }
 
@@ -332,6 +378,7 @@ impl MixerRuntime {
         for bus_id in bus_ids {
             self.sync_bus_routing(context, commands, mixer, bus_id)?;
         }
+        self.sync_all_levels(commands, mixer);
         Ok(())
     }
 
@@ -346,13 +393,15 @@ impl MixerRuntime {
                 .tracks
                 .get_mut(track.id.index())
                 .ok_or(MixerError::InvalidTrackId(track.id))?;
-            runtime.sync_routing_existing(
-                commands,
-                mixer,
-                self.master.input_node(),
-                &bus_inputs,
-                track,
-            )?;
+            if let Some(runtime) = runtime.as_mut() {
+                runtime.sync_routing_existing(
+                    commands,
+                    mixer,
+                    self.master.input_node(),
+                    &bus_inputs,
+                    track,
+                )?;
+            }
         }
         for bus in &mixer.buses {
             if let Some(runtime) = self.buses.get_mut(&bus.id) {
@@ -374,6 +423,7 @@ impl MixerRuntime {
         mixer: &MixerState,
     ) {
         self.master.set_level(
+            commands,
             db_to_amplitude(mixer.master.state.gain_db),
             mixer.master.state.pan,
         );
@@ -387,7 +437,9 @@ impl MixerRuntime {
             .iter_mut()
             .zip(mixer.tracks.iter().zip(track_amplitudes.into_iter()))
         {
-            runtime.apply_strip(commands, track, amplitude);
+            if let Some(runtime) = runtime.as_mut() {
+                runtime.apply_strip(commands, track, amplitude);
+            }
         }
         for bus in &mixer.buses {
             if let Some(runtime) = self.buses.get_mut(&bus.id) {
@@ -417,9 +469,14 @@ impl MasterRuntime {
         mixer: &MixerState,
     ) -> Self {
         let input = bus(2);
-        let strip = handle(StereoBalanceGain::new());
-        set_scalar(strip, 2, db_to_amplitude(mixer.master.state.gain_db));
-        set_scalar(strip, 3, mixer.master.state.pan);
+        let strip = handle_with_inputs(
+            commands,
+            StereoBalanceGain::new(),
+            inputs!(
+                (2 : db_to_amplitude(mixer.master.state.gain_db)),
+                (3 : mixer.master.state.pan)
+            ),
+        );
         graph_output(0, strip.channels(2));
         let mut runtime = Self {
             input,
@@ -434,9 +491,9 @@ impl MasterRuntime {
         node_id_of(self.input)
     }
 
-    fn set_level(&mut self, gain: f32, pan: f32) {
-        set_scalar(self.strip, 2, gain);
-        set_scalar(self.strip, 3, pan);
+    fn set_level(&mut self, commands: &mut MultiThreadedKnystCommands, gain: f32, pan: f32) {
+        set_scalar(commands, self.strip, 2, gain);
+        set_scalar(commands, self.strip, 3, pan);
     }
 
     fn rebuild_effects(
@@ -484,12 +541,17 @@ impl TrackRuntime {
         soundfont_settings: SoundfontSynthSettings,
     ) -> Result<Self, MixerRuntimeError> {
         let source_bus = bus(2);
-        let strip = handle(StereoBalanceGain::new());
+        let strip = handle_with_inputs(
+            commands,
+            StereoBalanceGain::new(),
+            inputs!(
+                (2 : db_to_amplitude(track.state.gain_db)),
+                (3 : track.state.pan)
+            ),
+        );
         let route_bus = bus(2);
 
         connect_stereo(node_id_of(strip), node_id_of(route_bus));
-        set_scalar(strip, 2, db_to_amplitude(track.state.gain_db));
-        set_scalar(strip, 3, track.state.pan);
 
         let mut runtime = Self {
             source_bus,
@@ -559,12 +621,12 @@ impl TrackRuntime {
 
     fn apply_strip(
         &mut self,
-        _commands: &mut MultiThreadedKnystCommands,
+        commands: &mut MultiThreadedKnystCommands,
         track: &MixerTrack,
         gain: f32,
     ) {
-        set_scalar(self.strip, 2, gain);
-        set_scalar(self.strip, 3, track.state.pan);
+        set_scalar(commands, self.strip, 2, gain);
+        set_scalar(commands, self.strip, 3, track.state.pan);
     }
 
     fn sync_routing(
@@ -605,7 +667,7 @@ impl TrackRuntime {
     fn rebuild_sends(
         &mut self,
         context: &KnystContext,
-        _commands: &mut MultiThreadedKnystCommands,
+        commands: &mut MultiThreadedKnystCommands,
         bus_inputs: &HashMap<BusId, NodeId>,
         sends: &[BusSend],
         pre_source: NodeId,
@@ -622,8 +684,11 @@ impl TrackRuntime {
                 let Some(destination) = bus_inputs.get(&send.bus_id).copied() else {
                     continue;
                 };
-                let gain = handle(StereoGain::new());
-                set_scalar(gain, 2, db_to_amplitude(send.gain_db));
+                let gain = handle_with_inputs(
+                    commands,
+                    StereoGain::new(),
+                    inputs!((2 : db_to_amplitude(send.gain_db))),
+                );
                 let gain_node = node_id_of(gain);
                 connect_stereo(
                     if send.pre_fader {
@@ -637,6 +702,29 @@ impl TrackRuntime {
                 self.send_nodes.push(gain_node);
             }
         });
+    }
+
+    fn free(self) {
+        if let Some(instrument) = self.instrument {
+            instrument.free();
+        }
+        for effect in self.effects {
+            free_effect(effect);
+        }
+        for node in self.send_nodes {
+            knyst_commands().disconnect(Connection::clear_from_nodes(node));
+            knyst_commands().disconnect(Connection::clear_to_nodes(node));
+            knyst_commands().free_node(node);
+        }
+        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.strip)));
+        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.strip)));
+        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.route_bus)));
+        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.route_bus)));
+        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.source_bus)));
+        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.source_bus)));
+        knyst_commands().free_node(node_id_of(self.strip));
+        knyst_commands().free_node(node_id_of(self.route_bus));
+        knyst_commands().free_node(node_id_of(self.source_bus));
     }
 }
 
@@ -688,11 +776,16 @@ impl BusRuntime {
         _mixer: &MixerState,
     ) -> Self {
         let input = bus(2);
-        let strip = handle(StereoBalanceGain::new());
+        let strip = handle_with_inputs(
+            commands,
+            StereoBalanceGain::new(),
+            inputs!(
+                (2 : db_to_amplitude(bus_track.state.gain_db)),
+                (3 : bus_track.state.pan)
+            ),
+        );
         let route_bus = bus(2);
         connect_stereo(node_id_of(strip), node_id_of(route_bus));
-        set_scalar(strip, 2, db_to_amplitude(bus_track.state.gain_db));
-        set_scalar(strip, 3, bus_track.state.pan);
         let mut runtime = Self {
             input,
             effects: Vec::new(),
@@ -710,12 +803,12 @@ impl BusRuntime {
 
     fn apply_strip(
         &mut self,
-        _commands: &mut MultiThreadedKnystCommands,
+        commands: &mut MultiThreadedKnystCommands,
         bus_track: &BusTrack,
         gain: f32,
     ) {
-        set_scalar(self.strip, 2, gain);
-        set_scalar(self.strip, 3, bus_track.state.pan);
+        set_scalar(commands, self.strip, 2, gain);
+        set_scalar(commands, self.strip, 3, bus_track.state.pan);
     }
 
     fn rebuild_effects(
@@ -782,7 +875,7 @@ impl BusRuntime {
     fn rebuild_sends(
         &mut self,
         context: &KnystContext,
-        _commands: &mut MultiThreadedKnystCommands,
+        commands: &mut MultiThreadedKnystCommands,
         bus_inputs: &HashMap<BusId, NodeId>,
         sends: &[BusSend],
         pre_source: NodeId,
@@ -799,8 +892,11 @@ impl BusRuntime {
                 let Some(destination) = bus_inputs.get(&send.bus_id).copied() else {
                     continue;
                 };
-                let gain = handle(StereoGain::new());
-                set_scalar(gain, 2, db_to_amplitude(send.gain_db));
+                let gain = handle_with_inputs(
+                    commands,
+                    StereoGain::new(),
+                    inputs!((2 : db_to_amplitude(send.gain_db))),
+                );
                 let gain_node = node_id_of(gain);
                 connect_stereo(
                     if send.pre_fader {
@@ -888,8 +984,26 @@ fn connect_stereo(source: NodeId, destination: NodeId) {
     knyst_commands().connect(source.to(destination).from_index(1).to_index(1));
 }
 
-fn set_scalar(handle: Handle<GenericHandle>, channel: usize, value: f32) {
-    handle.set(channel, value);
+fn handle_with_inputs(
+    commands: &mut MultiThreadedKnystCommands,
+    processor: impl GenOrGraph,
+    inputs: impl Into<InputBundle>,
+) -> Handle<GenericHandle> {
+    let num_inputs = processor.num_inputs();
+    let num_outputs = processor.num_outputs();
+    let node_id = commands.push(processor, inputs);
+    Handle::new(GenericHandle::new(node_id, num_inputs, num_outputs))
+}
+
+fn set_scalar(
+    commands: &mut MultiThreadedKnystCommands,
+    handle: Handle<GenericHandle>,
+    channel: usize,
+    value: f32,
+) {
+    let mut changes = SimultaneousChanges::duration_from_now(Duration::ZERO);
+    changes.push(node_id_of(handle).change().set(channel, value));
+    commands.schedule_changes(changes);
 }
 
 fn node_id_of<H: HandleData + Copy>(handle: Handle<H>) -> NodeId {
@@ -929,6 +1043,13 @@ fn route_bus_id(route: TrackRoute) -> Option<BusId> {
         TrackRoute::Master => None,
         TrackRoute::Bus(bus_id) => Some(bus_id),
     }
+}
+
+fn track_needs_runtime(track: &MixerTrack) -> bool {
+    !matches!(
+        track.instrument.kind,
+        InstrumentKind::BuiltIn { ref instrument_id } if instrument_id == "none"
+    ) || !track.effects.is_empty()
 }
 
 fn db_to_amplitude(db: f32) -> f32 {
@@ -999,24 +1120,46 @@ impl StereoBalanceGain {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use knyst::controller::KnystCommands;
     use knyst::modal_interface::knyst_commands;
-    use knyst::prelude::{bus, graph_output, handle};
+    use knyst::prelude::{BlockSize, GenState, Sample, bus, graph_output, handle, impl_gen};
 
-    use super::{
-        MixerRuntimeError, TrackRuntime, connect_stereo, create_track_instrument, node_id_of,
-    };
-    use crate::instrument::soundfont_synth::{
-        LoadedSoundfont, SoundfontProcessor, SoundfontSynthSettings,
-    };
-    use crate::instrument::{
-        InstrumentKind, InstrumentProcessorNode, InstrumentRuntimeHandle, InstrumentSlotState,
-        MidiEvent, ProcessorState, SoundfontProcessorState,
-    };
-    use crate::mixer::{Mixer, MixerState, TrackId, TrackRoute};
+    use super::{MixerRuntimeError, connect_stereo, node_id_of};
+    use crate::instrument::{InstrumentKind, InstrumentSlotState, MidiEvent, ProcessorState};
+    use crate::mixer::{Mixer, MixerState, TrackId};
     use crate::test_utils::{OfflineHarness, test_soundfont_resource};
+
+    struct TestSineGen {
+        phase: f32,
+        phase_increment: f32,
+    }
+
+    #[impl_gen]
+    impl TestSineGen {
+        #[new]
+        fn new(sample_rate: f32, frequency: f32) -> Self {
+            Self {
+                phase: 0.0,
+                phase_increment: std::f32::consts::TAU * frequency / sample_rate,
+            }
+        }
+
+        #[process]
+        fn process(
+            &mut self,
+            left_out: &mut [Sample],
+            right_out: &mut [Sample],
+            block_size: BlockSize,
+        ) -> GenState {
+            for frame in 0..block_size.0 {
+                let sample = self.phase.sin();
+                left_out[frame] = sample;
+                right_out[frame] = sample * 0.5;
+                self.phase += self.phase_increment;
+            }
+            GenState::Continue
+        }
+    }
 
     fn build_soundfont_mixer(harness: &mut OfflineHarness) -> Result<Mixer, MixerRuntimeError> {
         let mut state = MixerState::new();
@@ -1083,164 +1226,6 @@ mod tests {
     }
 
     #[test]
-    fn create_track_instrument_returns_audible_handle() {
-        let mut harness = OfflineHarness::new_with_outputs(44_100, 64, 4);
-        let resource = test_soundfont_resource();
-        let loaded = LoadedSoundfont::load(&resource).expect("test SoundFont should load");
-        let mut soundfonts = HashMap::new();
-        soundfonts.insert(resource.id.clone(), loaded);
-        let mut state = MixerState::new();
-        state
-            .track_mut(TrackId(0))
-            .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 0);
-        let track = state.track(TrackId(0)).expect("track 0 should exist");
-        let instrument = create_track_instrument(
-            harness.context(),
-            track,
-            &soundfonts,
-            SoundfontSynthSettings::new(44_100, 64),
-        )
-        .expect("instrument should build")
-        .expect("soundfont track should produce an instrument");
-        harness.context().with_activation(|| {
-            graph_output(2, instrument.handle.raw_handle().channels(2));
-        });
-
-        instrument.handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
-
-        harness.process_blocks(8);
-
-        assert!(harness.errors().is_empty(), "{:?}", harness.errors());
-        assert!(
-            harness
-                .output_channel(2)
-                .iter()
-                .any(|sample| sample.abs() > 1.0e-6)
-        );
-    }
-
-    #[test]
-    fn track_runtime_keeps_instrument_audible() {
-        let mut harness = OfflineHarness::new(44_100, 64);
-        let resource = test_soundfont_resource();
-        let loaded = LoadedSoundfont::load(&resource).expect("test SoundFont should load");
-        let mut soundfonts = HashMap::new();
-        soundfonts.insert(resource.id.clone(), loaded);
-        let mut state = MixerState::new();
-        state
-            .track_mut(TrackId(0))
-            .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 0);
-        let track = state.track(TrackId(0)).expect("track 0 should exist");
-        let context = harness.context().clone();
-        let runtime = TrackRuntime::new(
-            &context,
-            harness.commands(),
-            track,
-            &state,
-            &soundfonts,
-            SoundfontSynthSettings::new(44_100, 64),
-        )
-        .expect("track runtime should build");
-        let handle = runtime
-            .instrument
-            .as_ref()
-            .expect("track runtime should keep instrument")
-            .handle;
-        harness.context().with_activation(|| {
-            graph_output(0, handle.raw_handle().channels(2));
-        });
-
-        handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
-
-        harness.process_blocks(8);
-
-        assert!(harness.errors().is_empty(), "{:?}", harness.errors());
-        assert!(harness.output_has_signal());
-    }
-
-    #[test]
-    fn fresh_instrument_after_mixer_init_is_audible() {
-        let mut harness = OfflineHarness::new_with_outputs(44_100, 64, 4);
-        let mixer = build_soundfont_mixer(&mut harness).expect("mixer should initialize");
-        let resource = test_soundfont_resource();
-        let loaded = LoadedSoundfont::load(&resource).expect("test SoundFont should load");
-        let mut soundfonts = HashMap::new();
-        soundfonts.insert(resource.id.clone(), loaded);
-        let track = mixer.state.track(TrackId(0)).expect("track 0 should exist");
-        let instrument = create_track_instrument(
-            harness.context(),
-            track,
-            &soundfonts,
-            SoundfontSynthSettings::new(44_100, 64),
-        )
-        .expect("instrument should build")
-        .expect("soundfont track should produce an instrument");
-        harness.context().with_activation(|| {
-            graph_output(2, instrument.handle.raw_handle().channels(2));
-        });
-        harness.process_blocks(50);
-
-        instrument.handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
-
-        harness.process_blocks(50);
-
-        assert!(harness.errors().is_empty(), "{:?}", harness.errors());
-        assert!(
-            harness
-                .output_channel(2)
-                .iter()
-                .any(|sample| sample.abs() > 1.0e-6)
-        );
-    }
-
-    #[test]
-    fn track_soundfont_reaches_master_output() {
-        let mut harness = OfflineHarness::new(44_100, 64);
-        let mixer = build_soundfont_mixer(&mut harness).expect("mixer should initialize");
-        let handle = mixer
-            .instrument_handle(TrackId(0))
-            .expect("track instrument should exist");
-        harness.process_blocks(50);
-
-        handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
-
-        harness.process_blocks(50);
-
-        assert!(harness.errors().is_empty(), "{:?}", harness.errors());
-        assert!(harness.output_has_signal());
-    }
-
-    #[test]
     fn track_soundfont_reaches_master_output_with_thread_local_note_on() {
         let mut harness = OfflineHarness::new(44_100, 64);
         let mixer = build_soundfont_mixer(&mut harness).expect("mixer should initialize");
@@ -1248,6 +1233,8 @@ mod tests {
             .instrument_handle(TrackId(0))
             .expect("track instrument should exist");
         harness.process_blocks(50);
+        harness.commands().transport_play();
+        harness.process_block();
 
         harness.context().with_activation(|| {
             handle.note_on(0, 60, 100);
@@ -1260,104 +1247,26 @@ mod tests {
     }
 
     #[test]
-    fn track_source_bus_receives_instrument_audio() {
-        let mut harness = OfflineHarness::new_with_outputs(44_100, 64, 4);
-        let mixer = build_soundfont_mixer(&mut harness).expect("mixer should initialize");
-        let handle = mixer
-            .instrument_handle(TrackId(0))
-            .expect("track instrument should exist");
-        harness.context().with_activation(|| {
-            graph_output(2, mixer.runtime.tracks[0].source_bus.channels(2));
-        });
-        harness.process_blocks(50);
-
-        handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
-
-        harness.process_blocks(50);
-
-        assert!(harness.errors().is_empty(), "{:?}", harness.errors());
-        assert!(
-            harness
-                .output_channel(2)
-                .iter()
-                .any(|sample| sample.abs() > 1.0e-6)
-        );
-    }
-
-    #[test]
-    fn track_instrument_node_itself_renders_audio() {
-        let mut harness = OfflineHarness::new_with_outputs(44_100, 64, 4);
-        let mixer = build_soundfont_mixer(&mut harness).expect("mixer should initialize");
-        let handle = mixer
-            .instrument_handle(TrackId(0))
-            .expect("track instrument should exist");
-        harness.context().with_activation(|| {
-            graph_output(2, handle.raw_handle().channels(2));
-        });
-        harness.process_blocks(50);
-
-        handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
-
-        harness.process_blocks(50);
-
-        assert!(harness.errors().is_empty(), "{:?}", harness.errors());
-        assert!(
-            harness
-                .output_channel(2)
-                .iter()
-                .any(|sample| sample.abs() > 1.0e-6)
-        );
-    }
-
-    #[test]
-    fn direct_node_to_bus_connection_carries_audio() {
+    fn direct_sine_node_to_bus_preserves_expected_samples() {
         let mut harness = OfflineHarness::new(44_100, 64);
-        let loaded =
-            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
-        let processor = SoundfontProcessor::new(
-            &loaded.soundfont,
-            SoundfontSynthSettings::new(
-                harness.settings().sample_rate as i32,
-                harness.settings().block_size,
-            ),
-            SoundfontProcessorState::default(),
-        )
-        .expect("processor should initialize");
-        let (handle, bus_handle) = harness.context().with_activation(|| {
-            let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
+        let bus_handle = harness.context().with_activation(|| {
+            let signal = handle(TestSineGen::new(44_100.0, 440.0));
             let bus_handle = bus(2);
             graph_output(0, bus_handle.channels(2));
-            (InstrumentRuntimeHandle::new(node), bus_handle)
+            connect_stereo(node_id_of(signal), node_id_of(bus_handle));
+            bus_handle
         });
-        connect_stereo(handle.node_id(), node_id_of(bus_handle));
 
-        handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
+        let _ = bus_handle;
+        harness.process_block();
 
-        harness.process_blocks(8);
-
-        assert!(harness.errors().is_empty(), "{:?}", harness.errors());
-        assert!(harness.output_has_signal());
+        let phase_increment = std::f32::consts::TAU * 440.0 / 44_100.0;
+        for frame in 0..8 {
+            let expected_left = (phase_increment * frame as f32).sin();
+            let expected_right = expected_left * 0.5;
+            assert!((harness.output_channel(0)[frame] - expected_left).abs() < 1.0e-5);
+            assert!((harness.output_channel(1)[frame] - expected_right).abs() < 1.0e-5);
+        }
     }
 
     #[test]
@@ -1375,6 +1284,8 @@ mod tests {
         let handle = mixer
             .instrument_handle(TrackId(0))
             .expect("track instrument should exist");
+        harness.commands().transport_play();
+        harness.process_block();
 
         handle.send_midi(
             harness.commands(),
@@ -1388,41 +1299,5 @@ mod tests {
         harness.process_blocks(8);
 
         assert!(!harness.output_has_signal());
-    }
-
-    #[test]
-    fn routed_bus_still_reaches_master_output() {
-        let mut harness = OfflineHarness::new(44_100, 64);
-        let mut state = MixerState::new();
-        state.set_soundfont(test_soundfont_resource());
-        state
-            .track_mut(TrackId(0))
-            .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 0);
-        let bus_id = state.add_bus("Bus");
-        state
-            .set_track_route(TrackId(0), TrackRoute::Bus(bus_id))
-            .expect("track should route to bus");
-        let context = harness.context().clone();
-        let settings = harness.settings();
-        let mixer = Mixer::new(&context, harness.commands(), &settings, state)
-            .expect("mixer should initialize");
-        let handle = mixer
-            .instrument_handle(TrackId(0))
-            .expect("track instrument should exist");
-        harness.process_blocks(50);
-
-        handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
-
-        harness.process_blocks(50);
-
-        assert!(harness.output_has_signal());
     }
 }

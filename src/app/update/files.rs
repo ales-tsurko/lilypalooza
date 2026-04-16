@@ -172,6 +172,10 @@ impl Lilypalooza {
     pub(in crate::app) fn handle_tick(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
 
+        if self.playback.is_some() {
+            self.refresh_playback_position();
+        }
+
         if self.open_tooltip_key != self.hovered_tooltip_key
             && let (Some(hovered), Some(started_at)) = (
                 self.hovered_tooltip_key.as_ref(),
@@ -241,7 +245,9 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn handle_frame(&mut self) -> Task<Message> {
-        self.refresh_playback_position();
+        if self.playback.is_some() {
+            self.refresh_playback_position();
+        }
         Task::none()
     }
 

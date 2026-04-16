@@ -1,7 +1,8 @@
-//! MIDI-track sequencer and rolling lookahead scheduler.
+//! MIDI-track sequencer and score scheduler.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use knyst::prelude::{Beats, KnystCommands, MultiThreadedKnystCommands};
 use knyst::scheduling::{MusicalTimeMap, TempoChange};
@@ -10,7 +11,7 @@ use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind};
 
 use crate::instrument::{InstrumentRuntimeHandle, MidiEvent as EngineMidiEvent};
 use crate::mixer::{INSTRUMENT_TRACK_COUNT, TrackId};
-use crate::transport::{PlaybackState, Transport, TransportError, TransportSnapshot};
+use crate::transport::{Transport, TransportError};
 
 /// Sequencer errors.
 #[derive(thiserror::Error, Debug)]
@@ -27,9 +28,16 @@ pub enum SequencerError {
 }
 
 /// Score-backed sequencer state.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Sequencer {
     inner: Arc<Mutex<SequencerState>>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SequencerDebugState {
+    pub reset_count: usize,
+    pub schedule_count: usize,
 }
 
 impl Default for Sequencer {
@@ -59,20 +67,67 @@ impl Sequencer {
         inner.dirty = true;
     }
 
-    pub(crate) fn mark_dirty(&self) {
-        self.inner.lock().expect("sequencer mutex poisoned").dirty = true;
-    }
-
-    pub(crate) fn process_tick(
+    pub(crate) fn prepare_for_play(
         &self,
         commands: &mut MultiThreadedKnystCommands,
-    ) -> Result<(), SequencerError> {
-        let snapshot = Transport::new(commands, None).snapshot()?;
+        _start_beat: Beats,
+    ) {
         self.inner
             .lock()
             .expect("sequencer mutex poisoned")
-            .process_tick(commands, snapshot);
-        Ok(())
+            .prepare_for_play(commands, _start_beat);
+    }
+
+    pub(crate) fn reset_notes(&self, commands: &mut MultiThreadedKnystCommands) {
+        self.inner
+            .lock()
+            .expect("sequencer mutex poisoned")
+            .reset_notes(commands);
+    }
+
+    pub(crate) fn mark_dirty_at(&self, position: Beats) {
+        let mut inner = self.inner.lock().expect("sequencer mutex poisoned");
+        inner.dirty = true;
+        inner.pending_position = Some(position);
+    }
+
+    pub(crate) fn set_playing(&self, playing: bool) {
+        self.inner.lock().expect("sequencer mutex poisoned").playing = playing;
+    }
+
+    pub(crate) fn pending_position(&self) -> Option<Beats> {
+        self.inner
+            .lock()
+            .expect("sequencer mutex poisoned")
+            .pending_position
+    }
+
+    pub(crate) fn process_tick(&self, commands: &mut MultiThreadedKnystCommands) {
+        self.inner
+            .lock()
+            .expect("sequencer mutex poisoned")
+            .process_tick(commands);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn process_tick_at(
+        &self,
+        commands: &mut MultiThreadedKnystCommands,
+        current_beat: Beats,
+    ) {
+        self.inner
+            .lock()
+            .expect("sequencer mutex poisoned")
+            .process_tick_at(commands, current_beat);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_state(&self) -> SequencerDebugState {
+        let inner = self.inner.lock().expect("sequencer mutex poisoned");
+        SequencerDebugState {
+            reset_count: inner.reset_count,
+            schedule_count: inner.schedule_count,
+        }
     }
 }
 
@@ -136,29 +191,36 @@ impl<'a> SequencerHandle<'a> {
             .inner
             .lock()
             .expect("sequencer mutex poisoned");
+        inner.tempo_map = build_tempo_map(&tempo_points);
         inner.sequences = sequences;
         inner.next_indices = vec![0; inner.sequences.len()];
         inner.ppq = ppq;
         inner.total_ticks = total_ticks;
         inner.scheduled_until = Beats::ZERO;
-        inner.last_position = None;
+        inner.pending_position = None;
         inner.dirty = true;
+        drop(inner);
         Ok(())
     }
 
     /// Returns the current playback position in MIDI ticks.
     pub fn playback_tick(&mut self) -> Result<u64, SequencerError> {
-        let ppq = self
-            .sequencer
-            .inner
-            .lock()
-            .expect("sequencer mutex poisoned")
-            .ppq;
+        let (ppq, playing, pending_position) = {
+            let inner = self
+                .sequencer
+                .inner
+                .lock()
+                .expect("sequencer mutex poisoned");
+            (inner.ppq, inner.playing, inner.pending_position)
+        };
         if ppq == 0 {
             return Ok(0);
         }
+        if !playing && let Some(position) = pending_position {
+            return Ok(beats_to_ticks(position, ppq));
+        }
 
-        let beats = Transport::new(self.commands, None)
+        let beats = Transport::new(self.commands, None, None)
             .snapshot()?
             .beats_position;
         Ok(beats_to_ticks(beats, ppq))
@@ -183,109 +245,120 @@ impl<'a> SequencerHandle<'a> {
             .expect("sequencer mutex poisoned");
         inner.sequences.clear();
         inner.next_indices.clear();
+        inner.tempo_map = MusicalTimeMap::new();
         inner.ppq = 0;
         inner.total_ticks = 0;
         inner.scheduled_until = Beats::ZERO;
-        inner.last_position = None;
+        inner.pending_position = None;
         inner.dirty = true;
+        drop(inner);
     }
 
     fn replace_tempo_map(&mut self, tempos: &[TempoPoint]) {
-        let mut tempos = tempos.to_vec();
-        tempos.sort_by_key(|tempo| tempo.at);
+        let tempo_map = build_tempo_map(tempos);
         self.commands
             .change_musical_time_map(move |map: &mut MusicalTimeMap| {
-                *map = MusicalTimeMap::new();
-                let initial_bpm = tempos
-                    .iter()
-                    .find(|tempo| tempo.at == Beats::ZERO)
-                    .map_or(120.0, |tempo| tempo.bpm);
-                map.replace(0, TempoChange::NewTempo { bpm: initial_bpm });
-                for tempo in tempos {
-                    map.insert(TempoChange::NewTempo { bpm: tempo.bpm }, tempo.at);
-                }
+                *map = tempo_map.clone();
             });
     }
 }
 
-#[derive(Debug)]
 struct SequencerState {
+    generations: Vec<u32>,
     sequences: Vec<Sequence>,
     next_indices: Vec<usize>,
+    tempo_map: MusicalTimeMap,
     ppq: u16,
     total_ticks: u64,
     scheduled_until: Beats,
     lookahead: Beats,
     refill_margin: Beats,
     instrument_handles: Vec<Option<InstrumentRuntimeHandle>>,
+    playing: bool,
     dirty: bool,
-    last_position: Option<Beats>,
+    pending_position: Option<Beats>,
+    #[cfg(test)]
+    reset_count: usize,
+    #[cfg(test)]
+    schedule_count: usize,
 }
 
 impl SequencerState {
     fn new() -> Self {
         Self {
+            generations: vec![0; INSTRUMENT_TRACK_COUNT],
             sequences: Vec::new(),
             next_indices: Vec::new(),
+            tempo_map: MusicalTimeMap::new(),
             ppq: 0,
             total_ticks: 0,
             scheduled_until: Beats::ZERO,
-            lookahead: Beats::from_beats(8),
-            refill_margin: Beats::from_beats(2),
+            lookahead: Beats::from_fractional_beats::<2>(0, 1),
+            refill_margin: Beats::from_fractional_beats::<8>(0, 1),
             instrument_handles: vec![None; INSTRUMENT_TRACK_COUNT],
+            playing: false,
             dirty: false,
-            last_position: None,
+            pending_position: None,
+            #[cfg(test)]
+            reset_count: 0,
+            #[cfg(test)]
+            schedule_count: 0,
         }
     }
 
-    fn process_tick(
-        &mut self,
-        commands: &mut MultiThreadedKnystCommands,
-        snapshot: TransportSnapshot,
-    ) {
-        let now = snapshot.beats_position;
-        let transport_jumped_back = self.last_position.is_some_and(|last| now < last);
-        if self.dirty || transport_jumped_back {
-            self.sync_to_transport(commands, snapshot);
-            return;
-        }
+    fn prepare_for_play(&mut self, commands: &mut MultiThreadedKnystCommands, start_beat: Beats) {
+        self.playing = true;
+        let position = self.pending_position.unwrap_or(start_beat);
 
-        self.last_position = Some(now);
-
-        if snapshot.playback_state != PlaybackState::Playing {
-            return;
-        }
-
-        if self.scheduled_until > now + self.refill_margin {
-            return;
-        }
-
-        let window_start = self.scheduled_until.max(now);
-        self.schedule_window(commands, window_start, window_start + self.lookahead);
-    }
-
-    fn sync_to_transport(
-        &mut self,
-        commands: &mut MultiThreadedKnystCommands,
-        snapshot: TransportSnapshot,
-    ) {
-        let should_reset_notes =
-            self.last_position.is_some() || snapshot.playback_state == PlaybackState::Playing;
-        if should_reset_notes {
-            self.reset_notes(commands);
-        }
-        let now = snapshot.beats_position;
-        self.reset_schedule_state_at(now);
-        self.schedule_window(commands, now, now + self.lookahead);
+        self.reset_schedule_state_at(position);
+        self.dispatch_events_at_position_now(position, commands);
+        self.schedule_window(position, position + self.lookahead, commands);
         self.dirty = false;
+    }
+
+    fn process_tick(&mut self, commands: &mut MultiThreadedKnystCommands) {
+        if !self.playing {
+            return;
+        }
+
+        let Ok(Some(snapshot)) = commands
+            .request_transport_snapshot()
+            .recv_timeout(Duration::from_millis(2))
+        else {
+            return;
+        };
+        let current_beat = snapshot.beats.unwrap_or(Beats::ZERO);
+        self.process_tick_at(commands, current_beat);
+    }
+
+    fn process_tick_at(&mut self, commands: &mut MultiThreadedKnystCommands, current_beat: Beats) {
+        if self.dirty {
+            let position = self.pending_position.unwrap_or(current_beat);
+            self.reset_schedule_state_at(position);
+            self.schedule_window(position, position + self.lookahead, commands);
+            self.dirty = false;
+            return;
+        }
+
+        if self.scheduled_until > current_beat + self.refill_margin {
+            return;
+        }
+
+        let window_start = self.scheduled_until.max(current_beat);
+        self.schedule_window(window_start, window_start + self.lookahead, commands);
     }
 
     fn schedule_window(
         &mut self,
-        commands: &mut MultiThreadedKnystCommands,
         window_start: Beats,
         window_end: Beats,
+        commands: &mut MultiThreadedKnystCommands,
     ) {
+        #[cfg(test)]
+        {
+            self.schedule_count += 1;
+        }
+
         for (sequence, next_index) in self.sequences.iter().zip(self.next_indices.iter_mut()) {
             let Some(handle) = self
                 .instrument_handles
@@ -295,16 +368,40 @@ impl SequencerState {
             else {
                 continue;
             };
-            while let Some(timed_event) = sequence.events.get(*next_index) {
-                if timed_event.at > window_end {
+            while let Some(first_event) = sequence.events.get(*next_index) {
+                if first_event.at > window_end {
                     break;
                 }
-                if timed_event.at >= window_start {
-                    handle.schedule_midi(commands, timed_event.at, timed_event.event);
+
+                let event_time = first_event.at;
+                let group_start = *next_index;
+                while let Some(next_event) = sequence.events.get(*next_index) {
+                    if next_event.at != event_time {
+                        break;
+                    }
+                    *next_index += 1;
                 }
-                *next_index += 1;
+
+                if event_time < window_start {
+                    continue;
+                }
+
+                let mut frame_offset = 0_i32;
+                for timed_event in
+                    ordered_events_at_same_time(&sequence.events[group_start..*next_index])
+                {
+                    handle.schedule_midi_at_with_offset(
+                        commands,
+                        timed_event.at,
+                        self.generations[sequence.target_track.index()],
+                        frame_offset,
+                        timed_event.event,
+                    );
+                    frame_offset += 2;
+                }
             }
         }
+
         self.scheduled_until = window_end;
     }
 
@@ -315,15 +412,20 @@ impl SequencerState {
             .map(|sequence| first_event_at_or_after(&sequence.events, at))
             .collect();
         self.scheduled_until = at;
-        self.last_position = Some(at);
+        self.pending_position = None;
     }
 
-    fn reset_notes(&self, commands: &mut MultiThreadedKnystCommands) {
+    fn reset_notes(&mut self, commands: &mut MultiThreadedKnystCommands) {
+        #[cfg(test)]
+        {
+            self.reset_count += 1;
+        }
         let mut tracks = BTreeSet::new();
         for sequence in &self.sequences {
             tracks.insert(sequence.target_track);
         }
         for track in tracks {
+            self.generations[track.index()] = self.generations[track.index()].wrapping_add(1);
             let Some(handle) = self
                 .instrument_handles
                 .get(track.index())
@@ -332,12 +434,90 @@ impl SequencerState {
             else {
                 continue;
             };
-            for channel in 0..16 {
-                handle.send_midi(commands, EngineMidiEvent::AllNotesOff { channel });
-                handle.send_midi(commands, EngineMidiEvent::AllSoundOff { channel });
-                handle.send_midi(commands, EngineMidiEvent::ResetAllControllers { channel });
+            handle.send_reset(commands, self.generations[track.index()]);
+        }
+    }
+
+    fn dispatch_events_at_position_now(
+        &mut self,
+        position: Beats,
+        commands: &mut MultiThreadedKnystCommands,
+    ) {
+        for (sequence, next_index) in self.sequences.iter().zip(self.next_indices.iter_mut()) {
+            let Some(handle) = self
+                .instrument_handles
+                .get(sequence.target_track.index())
+                .copied()
+                .flatten()
+            else {
+                continue;
+            };
+            let Some(first_event) = sequence.events.get(*next_index) else {
+                continue;
+            };
+            if first_event.at != position {
+                continue;
+            }
+
+            let group_start = *next_index;
+            while let Some(next_event) = sequence.events.get(*next_index) {
+                if next_event.at != position {
+                    break;
+                }
+                *next_index += 1;
+            }
+
+            let mut frame_offset = 0_i32;
+            for timed_event in
+                ordered_events_at_same_time(&sequence.events[group_start..*next_index])
+            {
+                handle.send_midi_now_with_offset(
+                    commands,
+                    self.generations[sequence.target_track.index()],
+                    frame_offset,
+                    timed_event.event,
+                );
+                frame_offset += 2;
             }
         }
+    }
+}
+
+fn ordered_events_at_same_time(events: &[TimedMidiEvent]) -> Vec<TimedMidiEvent> {
+    let mut ordered = Vec::with_capacity(events.len());
+    ordered.extend(
+        events
+            .iter()
+            .copied()
+            .filter(|event| event_sort_group(event.event) == 0),
+    );
+    ordered.extend(
+        events
+            .iter()
+            .copied()
+            .filter(|event| event_sort_group(event.event) == 1),
+    );
+    ordered.extend(
+        events
+            .iter()
+            .copied()
+            .filter(|event| event_sort_group(event.event) == 2),
+    );
+    ordered
+}
+
+fn event_sort_group(event: EngineMidiEvent) -> u8 {
+    match event {
+        EngineMidiEvent::NoteOff { .. }
+        | EngineMidiEvent::AllNotesOff { .. }
+        | EngineMidiEvent::AllSoundOff { .. } => 0,
+        EngineMidiEvent::ProgramChange { .. }
+        | EngineMidiEvent::ControlChange { .. }
+        | EngineMidiEvent::ChannelPressure { .. }
+        | EngineMidiEvent::PolyPressure { .. }
+        | EngineMidiEvent::PitchBend { .. }
+        | EngineMidiEvent::ResetAllControllers { .. } => 1,
+        EngineMidiEvent::NoteOn { .. } => 2,
     }
 }
 
@@ -392,6 +572,22 @@ struct TimedMidiEvent {
 struct TempoPoint {
     at: Beats,
     bpm: f64,
+}
+
+fn build_tempo_map(tempos: &[TempoPoint]) -> MusicalTimeMap {
+    let mut tempos = tempos.to_vec();
+    tempos.sort_by_key(|tempo| tempo.at);
+
+    let mut map = MusicalTimeMap::new();
+    let initial_bpm = tempos
+        .iter()
+        .find(|tempo| tempo.at == Beats::ZERO)
+        .map_or(120.0, |tempo| tempo.bpm);
+    map.replace(0, TempoChange::NewTempo { bpm: initial_bpm });
+    for tempo in tempos {
+        map.insert(TempoChange::NewTempo { bpm: tempo.bpm }, tempo.at);
+    }
+    map
 }
 
 fn first_event_at_or_after(events: &[TimedMidiEvent], at: Beats) -> usize {
@@ -458,13 +654,18 @@ fn beats_to_ticks(beats: Beats, ppq: u16) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use knyst::controller::KnystCommands;
     use knyst::prelude::Beats;
 
-    use super::{Sequencer, beats_to_ticks, ticks_to_beats};
-    use crate::instrument::InstrumentSlotState;
+    use super::{
+        Sequencer, TimedMidiEvent, beats_to_ticks, ordered_events_at_same_time, ticks_to_beats,
+    };
+    use crate::instrument::{InstrumentSlotState, MidiEvent};
     use crate::mixer::{Mixer, MixerState, TrackId};
-    use crate::test_utils::{OfflineHarness, simple_midi_bytes, test_soundfont_resource};
-    use crate::transport::{PlaybackState, TransportSnapshot};
+    use crate::test_utils::{
+        OfflineHarness, delayed_note_midi_bytes, four_track_midi_bytes, simple_midi_bytes,
+        test_soundfont_resource,
+    };
 
     #[test]
     fn ticks_to_beats_maps_whole_and_fractional_beats() {
@@ -488,6 +689,10 @@ mod tests {
 
     #[test]
     fn sequencer_schedules_midi_into_track_output() {
+        const BLOCK_SIZE: usize = 64;
+        const SAMPLE_RATE: f64 = 44_100.0;
+        const BPM: f64 = 120.0;
+
         let mut harness = OfflineHarness::new(44_100, 64);
         let mut state = MixerState::new();
         state.set_soundfont(test_soundfont_resource());
@@ -505,34 +710,28 @@ mod tests {
         {
             let mut handle = crate::sequencer::SequencerHandle::new(&sequencer, harness.commands());
             handle
-                .replace_from_midi_bytes(&simple_midi_bytes(480))
+                .replace_from_midi_bytes(&delayed_note_midi_bytes(480, 480))
                 .expect("test midi should load");
         }
 
         {
-            let mut inner = sequencer.inner.lock().expect("sequencer mutex poisoned");
-            inner.process_tick(
-                harness.commands(),
-                TransportSnapshot::new(
-                    PlaybackState::Playing,
-                    knyst::time::Seconds::ZERO,
-                    Beats::ZERO,
-                ),
-            );
+            sequencer.prepare_for_play(harness.commands(), Beats::ZERO);
+            sequencer.set_playing(true);
+            harness.commands().transport_play();
         }
 
-        for _ in 0..64 {
+        let beats_per_second = BPM / 60.0;
+        for block in 0..512 {
+            let block_start_seconds = (block * BLOCK_SIZE) as f64 / SAMPLE_RATE;
+            let block_start_beat = Beats::from_beats_f64(block_start_seconds * beats_per_second);
+            sequencer.process_tick_at(harness.commands(), block_start_beat);
             harness.process_block();
-            let snapshot = TransportSnapshot::new(
-                PlaybackState::Playing,
-                knyst::time::Seconds::ZERO,
-                Beats::from_fractional_beats::<64>(0, 1),
-            );
-            let mut inner = sequencer.inner.lock().expect("sequencer mutex poisoned");
-            inner.process_tick(harness.commands(), snapshot);
+            if harness.output_has_signal() {
+                return;
+            }
         }
 
-        assert!(harness.output_has_signal());
+        panic!("sequencer scheduled playback produced silence");
     }
 
     #[test]
@@ -561,5 +760,227 @@ mod tests {
         let inner = sequencer.inner.lock().expect("sequencer mutex poisoned");
         assert_eq!(inner.sequences.len(), 1);
         assert_eq!(inner.sequences[0].target_track, TrackId(0));
+    }
+
+    #[test]
+    fn transport_play_primes_sequencer_and_produces_audio() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let mut state = MixerState::new();
+        state.set_soundfont(test_soundfont_resource());
+        state
+            .track_mut(TrackId(0))
+            .expect("track 0 should exist")
+            .instrument = InstrumentSlotState::soundfont("default", 0, 0);
+        let context = harness.context().clone();
+        let settings = harness.settings();
+        let mixer = Mixer::new(&context, harness.commands(), &settings, state)
+            .expect("mixer should initialize");
+        let sequencer = Sequencer::new();
+        sequencer.sync_track_handle(TrackId(0), mixer.instrument_handle(TrackId(0)));
+
+        {
+            let mut handle = crate::sequencer::SequencerHandle::new(&sequencer, harness.commands());
+            handle
+                .replace_from_midi_bytes(&simple_midi_bytes(480))
+                .expect("test midi should load");
+        }
+
+        {
+            sequencer.prepare_for_play(harness.commands(), Beats::ZERO);
+            sequencer.set_playing(true);
+            harness.commands().transport_play();
+        }
+
+        for _ in 0..128 {
+            harness.process_block();
+            if harness.output_has_signal() {
+                return;
+            }
+        }
+
+        panic!("transport play path produced silence");
+    }
+
+    #[test]
+    fn four_track_midi_with_tempo_track_produces_audio_from_start() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let mut state = MixerState::new();
+        state.set_soundfont(test_soundfont_resource());
+        for track_index in 0..4 {
+            state
+                .track_mut(TrackId(track_index as u16))
+                .expect("track should exist")
+                .instrument = InstrumentSlotState::soundfont("default", 0, track_index as u8);
+        }
+        let context = harness.context().clone();
+        let settings = harness.settings();
+        let mixer = Mixer::new(&context, harness.commands(), &settings, state)
+            .expect("mixer should initialize");
+        let sequencer = Sequencer::new();
+        for track_index in 0..4 {
+            let track_id = TrackId(track_index as u16);
+            sequencer.sync_track_handle(track_id, mixer.instrument_handle(track_id));
+        }
+
+        {
+            let mut handle = crate::sequencer::SequencerHandle::new(&sequencer, harness.commands());
+            handle
+                .replace_from_midi_bytes(&four_track_midi_bytes(480))
+                .expect("test midi should load");
+        }
+
+        {
+            sequencer.prepare_for_play(harness.commands(), Beats::ZERO);
+            sequencer.set_playing(true);
+            harness.commands().transport_play();
+        }
+
+        for _ in 0..128 {
+            harness.process_block();
+            if harness.output_has_signal() {
+                return;
+            }
+        }
+
+        panic!("four-track play path produced silence");
+    }
+
+    #[test]
+    fn paused_midi_load_does_not_consume_events_before_play() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let mut state = MixerState::new();
+        state.set_soundfont(test_soundfont_resource());
+        state
+            .track_mut(TrackId(0))
+            .expect("track 0 should exist")
+            .instrument = InstrumentSlotState::soundfont("default", 0, 0);
+        let context = harness.context().clone();
+        let settings = harness.settings();
+        let mixer = Mixer::new(&context, harness.commands(), &settings, state)
+            .expect("mixer should initialize");
+        let sequencer = Sequencer::new();
+        sequencer.sync_track_handle(TrackId(0), mixer.instrument_handle(TrackId(0)));
+
+        {
+            let mut handle = crate::sequencer::SequencerHandle::new(&sequencer, harness.commands());
+            handle
+                .replace_from_midi_bytes(&simple_midi_bytes(480))
+                .expect("test midi should load");
+        }
+
+        for _ in 0..64 {
+            harness.process_block();
+        }
+
+        assert!(
+            !harness.output_has_signal(),
+            "paused sequencer should not produce audio before play"
+        );
+
+        {
+            sequencer.prepare_for_play(harness.commands(), Beats::ZERO);
+            sequencer.set_playing(true);
+            harness.commands().transport_play();
+        }
+
+        for _ in 0..128 {
+            harness.process_block();
+            if harness.output_has_signal() {
+                return;
+            }
+        }
+
+        panic!("play after paused load produced silence");
+    }
+
+    #[test]
+    fn sequencer_delivers_each_midi_event_once() {
+        let sequencer = Sequencer::new();
+        {
+            let mut harness = OfflineHarness::new(44_100, 64);
+            let mut sequencer_handle =
+                crate::sequencer::SequencerHandle::new(&sequencer, harness.commands());
+            sequencer_handle
+                .replace_from_midi_bytes(&simple_midi_bytes(480))
+                .expect("test midi should load");
+        }
+
+        let inner = sequencer.inner.lock().expect("sequencer mutex poisoned");
+        assert_eq!(inner.sequences.len(), 1);
+        let events = &inner.sequences[0].events;
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0],
+            TimedMidiEvent {
+                at: Beats::ZERO,
+                event: MidiEvent::NoteOn {
+                    channel: 0,
+                    note: 60,
+                    velocity: 100,
+                },
+            }
+        );
+        assert_eq!(
+            events[1],
+            TimedMidiEvent {
+                at: Beats::from_beats(1),
+                event: MidiEvent::NoteOff {
+                    channel: 0,
+                    note: 60,
+                    velocity: 0,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn same_time_events_order_note_off_before_note_on() {
+        let at = Beats::from_beats(1);
+        let events = [
+            TimedMidiEvent {
+                at,
+                event: MidiEvent::NoteOn {
+                    channel: 0,
+                    note: 60,
+                    velocity: 100,
+                },
+            },
+            TimedMidiEvent {
+                at,
+                event: MidiEvent::NoteOff {
+                    channel: 0,
+                    note: 60,
+                    velocity: 0,
+                },
+            },
+            TimedMidiEvent {
+                at,
+                event: MidiEvent::ProgramChange {
+                    channel: 0,
+                    program: 10,
+                },
+            },
+        ];
+
+        let ordered = ordered_events_at_same_time(&events);
+        assert_eq!(
+            ordered.iter().map(|event| event.event).collect::<Vec<_>>(),
+            vec![
+                MidiEvent::NoteOff {
+                    channel: 0,
+                    note: 60,
+                    velocity: 0,
+                },
+                MidiEvent::ProgramChange {
+                    channel: 0,
+                    program: 10,
+                },
+                MidiEvent::NoteOn {
+                    channel: 0,
+                    note: 60,
+                    velocity: 100,
+                },
+            ]
+        );
     }
 }

@@ -32,6 +32,7 @@ objc2-foundation = "0.3.2"
 
 [dev-dependencies]
 iced_test = "0.14.0"
+midly = "0.5.3"
 
 [lints]
 workspace = true

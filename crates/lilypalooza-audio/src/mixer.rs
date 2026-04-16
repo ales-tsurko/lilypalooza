@@ -4,7 +4,10 @@ pub(crate) mod runtime;
 mod track;
 
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
+use knyst::controller::KnystCommands;
 use knyst::modal_interface::KnystContext;
 use knyst::prelude::MultiThreadedKnystCommands;
 use serde::{Deserialize, Serialize};
@@ -398,6 +401,7 @@ impl Mixer {
 pub struct MixerHandle<'a> {
     mixer: &'a mut Mixer,
     sequencer: &'a Sequencer,
+    runtime_dirty: &'a AtomicBool,
     context: &'a KnystContext,
     commands: &'a mut MultiThreadedKnystCommands,
 }
@@ -406,15 +410,21 @@ impl<'a> MixerHandle<'a> {
     pub(crate) fn new(
         mixer: &'a mut Mixer,
         sequencer: &'a Sequencer,
+        runtime_dirty: &'a AtomicBool,
         context: &'a KnystContext,
         commands: &'a mut MultiThreadedKnystCommands,
     ) -> MixerHandle<'a> {
         Self {
             mixer,
             sequencer,
+            runtime_dirty,
             context,
             commands,
         }
+    }
+
+    fn mark_runtime_dirty(&self) {
+        self.runtime_dirty.store(true, Ordering::Release);
     }
 }
 
@@ -429,6 +439,7 @@ impl Deref for MixerHandle<'_> {
 #[allow(missing_docs)]
 impl MixerHandle<'_> {
     pub fn set_soundfont(&mut self, resource: SoundfontResource) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         let soundfont_id = resource.id.clone();
         self.mixer.state.set_soundfont(resource);
         self.mixer.runtime.sync_soundfonts(&self.mixer.state)?;
@@ -442,10 +453,12 @@ impl MixerHandle<'_> {
             self.sequencer
                 .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
         }
+        drain_commands(self.commands);
         Ok(())
     }
 
     pub fn remove_soundfont(&mut self, id: &str) -> Result<SoundfontResource, AudioEngineError> {
+        self.mark_runtime_dirty();
         let removed = self.mixer.state.remove_soundfont(id)?;
         self.mixer.runtime.sync_soundfonts(&self.mixer.state)?;
         self.mixer.runtime.sync_tracks_for_soundfont(
@@ -458,10 +471,12 @@ impl MixerHandle<'_> {
             self.sequencer
                 .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
         }
+        drain_commands(self.commands);
         Ok(removed)
     }
 
     pub fn add_bus(&mut self, name: impl Into<String>) -> Result<BusId, AudioEngineError> {
+        self.mark_runtime_dirty();
         let bus_id = self.mixer.state.add_bus(name);
         self.mixer
             .runtime
@@ -470,6 +485,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn remove_bus(&mut self, id: BusId) -> Result<BusTrack, AudioEngineError> {
+        self.mark_runtime_dirty();
         let removed = self.mixer.state.remove_bus(id)?;
         self.mixer
             .runtime
@@ -482,6 +498,7 @@ impl MixerHandle<'_> {
         id: TrackId,
         instrument: InstrumentSlotState,
     ) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.instrument = instrument;
         self.mixer.runtime.sync_track_instrument(
             self.context,
@@ -489,8 +506,15 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             id,
         )?;
+        self.mixer.runtime.sync_track_routing(
+            self.context,
+            self.commands,
+            &self.mixer.state,
+            id,
+        )?;
         self.sequencer
             .sync_track_handle(id, self.mixer.instrument_handle(id));
+        drain_commands(self.commands);
         Ok(())
     }
 
@@ -499,8 +523,15 @@ impl MixerHandle<'_> {
         id: TrackId,
         effects: Vec<EffectSlotState>,
     ) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.effects = effects;
         self.mixer.runtime.sync_track_effects(
+            self.context,
+            self.commands,
+            &self.mixer.state,
+            id,
+        )?;
+        self.mixer.runtime.sync_track_routing(
             self.context,
             self.commands,
             &self.mixer.state,
@@ -510,6 +541,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_track_gain_db(&mut self, id: TrackId, gain_db: f32) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.state.gain_db = gain_db;
         self.mixer
             .runtime
@@ -518,6 +550,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_track_pan(&mut self, id: TrackId, pan: f32) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.state.pan = pan.clamp(-1.0, 1.0);
         self.mixer
             .runtime
@@ -526,6 +559,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_track_muted(&mut self, id: TrackId, muted: bool) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.state.muted = muted;
         self.mixer
             .runtime
@@ -534,6 +568,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_track_soloed(&mut self, id: TrackId, soloed: bool) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.state.soloed = soloed;
         self.mixer
             .runtime
@@ -546,6 +581,7 @@ impl MixerHandle<'_> {
         id: TrackId,
         route: TrackRoute,
     ) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.set_track_route(id, route)?;
         self.mixer.runtime.sync_track_routing(
             self.context,
@@ -561,6 +597,7 @@ impl MixerHandle<'_> {
         id: TrackId,
         routing: TrackRouting,
     ) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.set_track_routing(id, routing)?;
         self.mixer.runtime.sync_track_routing(
             self.context,
@@ -572,6 +609,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn add_track_send(&mut self, id: TrackId, send: BusSend) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.add_track_bus_send(id, send)?;
         self.mixer.runtime.sync_track_routing(
             self.context,
@@ -588,6 +626,7 @@ impl MixerHandle<'_> {
         index: usize,
         send: BusSend,
     ) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.set_track_bus_send(id, index, send)?;
         self.mixer.runtime.sync_track_routing(
             self.context,
@@ -603,6 +642,7 @@ impl MixerHandle<'_> {
         id: TrackId,
         index: usize,
     ) -> Result<BusSend, AudioEngineError> {
+        self.mark_runtime_dirty();
         let removed = self.mixer.state.remove_track_bus_send(id, index)?;
         self.mixer.runtime.sync_track_routing(
             self.context,
@@ -614,6 +654,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_bus_gain_db(&mut self, id: BusId, gain_db: f32) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.bus_mut(id)?.state.gain_db = gain_db;
         self.mixer
             .runtime
@@ -626,6 +667,7 @@ impl MixerHandle<'_> {
         id: BusId,
         effects: Vec<EffectSlotState>,
     ) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.bus_mut(id)?.effects = effects;
         self.mixer
             .runtime
@@ -634,6 +676,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_bus_pan(&mut self, id: BusId, pan: f32) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.bus_mut(id)?.state.pan = pan.clamp(-1.0, 1.0);
         self.mixer
             .runtime
@@ -642,6 +685,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_bus_muted(&mut self, id: BusId, muted: bool) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.bus_mut(id)?.state.muted = muted;
         self.mixer
             .runtime
@@ -650,6 +694,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_bus_soloed(&mut self, id: BusId, soloed: bool) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.bus_mut(id)?.state.soloed = soloed;
         self.mixer
             .runtime
@@ -658,6 +703,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_bus_route(&mut self, id: BusId, route: TrackRoute) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.set_bus_route(id, route)?;
         self.mixer
             .runtime
@@ -670,6 +716,7 @@ impl MixerHandle<'_> {
         id: BusId,
         routing: TrackRouting,
     ) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.set_bus_routing(id, routing)?;
         self.mixer
             .runtime
@@ -678,6 +725,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn add_bus_send(&mut self, id: BusId, send: BusSend) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.add_bus_send(id, send)?;
         self.mixer
             .runtime
@@ -691,6 +739,7 @@ impl MixerHandle<'_> {
         index: usize,
         send: BusSend,
     ) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.set_bus_send(id, index, send)?;
         self.mixer
             .runtime
@@ -703,6 +752,7 @@ impl MixerHandle<'_> {
         id: BusId,
         index: usize,
     ) -> Result<BusSend, AudioEngineError> {
+        self.mark_runtime_dirty();
         let removed = self.mixer.state.remove_bus_send(id, index)?;
         self.mixer
             .runtime
@@ -711,6 +761,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_master_gain_db(&mut self, gain_db: f32) {
+        self.mark_runtime_dirty();
         self.mixer.state.master.state.gain_db = gain_db;
         self.mixer
             .runtime
@@ -718,6 +769,7 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_master_pan(&mut self, pan: f32) {
+        self.mark_runtime_dirty();
         self.mixer.state.master.state.pan = pan.clamp(-1.0, 1.0);
         self.mixer
             .runtime
@@ -728,12 +780,22 @@ impl MixerHandle<'_> {
         &mut self,
         effects: Vec<EffectSlotState>,
     ) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
         self.mixer.state.master.effects = effects;
         self.mixer
             .runtime
             .sync_master_effects(self.context, self.commands, &self.mixer.state)?;
         Ok(())
     }
+}
+
+fn drain_commands(commands: &mut MultiThreadedKnystCommands) {
+    let Ok(receiver) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        commands.request_transport_snapshot()
+    })) else {
+        return;
+    };
+    let _ = receiver.recv_timeout(Duration::from_millis(20));
 }
 
 #[cfg(test)]

@@ -143,6 +143,67 @@ pub(crate) fn test_soundfont_resource() -> SoundfontResource {
 }
 
 pub(crate) fn simple_midi_bytes(ppq: u16) -> Vec<u8> {
+    midi_bytes_with_note(ppq, 0)
+}
+
+pub(crate) fn delayed_note_midi_bytes(ppq: u16, start_tick: u32) -> Vec<u8> {
+    midi_bytes_with_note(ppq, start_tick)
+}
+
+pub(crate) fn four_track_midi_bytes(ppq: u16) -> Vec<u8> {
+    let header = Header::new(Format::Parallel, Timing::Metrical(u15::from(ppq)));
+    let tempo_track: Track<'static> = vec![
+        TrackEvent {
+            delta: u28::from(0),
+            kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::from(500_000))),
+        },
+        TrackEvent {
+            delta: u28::from(0),
+            kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+        },
+    ];
+
+    let note_tracks: Vec<Track<'static>> = (0_u8..4)
+        .map(|channel| {
+            vec![
+                TrackEvent {
+                    delta: u28::from(0),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::from(channel),
+                        message: MidiMessage::NoteOn {
+                            key: u7::from(60 + channel * 2),
+                            vel: u7::from(100),
+                        },
+                    },
+                },
+                TrackEvent {
+                    delta: u28::from(u32::from(ppq)),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::from(channel),
+                        message: MidiMessage::NoteOff {
+                            key: u7::from(60 + channel * 2),
+                            vel: u7::from(0),
+                        },
+                    },
+                },
+                TrackEvent {
+                    delta: u28::from(0),
+                    kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+                },
+            ]
+        })
+        .collect();
+
+    let mut tracks = vec![tempo_track];
+    tracks.extend(note_tracks);
+    let smf = Smf { header, tracks };
+    let mut bytes = Vec::new();
+    smf.write_std(&mut bytes)
+        .expect("test MIDI should serialize");
+    bytes
+}
+
+fn midi_bytes_with_note(ppq: u16, start_tick: u32) -> Vec<u8> {
     let header = Header::new(Format::Parallel, Timing::Metrical(u15::from(ppq)));
     let tempo_track: Track<'static> = vec![
         TrackEvent {
@@ -156,7 +217,7 @@ pub(crate) fn simple_midi_bytes(ppq: u16) -> Vec<u8> {
     ];
     let note_track: Track<'static> = vec![
         TrackEvent {
-            delta: u28::from(0),
+            delta: u28::from(start_tick),
             kind: TrackEventKind::Midi {
                 channel: u4::from(0),
                 message: MidiMessage::NoteOn {
@@ -195,6 +256,72 @@ pub(crate) struct TestBackend {
     block_size: usize,
     num_outputs: usize,
     run_graph: Option<RunGraph>,
+}
+
+pub(crate) struct SharedTestBackend {
+    sample_rate: usize,
+    block_size: usize,
+    num_outputs: usize,
+    shared: Arc<Mutex<SharedTestBackendState>>,
+}
+
+pub(crate) struct SharedTestBackendHandle {
+    shared: Arc<Mutex<SharedTestBackendState>>,
+}
+
+struct SharedTestBackendState {
+    run_graph: Option<RunGraph>,
+}
+
+impl SharedTestBackend {
+    pub(crate) fn new(
+        sample_rate: usize,
+        block_size: usize,
+        num_outputs: usize,
+    ) -> (Self, SharedTestBackendHandle) {
+        let shared = Arc::new(Mutex::new(SharedTestBackendState { run_graph: None }));
+        (
+            Self {
+                sample_rate,
+                block_size,
+                num_outputs,
+                shared: Arc::clone(&shared),
+            },
+            SharedTestBackendHandle { shared },
+        )
+    }
+}
+
+impl SharedTestBackendHandle {
+    pub(crate) fn process_block(&self) {
+        let mut shared = self
+            .shared
+            .lock()
+            .expect("shared test backend state should not be poisoned");
+        if let Some(run_graph) = &mut shared.run_graph {
+            run_graph.run_resources_communication(10_000);
+            run_graph.process_block();
+        }
+    }
+
+    pub(crate) fn output_channel(&self, channel: usize) -> Vec<Sample> {
+        let shared = self
+            .shared
+            .lock()
+            .expect("shared test backend state should not be poisoned");
+        let run_graph = shared.run_graph.as_ref().expect("run graph should exist");
+        run_graph
+            .graph_output_buffers()
+            .get_channel(channel)
+            .to_vec()
+    }
+
+    pub(crate) fn output_has_signal(&self) -> bool {
+        self.output_channel(0)
+            .into_iter()
+            .chain(self.output_channel(1))
+            .any(|sample| sample.abs() > 1.0e-6)
+    }
 }
 
 impl TestBackend {
@@ -246,6 +373,63 @@ impl AudioBackend for TestBackend {
 
     fn stop(&mut self) -> Result<(), AudioBackendError> {
         if self.run_graph.take().is_some() {
+            Ok(())
+        } else {
+            Err(AudioBackendError::BackendNotRunning)
+        }
+    }
+
+    fn sample_rate(&self) -> usize {
+        self.sample_rate
+    }
+
+    fn block_size(&self) -> Option<usize> {
+        Some(self.block_size)
+    }
+
+    fn native_output_channels(&self) -> Option<usize> {
+        Some(self.num_outputs)
+    }
+
+    fn native_input_channels(&self) -> Option<usize> {
+        Some(0)
+    }
+}
+
+impl AudioBackend for SharedTestBackend {
+    fn start_processing_return_controller(
+        &mut self,
+        mut graph: Graph,
+        resources: Resources,
+        run_graph_settings: RunGraphSettings,
+        error_handler: Box<dyn FnMut(knyst::KnystError) + Send + 'static>,
+    ) -> Result<Controller, AudioBackendError> {
+        let mut shared = self
+            .shared
+            .lock()
+            .expect("shared test backend state should not be poisoned");
+        if shared.run_graph.is_some() {
+            return Err(AudioBackendError::BackendAlreadyRunning);
+        }
+
+        let (run_graph, resources_command_sender, resources_command_receiver) =
+            RunGraph::new(&mut graph, resources, run_graph_settings)?;
+        let controller = Controller::new(
+            graph,
+            error_handler,
+            resources_command_sender,
+            resources_command_receiver,
+        );
+        shared.run_graph = Some(run_graph);
+        Ok(controller)
+    }
+
+    fn stop(&mut self) -> Result<(), AudioBackendError> {
+        let mut shared = self
+            .shared
+            .lock()
+            .expect("shared test backend state should not be poisoned");
+        if shared.run_graph.take().is_some() {
             Ok(())
         } else {
             Err(AudioBackendError::BackendNotRunning)
