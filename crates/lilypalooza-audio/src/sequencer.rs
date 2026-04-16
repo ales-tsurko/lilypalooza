@@ -105,8 +105,8 @@ impl<'a> SequencerHandle<'a> {
         let mut tempo_points = Vec::new();
         let mut total_ticks = 0_u64;
 
-        for (index, track) in smf.tracks.iter().enumerate() {
-            if let Some(sequence) = Sequence::from_midi_track(index, track, ppq) {
+        for track in &smf.tracks {
+            if let Some(sequence) = Sequence::from_midi_track(sequences.len(), track, ppq) {
                 sequences.push(sequence);
             }
 
@@ -230,8 +230,8 @@ impl SequencerState {
             ppq: 0,
             total_ticks: 0,
             scheduled_until: Beats::ZERO,
-            lookahead: Beats::from_beats(4),
-            refill_margin: Beats::from_beats(1),
+            lookahead: Beats::from_beats(8),
+            refill_margin: Beats::from_beats(2),
             instrument_handles: vec![None; INSTRUMENT_TRACK_COUNT],
             dirty: false,
             last_position: None,
@@ -269,7 +269,11 @@ impl SequencerState {
         commands: &mut MultiThreadedKnystCommands,
         snapshot: TransportSnapshot,
     ) {
-        self.reset_notes();
+        let should_reset_notes =
+            self.last_position.is_some() || snapshot.playback_state == PlaybackState::Playing;
+        if should_reset_notes {
+            self.reset_notes(commands);
+        }
         let now = snapshot.beats_position;
         self.reset_schedule_state_at(now);
         self.schedule_window(commands, now, now + self.lookahead);
@@ -314,7 +318,7 @@ impl SequencerState {
         self.last_position = Some(at);
     }
 
-    fn reset_notes(&self) {
+    fn reset_notes(&self, commands: &mut MultiThreadedKnystCommands) {
         let mut tracks = BTreeSet::new();
         for sequence in &self.sequences {
             tracks.insert(sequence.target_track);
@@ -329,9 +333,9 @@ impl SequencerState {
                 continue;
             };
             for channel in 0..16 {
-                handle.midi(EngineMidiEvent::AllNotesOff { channel });
-                handle.midi(EngineMidiEvent::AllSoundOff { channel });
-                handle.midi(EngineMidiEvent::ResetAllControllers { channel });
+                handle.send_midi(commands, EngineMidiEvent::AllNotesOff { channel });
+                handle.send_midi(commands, EngineMidiEvent::AllSoundOff { channel });
+                handle.send_midi(commands, EngineMidiEvent::ResetAllControllers { channel });
             }
         }
     }
@@ -456,7 +460,11 @@ fn beats_to_ticks(beats: Beats, ppq: u16) -> u64 {
 mod tests {
     use knyst::prelude::Beats;
 
-    use super::{beats_to_ticks, ticks_to_beats};
+    use super::{Sequencer, beats_to_ticks, ticks_to_beats};
+    use crate::instrument::InstrumentSlotState;
+    use crate::mixer::{Mixer, MixerState, TrackId};
+    use crate::test_utils::{OfflineHarness, simple_midi_bytes, test_soundfont_resource};
+    use crate::transport::{PlaybackState, TransportSnapshot};
 
     #[test]
     fn ticks_to_beats_maps_whole_and_fractional_beats() {
@@ -476,5 +484,82 @@ mod tests {
             beats_to_ticks(Beats::from_fractional_beats::<2>(0, 1), 480),
             240
         );
+    }
+
+    #[test]
+    fn sequencer_schedules_midi_into_track_output() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let mut state = MixerState::new();
+        state.set_soundfont(test_soundfont_resource());
+        state
+            .track_mut(TrackId(0))
+            .expect("track 0 should exist")
+            .instrument = InstrumentSlotState::soundfont("default", 0, 0);
+        let context = harness.context().clone();
+        let settings = harness.settings();
+        let mixer = Mixer::new(&context, harness.commands(), &settings, state)
+            .expect("mixer should initialize");
+        let sequencer = Sequencer::new();
+        sequencer.sync_track_handle(TrackId(0), mixer.instrument_handle(TrackId(0)));
+
+        {
+            let mut handle = crate::sequencer::SequencerHandle::new(&sequencer, harness.commands());
+            handle
+                .replace_from_midi_bytes(&simple_midi_bytes(480))
+                .expect("test midi should load");
+        }
+
+        {
+            let mut inner = sequencer.inner.lock().expect("sequencer mutex poisoned");
+            inner.process_tick(
+                harness.commands(),
+                TransportSnapshot::new(
+                    PlaybackState::Playing,
+                    knyst::time::Seconds::ZERO,
+                    Beats::ZERO,
+                ),
+            );
+        }
+
+        for _ in 0..64 {
+            harness.process_block();
+            let snapshot = TransportSnapshot::new(
+                PlaybackState::Playing,
+                knyst::time::Seconds::ZERO,
+                Beats::from_fractional_beats::<64>(0, 1),
+            );
+            let mut inner = sequencer.inner.lock().expect("sequencer mutex poisoned");
+            inner.process_tick(harness.commands(), snapshot);
+        }
+
+        assert!(harness.output_has_signal());
+    }
+
+    #[test]
+    fn sequencer_maps_first_musical_track_to_first_instrument_track() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let mut state = MixerState::new();
+        state.set_soundfont(test_soundfont_resource());
+        state
+            .track_mut(TrackId(0))
+            .expect("track 0 should exist")
+            .instrument = InstrumentSlotState::soundfont("default", 0, 0);
+        let context = harness.context().clone();
+        let settings = harness.settings();
+        let mixer = Mixer::new(&context, harness.commands(), &settings, state)
+            .expect("mixer should initialize");
+        let sequencer = Sequencer::new();
+        sequencer.sync_track_handle(TrackId(0), mixer.instrument_handle(TrackId(0)));
+
+        {
+            let mut handle = crate::sequencer::SequencerHandle::new(&sequencer, harness.commands());
+            handle
+                .replace_from_midi_bytes(&simple_midi_bytes(480))
+                .expect("test midi should load");
+        }
+
+        let inner = sequencer.inner.lock().expect("sequencer mutex poisoned");
+        assert_eq!(inner.sequences.len(), 1);
+        assert_eq!(inner.sequences[0].target_track, TrackId(0));
     }
 }

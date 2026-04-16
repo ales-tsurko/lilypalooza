@@ -103,14 +103,18 @@ impl Lilypalooza {
                 if let Some(muted) = self.piano_roll.toggle_track_mute(track_index)
                     && let Some(playback) = self.playback.as_mut()
                 {
-                    let _ = playback.set_track_muted(track_index, muted);
+                    let _ = playback
+                        .mixer()
+                        .set_track_muted(lilypalooza_audio::TrackId(track_index as u16), muted);
                 }
             }
             PianoRollMessage::TrackSoloToggled(track_index) => {
                 if let Some(soloed) = self.piano_roll.toggle_track_solo(track_index)
                     && let Some(playback) = self.playback.as_mut()
                 {
-                    let _ = playback.set_track_solo(track_index, soloed);
+                    let _ = playback
+                        .mixer()
+                        .set_track_soloed(lilypalooza_audio::TrackId(track_index as u16), soloed);
                 }
             }
             PianoRollMessage::SetCursorTicks(tick) => {
@@ -130,10 +134,18 @@ impl Lilypalooza {
             PianoRollMessage::TransportPlayPause => {
                 self.transport_seek_preview = None;
                 if let Some(playback) = self.playback.as_mut() {
-                    if playback.is_playing() {
-                        playback.pause();
+                    let is_playing = playback
+                        .transport()
+                        .snapshot()
+                        .map(|snapshot| {
+                            snapshot.playback_state == lilypalooza_audio::PlaybackState::Playing
+                        })
+                        .unwrap_or(false);
+
+                    if is_playing {
+                        playback.transport().pause();
                     } else {
-                        let _ = playback.play();
+                        playback.transport().play();
                     }
 
                     self.refresh_playback_position();
@@ -154,10 +166,21 @@ impl Lilypalooza {
                 let target_tick = self.rewind_target_tick();
 
                 if let Some(playback) = self.playback.as_mut() {
-                    let was_playing = playback.is_playing();
-                    playback.jump_to_tick(target_tick);
+                    let was_playing = playback
+                        .transport()
+                        .snapshot()
+                        .map(|snapshot| {
+                            snapshot.playback_state == lilypalooza_audio::PlaybackState::Playing
+                        })
+                        .unwrap_or(false);
+                    playback.transport().pause();
+                    if let Some(current_file) = self.piano_roll.current_file() {
+                        let ppq = f64::from(current_file.data.ppq.max(1));
+                        let beats = target_tick as f64 / ppq;
+                        playback.transport().seek_beats(beats);
+                    }
                     if was_playing {
-                        let _ = playback.play();
+                        playback.transport().play();
                     }
                     self.refresh_playback_position();
                 } else {

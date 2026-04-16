@@ -9,6 +9,9 @@ pub mod mixer;
 pub mod sequencer;
 pub mod transport;
 
+#[cfg(test)]
+mod test_utils;
+
 pub use engine::{AudioEngine, AudioEngineError, AudioEngineOptions, AudioEngineSettings};
 pub use instrument::{
     EffectKind, EffectProcessor, EffectRuntimeHandle, EffectSlotState, InstrumentKind,

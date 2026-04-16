@@ -43,7 +43,7 @@ impl Default for SoundfontProcessorState {
 }
 
 pub(crate) fn default_soundfont_state() -> ProcessorState {
-    encode_state(&SoundfontProcessorState::default())
+    encode_soundfont_state(&SoundfontProcessorState::default())
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -198,7 +198,7 @@ impl Processor for SoundfontProcessor {
     }
 
     fn save_state(&self) -> ProcessorState {
-        encode_state(&self.state)
+        encode_soundfont_state(&self.state)
     }
 
     fn load_state(&mut self, state: &ProcessorState) -> Result<(), ProcessorStateError> {
@@ -288,6 +288,50 @@ impl InstrumentProcessor for SoundfontProcessor {
     }
 }
 
-fn encode_state(state: &SoundfontProcessorState) -> ProcessorState {
+pub(crate) fn encode_soundfont_state(state: &SoundfontProcessorState) -> ProcessorState {
     ProcessorState(bincode::serialize(state).expect("soundfont state serialization should succeed"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::{
+        LoadedSoundfont, SoundfontProcessor, SoundfontProcessorState, SoundfontSynthSettings,
+    };
+    use crate::instrument::{InstrumentProcessor, MidiEvent};
+    use crate::test_utils::test_soundfont_resource;
+
+    #[test]
+    fn soundfont_processor_renders_after_note_on() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut processor = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            SoundfontSynthSettings::new(44_100, 64),
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+
+        processor.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+
+        let mut left = vec![0.0; 64];
+        let mut right = vec![0.0; 64];
+        for _ in 0..8 {
+            processor.render(&mut left, &mut right);
+            if left
+                .iter()
+                .chain(right.iter())
+                .any(|sample| sample.abs() > 1.0e-6)
+            {
+                return;
+            }
+        }
+
+        panic!("soundfont processor produced silence after note on");
+    }
 }

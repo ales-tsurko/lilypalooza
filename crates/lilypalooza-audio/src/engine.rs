@@ -9,8 +9,11 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use knyst::audio_backend::{AudioBackend, AudioBackendError};
+use knyst::audio_backend::{CpalBackend, CpalBackendOptions};
 use knyst::modal_interface::{KnystContext, SphereError};
-use knyst::prelude::{KnystSphere, MultiThreadedKnystCommands, SphereSettings};
+use knyst::prelude::{
+    Beats, KnystCommands, KnystSphere, MultiThreadedKnystCommands, SphereSettings,
+};
 
 use crate::mixer::{Mixer, MixerError, MixerHandle, MixerState};
 use crate::sequencer::{Sequencer, SequencerHandle};
@@ -65,6 +68,15 @@ pub enum AudioEngineError {
 }
 
 impl AudioEngine {
+    /// Starts the audio engine on the default CPAL output backend.
+    pub fn start_cpal(
+        mixer: MixerState,
+        options: AudioEngineOptions,
+    ) -> Result<Self, AudioEngineError> {
+        let backend = CpalBackend::new(CpalBackendOptions::default())?;
+        Self::start(mixer, backend, options)
+    }
+
     /// Starts the audio engine on the provided backend.
     pub fn start<B: AudioBackend + 'static>(
         mixer: MixerState,
@@ -78,6 +90,8 @@ impl AudioEngine {
         let sphere = KnystSphere::start(&mut backend, options.sphere_settings, |_| {})?;
         let context = sphere.context();
         let mut commands = sphere.commands();
+        commands.transport_pause();
+        commands.transport_seek_to_beats(Beats::ZERO);
         let mixer = Mixer::new(&context, &mut commands, &settings, mixer)?;
         let sequencer = Sequencer::new();
         for track in mixer.state.tracks() {
@@ -152,7 +166,37 @@ fn start_scheduler_thread(
     thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
             let _ = sequencer.process_tick(&mut commands);
-            thread::sleep(Duration::from_millis(25));
+            thread::sleep(Duration::from_millis(10));
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use knyst::prelude::Beats;
+
+    use super::{AudioEngine, AudioEngineOptions};
+    use crate::test_utils::TestBackend;
+
+    #[test]
+    fn engine_starts_with_transport_paused_at_zero() {
+        let backend = TestBackend::new(44_100, 64, 2);
+        let mut engine = AudioEngine::start(
+            crate::mixer::MixerState::new(),
+            backend,
+            AudioEngineOptions::default(),
+        )
+        .expect("engine should start");
+
+        let snapshot = engine
+            .transport()
+            .snapshot()
+            .expect("transport snapshot should be available");
+
+        assert_eq!(
+            snapshot.playback_state,
+            crate::transport::PlaybackState::Paused
+        );
+        assert_eq!(snapshot.beats_position, Beats::ZERO);
+    }
 }

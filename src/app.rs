@@ -8,6 +8,7 @@ use iced::keyboard;
 use iced::widget::{Id, pane_grid, svg};
 use iced::{Point, Rectangle, Size, Subscription, Task, window};
 use iced_core::{Bytes, image};
+use lilypalooza_audio::AudioEngine;
 use tempfile::TempDir;
 
 use crate::browser_file_watcher::BrowserFileWatcher;
@@ -15,7 +16,6 @@ use crate::editor_file_watcher::EditorFileWatcher;
 use crate::error_prompt::{ErrorPrompt, PromptSelectedButton};
 use crate::lilypond;
 use crate::logger::Logger;
-use crate::playback::MidiPlayback;
 use crate::score_watcher::ScoreWatcher;
 use crate::settings::{
     self, DockAxis, DockNodeSettings, FoldedPaneRestoreSettings, FoldedPaneSettings,
@@ -116,7 +116,7 @@ struct Lilypalooza {
     compile_generation: u64,
     spinner_step: usize,
     compile_session: Option<lilypond::CompileSession>,
-    playback: Option<MidiPlayback>,
+    playback: Option<AudioEngine>,
     soundfont_status: SoundfontStatus,
     workspace_panes: pane_grid::State<DockGroupId>,
     dock_layout: Option<DockNode>,
@@ -708,7 +708,7 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
         subscriptions.push(iced::time::every(SCORE_ZOOM_PREVIEW_INTERVAL).map(|_| Message::Tick));
     }
 
-    if app.playback.as_ref().is_some_and(MidiPlayback::is_playing) {
+    if app.playback.is_some() && app.piano_roll.playback_is_playing() {
         subscriptions.push(window::frames().map(Message::Frame));
     }
 

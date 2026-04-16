@@ -139,20 +139,14 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     .step(0.001)
     .width(Fill);
 
-    let soundfont_label = match (&app.soundfont_status, app.playback.as_ref()) {
-        (_, Some(playback)) => playback
-            .soundfont_path()
+    let soundfont_label = match &app.soundfont_status {
+        SoundfontStatus::NotSelected => "Set soundfont".to_string(),
+        SoundfontStatus::Ready(path) => path
             .file_name()
             .and_then(|name| name.to_str())
             .map(str::to_string)
             .unwrap_or_else(|| "Soundfont".to_string()),
-        (SoundfontStatus::NotSelected, None) => "Set soundfont".to_string(),
-        (SoundfontStatus::Ready(path), None) => path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| "Soundfont".to_string()),
-        (SoundfontStatus::Error(error), None) => format!("Soundfont error: {error}"),
+        SoundfontStatus::Error(error) => format!("Soundfont error: {error}"),
     };
 
     let soundfont_button = button(
