@@ -156,6 +156,11 @@ const PIANO_ROLL_CONTEXTUAL_ACTIONS: [ShortcutAction; 5] = [
     ShortcutAction::TransportRewind,
 ];
 
+const MIXER_CONTEXTUAL_ACTIONS: [ShortcutAction; 2] = [
+    ShortcutAction::TransportPlayPause,
+    ShortcutAction::TransportRewind,
+];
+
 const EDITOR_CONTEXTUAL_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::NewEditor,
     ShortcutAction::OpenEditorFile,
@@ -252,7 +257,10 @@ pub(crate) fn resolve_contextual(
             .iter()
             .copied()
             .find(|action| action_matches(settings, *action, input)),
-        WorkspacePane::Mixer => None,
+        WorkspacePane::Mixer => MIXER_CONTEXTUAL_ACTIONS
+            .iter()
+            .copied()
+            .find(|action| action_matches(settings, *action, input)),
         WorkspacePane::Editor => EDITOR_CONTEXTUAL_ACTIONS
             .iter()
             .copied()
@@ -1359,6 +1367,24 @@ mod tests {
         assert_eq!(
             resolve_contextual(&ShortcutSettings::default(), WorkspacePane::Editor, input),
             Some(ShortcutAction::EditorMoveLineDown)
+        );
+    }
+
+    #[test]
+    fn resolves_mixer_transport_play_pause_binding() {
+        let input = named_input(keyboard::key::Named::Space);
+        assert_eq!(
+            resolve_contextual(&ShortcutSettings::default(), WorkspacePane::Mixer, input),
+            Some(ShortcutAction::TransportPlayPause)
+        );
+    }
+
+    #[test]
+    fn resolves_mixer_transport_rewind_binding() {
+        let input = named_input(keyboard::key::Named::Enter);
+        assert_eq!(
+            resolve_contextual(&ShortcutSettings::default(), WorkspacePane::Mixer, input),
+            Some(ShortcutAction::TransportRewind)
         );
     }
 

@@ -468,6 +468,11 @@ fn sticky_master_strip(
             strip_height_bits: strip_height.to_bits(),
         },
         move |dependency| {
+            let gain_mode = if dependency.compact_gain {
+                GainControlMode::Knob
+            } else {
+                GainControlMode::Fader
+            };
             strip_panel(
                 strip_shell(
                     "Main",
@@ -488,12 +493,8 @@ fn sticky_master_strip(
                     },
                     Some(Message::Mixer(MixerMessage::ResetMasterMeter)),
                     f32::from_bits(dependency.strip_height_bits),
-                    true,
-                    if dependency.compact_gain {
-                        GainControlMode::Knob
-                    } else {
-                        GainControlMode::Fader
-                    },
+                    meter_scale_visible(gain_mode),
+                    gain_mode,
                 ),
                 MAIN_STRIP_WIDTH,
                 f32::from_bits(dependency.strip_height_bits),
@@ -540,6 +541,11 @@ fn instrument_track_area(
                     let name = dependency.name.clone();
                     let selected = dependency.selected.clone();
                     let strip_height = f32::from_bits(dependency.strip_height_bits);
+                    let gain_mode = if dependency.compact_gain {
+                        GainControlMode::Knob
+                    } else {
+                        GainControlMode::Fader
+                    };
                     strip_panel(
                         strip_shell(
                             name,
@@ -577,12 +583,8 @@ fn instrument_track_area(
                             },
                             Some(Message::Mixer(MixerMessage::ResetTrackMeter(track_index))),
                             strip_height,
-                            true,
-                            if dependency.compact_gain {
-                                GainControlMode::Knob
-                            } else {
-                                GainControlMode::Fader
-                            },
+                            meter_scale_visible(gain_mode),
+                            gain_mode,
                         ),
                         STRIP_WIDTH,
                         strip_height,
@@ -664,6 +666,11 @@ fn bus_track_area(
                     let strip_height = f32::from_bits(dependency.strip_height_bits);
                     let soloed = dependency.soloed;
                     let muted = dependency.muted;
+                    let gain_mode = if dependency.compact_gain {
+                        GainControlMode::Knob
+                    } else {
+                        GainControlMode::Fader
+                    };
                     strip_panel(
                         strip_shell(
                             name,
@@ -690,12 +697,8 @@ fn bus_track_area(
                             },
                             Some(Message::Mixer(MixerMessage::ResetBusMeter(bus_id))),
                             strip_height,
-                            true,
-                            if dependency.compact_gain {
-                                GainControlMode::Knob
-                            } else {
-                                GainControlMode::Fader
-                            },
+                            meter_scale_visible(gain_mode),
+                            gain_mode,
                         ),
                         STRIP_WIDTH,
                         strip_height,
@@ -984,6 +987,10 @@ fn gain_control_mode(pane_height: f32) -> GainControlMode {
     }
 }
 
+fn meter_scale_visible(gain_mode: GainControlMode) -> bool {
+    matches!(gain_mode, GainControlMode::Fader)
+}
+
 fn strip_panel<'a>(content: Element<'a, Message>, width: f32, height: f32) -> Element<'a, Message> {
     container(content)
         .width(Length::Fixed(width))
@@ -1081,7 +1088,7 @@ mod tests {
         INSTRUMENT_PICKER_HEIGHT, InstrumentChoice, MAIN_SECTION_WIDTH, MAIN_STRIP_WIDTH,
         MIXER_MIN_HEIGHT, STRIP_TOGGLE_SIZE, StripMeterSnapshot, VALUE_LABEL_HEIGHT,
         control_stack_height, gain_control_height, gain_control_mode, meter_control_height,
-        meter_peak_label, selected_instrument_choice,
+        meter_peak_label, meter_scale_visible, selected_instrument_choice,
     };
     use lilypalooza_audio::mixer::ChannelMeterSnapshot;
 
@@ -1184,5 +1191,11 @@ mod tests {
             control_stack_height(control),
             control + VALUE_LABEL_HEIGHT + ui_style::SPACE_XS as f32
         );
+    }
+
+    #[test]
+    fn compact_gain_mode_hides_meter_scale() {
+        assert!(!meter_scale_visible(GainControlMode::Knob));
+        assert!(meter_scale_visible(GainControlMode::Fader));
     }
 }

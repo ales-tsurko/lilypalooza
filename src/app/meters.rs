@@ -16,6 +16,7 @@ const CHANNEL_WIDTH: f32 = (FADER_HANDLE_VISUAL_WIDTH - METER_GAP) * 0.5;
 const METER_TOTAL_WIDTH: f32 = CHANNEL_WIDTH * 2.0 + METER_GAP;
 const SCALE_WIDTH: f32 = 26.0;
 const TICK_WIDTH: f32 = 5.0;
+const SCALE_LABEL_MIN_GAP: f32 = 11.0;
 const CHANNEL_INSET: f32 = 0.5;
 const CLIP_HEIGHT: f32 = 5.0;
 const HOLD_HEIGHT: f32 = 2.0;
@@ -75,8 +76,8 @@ pub(super) struct MeterColors {
 
 pub(super) fn meter_colors(theme: &Theme) -> MeterColors {
     let palette = theme.extended_palette();
-    let safe = palette.success.base.color;
-    let hot = palette.danger.base.color;
+    let safe = brighten_color(palette.success.base.color, 0.18);
+    let hot = brighten_color(palette.danger.base.color, 0.12);
     let warning = mix_color(safe, hot, 0.45);
 
     MeterColors {
@@ -99,6 +100,16 @@ fn mix_color(a: Color, b: Color, amount: f32) -> Color {
         g: a.g + (b.g - a.g) * t,
         b: a.b + (b.b - a.b) * t,
         a: a.a + (b.a - a.a) * t,
+    }
+}
+
+fn brighten_color(color: Color, amount: f32) -> Color {
+    let t = amount.clamp(0.0, 1.0);
+    Color {
+        r: color.r + (1.0 - color.r) * t,
+        g: color.g + (1.0 - color.g) * t,
+        b: color.b + (1.0 - color.b) * t,
+        a: color.a,
     }
 }
 
@@ -213,7 +224,8 @@ impl<Message> canvas_widget::Program<Message> for MeterScale {
         let tick_right = TICK_WIDTH;
         let (rail_y, rail_height) = meter_rail_layout(bounds.height);
 
-        for (index, db) in SCALE_DB_MARKS.into_iter().enumerate() {
+        let marks = visible_scale_marks(bounds.height);
+        for (index, db) in marks.iter().copied().enumerate() {
             let y = rail_y + rail_height * (1.0 - meter_db_to_normalized(db));
             let tick = Path::line(
                 iced::Point::new(tick_left, y),
@@ -232,7 +244,7 @@ impl<Message> canvas_widget::Program<Message> for MeterScale {
                 size: Pixels(8.0),
                 align_y: if index == 0 {
                     alignment::Vertical::Top
-                } else if index == SCALE_DB_MARKS.len() - 1 {
+                } else if index == marks.len() - 1 {
                     alignment::Vertical::Bottom
                 } else {
                     alignment::Vertical::Center
@@ -243,6 +255,34 @@ impl<Message> canvas_widget::Program<Message> for MeterScale {
 
         vec![frame.into_geometry()]
     }
+}
+
+fn visible_scale_marks(height: f32) -> Vec<f32> {
+    let (_, rail_height) = meter_rail_layout(height);
+    let base_gap = rail_height * 0.1;
+    let stride = if base_gap <= 0.0 {
+        SCALE_DB_MARKS.len()
+    } else {
+        (SCALE_LABEL_MIN_GAP / base_gap).ceil().max(1.0) as usize
+    };
+
+    let mut marks = Vec::with_capacity(SCALE_DB_MARKS.len());
+    for (index, db) in SCALE_DB_MARKS.iter().copied().enumerate() {
+        if index == 0 || index == SCALE_DB_MARKS.len() - 1 || index % stride == 0 {
+            if marks.last().copied() != Some(db) {
+                marks.push(db);
+            }
+        }
+    }
+
+    if marks.first().copied() != Some(SCALE_DB_MARKS[0]) {
+        marks.insert(0, SCALE_DB_MARKS[0]);
+    }
+    if marks.last().copied() != Some(*SCALE_DB_MARKS.last().unwrap()) {
+        marks.push(*SCALE_DB_MARKS.last().unwrap());
+    }
+
+    marks
 }
 
 impl shader::Primitive for MeterPrimitive {
@@ -529,8 +569,8 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
 mod tests {
     use super::{
         CHANNEL_INSET, CHANNEL_WIDTH, FADER_HANDLE_VISUAL_WIDTH, METER_TOTAL_WIDTH, MeterColors,
-        SCALE_DB_MARKS, meter_db_to_normalized, meter_gradient_color, meter_rail_layout,
-        push_channel_meter,
+        SCALE_DB_MARKS, SCALE_LABEL_MIN_GAP, brighten_color, meter_db_to_normalized,
+        meter_gradient_color, meter_rail_layout, push_channel_meter, visible_scale_marks,
     };
     use crate::app::controls::fader_rail_layout;
     use lilypalooza_audio::mixer::{ChannelMeterSnapshot, StripMeterSnapshot};
@@ -613,6 +653,31 @@ mod tests {
     fn scale_marks_cover_the_60_db_range() {
         assert_eq!(SCALE_DB_MARKS.first().copied(), Some(0.0));
         assert_eq!(SCALE_DB_MARKS.last().copied(), Some(-60.0));
+    }
+
+    #[test]
+    fn compact_heights_reduce_scale_marks() {
+        let tall = visible_scale_marks(220.0);
+        let short = visible_scale_marks(96.0);
+
+        assert!(short.len() < tall.len());
+        assert_eq!(short.first().copied(), Some(0.0));
+        assert_eq!(short.last().copied(), Some(-60.0));
+    }
+
+    #[test]
+    fn visible_scale_marks_keep_minimum_spacing() {
+        let height = 96.0;
+        let marks = visible_scale_marks(height);
+        let (rail_y, rail_height) = meter_rail_layout(height);
+        let positions: Vec<f32> = marks
+            .into_iter()
+            .map(|db| rail_y + rail_height * (1.0 - meter_db_to_normalized(db)))
+            .collect();
+
+        for pair in positions.windows(2) {
+            assert!(pair[1] - pair[0] >= SCALE_LABEL_MIN_GAP - 0.001);
+        }
     }
 
     #[test]
@@ -715,6 +780,17 @@ mod tests {
 
         assert!(cold.g > cold.r);
         assert!(hot.r >= hot.g);
+    }
+
+    #[test]
+    fn brighten_color_moves_toward_white() {
+        let color = iced::Color::from_rgb(0.2, 0.4, 0.6);
+        let brighter = brighten_color(color, 0.2);
+
+        assert!(brighter.r > color.r);
+        assert!(brighter.g > color.g);
+        assert!(brighter.b > color.b);
+        assert_eq!(brighter.a, color.a);
     }
 
     #[test]
