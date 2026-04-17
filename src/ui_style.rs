@@ -201,7 +201,19 @@ pub(crate) fn pane_title_bar_surface_focused(theme: &Theme, focused: bool) -> co
         } else {
             palette.background.weak.text
         }),
-        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        border: border::rounded(
+            border::Radius::default()
+                .top_left(0)
+                .top_right(0)
+                .bottom_left(0)
+                .bottom_right(0),
+        )
+        .width(1)
+        .color(mix_color(
+            palette.background.weak.color,
+            palette.background.strong.color,
+            0.40,
+        )),
         ..container::Style::default()
     }
 }
