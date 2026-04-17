@@ -38,8 +38,12 @@ pub(crate) enum MixerRuntimeError {
 
 const METER_FLOOR: f32 = 0.00003162278;
 
-#[derive(Debug, Default, Clone)]
-struct SharedStripMeter(Arc<SharedStripMeterInner>);
+#[derive(Debug, Clone)]
+struct SharedStripMeter {
+    inner: Arc<SharedStripMeterInner>,
+    sample_rate: f32,
+    block_size: usize,
+}
 
 #[derive(Debug, Default)]
 struct SharedStripMeterInner {
@@ -51,41 +55,58 @@ struct SharedStripMeterInner {
 }
 
 impl SharedStripMeter {
+    fn new(sample_rate: usize, block_size: usize) -> Self {
+        Self {
+            inner: Arc::new(SharedStripMeterInner::default()),
+            sample_rate: sample_rate.max(1) as f32,
+            block_size: block_size.max(1),
+        }
+    }
+
     fn observe_stereo(&self, left: f32, right: f32) {
         let left = left.abs();
         let right = right.abs();
 
-        self.0.peak_l.store(left.to_bits(), Ordering::Relaxed);
-        self.0.peak_r.store(right.to_bits(), Ordering::Relaxed);
+        let peak_l = f32::from_bits(self.inner.peak_l.load(Ordering::Relaxed));
+        let peak_r = f32::from_bits(self.inner.peak_r.load(Ordering::Relaxed));
+        let displayed_l = apply_meter_release(peak_l, left, self.sample_rate, self.block_size);
+        let displayed_r = apply_meter_release(peak_r, right, self.sample_rate, self.block_size);
 
-        let hold_l = f32::from_bits(self.0.hold_l.load(Ordering::Relaxed));
+        self.inner
+            .peak_l
+            .store(displayed_l.to_bits(), Ordering::Relaxed);
+        self.inner
+            .peak_r
+            .store(displayed_r.to_bits(), Ordering::Relaxed);
+
+        let hold_l = f32::from_bits(self.inner.hold_l.load(Ordering::Relaxed));
         if left > hold_l {
-            self.0.hold_l.store(left.to_bits(), Ordering::Relaxed);
+            self.inner.hold_l.store(left.to_bits(), Ordering::Relaxed);
         }
 
-        let hold_r = f32::from_bits(self.0.hold_r.load(Ordering::Relaxed));
+        let hold_r = f32::from_bits(self.inner.hold_r.load(Ordering::Relaxed));
         if right > hold_r {
-            self.0.hold_r.store(right.to_bits(), Ordering::Relaxed);
+            self.inner.hold_r.store(right.to_bits(), Ordering::Relaxed);
         }
 
         if left >= 1.0 || right >= 1.0 {
-            self.0.clip_latched.store(true, Ordering::Relaxed);
+            self.inner.clip_latched.store(true, Ordering::Relaxed);
         }
     }
 
     fn reset(&self) {
-        self.0.peak_l.store(0.0f32.to_bits(), Ordering::Relaxed);
-        self.0.peak_r.store(0.0f32.to_bits(), Ordering::Relaxed);
-        self.0.hold_l.store(0.0f32.to_bits(), Ordering::Relaxed);
-        self.0.hold_r.store(0.0f32.to_bits(), Ordering::Relaxed);
-        self.0.clip_latched.store(false, Ordering::Relaxed);
+        self.inner.peak_l.store(0.0f32.to_bits(), Ordering::Relaxed);
+        self.inner.peak_r.store(0.0f32.to_bits(), Ordering::Relaxed);
+        self.inner.hold_l.store(0.0f32.to_bits(), Ordering::Relaxed);
+        self.inner.hold_r.store(0.0f32.to_bits(), Ordering::Relaxed);
+        self.inner.clip_latched.store(false, Ordering::Relaxed);
     }
 
     fn snapshot(&self) -> StripMeterSnapshot {
-        let peak_l = f32::from_bits(self.0.peak_l.load(Ordering::Relaxed));
-        let peak_r = f32::from_bits(self.0.peak_r.load(Ordering::Relaxed));
-        let hold_l = f32::from_bits(self.0.hold_l.load(Ordering::Relaxed));
-        let hold_r = f32::from_bits(self.0.hold_r.load(Ordering::Relaxed));
+        let peak_l = f32::from_bits(self.inner.peak_l.load(Ordering::Relaxed));
+        let peak_r = f32::from_bits(self.inner.peak_r.load(Ordering::Relaxed));
+        let hold_l = f32::from_bits(self.inner.hold_l.load(Ordering::Relaxed));
+        let hold_r = f32::from_bits(self.inner.hold_r.load(Ordering::Relaxed));
 
         StripMeterSnapshot {
             left: ChannelMeterSnapshot {
@@ -96,8 +117,14 @@ impl SharedStripMeter {
                 level: normalize_meter_level(peak_r),
                 hold: normalize_meter_level(hold_r),
             },
-            clip_latched: self.0.clip_latched.load(Ordering::Relaxed),
+            clip_latched: self.inner.clip_latched.load(Ordering::Relaxed),
         }
+    }
+}
+
+impl Default for SharedStripMeter {
+    fn default() -> Self {
+        Self::new(44_100, 64)
     }
 }
 
@@ -106,12 +133,31 @@ fn normalize_meter_level(amplitude: f32) -> f32 {
     ((db - STRIP_METER_MIN_DB) / (STRIP_METER_MAX_DB - STRIP_METER_MIN_DB)).clamp(0.0, 1.0)
 }
 
+const METER_RELEASE_DB_PER_SECOND: f32 = 18.0;
+
+fn amplitude_to_db(amplitude: f32) -> f32 {
+    20.0 * amplitude.abs().max(METER_FLOOR).log10()
+}
+
+fn apply_meter_release(current: f32, observed: f32, sample_rate: f32, block_size: usize) -> f32 {
+    if observed >= current {
+        return observed;
+    }
+
+    let current_db = amplitude_to_db(current);
+    let observed_db = amplitude_to_db(observed);
+    let block_seconds = block_size as f32 / sample_rate.max(1.0);
+    let released_db = current_db - METER_RELEASE_DB_PER_SECOND * block_seconds;
+    db_to_amplitude(released_db.max(observed_db).max(STRIP_METER_MIN_DB))
+}
+
 pub(crate) struct MixerRuntime {
     master: MasterRuntime,
     tracks: Vec<Option<TrackRuntime>>,
     buses: HashMap<BusId, BusRuntime>,
     soundfonts: HashMap<String, LoadedSoundfont>,
     soundfont_settings: SoundfontSynthSettings,
+    meter_settings: AudioEngineSettings,
 }
 
 impl MixerRuntime {
@@ -197,7 +243,7 @@ impl MixerRuntime {
         mixer: &MixerState,
     ) -> Result<Self, MixerRuntimeError> {
         context.with_activation(|| {
-            let master = MasterRuntime::new(context, commands, mixer);
+            let master = MasterRuntime::new(context, commands, settings, mixer);
             let soundfont_settings =
                 SoundfontSynthSettings::new(settings.sample_rate as i32, settings.block_size);
 
@@ -205,7 +251,7 @@ impl MixerRuntime {
             for bus_track in &mixer.buses {
                 buses.insert(
                     bus_track.id,
-                    BusRuntime::new(context, commands, bus_track, mixer),
+                    BusRuntime::new(context, commands, settings, bus_track, mixer),
                 );
             }
 
@@ -215,6 +261,7 @@ impl MixerRuntime {
                 buses,
                 soundfonts: HashMap::new(),
                 soundfont_settings,
+                meter_settings: *settings,
             };
             runtime.sync_soundfonts(mixer)?;
 
@@ -224,6 +271,7 @@ impl MixerRuntime {
                     Some(TrackRuntime::new(
                         context,
                         commands,
+                        settings,
                         track,
                         mixer,
                         &runtime.soundfonts,
@@ -297,8 +345,10 @@ impl MixerRuntime {
     ) -> Result<(), MixerRuntimeError> {
         let bus_track = mixer.bus(bus_id)?;
         context.with_activation(|| {
-            self.buses
-                .insert(bus_id, BusRuntime::new(context, commands, bus_track, mixer));
+            self.buses.insert(
+                bus_id,
+                BusRuntime::new(context, commands, &self.meter_settings, bus_track, mixer),
+            );
         });
         self.sync_bus_routing(context, commands, mixer, bus_id)?;
         self.sync_all_levels(commands, mixer);
@@ -349,6 +399,7 @@ impl MixerRuntime {
             *runtime = Some(TrackRuntime::new(
                 context,
                 commands,
+                &self.meter_settings,
                 track,
                 mixer,
                 &self.soundfonts,
@@ -382,6 +433,7 @@ impl MixerRuntime {
             *runtime = Some(TrackRuntime::new(
                 context,
                 commands,
+                &self.meter_settings,
                 track,
                 mixer,
                 &self.soundfonts,
@@ -605,10 +657,11 @@ impl MasterRuntime {
     fn new(
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
+        settings: &AudioEngineSettings,
         mixer: &MixerState,
     ) -> Self {
         let input = bus(2);
-        let meter = SharedStripMeter::default();
+        let meter = SharedStripMeter::new(settings.sample_rate, settings.block_size);
         let strip = handle_with_inputs(
             commands,
             StereoBalanceGain::new(),
@@ -681,6 +734,7 @@ impl TrackRuntime {
     fn new(
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
+        settings: &AudioEngineSettings,
         track: &MixerTrack,
         mixer: &MixerState,
         soundfonts: &HashMap<String, LoadedSoundfont>,
@@ -688,7 +742,7 @@ impl TrackRuntime {
     ) -> Result<Self, MixerRuntimeError> {
         let initial_gain = track_effective_amplitude(mixer, track);
         let source_bus = bus(2);
-        let meter = SharedStripMeter::default();
+        let meter = SharedStripMeter::new(settings.sample_rate, settings.block_size);
         let strip = handle_with_inputs(
             commands,
             StereoBalanceGain::new(),
@@ -926,12 +980,13 @@ impl BusRuntime {
     fn new(
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
+        settings: &AudioEngineSettings,
         bus_track: &BusTrack,
         _mixer: &MixerState,
     ) -> Self {
         let initial_gain = bus_effective_amplitude(bus_track);
         let input = bus(2);
-        let meter = SharedStripMeter::default();
+        let meter = SharedStripMeter::new(settings.sample_rate, settings.block_size);
         let strip = handle_with_inputs(
             commands,
             StereoBalanceGain::new(),
@@ -1364,6 +1419,35 @@ mod tests {
     }
 
     #[test]
+    fn strip_meter_release_is_ballistic_not_instant() {
+        let meter = SharedStripMeter::default();
+
+        meter.observe_stereo(1.0, 0.5);
+        let hot = meter.snapshot();
+        meter.observe_stereo(0.05, 0.025);
+        let falling = meter.snapshot();
+
+        assert!(falling.left.level < hot.left.level);
+        assert!(falling.left.level > normalize_meter_level(0.05));
+        assert!(falling.right.level < hot.right.level);
+        assert!(falling.right.level > normalize_meter_level(0.025));
+    }
+
+    #[test]
+    fn strip_meter_release_eventually_reaches_floor() {
+        let meter = SharedStripMeter::default();
+
+        meter.observe_stereo(1.0, 1.0);
+        for _ in 0..4_000 {
+            meter.observe_stereo(0.0, 0.0);
+        }
+        let cooled = meter.snapshot();
+
+        assert!(cooled.left.level <= 0.001);
+        assert!(cooled.right.level <= 0.001);
+    }
+
+    #[test]
     fn meter_snapshot_normalizes_db_monotonically() {
         assert!(normalize_meter_level(0.05) < normalize_meter_level(0.5));
         assert!(normalize_meter_level(0.5) < normalize_meter_level(1.0));
@@ -1386,7 +1470,7 @@ mod tests {
         assert_eq!(left_snapshot.left.hold, 0.0);
         assert_eq!(left_snapshot.right.hold, 0.0);
 
-        assert!(right_snapshot.clip_latched);
+        assert!(!right_snapshot.clip_latched);
         assert!(right_snapshot.left.hold > 0.0);
         assert!(right_snapshot.right.hold > 0.0);
     }
