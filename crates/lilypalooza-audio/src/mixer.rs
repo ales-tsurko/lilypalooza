@@ -48,6 +48,37 @@ pub enum MixerError {
     InvalidSoundfontId(String),
 }
 
+/// One channel meter snapshot.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ChannelMeterSnapshot {
+    /// Normalized level in `0..=1`.
+    pub level: f32,
+    /// Normalized hold marker in `0..=1`.
+    pub hold: f32,
+}
+
+/// One stereo strip meter snapshot.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct StripMeterSnapshot {
+    /// Left channel meter state.
+    pub left: ChannelMeterSnapshot,
+    /// Right channel meter state.
+    pub right: ChannelMeterSnapshot,
+    /// Latched clip state.
+    pub clip_latched: bool,
+}
+
+/// Full mixer meter snapshot.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MixerMeterSnapshot {
+    /// Main strip meter state.
+    pub main: StripMeterSnapshot,
+    /// Instrument track meter states.
+    pub tracks: Vec<StripMeterSnapshot>,
+    /// Bus strip meter states.
+    pub buses: Vec<(BusId, StripMeterSnapshot)>,
+}
+
 /// Serializable mixer state with fixed instrument tracks, dynamic buses, and a dedicated master.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MixerState {
@@ -393,6 +424,14 @@ impl Mixer {
 
     pub(crate) fn instrument_handle(&self, track_id: TrackId) -> Option<InstrumentRuntimeHandle> {
         self.runtime.instrument_handle(track_id)
+    }
+
+    pub(crate) fn meter_snapshot(&self) -> MixerMeterSnapshot {
+        self.runtime.meter_snapshot(&self.state)
+    }
+
+    pub(crate) fn reset_meters(&self) {
+        self.runtime.reset_meters();
     }
 }
 

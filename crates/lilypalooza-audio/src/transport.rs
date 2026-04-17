@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use knyst::prelude::{Beats, KnystCommands, MultiThreadedKnystCommands, Seconds, TransportState};
 
+use crate::mixer::Mixer;
 use crate::sequencer::Sequencer;
 
 /// Playback state.
@@ -76,6 +77,7 @@ pub enum TransportError {
 /// Mutable transport control handle.
 pub struct Transport<'a> {
     commands: &'a mut MultiThreadedKnystCommands,
+    mixer: Option<&'a mut Mixer>,
     sequencer: Option<&'a Sequencer>,
     runtime_dirty: Option<&'a AtomicBool>,
 }
@@ -83,11 +85,13 @@ pub struct Transport<'a> {
 impl<'a> Transport<'a> {
     pub(crate) fn new(
         commands: &'a mut MultiThreadedKnystCommands,
+        mixer: Option<&'a mut Mixer>,
         sequencer: Option<&'a Sequencer>,
         runtime_dirty: Option<&'a AtomicBool>,
     ) -> Self {
         Self {
             commands,
+            mixer,
             sequencer,
             runtime_dirty,
         }
@@ -127,6 +131,9 @@ impl<'a> Transport<'a> {
             .unwrap_or(Beats::ZERO);
         if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(false);
+        }
+        if let Some(mixer) = self.mixer.as_deref() {
+            mixer.reset_meters();
         }
         self.commands.clear_scheduled_changes();
         wait_for_controller_barrier(self.commands);
@@ -176,6 +183,9 @@ impl<'a> Transport<'a> {
         if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(false);
         }
+        if let Some(mixer) = self.mixer.as_deref() {
+            mixer.reset_meters();
+        }
         self.commands.clear_scheduled_changes();
         wait_for_controller_barrier(self.commands);
         if was_playing && let Some(sequencer) = self.sequencer {
@@ -219,6 +229,9 @@ impl<'a> Transport<'a> {
         let position = Beats::from_beats_f64(position.max(0.0));
         if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(false);
+        }
+        if let Some(mixer) = self.mixer.as_deref() {
+            mixer.reset_meters();
         }
         self.commands.clear_scheduled_changes();
         wait_for_controller_barrier(self.commands);

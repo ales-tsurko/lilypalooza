@@ -35,6 +35,7 @@ mod controls;
 mod dock_view;
 mod editor;
 mod messages;
+mod meters;
 mod mixer;
 mod piano_roll;
 mod score_cursor;

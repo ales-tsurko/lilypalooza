@@ -15,7 +15,7 @@ use knyst::prelude::{
     Beats, KnystCommands, KnystSphere, MultiThreadedKnystCommands, SphereSettings,
 };
 
-use crate::mixer::{Mixer, MixerError, MixerHandle, MixerState};
+use crate::mixer::{Mixer, MixerError, MixerHandle, MixerMeterSnapshot, MixerState};
 use crate::sequencer::{Sequencer, SequencerHandle};
 use crate::transport::Transport;
 
@@ -137,6 +137,7 @@ impl AudioEngine {
     pub fn transport(&mut self) -> Transport<'_> {
         Transport::new(
             &mut self.commands,
+            Some(&mut self.mixer),
             Some(&self.sequencer),
             Some(self.runtime_dirty.as_ref()),
         )
@@ -160,6 +161,10 @@ impl AudioEngine {
     /// Returns the sequencer control handle.
     pub fn sequencer(&mut self) -> SequencerHandle<'_> {
         SequencerHandle::new(&self.sequencer, &mut self.commands)
+    }
+
+    pub fn meter_snapshot(&self) -> MixerMeterSnapshot {
+        self.mixer.meter_snapshot()
     }
 
     /// Flushes pending runtime configuration changes through the running graph.
@@ -486,6 +491,7 @@ mod tests {
         {
             let mut transport = Transport::new(
                 &mut engine.commands,
+                Some(&mut engine.mixer),
                 Some(&engine.sequencer),
                 Some(engine.runtime_dirty.as_ref()),
             );

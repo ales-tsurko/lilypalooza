@@ -235,7 +235,7 @@ impl<'a> SequencerHandle<'a> {
             return Ok(beats_to_ticks(position, ppq));
         }
 
-        let beats = Transport::new(self.commands, None, None)
+        let beats = Transport::new(self.commands, None, None, None)
             .snapshot()?
             .beats_position;
         Ok(beats_to_ticks(beats, ppq))

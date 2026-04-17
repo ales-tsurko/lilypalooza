@@ -11,6 +11,7 @@ iced = "0.14"
 iced_core = "0.14.0"
 
 [dependencies]
+bytemuck = { version = "1.23.1", features = ["derive"] }
 directories = "5.0.1"
 iced = { workspace = true, features = ["canvas", "image", "lazy", "tokio", "svg"] }
 iced_core = { workspace = true }

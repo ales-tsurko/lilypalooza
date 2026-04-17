@@ -3,10 +3,12 @@ use std::sync::Arc;
 
 use iced::widget::{button, column, container, lazy, pick_list, responsive, row, scrollable, text};
 use iced::{Element, Fill, FillPortion, Length, alignment};
+use lilypalooza_audio::mixer::{ChannelMeterSnapshot, MixerMeterSnapshot, StripMeterSnapshot};
 use lilypalooza_audio::{InstrumentSlotState, MixerState, SoundfontProcessorState};
 
 use super::controls::{gain_fader, gain_knob, pan_knob};
 use super::messages::MixerMessage;
+use super::meters::{MeterColors, meter_colors, stereo_meter};
 use super::{Lilypalooza, Message};
 use crate::{fonts, ui_style};
 
@@ -19,7 +21,7 @@ const STRIP_SPACING: f32 = 10.0;
 const INSTRUMENT_PICKER_HEIGHT: f32 = 28.0;
 const SECTION_HEADER_HEIGHT: f32 = 28.0;
 const STRIP_MIN_HEIGHT: f32 = 140.0;
-const STRIP_TOGGLE_SIZE: f32 = 28.0;
+const STRIP_TOGGLE_SIZE: f32 = INSTRUMENT_PICKER_HEIGHT - 4.0;
 const COMPACT_GAIN_SWITCH_OFFSET: f32 = 20.0;
 
 struct StripActions<'a> {
@@ -190,6 +192,8 @@ impl fmt::Display for InstrumentChoice {
 struct MainStripDependency {
     gain_bits: u32,
     pan_bits: u32,
+    meter: MeterDependency,
+    colors: MeterColorsDependency,
     compact_gain: bool,
     strip_height_bits: u32,
 }
@@ -201,6 +205,8 @@ struct TrackStripDependency {
     selected: Option<InstrumentChoice>,
     gain_bits: u32,
     pan_bits: u32,
+    meter: MeterDependency,
+    colors: MeterColorsDependency,
     compact_gain: bool,
     strip_height_bits: u32,
     soloed: bool,
@@ -213,10 +219,96 @@ struct BusStripDependency {
     name: String,
     gain_bits: u32,
     pan_bits: u32,
+    meter: MeterDependency,
+    colors: MeterColorsDependency,
     compact_gain: bool,
     strip_height_bits: u32,
     soloed: bool,
     muted: bool,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+struct MeterDependency {
+    left_level_bits: u32,
+    right_level_bits: u32,
+    left_hold_bits: u32,
+    right_hold_bits: u32,
+    clip_latched: bool,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+struct MeterColorsDependency {
+    rail: [u32; 4],
+    fill: [u32; 4],
+    hot: [u32; 4],
+    hold: [u32; 4],
+    clip: [u32; 4],
+}
+
+impl MeterDependency {
+    fn from_snapshot(snapshot: StripMeterSnapshot) -> Self {
+        Self {
+            left_level_bits: snapshot.left.level.to_bits(),
+            right_level_bits: snapshot.right.level.to_bits(),
+            left_hold_bits: snapshot.left.hold.to_bits(),
+            right_hold_bits: snapshot.right.hold.to_bits(),
+            clip_latched: snapshot.clip_latched,
+        }
+    }
+
+    fn snapshot(self) -> StripMeterSnapshot {
+        StripMeterSnapshot {
+            left: ChannelMeterSnapshot {
+                level: f32::from_bits(self.left_level_bits),
+                hold: f32::from_bits(self.left_hold_bits),
+            },
+            right: ChannelMeterSnapshot {
+                level: f32::from_bits(self.right_level_bits),
+                hold: f32::from_bits(self.right_hold_bits),
+            },
+            clip_latched: self.clip_latched,
+        }
+    }
+}
+
+impl MeterColorsDependency {
+    fn from_colors(colors: MeterColors) -> Self {
+        Self {
+            rail: color_bits(colors.rail),
+            fill: color_bits(colors.fill),
+            hot: color_bits(colors.hot),
+            hold: color_bits(colors.hold),
+            clip: color_bits(colors.clip),
+        }
+    }
+
+    fn colors(self) -> MeterColors {
+        MeterColors {
+            rail: color_from_bits(self.rail),
+            fill: color_from_bits(self.fill),
+            hot: color_from_bits(self.hot),
+            hold: color_from_bits(self.hold),
+            clip: color_from_bits(self.clip),
+        }
+    }
+}
+
+fn color_bits(color: iced::Color) -> [u32; 4] {
+    [
+        color.r.to_bits(),
+        color.g.to_bits(),
+        color.b.to_bits(),
+        color.a.to_bits(),
+    ]
+}
+
+fn color_from_bits(bits: [u32; 4]) -> iced::Color {
+    iced::Color {
+        r: f32::from_bits(bits[0]),
+        g: f32::from_bits(bits[1]),
+        b: f32::from_bits(bits[2]),
+        a: f32::from_bits(bits[3]),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +327,8 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
             .into();
     };
     let mixer = playback.mixer_state();
+    let meter_snapshot = playback.meter_snapshot();
+    let colors = meter_colors(&app.theme);
 
     responsive(move |size| {
         let gain_mode = gain_control_mode(size.height);
@@ -243,15 +337,33 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                 .max(STRIP_MIN_HEIGHT);
 
         row![
-            container(master_track_area(mixer, strip_height, gain_mode))
-                .width(Length::Fixed(MAIN_STRIP_WIDTH))
-                .height(Fill),
-            container(instrument_track_area(mixer, strip_height, gain_mode))
-                .width(FillPortion(5))
-                .height(Fill),
-            container(bus_track_area(mixer, strip_height, gain_mode))
-                .width(FillPortion(2))
-                .height(Fill)
+            container(master_track_area(
+                mixer,
+                &meter_snapshot,
+                colors,
+                strip_height,
+                gain_mode,
+            ))
+            .width(Length::Fixed(MAIN_STRIP_WIDTH))
+            .height(Fill),
+            container(instrument_track_area(
+                mixer,
+                &meter_snapshot,
+                colors,
+                strip_height,
+                gain_mode,
+            ))
+            .width(FillPortion(5))
+            .height(Fill),
+            container(bus_track_area(
+                mixer,
+                &meter_snapshot,
+                colors,
+                strip_height,
+                gain_mode,
+            ))
+            .width(FillPortion(2))
+            .height(Fill)
         ]
         .spacing(ui_style::SPACE_SM)
         .padding(ui_style::PADDING_SM)
@@ -264,12 +376,20 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
 
 fn master_track_area(
     mixer: &MixerState,
+    meters: &MixerMeterSnapshot,
+    colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
-) -> Element<'_, Message> {
-    let master_row = row![sticky_master_strip(mixer, strip_height, gain_mode)]
-        .align_y(alignment::Vertical::Top)
-        .height(Length::Fixed(strip_height));
+) -> Element<'static, Message> {
+    let master_row = row![sticky_master_strip(
+        mixer,
+        meters.main,
+        colors,
+        strip_height,
+        gain_mode
+    )]
+    .align_y(alignment::Vertical::Top)
+    .height(Length::Fixed(strip_height));
 
     column![
         section_title("Main"),
@@ -288,14 +408,18 @@ fn master_track_area(
 
 fn sticky_master_strip(
     mixer: &MixerState,
+    meter_snapshot: StripMeterSnapshot,
+    colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
-) -> Element<'_, Message> {
+) -> Element<'static, Message> {
     let master = mixer.master();
     lazy(
         MainStripDependency {
             gain_bits: master.state.gain_db.to_bits(),
             pan_bits: master.state.pan.to_bits(),
+            meter: MeterDependency::from_snapshot(meter_snapshot),
+            colors: MeterColorsDependency::from_colors(colors),
             compact_gain: matches!(gain_mode, GainControlMode::Knob),
             strip_height_bits: strip_height.to_bits(),
         },
@@ -306,6 +430,8 @@ fn sticky_master_strip(
                     None,
                     f32::from_bits(dependency.gain_bits),
                     f32::from_bits(dependency.pan_bits),
+                    dependency.meter.snapshot(),
+                    dependency.colors.colors(),
                     StripActions {
                         solo: None,
                         mute: None,
@@ -333,9 +459,11 @@ fn sticky_master_strip(
 
 fn instrument_track_area(
     mixer: &MixerState,
+    meters: &MixerMeterSnapshot,
+    colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
-) -> Element<'_, Message> {
+) -> Element<'static, Message> {
     let options: Arc<[InstrumentChoice]> = instrument_choices(mixer).into();
     let track_row = mixer.tracks().iter().fold(
         row![]
@@ -353,6 +481,10 @@ fn instrument_track_area(
                     selected,
                     gain_bits: track.state.gain_db.to_bits(),
                     pan_bits: track.state.pan.to_bits(),
+                    meter: MeterDependency::from_snapshot(
+                        meters.tracks.get(track_index).copied().unwrap_or_default(),
+                    ),
+                    colors: MeterColorsDependency::from_colors(colors),
                     compact_gain: matches!(gain_mode, GainControlMode::Knob),
                     strip_height_bits: strip_height.to_bits(),
                     soloed: track.state.soloed,
@@ -379,6 +511,8 @@ fn instrument_track_area(
                             ),
                             f32::from_bits(dependency.gain_bits),
                             f32::from_bits(dependency.pan_bits),
+                            dependency.meter.snapshot(),
+                            dependency.colors.colors(),
                             StripActions {
                                 solo: Some((
                                     dependency.soloed,
@@ -427,9 +561,11 @@ fn instrument_track_area(
 
 fn bus_track_area(
     mixer: &MixerState,
+    meters: &MixerMeterSnapshot,
+    colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
-) -> Element<'_, Message> {
+) -> Element<'static, Message> {
     let bus_row = mixer.buses().iter().fold(
         row![]
             .spacing(STRIP_SPACING)
@@ -442,6 +578,15 @@ fn bus_track_area(
                     name: bus.name.clone(),
                     gain_bits: bus.state.gain_db.to_bits(),
                     pan_bits: bus.state.pan.to_bits(),
+                    meter: MeterDependency::from_snapshot(
+                        meters
+                            .buses
+                            .iter()
+                            .find(|(id, _)| *id == bus.id)
+                            .map(|(_, snapshot)| *snapshot)
+                            .unwrap_or_default(),
+                    ),
+                    colors: MeterColorsDependency::from_colors(colors),
                     compact_gain: matches!(gain_mode, GainControlMode::Knob),
                     strip_height_bits: strip_height.to_bits(),
                     soloed: bus.state.soloed,
@@ -461,6 +606,8 @@ fn bus_track_area(
                             None,
                             gain_db,
                             pan,
+                            dependency.meter.snapshot(),
+                            dependency.colors.colors(),
                             StripActions {
                                 solo: Some((
                                     soloed,
@@ -528,11 +675,14 @@ fn section_title<'a>(label: impl Into<String>) -> Element<'a, Message> {
         .into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn strip_shell<'a>(
     title: impl Into<String>,
     instrument_picker: Option<Element<'a, Message>>,
     gain_db: f32,
     pan: f32,
+    meter_snapshot: StripMeterSnapshot,
+    meter_colors: MeterColors,
     actions: StripActions<'a>,
     strip_height: f32,
     gain_mode: GainControlMode,
@@ -576,15 +726,30 @@ fn strip_shell<'a>(
     if let Some(on_gain) = actions.on_gain {
         content = content.push(text(format!("{gain_db:.1} dB")).size(ui_style::FONT_SIZE_UI_XS));
 
-        content = match gain_mode {
-            GainControlMode::Fader => content.push(
-                container(gain_fader(gain_db, on_gain))
-                    .width(Fill)
-                    .height(Length::Fill)
-                    .center_x(Fill),
-            ),
-            GainControlMode::Knob => content.push(gain_knob(gain_db, on_gain)),
+        let gain_control = match gain_mode {
+            GainControlMode::Fader => container(gain_fader(gain_db, on_gain))
+                .width(Fill)
+                .height(Length::Fill)
+                .center_x(Fill)
+                .into(),
+            GainControlMode::Knob => gain_knob(gain_db, on_gain),
         };
+
+        content = content.push(
+            row![
+                container(gain_control).width(Fill),
+                container(stereo_meter(
+                    meter_snapshot,
+                    meter_colors,
+                    strip_height * 0.42
+                ))
+                .width(Length::Shrink)
+                .align_y(alignment::Vertical::Bottom),
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .height(Length::Fill)
+            .align_y(alignment::Vertical::Bottom),
+        );
     }
 
     container(content)
@@ -695,8 +860,8 @@ mod tests {
     use lilypalooza_audio::{InstrumentSlotState, MixerState};
 
     use super::{
-        COMPACT_GAIN_SWITCH_OFFSET, GainControlMode, InstrumentChoice, MIXER_MIN_HEIGHT,
-        STRIP_TOGGLE_SIZE, gain_control_mode, selected_instrument_choice,
+        COMPACT_GAIN_SWITCH_OFFSET, GainControlMode, INSTRUMENT_PICKER_HEIGHT, InstrumentChoice,
+        MIXER_MIN_HEIGHT, STRIP_TOGGLE_SIZE, gain_control_mode, selected_instrument_choice,
     };
 
     #[test]
@@ -741,6 +906,6 @@ mod tests {
 
     #[test]
     fn empty_toggle_slots_use_track_toggle_size() {
-        assert_eq!(STRIP_TOGGLE_SIZE, 28.0);
+        assert_eq!(STRIP_TOGGLE_SIZE, INSTRUMENT_PICKER_HEIGHT - 4.0);
     }
 }

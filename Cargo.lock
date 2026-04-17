@@ -2742,6 +2742,7 @@ dependencies = [
 name = "lilypalooza"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "directories",
  "iced",
  "iced-code-editor",

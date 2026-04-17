@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use knyst::graph::GenOrGraph;
@@ -20,7 +22,8 @@ use crate::instrument::{
     InstrumentRuntimeHandle, ProcessorStateError, create_effect_processor,
 };
 use crate::mixer::{
-    BusId, BusSend, BusTrack, MixerError, MixerState, MixerTrack, TrackId, TrackRoute,
+    BusId, BusSend, BusTrack, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot, MixerState,
+    MixerTrack, StripMeterSnapshot, TrackId, TrackRoute,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -31,6 +34,78 @@ pub(crate) enum MixerRuntimeError {
     Soundfont(#[from] SoundfontSynthError),
     #[error(transparent)]
     ProcessorState(#[from] ProcessorStateError),
+}
+
+const METER_MIN_DB: f32 = -60.0;
+const METER_MAX_DB: f32 = 0.0;
+const METER_FLOOR: f32 = 0.001;
+
+#[derive(Debug, Default, Clone)]
+struct SharedStripMeter(Arc<SharedStripMeterInner>);
+
+#[derive(Debug, Default)]
+struct SharedStripMeterInner {
+    peak_l: AtomicU32,
+    peak_r: AtomicU32,
+    hold_l: AtomicU32,
+    hold_r: AtomicU32,
+    clip_latched: AtomicBool,
+}
+
+impl SharedStripMeter {
+    fn observe_stereo(&self, left: f32, right: f32) {
+        let left = left.abs();
+        let right = right.abs();
+
+        self.0.peak_l.store(left.to_bits(), Ordering::Relaxed);
+        self.0.peak_r.store(right.to_bits(), Ordering::Relaxed);
+
+        let hold_l = f32::from_bits(self.0.hold_l.load(Ordering::Relaxed));
+        if left > hold_l {
+            self.0.hold_l.store(left.to_bits(), Ordering::Relaxed);
+        }
+
+        let hold_r = f32::from_bits(self.0.hold_r.load(Ordering::Relaxed));
+        if right > hold_r {
+            self.0.hold_r.store(right.to_bits(), Ordering::Relaxed);
+        }
+
+        if left >= 1.0 || right >= 1.0 {
+            self.0.clip_latched.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn reset(&self) {
+        self.0.peak_l.store(0.0f32.to_bits(), Ordering::Relaxed);
+        self.0.peak_r.store(0.0f32.to_bits(), Ordering::Relaxed);
+        self.0.hold_l.store(0.0f32.to_bits(), Ordering::Relaxed);
+        self.0.hold_r.store(0.0f32.to_bits(), Ordering::Relaxed);
+        self.0.clip_latched.store(false, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> StripMeterSnapshot {
+        let peak_l = f32::from_bits(self.0.peak_l.load(Ordering::Relaxed));
+        let peak_r = f32::from_bits(self.0.peak_r.load(Ordering::Relaxed));
+        let hold_l = f32::from_bits(self.0.hold_l.load(Ordering::Relaxed));
+        let hold_r = f32::from_bits(self.0.hold_r.load(Ordering::Relaxed));
+
+        StripMeterSnapshot {
+            left: ChannelMeterSnapshot {
+                level: normalize_meter_level(peak_l),
+                hold: normalize_meter_level(hold_l),
+            },
+            right: ChannelMeterSnapshot {
+                level: normalize_meter_level(peak_r),
+                hold: normalize_meter_level(hold_r),
+            },
+            clip_latched: self.0.clip_latched.load(Ordering::Relaxed),
+        }
+    }
+}
+
+fn normalize_meter_level(amplitude: f32) -> f32 {
+    let db = 20.0 * amplitude.abs().max(METER_FLOOR).log10();
+    ((db - METER_MIN_DB) / (METER_MAX_DB - METER_MIN_DB)).clamp(0.0, 1.0)
 }
 
 pub(crate) struct MixerRuntime {
@@ -51,6 +126,49 @@ impl MixerRuntime {
                 .as_ref()?
                 .handle,
         )
+    }
+
+    pub(crate) fn meter_snapshot(&self, mixer: &MixerState) -> MixerMeterSnapshot {
+        MixerMeterSnapshot {
+            main: self.master.meter.snapshot(),
+            tracks: mixer
+                .tracks()
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    self.tracks
+                        .get(index)
+                        .and_then(|runtime| runtime.as_ref())
+                        .map_or_else(StripMeterSnapshot::default, |runtime| {
+                            runtime.meter.snapshot()
+                        })
+                })
+                .collect(),
+            buses: mixer
+                .buses()
+                .iter()
+                .map(|bus| {
+                    (
+                        bus.id,
+                        self.buses
+                            .get(&bus.id)
+                            .map_or_else(StripMeterSnapshot::default, |runtime| {
+                                runtime.meter.snapshot()
+                            }),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn reset_meters(&self) {
+        self.master.meter.reset();
+        for runtime in self.tracks.iter().flatten() {
+            runtime.meter.reset();
+        }
+        for runtime in self.buses.values() {
+            runtime.meter.reset();
+        }
     }
 
     pub(crate) fn attach(
@@ -460,6 +578,8 @@ struct MasterRuntime {
     input: Handle<GenericHandle>,
     effects: Vec<EffectRuntimeHandle>,
     strip: Handle<GenericHandle>,
+    _meter_node: Handle<GenericHandle>,
+    meter: SharedStripMeter,
 }
 
 impl MasterRuntime {
@@ -469,6 +589,7 @@ impl MasterRuntime {
         mixer: &MixerState,
     ) -> Self {
         let input = bus(2);
+        let meter = SharedStripMeter::default();
         let strip = handle_with_inputs(
             commands,
             StereoBalanceGain::new(),
@@ -477,11 +598,15 @@ impl MasterRuntime {
                 (3 : mixer.master.state.pan)
             ),
         );
-        graph_output(0, strip.channels(2));
+        let meter_node = handle(MeterTap::new(meter.clone()));
+        connect_stereo(node_id_of(strip), node_id_of(meter_node));
+        graph_output(0, meter_node.channels(2));
         let mut runtime = Self {
             input,
             effects: Vec::new(),
             strip,
+            _meter_node: meter_node,
+            meter,
         };
         runtime.rebuild_effects(context, commands, &mixer.master.effects);
         runtime
@@ -526,6 +651,8 @@ struct TrackRuntime {
     source_bus: Handle<GenericHandle>,
     effects: Vec<EffectRuntimeHandle>,
     strip: Handle<GenericHandle>,
+    meter_node: Handle<GenericHandle>,
+    meter: SharedStripMeter,
     route_bus: Handle<GenericHandle>,
     instrument: Option<TrackInstrumentRuntime>,
     send_nodes: Vec<NodeId>,
@@ -542,19 +669,24 @@ impl TrackRuntime {
     ) -> Result<Self, MixerRuntimeError> {
         let initial_gain = track_effective_amplitude(mixer, track);
         let source_bus = bus(2);
+        let meter = SharedStripMeter::default();
         let strip = handle_with_inputs(
             commands,
             StereoBalanceGain::new(),
             inputs!((2 : initial_gain), (3 : track.state.pan)),
         );
+        let meter_node = handle(MeterTap::new(meter.clone()));
         let route_bus = bus(2);
 
-        connect_stereo(node_id_of(strip), node_id_of(route_bus));
+        connect_stereo(node_id_of(strip), node_id_of(meter_node));
+        connect_stereo(node_id_of(meter_node), node_id_of(route_bus));
 
         let mut runtime = Self {
             source_bus,
             effects: Vec::new(),
             strip,
+            meter_node,
+            meter,
             route_bus,
             instrument: None,
             send_nodes: Vec::new(),
@@ -716,11 +848,14 @@ impl TrackRuntime {
         }
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.strip)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.strip)));
+        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.meter_node)));
+        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.meter_node)));
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.route_bus)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.route_bus)));
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.source_bus)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.source_bus)));
         knyst_commands().free_node(node_id_of(self.strip));
+        knyst_commands().free_node(node_id_of(self.meter_node));
         knyst_commands().free_node(node_id_of(self.route_bus));
         knyst_commands().free_node(node_id_of(self.source_bus));
     }
@@ -762,6 +897,8 @@ struct BusRuntime {
     input: Handle<GenericHandle>,
     effects: Vec<EffectRuntimeHandle>,
     strip: Handle<GenericHandle>,
+    meter_node: Handle<GenericHandle>,
+    meter: SharedStripMeter,
     route_bus: Handle<GenericHandle>,
     send_nodes: Vec<NodeId>,
 }
@@ -775,17 +912,22 @@ impl BusRuntime {
     ) -> Self {
         let initial_gain = bus_effective_amplitude(bus_track);
         let input = bus(2);
+        let meter = SharedStripMeter::default();
         let strip = handle_with_inputs(
             commands,
             StereoBalanceGain::new(),
             inputs!((2 : initial_gain), (3 : bus_track.state.pan)),
         );
+        let meter_node = handle(MeterTap::new(meter.clone()));
         let route_bus = bus(2);
-        connect_stereo(node_id_of(strip), node_id_of(route_bus));
+        connect_stereo(node_id_of(strip), node_id_of(meter_node));
+        connect_stereo(node_id_of(meter_node), node_id_of(route_bus));
         let mut runtime = Self {
             input,
             effects: Vec::new(),
             strip,
+            meter_node,
+            meter,
             route_bus,
             send_nodes: Vec::new(),
         };
@@ -919,11 +1061,14 @@ impl BusRuntime {
         }
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.strip)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.strip)));
+        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.meter_node)));
+        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.meter_node)));
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.route_bus)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.route_bus)));
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.input)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.input)));
         knyst_commands().free_node(node_id_of(self.strip));
+        knyst_commands().free_node(node_id_of(self.meter_node));
         knyst_commands().free_node(node_id_of(self.route_bus));
         knyst_commands().free_node(node_id_of(self.input));
     }
@@ -1007,6 +1152,44 @@ fn node_id_of<H: HandleData + Copy>(handle: Handle<H>) -> NodeId {
         .node_ids()
         .next()
         .expect("runtime handles should always own one node")
+}
+
+#[derive(Debug, Clone)]
+struct MeterTap {
+    meter: SharedStripMeter,
+}
+
+#[impl_gen]
+impl MeterTap {
+    #[new]
+    fn new(meter: SharedStripMeter) -> Self {
+        Self { meter }
+    }
+
+    #[process]
+    fn process(
+        &mut self,
+        left_in: &[Sample],
+        right_in: &[Sample],
+        left_out: &mut [Sample],
+        right_out: &mut [Sample],
+        block_size: BlockSize,
+    ) -> GenState {
+        let mut peak_left = 0.0_f32;
+        let mut peak_right = 0.0_f32;
+
+        for frame in 0..block_size.0 {
+            let left = left_in[frame];
+            let right = right_in[frame];
+            left_out[frame] = left;
+            right_out[frame] = right;
+            peak_left = peak_left.max(left.abs());
+            peak_right = peak_right.max(right.abs());
+        }
+
+        self.meter.observe_stereo(peak_left, peak_right);
+        GenState::Continue
+    }
 }
 
 fn track_effective_amplitude(mixer: &MixerState, track: &MixerTrack) -> f32 {
@@ -1120,10 +1303,52 @@ mod tests {
     use knyst::modal_interface::knyst_commands;
     use knyst::prelude::{BlockSize, GenState, Sample, bus, graph_output, handle, impl_gen};
 
-    use super::{MixerRuntimeError, connect_stereo, node_id_of};
+    use super::{
+        MixerRuntimeError, SharedStripMeter, connect_stereo, node_id_of, normalize_meter_level,
+    };
     use crate::instrument::{InstrumentKind, InstrumentSlotState, MidiEvent, ProcessorState};
     use crate::mixer::{Mixer, MixerState, TrackId};
     use crate::test_utils::{OfflineHarness, test_soundfont_resource};
+
+    #[test]
+    fn strip_meter_captures_stereo_peak_and_hold() {
+        let meter = SharedStripMeter::default();
+
+        meter.observe_stereo(0.25, 0.5);
+        let snapshot = meter.snapshot();
+
+        assert!(snapshot.left.level > 0.0);
+        assert!(snapshot.right.level > snapshot.left.level);
+        assert_eq!(snapshot.left.hold, snapshot.left.level);
+        assert_eq!(snapshot.right.hold, snapshot.right.level);
+        assert!(!snapshot.clip_latched);
+    }
+
+    #[test]
+    fn strip_meter_hold_and_clip_stick_until_reset() {
+        let meter = SharedStripMeter::default();
+
+        meter.observe_stereo(1.1, 0.2);
+        let hot = meter.snapshot();
+        meter.observe_stereo(0.1, 0.05);
+        let cooled = meter.snapshot();
+
+        assert!(hot.clip_latched);
+        assert!(cooled.clip_latched);
+        assert_eq!(cooled.left.hold, hot.left.hold);
+
+        meter.reset();
+        let reset = meter.snapshot();
+        assert!(!reset.clip_latched);
+        assert_eq!(reset.left.hold, 0.0);
+        assert_eq!(reset.right.hold, 0.0);
+    }
+
+    #[test]
+    fn meter_snapshot_normalizes_db_monotonically() {
+        assert!(normalize_meter_level(0.05) < normalize_meter_level(0.5));
+        assert!(normalize_meter_level(0.5) < normalize_meter_level(1.0));
+    }
 
     struct TestSineGen {
         phase: f32,
