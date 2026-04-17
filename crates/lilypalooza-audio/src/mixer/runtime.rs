@@ -23,7 +23,7 @@ use crate::instrument::{
 };
 use crate::mixer::{
     BusId, BusSend, BusTrack, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot, MixerState,
-    MixerTrack, StripMeterSnapshot, TrackId, TrackRoute,
+    MixerTrack, STRIP_METER_MAX_DB, STRIP_METER_MIN_DB, StripMeterSnapshot, TrackId, TrackRoute,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -36,9 +36,7 @@ pub(crate) enum MixerRuntimeError {
     ProcessorState(#[from] ProcessorStateError),
 }
 
-const METER_MIN_DB: f32 = -60.0;
-const METER_MAX_DB: f32 = 0.0;
-const METER_FLOOR: f32 = 0.001;
+const METER_FLOOR: f32 = 0.00003162278;
 
 #[derive(Debug, Default, Clone)]
 struct SharedStripMeter(Arc<SharedStripMeterInner>);
@@ -105,7 +103,7 @@ impl SharedStripMeter {
 
 fn normalize_meter_level(amplitude: f32) -> f32 {
     let db = 20.0 * amplitude.abs().max(METER_FLOOR).log10();
-    ((db - METER_MIN_DB) / (METER_MAX_DB - METER_MIN_DB)).clamp(0.0, 1.0)
+    ((db - STRIP_METER_MIN_DB) / (STRIP_METER_MAX_DB - STRIP_METER_MIN_DB)).clamp(0.0, 1.0)
 }
 
 pub(crate) struct MixerRuntime {
@@ -169,6 +167,27 @@ impl MixerRuntime {
         for runtime in self.buses.values() {
             runtime.meter.reset();
         }
+    }
+
+    pub(crate) fn reset_master_meter(&self) {
+        self.master.meter.reset();
+    }
+
+    pub(crate) fn reset_track_meter(&self, id: TrackId) -> Result<(), MixerRuntimeError> {
+        let runtime = self
+            .tracks
+            .get(id.index())
+            .ok_or(MixerError::InvalidTrackId(id))?
+            .as_ref()
+            .ok_or(MixerError::InvalidTrackId(id))?;
+        runtime.meter.reset();
+        Ok(())
+    }
+
+    pub(crate) fn reset_bus_meter(&self, id: BusId) -> Result<(), MixerRuntimeError> {
+        let runtime = self.buses.get(&id).ok_or(MixerError::InvalidBusId(id))?;
+        runtime.meter.reset();
+        Ok(())
     }
 
     pub(crate) fn attach(
@@ -1348,6 +1367,28 @@ mod tests {
     fn meter_snapshot_normalizes_db_monotonically() {
         assert!(normalize_meter_level(0.05) < normalize_meter_level(0.5));
         assert!(normalize_meter_level(0.5) < normalize_meter_level(1.0));
+    }
+
+    #[test]
+    fn reset_one_strip_meter_does_not_touch_another() {
+        let left = SharedStripMeter::default();
+        let right = SharedStripMeter::default();
+
+        left.observe_stereo(1.1, 0.7);
+        right.observe_stereo(0.9, 0.8);
+
+        left.reset();
+
+        let left_snapshot = left.snapshot();
+        let right_snapshot = right.snapshot();
+
+        assert!(!left_snapshot.clip_latched);
+        assert_eq!(left_snapshot.left.hold, 0.0);
+        assert_eq!(left_snapshot.right.hold, 0.0);
+
+        assert!(right_snapshot.clip_latched);
+        assert!(right_snapshot.left.hold > 0.0);
+        assert!(right_snapshot.right.hold > 0.0);
     }
 
     struct TestSineGen {

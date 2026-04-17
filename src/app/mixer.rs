@@ -1,28 +1,44 @@
 use std::fmt;
 use std::sync::Arc;
 
-use iced::widget::{button, column, container, lazy, pick_list, responsive, row, scrollable, text};
+use iced::widget::{
+    button, column, container, lazy, mouse_area, pick_list, responsive, row, scrollable, text,
+};
 use iced::{Element, Fill, FillPortion, Length, alignment};
-use lilypalooza_audio::mixer::{ChannelMeterSnapshot, MixerMeterSnapshot, StripMeterSnapshot};
+use lilypalooza_audio::mixer::{
+    ChannelMeterSnapshot, MixerMeterSnapshot, STRIP_METER_MAX_DB, STRIP_METER_MIN_DB,
+    StripMeterSnapshot,
+};
 use lilypalooza_audio::{InstrumentSlotState, MixerState, SoundfontProcessorState};
 
-use super::controls::{gain_fader, gain_knob, pan_knob};
+use super::controls::{gain_control_width, gain_fader, gain_knob, pan_knob};
 use super::messages::MixerMessage;
-use super::meters::{MeterColors, meter_colors, stereo_meter};
+use super::meters::{
+    MeterColors, meter_colors, stereo_meter, stereo_meter_bar_width, stereo_meter_width,
+    stereo_meter_with_scale,
+};
 use super::{Lilypalooza, Message};
 use crate::{fonts, ui_style};
 
 pub(super) const MIXER_MIN_HEIGHT: f32 = 340.0;
 pub(super) const MIXER_MIN_WIDTH: f32 = 520.0;
 
-const MAIN_STRIP_WIDTH: f32 = 148.0;
-const STRIP_WIDTH: f32 = 156.0;
-const STRIP_SPACING: f32 = 10.0;
+const GROUP_SIDE_BORDER_WIDTH: f32 = 1.0;
+const MAIN_STRIP_WIDTH: f32 = 141.0;
+const MAIN_SECTION_WIDTH: f32 = MAIN_STRIP_WIDTH + GROUP_SIDE_BORDER_WIDTH * 2.0;
+const STRIP_WIDTH: f32 = 146.0;
+const STRIP_SPACING: f32 = 0.0;
 const INSTRUMENT_PICKER_HEIGHT: f32 = 28.0;
-const SECTION_HEADER_HEIGHT: f32 = 28.0;
+const SECTION_HEADER_HEIGHT: f32 = 24.0;
 const STRIP_MIN_HEIGHT: f32 = 140.0;
 const STRIP_TOGGLE_SIZE: f32 = INSTRUMENT_PICKER_HEIGHT - 4.0;
 const COMPACT_GAIN_SWITCH_OFFSET: f32 = 20.0;
+const VALUE_LABEL_HEIGHT: f32 = 14.0;
+const HEADER_SIDE_INSET: f32 = 12.0;
+const METER_STACK_SPACING: f32 = 6.0;
+const STRIP_STACK_SPACING: f32 = 2.0;
+const LABEL_CONTROL_SPACING: f32 = ui_style::SPACE_XS as f32;
+const TITLE_TOP_SPACING: f32 = 6.0;
 
 struct StripActions<'a> {
     solo: Option<(bool, Message)>,
@@ -239,10 +255,13 @@ struct MeterDependency {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 struct MeterColorsDependency {
     rail: [u32; 4],
-    fill: [u32; 4],
+    safe: [u32; 4],
+    warning: [u32; 4],
     hot: [u32; 4],
     hold: [u32; 4],
     clip: [u32; 4],
+    scale_text: [u32; 4],
+    scale_tick: [u32; 4],
 }
 
 impl MeterDependency {
@@ -275,20 +294,26 @@ impl MeterColorsDependency {
     fn from_colors(colors: MeterColors) -> Self {
         Self {
             rail: color_bits(colors.rail),
-            fill: color_bits(colors.fill),
+            safe: color_bits(colors.safe),
+            warning: color_bits(colors.warning),
             hot: color_bits(colors.hot),
             hold: color_bits(colors.hold),
             clip: color_bits(colors.clip),
+            scale_text: color_bits(colors.scale_text),
+            scale_tick: color_bits(colors.scale_tick),
         }
     }
 
     fn colors(self) -> MeterColors {
         MeterColors {
             rail: color_from_bits(self.rail),
-            fill: color_from_bits(self.fill),
+            safe: color_from_bits(self.safe),
+            warning: color_from_bits(self.warning),
             hot: color_from_bits(self.hot),
             hold: color_from_bits(self.hold),
             clip: color_from_bits(self.clip),
+            scale_text: color_from_bits(self.scale_text),
+            scale_tick: color_from_bits(self.scale_tick),
         }
     }
 }
@@ -344,8 +369,9 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                 strip_height,
                 gain_mode,
             ))
-            .width(Length::Fixed(MAIN_STRIP_WIDTH))
-            .height(Fill),
+            .width(Length::Fixed(MAIN_SECTION_WIDTH))
+            .height(Fill)
+            .style(ui_style::mixer_side_group_surface),
             container(instrument_track_area(
                 mixer,
                 &meter_snapshot,
@@ -354,7 +380,8 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                 gain_mode,
             ))
             .width(FillPortion(5))
-            .height(Fill),
+            .height(Fill)
+            .style(ui_style::mixer_instrument_group_surface),
             container(bus_track_area(
                 mixer,
                 &meter_snapshot,
@@ -364,6 +391,7 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
             ))
             .width(FillPortion(2))
             .height(Fill)
+            .style(ui_style::mixer_side_group_surface)
         ]
         .spacing(ui_style::SPACE_SM)
         .padding(ui_style::PADDING_SM)
@@ -392,16 +420,32 @@ fn master_track_area(
     .height(Length::Fixed(strip_height));
 
     column![
-        section_title("Main"),
-        scrollable(master_row)
-            .direction(scrollable::Direction::Horizontal(
-                scrollable::Scrollbar::new()
-            ))
-            .style(ui_style::workspace_scrollable)
+        container(section_header_bar(row![section_title("Main")]))
+            .style(ui_style::workspace_toolbar_surface),
+        row![
+            container(text(""))
+                .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
+                .height(Fill)
+                .style(ui_style::chrome_separator),
+            scrollable(master_row)
+                .direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::new()
+                ))
+                .style(ui_style::workspace_scrollable)
+                .width(Fill)
+                .height(Fill),
+            container(text(""))
+                .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
+                .height(Fill)
+                .style(ui_style::chrome_separator),
+        ]
+        .height(Fill),
+        container(text(""))
             .width(Fill)
-            .height(Fill)
+            .height(Length::Fixed(1.0))
+            .style(ui_style::chrome_separator)
     ]
-    .spacing(ui_style::SPACE_XS)
+    .spacing(0)
     .height(Fill)
     .into()
 }
@@ -442,7 +486,9 @@ fn sticky_master_strip(
                             Message::Mixer(MixerMessage::SetMasterPan(value))
                         })),
                     },
+                    Some(Message::Mixer(MixerMessage::ResetMasterMeter)),
                     f32::from_bits(dependency.strip_height_bits),
+                    true,
                     if dependency.compact_gain {
                         GainControlMode::Knob
                     } else {
@@ -529,7 +575,9 @@ fn instrument_track_area(
                                     Message::Mixer(MixerMessage::SetTrackPan(track_index, value))
                                 })),
                             },
+                            Some(Message::Mixer(MixerMessage::ResetTrackMeter(track_index))),
                             strip_height,
+                            true,
                             if dependency.compact_gain {
                                 GainControlMode::Knob
                             } else {
@@ -545,16 +593,32 @@ fn instrument_track_area(
     );
 
     column![
-        section_title("Instrument Tracks"),
-        scrollable(track_row)
-            .direction(scrollable::Direction::Horizontal(
-                scrollable::Scrollbar::new()
-            ))
-            .style(ui_style::workspace_scrollable)
+        container(section_header_bar(row![section_title("Instrument Tracks")]))
+            .style(ui_style::workspace_toolbar_surface),
+        row![
+            container(text(""))
+                .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
+                .height(Fill)
+                .style(ui_style::chrome_separator),
+            scrollable(track_row)
+                .direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::new()
+                ))
+                .style(ui_style::workspace_scrollable)
+                .width(Fill)
+                .height(Fill),
+            container(text(""))
+                .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
+                .height(Fill)
+                .style(ui_style::chrome_separator),
+        ]
+        .height(Fill),
+        container(text(""))
             .width(Fill)
-            .height(Fill)
+            .height(Length::Fixed(1.0))
+            .style(ui_style::chrome_separator)
     ]
-    .spacing(ui_style::SPACE_XS)
+    .spacing(0)
     .height(Fill)
     .into()
 }
@@ -624,7 +688,9 @@ fn bus_track_area(
                                     Message::Mixer(MixerMessage::SetBusPan(bus_id, value))
                                 })),
                             },
+                            Some(Message::Mixer(MixerMessage::ResetBusMeter(bus_id))),
                             strip_height,
+                            true,
                             if dependency.compact_gain {
                                 GainControlMode::Knob
                             } else {
@@ -640,38 +706,95 @@ fn bus_track_area(
     );
 
     column![
+        container(section_header_bar(
+            row![
+                section_title("Buses"),
+                container(text("")).width(Fill),
+                button(text("+ Bus").size(ui_style::FONT_SIZE_UI_XS))
+                    .style(ui_style::button_neutral)
+                    .padding([
+                        ui_style::PADDING_BUTTON_COMPACT_V,
+                        ui_style::PADDING_BUTTON_COMPACT_H
+                    ])
+                    .on_press(Message::Mixer(MixerMessage::AddBus)),
+                container(text("")).width(Length::Fixed(HEADER_SIDE_INSET)),
+            ]
+            .align_y(alignment::Vertical::Center),
+        ),)
+        .style(ui_style::workspace_toolbar_surface),
         row![
-            section_title("Buses"),
-            container(text("")).width(Fill),
-            button(text("+ Bus").size(ui_style::FONT_SIZE_UI_XS))
-                .style(ui_style::button_neutral)
-                .padding([
-                    ui_style::PADDING_BUTTON_COMPACT_V,
-                    ui_style::PADDING_BUTTON_COMPACT_H
-                ])
-                .on_press(Message::Mixer(MixerMessage::AddBus)),
+            container(text(""))
+                .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
+                .height(Fill)
+                .style(ui_style::chrome_separator),
+            scrollable(bus_row)
+                .direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::new()
+                ))
+                .style(ui_style::workspace_scrollable)
+                .width(Fill)
+                .height(Fill),
+            container(text(""))
+                .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
+                .height(Fill)
+                .style(ui_style::chrome_separator),
         ]
-        .align_y(alignment::Vertical::Center),
-        scrollable(bus_row)
-            .direction(scrollable::Direction::Horizontal(
-                scrollable::Scrollbar::new()
-            ))
-            .style(ui_style::workspace_scrollable)
+        .height(Fill),
+        container(text(""))
             .width(Fill)
-            .height(Fill)
+            .height(Length::Fixed(1.0))
+            .style(ui_style::chrome_separator)
     ]
-    .spacing(ui_style::SPACE_XS)
+    .spacing(0)
     .height(Fill)
     .into()
 }
 
 fn section_title<'a>(label: impl Into<String>) -> Element<'a, Message> {
-    text(label.into())
-        .size(ui_style::FONT_SIZE_UI_SM)
-        .font(iced::Font {
-            weight: iced::font::Weight::Bold,
-            ..fonts::UI
-        })
+    container(
+        text(label.into())
+            .size(ui_style::FONT_SIZE_UI_SM)
+            .font(iced::Font {
+                weight: iced::font::Weight::Bold,
+                ..fonts::UI
+            }),
+    )
+    .height(Length::Fixed(SECTION_HEADER_HEIGHT))
+    .center_y(Length::Fixed(SECTION_HEADER_HEIGHT))
+    .into()
+}
+
+fn section_header_bar<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(row![
+        container(text("")).width(Length::Fixed(HEADER_SIDE_INSET)),
+        container(content.into())
+            .height(Length::Fixed(SECTION_HEADER_HEIGHT))
+            .center_y(Length::Fixed(SECTION_HEADER_HEIGHT))
+    ])
+    .align_y(alignment::Vertical::Center)
+    .height(Length::Fixed(SECTION_HEADER_HEIGHT))
+    .width(Fill)
+    .center_y(Length::Fixed(SECTION_HEADER_HEIGHT))
+    .into()
+}
+
+fn value_label_slot<'a>(
+    width: f32,
+    label: impl Into<String>,
+    color: Option<iced::Color>,
+) -> Element<'a, Message> {
+    let text = text(label.into()).size(ui_style::FONT_SIZE_UI_XS.saturating_sub(1));
+    let text = if let Some(color) = color {
+        text.color(color)
+    } else {
+        text
+    };
+
+    container(text)
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(VALUE_LABEL_HEIGHT))
+        .center_x(Length::Fixed(width))
+        .align_y(alignment::Vertical::Bottom)
         .into()
 }
 
@@ -684,11 +807,15 @@ fn strip_shell<'a>(
     meter_snapshot: StripMeterSnapshot,
     meter_colors: MeterColors,
     actions: StripActions<'a>,
+    meter_reset: Option<Message>,
     strip_height: f32,
+    show_meter_scale: bool,
     gain_mode: GainControlMode,
 ) -> Element<'a, Message> {
-    let mut content = column![section_title(title.into())]
-        .spacing(ui_style::SPACE_XS)
+    let title = title.into();
+    let title = section_title(title);
+    let mut content = column![]
+        .spacing(STRIP_STACK_SPACING)
         .align_x(alignment::Horizontal::Center)
         .width(Fill)
         .height(Fill);
@@ -699,58 +826,114 @@ fn strip_shell<'a>(
             .height(Length::Fixed(INSTRUMENT_PICKER_HEIGHT)),
     );
 
-    content = content.push(
-        row![
-            actions
-                .solo
-                .map_or_else(strip_toggle_placeholder, |(active, message)| {
-                    strip_toggle_button("S", active, message)
-                },),
-            actions
-                .mute
-                .map_or_else(strip_toggle_placeholder, |(active, message)| {
-                    strip_toggle_button("M", active, message)
-                },),
-        ]
-        .spacing(ui_style::SPACE_XS)
-        .width(Fill)
-        .align_y(alignment::Vertical::Center),
-    );
-
     if let Some(on_pan) = actions.on_pan {
-        content = content
-            .push(text(format!("{pan:+.2}")).size(ui_style::FONT_SIZE_UI_XS))
-            .push(pan_knob(pan, on_pan));
+        content = content.push(
+            column![
+                value_label_slot(INSTRUMENT_PICKER_HEIGHT, format!("{:+.2}", -pan), None),
+                pan_knob(-pan, move |value| on_pan(-value)),
+            ]
+            .spacing(LABEL_CONTROL_SPACING)
+            .align_x(alignment::Horizontal::Center),
+        );
     }
 
     if let Some(on_gain) = actions.on_gain {
-        content = content.push(text(format!("{gain_db:.1} dB")).size(ui_style::FONT_SIZE_UI_XS));
+        let control_height = gain_control_height(strip_height, gain_mode);
+        let meter_height = meter_control_height(strip_height, gain_mode);
+        let gain_width = gain_control_width(matches!(gain_mode, GainControlMode::Knob));
+        let meter_width = stereo_meter_width(show_meter_scale);
+        let meter_bar_width = stereo_meter_bar_width();
+        let meter_scale_width = (meter_width - meter_bar_width).max(0.0);
+        let stack_height = control_stack_height(control_height);
+        let meter_label = meter_peak_label(meter_snapshot);
+        let meter_label_color = if meter_snapshot.clip_latched {
+            meter_colors.clip
+        } else {
+            meter_colors.scale_text
+        };
 
         let gain_control = match gain_mode {
             GainControlMode::Fader => container(gain_fader(gain_db, on_gain))
                 .width(Fill)
-                .height(Length::Fill)
+                .height(Length::Fixed(control_height))
                 .center_x(Fill)
                 .into(),
             GainControlMode::Knob => gain_knob(gain_db, on_gain),
         };
+        let meter = if show_meter_scale {
+            stereo_meter_with_scale(meter_snapshot, meter_colors, meter_height)
+        } else {
+            stereo_meter(meter_snapshot, meter_colors, meter_height)
+        };
+        let meter = if let Some(message) = meter_reset {
+            mouse_area(meter).on_press(message).into()
+        } else {
+            meter
+        };
+
+        let top_label_row = row![
+            value_label_slot(gain_width, format!("{gain_db:.1}"), None),
+            row![
+                value_label_slot(meter_bar_width, meter_label, Some(meter_label_color),),
+                container(text("")).width(Length::Fixed(meter_scale_width)),
+            ]
+            .width(Length::Fixed(meter_width))
+            .height(Length::Fixed(VALUE_LABEL_HEIGHT))
+            .align_y(alignment::Vertical::Bottom),
+        ]
+        .spacing(METER_STACK_SPACING)
+        .height(Length::Fixed(VALUE_LABEL_HEIGHT))
+        .align_y(alignment::Vertical::Bottom)
+        .width(Length::Shrink);
+
+        let control_row = row![
+            container(gain_control)
+                .width(Length::Fixed(gain_width))
+                .height(Length::Fixed(control_height))
+                .center_x(Length::Fixed(gain_width))
+                .align_y(alignment::Vertical::Bottom),
+            container(meter)
+                .width(Length::Fixed(meter_width))
+                .height(Length::Fixed(meter_height))
+                .center_x(Length::Fixed(meter_width))
+                .align_y(alignment::Vertical::Bottom),
+        ]
+        .spacing(METER_STACK_SPACING)
+        .height(Length::Fixed(control_height))
+        .align_y(alignment::Vertical::Bottom)
+        .width(Length::Shrink);
 
         content = content.push(
-            row![
-                container(gain_control).width(Fill),
-                container(stereo_meter(
-                    meter_snapshot,
-                    meter_colors,
-                    strip_height * 0.42
-                ))
-                .width(Length::Shrink)
-                .align_y(alignment::Vertical::Bottom),
-            ]
-            .spacing(ui_style::SPACE_XS)
-            .height(Length::Fill)
-            .align_y(alignment::Vertical::Bottom),
+            column![top_label_row, control_row]
+                .spacing(LABEL_CONTROL_SPACING)
+                .height(Length::Fixed(stack_height))
+                .align_x(alignment::Horizontal::Center)
+                .width(Length::Shrink),
         );
     }
+
+    content = content.push(
+        container(
+            row![
+                actions
+                    .mute
+                    .map_or_else(strip_toggle_placeholder, |(active, message)| {
+                        strip_toggle_button("M", active, message)
+                    },),
+                actions
+                    .solo
+                    .map_or_else(strip_toggle_placeholder, |(active, message)| {
+                        strip_toggle_button("S", active, message)
+                    },),
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center),
+        )
+        .width(Fill)
+        .center_x(Fill),
+    );
+
+    content = content.push(container(title).padding([TITLE_TOP_SPACING as u16, 0]));
 
     container(content)
         .padding(ui_style::PADDING_SM)
@@ -758,6 +941,39 @@ fn strip_shell<'a>(
         .height(Length::Fixed(strip_height))
         .style(ui_style::pane_main_surface)
         .into()
+}
+
+fn gain_control_height(strip_height: f32, gain_mode: GainControlMode) -> f32 {
+    match gain_mode {
+        GainControlMode::Knob => 48.0,
+        GainControlMode::Fader => (strip_height
+            - (ui_style::PADDING_SM as f32 * 2.0)
+            - SECTION_HEADER_HEIGHT
+            - INSTRUMENT_PICKER_HEIGHT
+            - STRIP_TOGGLE_SIZE
+            - 42.0
+            - (VALUE_LABEL_HEIGHT * 3.0)
+            - (ui_style::SPACE_XS as f32 * 5.0))
+            .max(96.0),
+    }
+}
+
+fn meter_control_height(strip_height: f32, gain_mode: GainControlMode) -> f32 {
+    gain_control_height(strip_height, gain_mode)
+}
+
+fn control_stack_height(control_height: f32) -> f32 {
+    control_height + VALUE_LABEL_HEIGHT + ui_style::SPACE_XS as f32
+}
+
+fn meter_peak_label(snapshot: StripMeterSnapshot) -> String {
+    let peak = snapshot.left.hold.max(snapshot.right.hold);
+    if peak <= 0.0 {
+        "-inf".to_string()
+    } else {
+        let db = STRIP_METER_MIN_DB + (STRIP_METER_MAX_DB - STRIP_METER_MIN_DB) * peak;
+        format!("{db:.1}")
+    }
 }
 
 fn gain_control_mode(pane_height: f32) -> GainControlMode {
@@ -857,12 +1073,17 @@ fn selected_instrument_choice(
 
 #[cfg(test)]
 mod tests {
+    use crate::ui_style;
     use lilypalooza_audio::{InstrumentSlotState, MixerState};
 
     use super::{
-        COMPACT_GAIN_SWITCH_OFFSET, GainControlMode, INSTRUMENT_PICKER_HEIGHT, InstrumentChoice,
-        MIXER_MIN_HEIGHT, STRIP_TOGGLE_SIZE, gain_control_mode, selected_instrument_choice,
+        COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
+        INSTRUMENT_PICKER_HEIGHT, InstrumentChoice, MAIN_SECTION_WIDTH, MAIN_STRIP_WIDTH,
+        MIXER_MIN_HEIGHT, STRIP_TOGGLE_SIZE, StripMeterSnapshot, VALUE_LABEL_HEIGHT,
+        control_stack_height, gain_control_height, gain_control_mode, meter_control_height,
+        meter_peak_label, selected_instrument_choice,
     };
+    use lilypalooza_audio::mixer::ChannelMeterSnapshot;
 
     #[test]
     fn empty_slot_maps_to_none_choice() {
@@ -907,5 +1128,61 @@ mod tests {
     #[test]
     fn empty_toggle_slots_use_track_toggle_size() {
         assert_eq!(STRIP_TOGGLE_SIZE, INSTRUMENT_PICKER_HEIGHT - 4.0);
+    }
+
+    #[test]
+    fn meter_and_gain_controls_share_same_height() {
+        let strip_height = 280.0;
+        assert_eq!(
+            meter_control_height(strip_height, GainControlMode::Fader),
+            gain_control_height(strip_height, GainControlMode::Fader)
+        );
+        assert_eq!(
+            meter_control_height(strip_height, GainControlMode::Knob),
+            gain_control_height(strip_height, GainControlMode::Knob)
+        );
+        assert_eq!(
+            control_stack_height(meter_control_height(strip_height, GainControlMode::Fader)),
+            control_stack_height(gain_control_height(strip_height, GainControlMode::Fader))
+        );
+    }
+
+    #[test]
+    fn meter_peak_label_uses_hold_and_floor() {
+        assert_eq!(meter_peak_label(StripMeterSnapshot::default()), "-inf");
+        let snapshot = StripMeterSnapshot {
+            left: ChannelMeterSnapshot {
+                level: 0.2,
+                hold: 1.0,
+            },
+            right: ChannelMeterSnapshot {
+                level: 0.2,
+                hold: 0.5,
+            },
+            clip_latched: false,
+        };
+        assert_eq!(meter_peak_label(snapshot), "0.0");
+    }
+
+    #[test]
+    fn main_section_width_includes_group_borders() {
+        assert_eq!(
+            MAIN_SECTION_WIDTH,
+            MAIN_STRIP_WIDTH + GROUP_SIDE_BORDER_WIDTH * 2.0
+        );
+    }
+
+    #[test]
+    fn value_labels_use_shared_slot_height() {
+        assert_eq!(VALUE_LABEL_HEIGHT, 14.0);
+    }
+
+    #[test]
+    fn control_stack_height_adds_shared_label_slot() {
+        let control: f32 = 100.0;
+        assert_eq!(
+            control_stack_height(control),
+            control + VALUE_LABEL_HEIGHT + ui_style::SPACE_XS as f32
+        );
     }
 }

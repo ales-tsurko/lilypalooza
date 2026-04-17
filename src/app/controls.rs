@@ -19,6 +19,20 @@ const DEFAULT_WHEEL_SCALAR: f32 = 0.05;
 const GAIN_MIN_DB: f32 = -60.0;
 const GAIN_MAX_DB: f32 = 12.0;
 
+pub(super) fn fader_rail_layout(total_height: f32) -> (f32, f32) {
+    let rail_y = 8.0;
+    let rail_height = (total_height - rail_y * 2.0).max(FADER_HANDLE_HEIGHT + 6.0);
+    (rail_y, rail_height)
+}
+
+pub(super) fn gain_control_width(mode_is_knob: bool) -> f32 {
+    if mode_is_knob {
+        GAIN_KNOB_SIZE
+    } else {
+        FADER_WIDTH
+    }
+}
+
 pub(super) fn pan_knob<'a, Message: Clone + 'a>(
     value: f32,
     on_change: impl Fn(f32) -> Message + 'a,
@@ -379,8 +393,7 @@ impl<Message: Clone> canvas_widget::Program<Message> for GainFader<'_, Message> 
 
         let rail_width = FADER_RAIL_WIDTH;
         let rail_x = (bounds.width - rail_width) * 0.5;
-        let rail_y = 8.0;
-        let rail_height = (bounds.height - rail_y * 2.0).max(FADER_HANDLE_HEIGHT + 6.0);
+        let (rail_y, rail_height) = fader_rail_layout(bounds.height);
         let rail_bounds = Rectangle {
             x: rail_x,
             y: rail_y,

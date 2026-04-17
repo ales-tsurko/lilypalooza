@@ -16,8 +16,12 @@ impl Lilypalooza {
             MixerMessage::AddBus => {
                 let _ = mixer.add_bus(format!("Bus {}", mixer.bus_count() + 1));
             }
+            MixerMessage::ResetMasterMeter => mixer.reset_master_meter(),
             MixerMessage::SetMasterGain(gain) => mixer.set_master_gain_db(gain),
             MixerMessage::SetMasterPan(pan) => mixer.set_master_pan(pan),
+            MixerMessage::ResetTrackMeter(index) => {
+                let _ = mixer.reset_track_meter(TrackId(index as u16));
+            }
             MixerMessage::SetTrackGain(index, gain) => {
                 let _ = mixer.set_track_gain_db(TrackId(index as u16), gain);
             }
@@ -53,6 +57,9 @@ impl Lilypalooza {
                     } => InstrumentSlotState::soundfont(soundfont_id, bank, program),
                 };
                 let _ = mixer.set_track_instrument(TrackId(index as u16), slot);
+            }
+            MixerMessage::ResetBusMeter(id) => {
+                let _ = mixer.reset_bus_meter(BusId(id));
             }
             MixerMessage::SetBusGain(id, gain) => {
                 let _ = mixer.set_bus_gain_db(BusId(id), gain);

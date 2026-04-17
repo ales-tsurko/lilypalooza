@@ -23,6 +23,11 @@ pub use track::{
     TrackRouting, TrackState,
 };
 
+/// Strip meter minimum displayed level in dBFS.
+pub const STRIP_METER_MIN_DB: f32 = -60.0;
+/// Strip meter maximum displayed level in dBFS.
+pub const STRIP_METER_MAX_DB: f32 = 0.0;
+
 /// Mixer model error.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum MixerError {
@@ -433,6 +438,20 @@ impl Mixer {
     pub(crate) fn reset_meters(&self) {
         self.runtime.reset_meters();
     }
+
+    pub(crate) fn reset_master_meter(&self) {
+        self.runtime.reset_master_meter();
+    }
+
+    pub(crate) fn reset_track_meter(&self, id: TrackId) -> Result<(), AudioEngineError> {
+        self.runtime.reset_track_meter(id)?;
+        Ok(())
+    }
+
+    pub(crate) fn reset_bus_meter(&self, id: BusId) -> Result<(), AudioEngineError> {
+        self.runtime.reset_bus_meter(id)?;
+        Ok(())
+    }
 }
 
 /// Mutable mixer control handle.
@@ -823,6 +842,18 @@ impl MixerHandle<'_> {
         self.mixer
             .runtime
             .sync_all_levels(self.commands, &self.mixer.state);
+    }
+
+    pub fn reset_master_meter(&mut self) {
+        self.mixer.reset_master_meter();
+    }
+
+    pub fn reset_track_meter(&mut self, id: TrackId) -> Result<(), AudioEngineError> {
+        self.mixer.reset_track_meter(id)
+    }
+
+    pub fn reset_bus_meter(&mut self, id: BusId) -> Result<(), AudioEngineError> {
+        self.mixer.reset_bus_meter(id)
     }
 
     pub fn set_master_effects(

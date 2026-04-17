@@ -231,13 +231,16 @@ pub(super) enum PianoRollMessage {
 #[derive(Debug, Clone)]
 pub(super) enum MixerMessage {
     AddBus,
+    ResetMasterMeter,
     SetMasterGain(f32),
     SetMasterPan(f32),
+    ResetTrackMeter(usize),
     SetTrackGain(usize, f32),
     SetTrackPan(usize, f32),
     ToggleTrackMute(usize),
     ToggleTrackSolo(usize),
     SelectTrackInstrument(usize, super::mixer::InstrumentChoice),
+    ResetBusMeter(u16),
     SetBusGain(u16, f32),
     SetBusPan(u16, f32),
     ToggleBusMute(u16),

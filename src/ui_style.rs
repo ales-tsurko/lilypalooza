@@ -145,6 +145,42 @@ pub(crate) fn piano_roll_surface(theme: &Theme) -> container::Style {
     }
 }
 
+pub(crate) fn mixer_instrument_group_surface(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(
+            mix_color(
+                palette.background.base.color,
+                palette.background.weak.color,
+                0.18,
+            )
+            .into(),
+        ),
+        text_color: Some(palette.background.base.text),
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn mixer_side_group_surface(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(
+            mix_color(
+                palette.background.weakest.color,
+                palette.background.weak.color,
+                0.12,
+            )
+            .into(),
+        ),
+        text_color: Some(palette.background.weakest.text),
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        ..container::Style::default()
+    }
+}
+
 pub(crate) fn pane_title_bar_surface_focused(theme: &Theme, focused: bool) -> container::Style {
     let palette = theme.extended_palette();
     let background = if focused {

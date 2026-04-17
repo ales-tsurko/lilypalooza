@@ -2,16 +2,37 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use bytemuck::{Pod, Zeroable};
-use iced::widget::{shader, shader as shader_widget};
-use iced::{Color, Element, Length, Rectangle, Theme};
+use iced::widget::canvas::{self as canvas_widget, Path, Stroke, Text};
+use iced::widget::{canvas, row, shader, shader as shader_widget};
+use iced::{Color, Element, Length, Pixels, Rectangle, Renderer, Theme, alignment};
 
-use lilypalooza_audio::mixer::StripMeterSnapshot;
+use lilypalooza_audio::mixer::{STRIP_METER_MAX_DB, STRIP_METER_MIN_DB, StripMeterSnapshot};
 
-const METER_WIDTH: f32 = 14.0;
-const METER_GAP: f32 = 2.0;
+use super::controls::fader_rail_layout;
+
+const METER_GAP: f32 = 1.0;
+const FADER_HANDLE_VISUAL_WIDTH: f32 = 22.0;
+const CHANNEL_WIDTH: f32 = (FADER_HANDLE_VISUAL_WIDTH - METER_GAP) * 0.5;
+const METER_TOTAL_WIDTH: f32 = CHANNEL_WIDTH * 2.0 + METER_GAP;
+const SCALE_WIDTH: f32 = 26.0;
+const TICK_WIDTH: f32 = 5.0;
+const CHANNEL_INSET: f32 = 0.5;
 const CLIP_HEIGHT: f32 = 5.0;
 const HOLD_HEIGHT: f32 = 2.0;
-const HOT_ZONE_START: f32 = 0.82;
+const METER_SEGMENTS: usize = 40;
+const SCALE_DB_MARKS: [f32; 7] = [0.0, -6.0, -12.0, -18.0, -24.0, -36.0, -60.0];
+
+pub(super) fn stereo_meter_width(with_scale: bool) -> f32 {
+    if with_scale {
+        METER_TOTAL_WIDTH + 1.0 + SCALE_WIDTH
+    } else {
+        METER_TOTAL_WIDTH
+    }
+}
+
+pub(super) fn stereo_meter_bar_width() -> f32 {
+    METER_TOTAL_WIDTH
+}
 
 pub(super) fn stereo_meter<'a, Message: 'a>(
     snapshot: StripMeterSnapshot,
@@ -19,29 +40,78 @@ pub(super) fn stereo_meter<'a, Message: 'a>(
     height: f32,
 ) -> Element<'a, Message> {
     shader_widget(MeterProgram::new(snapshot, colors))
-        .width(Length::Fixed(METER_WIDTH * 2.0 + METER_GAP))
+        .width(Length::Fixed(METER_TOTAL_WIDTH))
         .height(Length::Fixed(height.max(1.0)))
         .into()
+}
+
+pub(super) fn stereo_meter_with_scale<'a, Message: 'a>(
+    snapshot: StripMeterSnapshot,
+    colors: MeterColors,
+    height: f32,
+) -> Element<'a, Message> {
+    row![
+        stereo_meter(snapshot, colors, height),
+        canvas(MeterScale { colors })
+            .width(Length::Fixed(SCALE_WIDTH))
+            .height(Length::Fixed(height.max(1.0))),
+    ]
+    .spacing(1)
+    .align_y(alignment::Vertical::Bottom)
+    .into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct MeterColors {
     pub(super) rail: Color,
-    pub(super) fill: Color,
+    pub(super) safe: Color,
+    pub(super) warning: Color,
     pub(super) hot: Color,
     pub(super) hold: Color,
     pub(super) clip: Color,
+    pub(super) scale_text: Color,
+    pub(super) scale_tick: Color,
 }
 
 pub(super) fn meter_colors(theme: &Theme) -> MeterColors {
     let palette = theme.extended_palette();
+    let safe = palette.success.base.color;
+    let hot = palette.danger.base.color;
+    let warning = mix_color(safe, hot, 0.45);
 
     MeterColors {
         rail: palette.background.weak.color,
-        fill: palette.primary.base.color,
-        hot: palette.success.base.color,
-        hold: palette.primary.strong.color,
-        clip: palette.danger.base.color,
+        safe,
+        warning,
+        hot,
+        hold: palette.background.base.text,
+        clip: palette.danger.strong.color,
+        scale_text: palette.background.strong.text,
+        scale_tick: palette.background.strong.color,
+    }
+}
+
+fn mix_color(a: Color, b: Color, amount: f32) -> Color {
+    let t = amount.clamp(0.0, 1.0);
+
+    Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
+fn meter_db_to_normalized(db: f32) -> f32 {
+    ((db - STRIP_METER_MIN_DB) / (STRIP_METER_MAX_DB - STRIP_METER_MIN_DB)).clamp(0.0, 1.0)
+}
+
+fn meter_gradient_color(colors: MeterColors, normalized_level: f32) -> Color {
+    let t = normalized_level.clamp(0.0, 1.0);
+    if t < 0.72 {
+        mix_color(colors.safe, colors.warning, t / 0.72)
+    } else {
+        mix_color(colors.warning, colors.hot, (t - 0.72) / 0.28)
     }
 }
 
@@ -75,6 +145,11 @@ impl<Message> shader::Program<Message> for MeterProgram {
 struct MeterPrimitive {
     key: u64,
     vertices: Box<[MeterVertex]>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MeterScale {
+    colors: MeterColors,
 }
 
 impl MeterPrimitive {
@@ -119,6 +194,54 @@ impl MeterPrimitive {
             key: hasher.finish(),
             vertices: vertices.into_boxed_slice(),
         }
+    }
+}
+
+impl<Message> canvas_widget::Program<Message> for MeterScale {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas_widget::Geometry> {
+        let mut frame = canvas_widget::Frame::new(renderer, bounds.size());
+        let tick_left = 0.0;
+        let tick_right = TICK_WIDTH;
+        let (rail_y, rail_height) = meter_rail_layout(bounds.height);
+
+        for (index, db) in SCALE_DB_MARKS.into_iter().enumerate() {
+            let y = rail_y + rail_height * (1.0 - meter_db_to_normalized(db));
+            let tick = Path::line(
+                iced::Point::new(tick_left, y),
+                iced::Point::new(tick_right, y),
+            );
+            frame.stroke(
+                &tick,
+                Stroke::default()
+                    .with_width(1.0)
+                    .with_color(self.colors.scale_tick),
+            );
+            frame.fill_text(Text {
+                content: format!("{:.0}", db.abs()),
+                position: iced::Point::new(TICK_WIDTH + 3.0, y),
+                color: self.colors.scale_text,
+                size: Pixels(8.0),
+                align_y: if index == 0 {
+                    alignment::Vertical::Top
+                } else if index == SCALE_DB_MARKS.len() - 1 {
+                    alignment::Vertical::Bottom
+                } else {
+                    alignment::Vertical::Center
+                },
+                ..Text::default()
+            });
+        }
+
+        vec![frame.into_geometry()]
     }
 }
 
@@ -257,74 +380,79 @@ fn push_channel_meter(
     colors: MeterColors,
     clip_latched: bool,
 ) {
+    let total_width = METER_TOTAL_WIDTH;
+    let inset_x = x + CHANNEL_INSET;
+    let inset_width = (width - CHANNEL_INSET * 2.0).max(0.0);
+    let (rail_y, rail_height) = meter_rail_layout(height);
     push_rect(
         vertices,
-        x,
-        0.0,
-        width,
-        height,
+        inset_x,
+        rail_y,
+        inset_width,
+        rail_height,
         colors.rail,
-        width * 2.0 + METER_GAP,
+        total_width,
         height,
     );
 
-    let hot_cutoff = height * (1.0 - HOT_ZONE_START);
-    let level_height = height * level.clamp(0.0, 1.0);
-    if level_height > 0.0 {
-        let low_height = (height - hot_cutoff).min(level_height);
-        if low_height > 0.0 {
-            push_rect(
-                vertices,
-                x,
-                height - low_height,
-                width,
-                low_height,
-                colors.fill,
-                width * 2.0 + METER_GAP,
-                height,
-            );
+    let visible_from_y = rail_y + rail_height * (1.0 - level.clamp(0.0, 1.0));
+    let segment_height = rail_height / METER_SEGMENTS as f32;
+    for segment in 0..METER_SEGMENTS {
+        let segment_top = rail_y + segment as f32 * segment_height;
+        let segment_bottom =
+            (rail_y + (segment + 1) as f32 * segment_height).min(rail_y + rail_height);
+        if segment_bottom <= visible_from_y {
+            continue;
         }
 
-        let hot_height = (level_height - low_height).max(0.0);
-        if hot_height > 0.0 {
-            push_rect(
-                vertices,
-                x,
-                hot_cutoff - hot_height,
-                width,
-                hot_height,
-                colors.hot,
-                width * 2.0 + METER_GAP,
-                height,
-            );
+        let visible_top = segment_top.max(visible_from_y);
+        let visible_height = segment_bottom - visible_top;
+        if visible_height <= 0.0 {
+            continue;
         }
+
+        let normalized = 1.0 - (((segment_top + segment_bottom) * 0.5 - rail_y) / rail_height);
+        push_rect(
+            vertices,
+            inset_x,
+            visible_top,
+            inset_width,
+            visible_height,
+            meter_gradient_color(colors, normalized),
+            total_width,
+            height,
+        );
     }
 
-    let hold_y = (height * (1.0 - hold.clamp(0.0, 1.0)) - HOLD_HEIGHT * 0.5)
-        .clamp(0.0, height - HOLD_HEIGHT);
+    let hold_y = (rail_y + rail_height * (1.0 - hold.clamp(0.0, 1.0)) - HOLD_HEIGHT * 0.5)
+        .clamp(rail_y, rail_y + rail_height - HOLD_HEIGHT);
     push_rect(
         vertices,
-        x,
+        inset_x,
         hold_y,
-        width,
+        inset_width,
         HOLD_HEIGHT,
         colors.hold,
-        width * 2.0 + METER_GAP,
+        total_width,
         height,
     );
 
     if clip_latched {
         push_rect(
             vertices,
-            x,
-            0.0,
-            width,
+            inset_x,
+            rail_y,
+            inset_width,
             CLIP_HEIGHT,
             colors.clip,
-            width * 2.0 + METER_GAP,
+            total_width,
             height,
         );
     }
+}
+
+fn meter_rail_layout(total_height: f32) -> (f32, f32) {
+    fader_rail_layout(total_height)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -399,41 +527,61 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HOT_ZONE_START, METER_WIDTH, push_channel_meter};
+    use super::{
+        CHANNEL_INSET, CHANNEL_WIDTH, FADER_HANDLE_VISUAL_WIDTH, METER_TOTAL_WIDTH, MeterColors,
+        SCALE_DB_MARKS, meter_db_to_normalized, meter_gradient_color, meter_rail_layout,
+        push_channel_meter,
+    };
+    use crate::app::controls::fader_rail_layout;
     use lilypalooza_audio::mixer::{ChannelMeterSnapshot, StripMeterSnapshot};
 
     #[test]
     fn meter_geometry_grows_monotonically_with_level() {
-        let colors = super::MeterColors {
+        let colors = MeterColors {
             rail: iced::Color::BLACK,
-            fill: iced::Color::WHITE,
+            safe: iced::Color::WHITE,
+            warning: iced::Color::WHITE,
             hot: iced::Color::WHITE,
             hold: iced::Color::WHITE,
             clip: iced::Color::WHITE,
+            scale_text: iced::Color::WHITE,
+            scale_tick: iced::Color::WHITE,
         };
 
         let mut low = Vec::new();
-        push_channel_meter(&mut low, 0.0, METER_WIDTH, 120.0, 0.2, 0.2, colors, false);
+        push_channel_meter(&mut low, 0.0, CHANNEL_WIDTH, 120.0, 0.2, 0.2, colors, false);
         let mut high = Vec::new();
-        push_channel_meter(&mut high, 0.0, METER_WIDTH, 120.0, 0.8, 0.8, colors, false);
+        push_channel_meter(
+            &mut high,
+            0.0,
+            CHANNEL_WIDTH,
+            120.0,
+            0.8,
+            0.8,
+            colors,
+            false,
+        );
 
         assert!(high.len() >= low.len());
     }
 
     #[test]
     fn clip_flag_adds_clip_geometry() {
-        let colors = super::MeterColors {
+        let colors = MeterColors {
             rail: iced::Color::BLACK,
-            fill: iced::Color::WHITE,
+            safe: iced::Color::WHITE,
+            warning: iced::Color::WHITE,
             hot: iced::Color::WHITE,
             hold: iced::Color::WHITE,
             clip: iced::Color::WHITE,
+            scale_text: iced::Color::WHITE,
+            scale_tick: iced::Color::WHITE,
         };
         let mut without_clip = Vec::new();
         push_channel_meter(
             &mut without_clip,
             0.0,
-            METER_WIDTH,
+            CHANNEL_WIDTH,
             120.0,
             0.9,
             0.9,
@@ -444,7 +592,7 @@ mod tests {
         push_channel_meter(
             &mut with_clip,
             0.0,
-            METER_WIDTH,
+            CHANNEL_WIDTH,
             120.0,
             0.9,
             0.9,
@@ -456,8 +604,117 @@ mod tests {
     }
 
     #[test]
-    fn hot_zone_constant_stays_in_range() {
-        assert!((0.0..1.0).contains(&HOT_ZONE_START));
+    fn db_scale_normalizes_endpoints() {
+        assert_eq!(meter_db_to_normalized(-60.0), 0.0);
+        assert_eq!(meter_db_to_normalized(0.0), 1.0);
+    }
+
+    #[test]
+    fn scale_marks_cover_the_60_db_range() {
+        assert_eq!(SCALE_DB_MARKS.first().copied(), Some(0.0));
+        assert_eq!(SCALE_DB_MARKS.last().copied(), Some(-60.0));
+    }
+
+    #[test]
+    fn meter_total_width_matches_fader_handle_width() {
+        assert_eq!(METER_TOTAL_WIDTH, FADER_HANDLE_VISUAL_WIDTH);
+    }
+
+    #[test]
+    fn meter_rail_matches_fader_rail_layout() {
+        assert_eq!(meter_rail_layout(220.0), fader_rail_layout(220.0));
+    }
+
+    #[test]
+    fn meter_geometry_stays_inside_meter_lane() {
+        let colors = MeterColors {
+            rail: iced::Color::BLACK,
+            safe: iced::Color::WHITE,
+            warning: iced::Color::WHITE,
+            hot: iced::Color::WHITE,
+            hold: iced::Color::WHITE,
+            clip: iced::Color::WHITE,
+            scale_text: iced::Color::WHITE,
+            scale_tick: iced::Color::WHITE,
+        };
+        let mut vertices = Vec::new();
+        push_channel_meter(
+            &mut vertices,
+            0.0,
+            CHANNEL_WIDTH,
+            120.0,
+            0.9,
+            0.9,
+            colors,
+            true,
+        );
+
+        let max_x = vertices
+            .iter()
+            .map(|vertex| (vertex.position[0] + 1.0) * 0.5 * METER_TOTAL_WIDTH)
+            .fold(0.0, f32::max);
+
+        assert!(max_x <= CHANNEL_WIDTH - CHANNEL_INSET + 0.001);
+    }
+
+    #[test]
+    fn meter_geometry_stays_inside_meter_rail_height() {
+        let colors = MeterColors {
+            rail: iced::Color::BLACK,
+            safe: iced::Color::WHITE,
+            warning: iced::Color::WHITE,
+            hot: iced::Color::WHITE,
+            hold: iced::Color::WHITE,
+            clip: iced::Color::WHITE,
+            scale_text: iced::Color::WHITE,
+            scale_tick: iced::Color::WHITE,
+        };
+        let height = 120.0;
+        let (rail_y, rail_height) = meter_rail_layout(height);
+        let rail_bottom = rail_y + rail_height;
+        let mut vertices = Vec::new();
+        push_channel_meter(
+            &mut vertices,
+            0.0,
+            CHANNEL_WIDTH,
+            height,
+            0.9,
+            0.9,
+            colors,
+            true,
+        );
+
+        let min_y = vertices
+            .iter()
+            .map(|vertex| (1.0 - vertex.position[1]) * 0.5 * height)
+            .fold(f32::INFINITY, f32::min);
+        let max_y = vertices
+            .iter()
+            .map(|vertex| (1.0 - vertex.position[1]) * 0.5 * height)
+            .fold(0.0, f32::max);
+
+        assert!(min_y >= rail_y - 0.001);
+        assert!(max_y <= rail_bottom + 0.001);
+    }
+
+    #[test]
+    fn gradient_moves_from_safe_to_hot() {
+        let colors = MeterColors {
+            rail: iced::Color::BLACK,
+            safe: iced::Color::from_rgb(0.0, 1.0, 0.0),
+            warning: iced::Color::from_rgb(1.0, 1.0, 0.0),
+            hot: iced::Color::from_rgb(1.0, 0.0, 0.0),
+            hold: iced::Color::WHITE,
+            clip: iced::Color::WHITE,
+            scale_text: iced::Color::WHITE,
+            scale_tick: iced::Color::WHITE,
+        };
+
+        let cold = meter_gradient_color(colors, 0.1);
+        let hot = meter_gradient_color(colors, 0.95);
+
+        assert!(cold.g > cold.r);
+        assert!(hot.r >= hot.g);
     }
 
     #[test]
