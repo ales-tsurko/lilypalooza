@@ -21,6 +21,7 @@ pub(super) enum Message {
     ScorePreviewReady(Result<ScorePreviewReady, String>),
     CompileOutputsReady(CompileOutputsReady),
     PianoRoll(PianoRollMessage),
+    Mixer(MixerMessage),
     Editor(EditorMessage),
     Logger(LoggerMessage),
     Shortcuts(ShortcutsMessage),
@@ -225,6 +226,22 @@ pub(super) enum PianoRollMessage {
     TransportSeekReleased,
     TransportPlayPause,
     TransportRewind,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum MixerMessage {
+    AddBus,
+    SetMasterGain(f32),
+    SetMasterPan(f32),
+    SetTrackGain(usize, f32),
+    SetTrackPan(usize, f32),
+    ToggleTrackMute(usize),
+    ToggleTrackSolo(usize),
+    SelectTrackInstrument(usize, super::mixer::InstrumentChoice),
+    SetBusGain(u16, f32),
+    SetBusPan(u16, f32),
+    ToggleBusMute(u16),
+    ToggleBusSolo(u16),
 }
 
 #[derive(Debug, Clone, Copy)]

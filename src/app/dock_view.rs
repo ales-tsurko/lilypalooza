@@ -12,8 +12,8 @@ use iced::{
 
 use super::{
     DockDropRegion, EditorFileMenuSection, EditorHeaderMenuSection, Lilypalooza, Message,
-    PaneMessage, ProjectMenuSection, WorkspacePaneKind, messages::ShortcutsMessage, piano_roll,
-    score_view, transport_bar,
+    PaneMessage, ProjectMenuSection, WorkspacePaneKind, messages::ShortcutsMessage, mixer,
+    piano_roll, score_view, transport_bar,
 };
 use crate::{fonts, icons, shortcuts, ui_style};
 
@@ -545,6 +545,7 @@ fn workspace_panes(app: &Lilypalooza) -> Element<'_, Message> {
                 let body = match active_pane {
                     WorkspacePaneKind::Score => score_view::score_body(app),
                     WorkspacePaneKind::PianoRoll => piano_roll::content(app),
+                    WorkspacePaneKind::Mixer => mixer::content(app),
                     WorkspacePaneKind::Editor => editor_pane_body(app),
                     WorkspacePaneKind::Logger => app
                         .logger
@@ -1584,6 +1585,7 @@ fn workspace_pane_title(pane: WorkspacePaneKind) -> &'static str {
     match pane {
         WorkspacePaneKind::Score => "Score",
         WorkspacePaneKind::PianoRoll => "Piano Roll",
+        WorkspacePaneKind::Mixer => "Mixer",
         WorkspacePaneKind::Editor => "Editor",
         WorkspacePaneKind::Logger => "Logger",
     }
@@ -1593,16 +1595,18 @@ fn workspace_pane_icon(pane: WorkspacePaneKind) -> svg::Handle {
     match pane {
         WorkspacePaneKind::Score => icons::music_4(),
         WorkspacePaneKind::PianoRoll => icons::piano(),
+        WorkspacePaneKind::Mixer => icons::sliders_vertical(),
         WorkspacePaneKind::Editor => icons::file_pen(),
         WorkspacePaneKind::Logger => icons::scroll_text(),
     }
 }
 
-fn all_workspace_panes() -> [WorkspacePaneKind; 4] {
+fn all_workspace_panes() -> [WorkspacePaneKind; 5] {
     [
         WorkspacePaneKind::Editor,
         WorkspacePaneKind::Score,
         WorkspacePaneKind::PianoRoll,
+        WorkspacePaneKind::Mixer,
         WorkspacePaneKind::Logger,
     ]
 }
@@ -1796,13 +1800,20 @@ pub(super) fn workspace_group_min_width(app: &Lilypalooza, group_id: super::Dock
         0.0
     };
 
-    tabs_width + menu_width + HEADER_WIDTH_SAFETY
+    let min_content_width = if group.tabs.contains(&WorkspacePaneKind::Mixer) {
+        420.0
+    } else {
+        0.0
+    };
+
+    (tabs_width + menu_width + HEADER_WIDTH_SAFETY).max(min_content_width)
 }
 
 fn workspace_tab_min_width(pane: WorkspacePaneKind) -> f32 {
     let title_width = match pane {
         WorkspacePaneKind::Score => 36.0,
         WorkspacePaneKind::PianoRoll => 66.0,
+        WorkspacePaneKind::Mixer => 34.0,
         WorkspacePaneKind::Editor => 38.0,
         WorkspacePaneKind::Logger => 42.0,
     };
@@ -1901,6 +1912,7 @@ fn pane_header_control_groups<'a>(
     match pane {
         WorkspacePaneKind::Score => score_view::score_controls(app),
         WorkspacePaneKind::PianoRoll => piano_roll::controls(app),
+        WorkspacePaneKind::Mixer => Vec::new(),
         WorkspacePaneKind::Editor => Vec::new(),
         WorkspacePaneKind::Logger => logger_controls(app),
     }
@@ -1910,6 +1922,7 @@ fn pane_header_has_controls(app: &Lilypalooza, pane: WorkspacePaneKind) -> bool 
     match pane {
         WorkspacePaneKind::Score => app.current_score.is_some(),
         WorkspacePaneKind::PianoRoll => true,
+        WorkspacePaneKind::Mixer => false,
         WorkspacePaneKind::Editor => true,
         WorkspacePaneKind::Logger => true,
     }

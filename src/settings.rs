@@ -10,6 +10,7 @@ pub(crate) enum WorkspacePane {
     #[default]
     Score,
     PianoRoll,
+    Mixer,
     Editor,
     Logger,
 }
@@ -360,6 +361,7 @@ pub(crate) enum ShortcutActionId {
     ToggleEditorPane,
     ToggleScorePane,
     TogglePianoRollPane,
+    ToggleMixerPane,
     ToggleLoggerPane,
     PreviousTab,
     NextTab,

@@ -153,6 +153,10 @@ impl AudioEngine {
         )
     }
 
+    pub fn mixer_state(&self) -> &MixerState {
+        &self.mixer.state
+    }
+
     /// Returns the sequencer control handle.
     pub fn sequencer(&mut self) -> SequencerHandle<'_> {
         SequencerHandle::new(&self.sequencer, &mut self.commands)
@@ -280,6 +284,43 @@ mod tests {
         }
     }
 
+    fn render_soundfont_program(program: u8) -> Vec<Sample> {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(
+                    TrackId(0),
+                    InstrumentSlotState::soundfont("default", 0, program),
+                )
+                .expect("track should accept soundfont instrument");
+        }
+        settle_backend(&backend_handle);
+        engine
+            .sequencer()
+            .replace_from_midi_bytes(&simple_midi_bytes(480))
+            .expect("midi should load");
+        engine.transport().play();
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return backend_handle.output_channel(0);
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("engine end-to-end path produced silence");
+    }
+
     #[impl_gen]
     impl ScheduledValueGen {
         #[new]
@@ -402,6 +443,20 @@ mod tests {
         }
 
         panic!("engine end-to-end path produced silence");
+    }
+
+    #[test]
+    fn engine_switches_soundfont_programs_at_track_level() {
+        let piano = render_soundfont_program(0);
+        let violin = render_soundfont_program(40);
+
+        assert!(
+            piano
+                .iter()
+                .zip(violin.iter())
+                .any(|(a, b)| (a - b).abs() > 1.0e-6),
+            "different track-level SoundFont programs rendered the same output"
+        );
     }
 
     #[test]
@@ -578,15 +633,27 @@ mod tests {
         engine.transport().seek_beats(3.0);
         engine.transport().play();
 
-        for _ in 0..2048 {
+        let mut max_peak = 0.0_f32;
+        for _ in 0..4096 {
             backend_handle.process_block();
+            max_peak = max_peak.max(
+                backend_handle
+                    .output_channel(0)
+                    .into_iter()
+                    .chain(backend_handle.output_channel(1))
+                    .map(f32::abs)
+                    .fold(0.0, f32::max),
+            );
             if backend_handle.output_has_signal() {
                 return;
             }
             thread::sleep(Duration::from_millis(2));
         }
 
-        panic!("paused seek followed by play should reach delayed note after jump");
+        let debug = engine.sequencer.debug_state();
+        panic!(
+            "paused seek followed by play should reach delayed note after jump; debug={debug:?}; max_peak={max_peak}"
+        );
     }
 
     #[test]

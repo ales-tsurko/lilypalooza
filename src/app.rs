@@ -33,7 +33,9 @@ use view::view;
 
 mod dock_view;
 mod editor;
+mod knob;
 mod messages;
+mod mixer;
 mod piano_roll;
 mod score_cursor;
 mod score_view;
@@ -63,6 +65,7 @@ const MAX_SVG_PAGE_BRIGHTNESS: u8 = 100;
 const SVG_PAGE_BRIGHTNESS_STEP: u8 = 10;
 const SCORE_ZOOM_PREVIEW_INTERVAL: Duration = Duration::from_millis(16);
 const SCORE_ZOOM_PREVIEW_SETTLE_DELAY: Duration = Duration::from_millis(120);
+const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(33);
 pub(super) const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 pub(super) fn editor_file_browser_column_scroll_id(index: usize) -> Id {
@@ -499,6 +502,19 @@ fn new(
             },
         });
     }
+    let mixer_visible = dock_groups
+        .values()
+        .any(|group| group.tabs.contains(&WorkspacePaneKind::Mixer));
+    if !mixer_visible
+        && !folded_panes
+            .iter()
+            .any(|folded| folded.pane == WorkspacePaneKind::Mixer)
+    {
+        folded_panes.push(FoldedPaneState {
+            pane: WorkspacePaneKind::Mixer,
+            restore: FoldedPaneRestore::Standalone,
+        });
+    }
     let piano_roll_visible = !folded_panes
         .iter()
         .any(|folded| folded.pane == WorkspacePaneKind::PianoRoll);
@@ -709,8 +725,8 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
         subscriptions.push(iced::time::every(SCORE_ZOOM_PREVIEW_INTERVAL).map(|_| Message::Tick));
     }
 
-    if app.playback.is_some() {
-        subscriptions.push(window::frames().map(Message::Frame));
+    if app.playback.is_some() && app.piano_roll.playback_is_playing() {
+        subscriptions.push(iced::time::every(PLAYBACK_POLL_INTERVAL).map(Message::Frame));
     }
 
     Subscription::batch(subscriptions)

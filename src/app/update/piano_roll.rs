@@ -118,9 +118,13 @@ impl Lilypalooza {
                 if let Some(soloed) = self.piano_roll.toggle_track_solo(track_index)
                     && let Some(playback) = self.playback.as_mut()
                 {
-                    let _ = playback
-                        .mixer()
+                    let mut mixer = playback.mixer();
+                    let _ = mixer
                         .set_track_soloed(lilypalooza_audio::TrackId(track_index as u16), soloed);
+                    self.piano_roll.set_global_solo_active(
+                        mixer.tracks().iter().any(|track| track.state.soloed)
+                            || mixer.buses().iter().any(|bus| bus.state.soloed),
+                    );
                 }
             }
             PianoRollMessage::SetCursorTicks(tick) => {

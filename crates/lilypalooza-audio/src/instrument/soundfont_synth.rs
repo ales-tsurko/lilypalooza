@@ -214,8 +214,7 @@ impl Processor for SoundfontProcessor {
     }
 
     fn reset(&mut self) {
-        self.synthesizer.note_off_all(true);
-        self.synthesizer.reset();
+        self.apply_program();
     }
 }
 
@@ -234,18 +233,17 @@ impl InstrumentProcessor for SoundfontProcessor {
             ),
             MidiEvent::ControlChange {
                 controller, value, ..
-            } => self.synthesizer.process_midi_message(
-                Self::TRACK_CHANNEL,
-                0xB0,
-                i32::from(controller),
-                i32::from(value),
-            ),
-            MidiEvent::ProgramChange { program, .. } => self.synthesizer.process_midi_message(
-                Self::TRACK_CHANNEL,
-                0xC0,
-                i32::from(program),
-                0,
-            ),
+            } => {
+                if !matches!(controller, 0 | 32) {
+                    self.synthesizer.process_midi_message(
+                        Self::TRACK_CHANNEL,
+                        0xB0,
+                        i32::from(controller),
+                        i32::from(value),
+                    );
+                }
+            }
+            MidiEvent::ProgramChange { .. } => {}
             MidiEvent::ChannelPressure { pressure, .. } => self.synthesizer.process_midi_message(
                 Self::TRACK_CHANNEL,
                 0xD0,
@@ -437,5 +435,186 @@ mod tests {
         }
 
         panic!("soundfont processor produced silence after reset then note on");
+    }
+
+    #[test]
+    fn soundfont_processor_ignores_midi_program_override() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let settings = SoundfontSynthSettings::new(44_100, 64);
+        let mut selected_program = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            settings,
+            SoundfontProcessorState {
+                soundfont_id: "default".to_string(),
+                bank: 0,
+                program: 40,
+            },
+        )
+        .expect("processor should initialize");
+        let mut overridden_program = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            settings,
+            SoundfontProcessorState {
+                soundfont_id: "default".to_string(),
+                bank: 0,
+                program: 40,
+            },
+        )
+        .expect("processor should initialize");
+
+        overridden_program.handle_midi(MidiEvent::ProgramChange {
+            channel: 0,
+            program: 0,
+        });
+        overridden_program.handle_midi(MidiEvent::ControlChange {
+            channel: 0,
+            controller: 0,
+            value: 0,
+        });
+        overridden_program.handle_midi(MidiEvent::ControlChange {
+            channel: 0,
+            controller: 32,
+            value: 0,
+        });
+
+        selected_program.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+        overridden_program.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+
+        let mut selected_left = vec![0.0; 512];
+        let mut selected_right = vec![0.0; 512];
+        let mut overridden_left = vec![0.0; 512];
+        let mut overridden_right = vec![0.0; 512];
+
+        for _ in 0..8 {
+            selected_program.render(&mut selected_left, &mut selected_right);
+            overridden_program.render(&mut overridden_left, &mut overridden_right);
+        }
+
+        assert_eq!(selected_left, overridden_left);
+        assert_eq!(selected_right, overridden_right);
+    }
+
+    #[test]
+    fn soundfont_processor_selected_program_changes_rendered_signal() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let settings = SoundfontSynthSettings::new(44_100, 64);
+        let mut piano = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            settings,
+            SoundfontProcessorState {
+                soundfont_id: "default".to_string(),
+                bank: 0,
+                program: 0,
+            },
+        )
+        .expect("processor should initialize");
+        let mut violin = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            settings,
+            SoundfontProcessorState {
+                soundfont_id: "default".to_string(),
+                bank: 0,
+                program: 40,
+            },
+        )
+        .expect("processor should initialize");
+
+        piano.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+        violin.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+
+        let mut piano_left = vec![0.0; 512];
+        let mut piano_right = vec![0.0; 512];
+        let mut violin_left = vec![0.0; 512];
+        let mut violin_right = vec![0.0; 512];
+
+        for _ in 0..8 {
+            piano.render(&mut piano_left, &mut piano_right);
+            violin.render(&mut violin_left, &mut violin_right);
+        }
+
+        assert!(
+            piano_left
+                .iter()
+                .zip(violin_left.iter())
+                .chain(piano_right.iter().zip(violin_right.iter()))
+                .any(|(a, b)| (a - b).abs() > 1.0e-6),
+            "different selected SoundFont programs rendered the same signal"
+        );
+    }
+
+    #[test]
+    fn soundfont_processor_reset_preserves_selected_program() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let settings = SoundfontSynthSettings::new(44_100, 64);
+        let mut violin = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            settings,
+            SoundfontProcessorState {
+                soundfont_id: "default".to_string(),
+                bank: 0,
+                program: 40,
+            },
+        )
+        .expect("processor should initialize");
+        let mut piano = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            settings,
+            SoundfontProcessorState {
+                soundfont_id: "default".to_string(),
+                bank: 0,
+                program: 0,
+            },
+        )
+        .expect("processor should initialize");
+
+        violin.reset();
+        violin.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+        piano.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+
+        let mut violin_left = vec![0.0; 512];
+        let mut violin_right = vec![0.0; 512];
+        let mut piano_left = vec![0.0; 512];
+        let mut piano_right = vec![0.0; 512];
+
+        for _ in 0..8 {
+            violin.render(&mut violin_left, &mut violin_right);
+            piano.render(&mut piano_left, &mut piano_right);
+        }
+
+        assert!(
+            violin_left
+                .iter()
+                .zip(piano_left.iter())
+                .chain(violin_right.iter().zip(piano_right.iter()))
+                .any(|(a, b)| (a - b).abs() > 1.0e-6),
+            "reset restored the SoundFont processor to the default piano program"
+        );
     }
 }

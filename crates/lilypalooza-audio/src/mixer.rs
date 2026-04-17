@@ -540,6 +540,16 @@ impl MixerHandle<'_> {
         Ok(())
     }
 
+    pub fn set_track_name(
+        &mut self,
+        id: TrackId,
+        name: impl Into<String>,
+    ) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
+        self.mixer.state.track_mut(id)?.name = name.into();
+        Ok(())
+    }
+
     pub fn set_track_gain_db(&mut self, id: TrackId, gain_db: f32) -> Result<(), AudioEngineError> {
         self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.state.gain_db = gain_db;

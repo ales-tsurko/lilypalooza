@@ -29,6 +29,12 @@ pub(crate) struct MidiTrack {
 }
 
 #[derive(Debug, Clone)]
+struct ParsedMidiTrack {
+    raw_index: usize,
+    explicit_label: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct MidiNote {
     pub(crate) start_tick: u64,
     pub(crate) end_tick: u64,
@@ -165,7 +171,7 @@ pub(crate) fn parse_midi_roll_file(path: &Path) -> Result<MidiRollData, String> 
     let ppq = division;
 
     let mut notes = Vec::new();
-    let mut tracks = Vec::new();
+    let mut parsed_tracks = Vec::new();
     let mut tempo_changes = Vec::new();
     let mut time_signatures = Vec::new();
 
@@ -364,15 +370,13 @@ pub(crate) fn parse_midi_roll_file(path: &Path) -> Result<MidiRollData, String> 
 
         total_ticks = total_ticks.max(absolute_tick);
 
-        tracks.push(MidiTrack {
-            index: usize::from(track_index),
-            label: format_track_label(
-                usize::from(track_index),
-                track_name.as_deref(),
-                instrument_name.as_deref(),
-            ),
+        parsed_tracks.push(ParsedMidiTrack {
+            raw_index: usize::from(track_index),
+            explicit_label: explicit_track_label(track_name.as_deref(), instrument_name.as_deref()),
         });
     }
+
+    let tracks = compact_tracks_and_notes(&parsed_tracks, &mut notes);
 
     notes.sort_by(|left, right| {
         left.start_tick
@@ -486,23 +490,49 @@ fn is_score_midi_stem(file_stem: &str, score_stem: &str) -> bool {
     file_stem == score_stem || file_stem.starts_with(&format!("{score_stem}-"))
 }
 
-fn format_track_label(
-    track_index: usize,
-    track_name: Option<&str>,
-    instrument_name: Option<&str>,
-) -> String {
+fn explicit_track_label(track_name: Option<&str>, instrument_name: Option<&str>) -> Option<String> {
     if let Some(name) = track_name.map(str::trim).filter(|name| !name.is_empty()) {
-        return name.to_string();
+        return Some(name.to_string());
     }
 
     if let Some(name) = instrument_name
         .map(str::trim)
         .filter(|name| !name.is_empty())
     {
-        return name.to_string();
+        return Some(name.to_string());
     }
 
-    format!("Track {}", track_index.saturating_add(1))
+    None
+}
+
+fn compact_tracks_and_notes(tracks: &[ParsedMidiTrack], notes: &mut [MidiNote]) -> Vec<MidiTrack> {
+    let mut used_raw_indices = Vec::new();
+    for note in notes.iter() {
+        if !used_raw_indices.contains(&note.track_index) {
+            used_raw_indices.push(note.track_index);
+        }
+    }
+
+    let mut compacted_tracks = Vec::with_capacity(used_raw_indices.len());
+    let mut raw_to_compact = HashMap::with_capacity(used_raw_indices.len());
+    for (compact_index, raw_index) in used_raw_indices.into_iter().enumerate() {
+        let explicit_label = tracks
+            .iter()
+            .find(|track| track.raw_index == raw_index)
+            .and_then(|track| track.explicit_label.clone());
+        compacted_tracks.push(MidiTrack {
+            index: compact_index,
+            label: explicit_label.unwrap_or_else(|| format!("Track {}", compact_index + 1)),
+        });
+        raw_to_compact.insert(raw_index, compact_index);
+    }
+    for note in notes.iter_mut() {
+        if let Some(compact_index) = raw_to_compact.get(&note.track_index) {
+            note.track_index = *compact_index;
+        }
+    }
+
+    compacted_tracks
 }
 
 fn finish_active_note(
@@ -667,9 +697,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_midi_roll_preserves_track_order() {
+    fn parse_midi_roll_compacts_non_musical_tracks() {
         let header = Header::new(Format::Parallel, Timing::Metrical(u15::from(480)));
         let tempo_track: Track<'static> = vec![
+            TrackEvent {
+                delta: u28::from(0),
+                kind: TrackEventKind::Meta(MetaMessage::TrackName(b"Tempo".as_slice())),
+            },
             TrackEvent {
                 delta: u28::from(0),
                 kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::from(500_000))),
@@ -680,6 +714,10 @@ mod tests {
             },
         ];
         let note_track: Track<'static> = vec![
+            TrackEvent {
+                delta: u28::from(0),
+                kind: TrackEventKind::Meta(MetaMessage::TrackName(b"Violin".as_slice())),
+            },
             TrackEvent {
                 delta: u28::from(0),
                 kind: TrackEventKind::Midi {
@@ -718,10 +756,10 @@ mod tests {
 
         let data = parse_midi_roll_file(file.path()).expect("midi should parse");
 
-        assert_eq!(data.tracks.len(), 2);
+        assert_eq!(data.tracks.len(), 1);
         assert_eq!(data.tracks[0].index, 0);
-        assert_eq!(data.tracks[1].index, 1);
+        assert_eq!(data.tracks[0].label, "Violin");
         assert_eq!(data.notes.len(), 1);
-        assert_eq!(data.notes[0].track_index, 1);
+        assert_eq!(data.notes[0].track_index, 0);
     }
 }

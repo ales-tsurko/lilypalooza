@@ -27,6 +27,7 @@ const LIST_MUSIC: &[u8] = include_bytes!("../assets/icons/list-music.svg");
 const PENCIL: &[u8] = include_bytes!("../assets/icons/pencil.svg");
 const SCROLL_TEXT: &[u8] = include_bytes!("../assets/icons/scroll-text.svg");
 const SKIP_BACK: &[u8] = include_bytes!("../assets/icons/skip-back.svg");
+const SLIDERS_VERTICAL: &[u8] = include_bytes!("../assets/icons/sliders-vertical.svg");
 const SUN_DIM: &[u8] = include_bytes!("../assets/icons/sun-dim.svg");
 const SUN: &[u8] = include_bytes!("../assets/icons/sun.svg");
 const TRASH_2: &[u8] = include_bytes!("../assets/icons/trash-2.svg");
@@ -136,6 +137,10 @@ pub(crate) fn pencil() -> svg::Handle {
 
 pub(crate) fn scroll_text() -> svg::Handle {
     svg::Handle::from_memory(SCROLL_TEXT)
+}
+
+pub(crate) fn sliders_vertical() -> svg::Handle {
+    svg::Handle::from_memory(SLIDERS_VERTICAL)
 }
 
 pub(crate) fn skip_back() -> svg::Handle {

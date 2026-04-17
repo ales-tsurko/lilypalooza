@@ -60,6 +60,7 @@ pub(super) struct PianoRollState {
     rewind_flag_ticks: Vec<u64>,
     pub(super) files: Vec<MidiRollFile>,
     track_mix_by_file: Vec<Vec<TrackMixState>>,
+    global_solo_active: bool,
     track_panel_visible: bool,
     track_panel_width: f32,
     pub(super) selected_file: usize,
@@ -93,6 +94,7 @@ impl PianoRollState {
             rewind_flag_ticks: Vec::new(),
             files: Vec::new(),
             track_mix_by_file: Vec::new(),
+            global_solo_active: false,
             track_panel_visible: true,
             track_panel_width: TRACK_PANEL_DEFAULT_WIDTH,
             selected_file: 0,
@@ -110,6 +112,7 @@ impl PianoRollState {
         self.playback_is_playing = false;
         self.rewind_flag_ticks.clear();
         self.track_mix_by_file.clear();
+        self.global_solo_active = false;
     }
 
     pub(super) fn replace_files(&mut self, files: Vec<MidiRollFile>) {
@@ -154,6 +157,7 @@ impl PianoRollState {
             .map(|file| file.data.total_ticks)
             .unwrap_or(0);
         self.playback_is_playing = false;
+        self.global_solo_active = false;
     }
 
     pub(super) fn current_file(&self) -> Option<&MidiRollFile> {
@@ -260,6 +264,22 @@ impl PianoRollState {
         let state = track_mix.get_mut(track_index)?;
         state.soloed = !state.soloed;
         Some(state.soloed)
+    }
+
+    pub(super) fn set_track_muted(&mut self, track_index: usize, muted: bool) -> Option<()> {
+        let track_mix = self.track_mix_by_file.get_mut(self.selected_file)?;
+        track_mix.get_mut(track_index)?.muted = muted;
+        Some(())
+    }
+
+    pub(super) fn set_track_soloed(&mut self, track_index: usize, soloed: bool) -> Option<()> {
+        let track_mix = self.track_mix_by_file.get_mut(self.selected_file)?;
+        track_mix.get_mut(track_index)?.soloed = soloed;
+        Some(())
+    }
+
+    pub(super) fn set_global_solo_active(&mut self, active: bool) {
+        self.global_solo_active = active;
     }
 
     pub(super) fn set_beat_subdivision(&mut self, subdivision: u8) {
@@ -624,6 +644,7 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
         playback_tick: app.piano_roll.playback_tick(),
         rewind_flag_tick: app.piano_roll.rewind_flag_tick(),
         track_mix: app.piano_roll.current_track_mix(),
+        global_solo_active: app.piano_roll.global_solo_active,
         track_panel_visible: show_track_panel,
         track_panel_width: app.piano_roll.track_panel_width(),
         zoom_modifier_active: app.zoom_modifier_active(),
@@ -639,6 +660,7 @@ struct PianoRollBody<'a> {
     playback_tick: u64,
     rewind_flag_tick: u64,
     track_mix: &'a [TrackMixState],
+    global_solo_active: bool,
     track_panel_visible: bool,
     track_panel_width: f32,
     zoom_modifier_active: bool,
@@ -654,6 +676,7 @@ fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
         playback_tick,
         rewind_flag_tick,
         track_mix,
+        global_solo_active,
         track_panel_visible,
         track_panel_width,
         zoom_modifier_active,
@@ -700,6 +723,7 @@ fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
         beat_subdivision,
         playback_tick,
         track_mix,
+        global_solo_active,
     })
     .width(Length::Fixed(timeline_width))
     .height(Length::Fixed(notes_height));
@@ -796,7 +820,7 @@ fn track_list<'a>(
         .padding([ui_style::PADDING_XS, ui_style::PADDING_XS]);
     let label_max_chars = max_track_label_chars(track_panel_width);
 
-    for track in file.data.tracks.iter().skip(1) {
+    for track in &file.data.tracks {
         let state = track_mix.get(track.index).copied().unwrap_or_default();
         let track_label = shorten_label(&track.label, label_max_chars);
 
@@ -1296,6 +1320,7 @@ struct RollNotesCanvas<'a> {
     beat_subdivision: u8,
     playback_tick: u64,
     track_mix: &'a [TrackMixState],
+    global_solo_active: bool,
 }
 
 #[derive(Debug, Default)]
@@ -1317,6 +1342,12 @@ struct NoteGeometry {
     y: f32,
     width: f32,
     height: f32,
+}
+
+#[derive(Clone, Copy)]
+struct VisibilityState<'a> {
+    track_mix: &'a [TrackMixState],
+    global_solo_active: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1445,6 +1476,7 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
             &state.stack_offsets,
             &self.data.notes,
             self.track_mix,
+            self.global_solo_active,
         );
 
         for note_index in draw_order {
@@ -1464,7 +1496,10 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
             draw_note(
                 &mut frame,
                 self.data,
-                self.track_mix,
+                VisibilityState {
+                    track_mix: self.track_mix,
+                    global_solo_active: self.global_solo_active,
+                },
                 note,
                 geometry,
                 stack_badge,
@@ -1479,14 +1514,18 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
 fn draw_note(
     frame: &mut canvas::Frame,
     data: &MidiRollData,
-    track_mix: &[TrackMixState],
+    visibility: VisibilityState<'_>,
     note: &MidiNote,
     geometry: NoteGeometry,
     stack_badge: Option<StackBadge>,
     show_label: bool,
 ) {
     let mut color = track_color(note.track_index);
-    let visibility_alpha = track_visibility_alpha(track_mix, note.track_index);
+    let visibility_alpha = track_visibility_alpha(
+        visibility.track_mix,
+        note.track_index,
+        visibility.global_solo_active,
+    );
     color.a *= visibility_alpha;
 
     let track_label = data
@@ -1630,6 +1669,7 @@ fn compute_stack_label_notes(
     stack_offsets: &HashMap<NoteStackKey, usize>,
     notes: &[MidiNote],
     track_mix: &[TrackMixState],
+    global_solo_active: bool,
 ) -> HashMap<NoteStackKey, StackTop> {
     let mut label_notes = HashMap::new();
 
@@ -1651,7 +1691,9 @@ fn compute_stack_label_notes(
                 continue;
             };
 
-            if track_visibility_alpha(track_mix, candidate_note.track_index) > 0.20 {
+            if track_visibility_alpha(track_mix, candidate_note.track_index, global_solo_active)
+                > 0.20
+            {
                 selected = StackTop {
                     note_index: candidate_note_index,
                     position: pos,
@@ -2187,7 +2229,11 @@ fn pitch_name(pitch: u8) -> String {
     format!("{note_name}{octave}")
 }
 
-fn track_visibility_alpha(track_mix: &[TrackMixState], track_index: usize) -> f32 {
+fn track_visibility_alpha(
+    track_mix: &[TrackMixState],
+    track_index: usize,
+    global_solo_active: bool,
+) -> f32 {
     let Some(current_state) = track_mix.get(track_index) else {
         return 1.0;
     };
@@ -2196,7 +2242,7 @@ fn track_visibility_alpha(track_mix: &[TrackMixState], track_index: usize) -> f3
         return 0.10;
     }
 
-    let has_any_solo = track_mix.iter().any(|state| state.soloed);
+    let has_any_solo = global_solo_active || track_mix.iter().any(|state| state.soloed);
     if has_any_solo && !current_state.soloed {
         return 0.18;
     }
@@ -2231,4 +2277,34 @@ fn shorten_label(label: &str, max_len: usize) -> String {
     let mut shortened: String = label.chars().take(max_len.saturating_sub(1)).collect();
     shortened.push('~');
     shortened
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TrackMixState, track_visibility_alpha};
+
+    #[test]
+    fn external_solo_dims_visible_tracks() {
+        let track_mix = vec![TrackMixState::default(), TrackMixState::default()];
+
+        assert!(track_visibility_alpha(&track_mix, 0, true) < 0.20);
+        assert!(track_visibility_alpha(&track_mix, 1, true) < 0.20);
+    }
+
+    #[test]
+    fn local_solo_keeps_soloed_track_visible() {
+        let track_mix = vec![
+            TrackMixState {
+                muted: false,
+                soloed: false,
+            },
+            TrackMixState {
+                muted: false,
+                soloed: true,
+            },
+        ];
+
+        assert!(track_visibility_alpha(&track_mix, 0, false) < 0.20);
+        assert_eq!(track_visibility_alpha(&track_mix, 1, false), 1.0);
+    }
 }

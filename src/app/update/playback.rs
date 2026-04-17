@@ -66,11 +66,11 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn sync_playback_file(&mut self) {
-        let selected_file = self.current_midi_file_path();
-        let Some(selected_file) = selected_file else {
+        let Some(current_file) = self.piano_roll.current_file().cloned() else {
             self.playback = None;
             return;
         };
+        let selected_file = current_file.path.clone();
         let SoundfontStatus::Ready(soundfont_path) = &self.soundfont_status else {
             return;
         };
@@ -79,7 +79,13 @@ impl Lilypalooza {
 
         match fs::read(&selected_file) {
             Ok(bytes) => {
-                match rebuild_playback_engine(soundfont_path, &bytes) {
+                let track_labels = current_file
+                    .data
+                    .tracks
+                    .iter()
+                    .map(|track| track.label.clone())
+                    .collect::<Vec<_>>();
+                match rebuild_playback_engine(soundfont_path, &bytes, &track_labels) {
                     Ok(playback) => {
                         self.soundfont_status = SoundfontStatus::Ready(soundfont_path.clone());
                         self.logger.push(format!(
@@ -208,11 +214,6 @@ impl Lilypalooza {
             .set_playback_position(current_tick, total_ticks, is_playing);
         self.refresh_score_cursor_overlay();
     }
-
-    pub(in crate::app) fn current_midi_file_path(&self) -> Option<PathBuf> {
-        self.piano_roll.current_file().map(|file| file.path.clone())
-    }
-
     pub(in crate::app) fn current_midi_total_ticks(&self) -> u64 {
         self.piano_roll
             .current_file()
@@ -256,6 +257,7 @@ fn configure_soundfont(playback: &mut AudioEngine, soundfont_path: &Path) -> Res
 fn rebuild_playback_engine(
     soundfont_path: &Path,
     midi_bytes: &[u8],
+    track_labels: &[String],
 ) -> Result<AudioEngine, String> {
     let mut playback = AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
         .map_err(|error| error.to_string())?;
@@ -264,6 +266,15 @@ fn rebuild_playback_engine(
         .sequencer()
         .replace_from_midi_bytes(midi_bytes)
         .map_err(|error| error.to_string())?;
+    {
+        let mut mixer = playback.mixer();
+        for (track_index, label) in track_labels.iter().enumerate() {
+            if track_index >= INSTRUMENT_TRACK_COUNT {
+                break;
+            }
+            let _ = mixer.set_track_name(TrackId(track_index as u16), label.clone());
+        }
+    }
     Ok(playback)
 }
 

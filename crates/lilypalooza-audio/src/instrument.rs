@@ -180,6 +180,27 @@ impl InstrumentSlotState {
             }),
         }
     }
+
+    /// Returns whether this slot contains no instrument.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        matches!(
+            self.kind,
+            InstrumentKind::BuiltIn {
+                ref instrument_id
+            } if instrument_id == "none"
+        )
+    }
+
+    /// Decodes the typed SoundFont state when this slot contains a SoundFont instrument.
+    pub fn soundfont_state(&self) -> Result<Option<SoundfontProcessorState>, ProcessorStateError> {
+        match self.kind {
+            InstrumentKind::BuiltIn { ref instrument_id } if instrument_id == "soundfont" => {
+                soundfont_synth::SoundfontProcessor::decode_state(&self.state).map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
 /// Supported effect backends.

@@ -38,6 +38,7 @@ pub(in crate::app) enum PaneCycleDirection {
 mod editor;
 mod files;
 mod input;
+mod mixer;
 mod pane;
 mod persistence;
 mod piano_roll;
@@ -54,6 +55,7 @@ pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
         Message::ScorePreviewReady(result) => app.handle_score_preview_ready(result),
         Message::CompileOutputsReady(result) => app.handle_compile_outputs_ready(result),
         Message::PianoRoll(message) => app.handle_piano_roll_message(message),
+        Message::Mixer(message) => app.handle_mixer_message(message),
         Message::Editor(message) => app.handle_editor_message(message),
         Message::Logger(message) => app.handle_logger_message(message),
         Message::Shortcuts(message) => app.handle_shortcuts_message(message),
@@ -500,8 +502,9 @@ fn pane_sort_key(pane: WorkspacePaneKind) -> u8 {
     match pane {
         WorkspacePaneKind::Score => 0,
         WorkspacePaneKind::PianoRoll => 1,
-        WorkspacePaneKind::Editor => 2,
-        WorkspacePaneKind::Logger => 3,
+        WorkspacePaneKind::Mixer => 2,
+        WorkspacePaneKind::Editor => 3,
+        WorkspacePaneKind::Logger => 4,
     }
 }
 

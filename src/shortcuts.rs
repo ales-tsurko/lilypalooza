@@ -120,7 +120,7 @@ impl<'a> ShortcutInput<'a> {
     }
 }
 
-const GLOBAL_ACTIONS: [ShortcutAction; 8] = [
+const GLOBAL_ACTIONS: [ShortcutAction; 9] = [
     ShortcutAction::QuitApp,
     ShortcutAction::OpenActions,
     ShortcutAction::OpenSettingsFile,
@@ -128,6 +128,7 @@ const GLOBAL_ACTIONS: [ShortcutAction; 8] = [
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Editor),
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Score),
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::PianoRoll),
+    ShortcutAction::ToggleWorkspacePane(WorkspacePane::Mixer),
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Logger),
 ];
 
@@ -251,6 +252,7 @@ pub(crate) fn resolve_contextual(
             .iter()
             .copied()
             .find(|action| action_matches(settings, *action, input)),
+        WorkspacePane::Mixer => None,
         WorkspacePane::Editor => EDITOR_CONTEXTUAL_ACTIONS
             .iter()
             .copied()
@@ -387,6 +389,7 @@ shortcut_metadata! {
     ToggleEditorPane => ("Toggle Editor Pane", "Workspace: show or hide the editor pane."),
     ToggleScorePane => ("Toggle Score Pane", "Workspace: show or hide the score preview pane."),
     TogglePianoRollPane => ("Toggle Piano Roll Pane", "Workspace: show or hide the piano roll pane."),
+    ToggleMixerPane => ("Toggle Mixer Pane", "Workspace: show or hide the mixer pane."),
     ToggleLoggerPane => ("Toggle Logger Pane", "Workspace: show or hide the logger pane."),
     PreviousTab => ("Previous Workspace Tab", "Workspace: switch to the previous tab in the active pane group."),
     NextTab => ("Next Workspace Tab", "Workspace: switch to the next tab in the active pane group."),
@@ -446,7 +449,7 @@ fn fixed_contextual_action(
             }
             _ => None,
         },
-        WorkspacePane::Editor | WorkspacePane::Logger => None,
+        WorkspacePane::Mixer | WorkspacePane::Editor | WorkspacePane::Logger => None,
     }
 }
 
@@ -529,6 +532,9 @@ fn action_from_id(action_id: ShortcutActionId) -> ShortcutAction {
         }
         ShortcutActionId::TogglePianoRollPane => {
             ShortcutAction::ToggleWorkspacePane(WorkspacePane::PianoRoll)
+        }
+        ShortcutActionId::ToggleMixerPane => {
+            ShortcutAction::ToggleWorkspacePane(WorkspacePane::Mixer)
         }
         ShortcutActionId::ToggleLoggerPane => {
             ShortcutAction::ToggleWorkspacePane(WorkspacePane::Logger)
@@ -868,9 +874,13 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
             binding_code(ShortcutKeyCode::Digit3, true, false, false),
             binding_code(ShortcutKeyCode::Numpad3, true, false, false),
         ],
-        ShortcutAction::ToggleWorkspacePane(WorkspacePane::Logger) => vec![
+        ShortcutAction::ToggleWorkspacePane(WorkspacePane::Mixer) => vec![
             binding_code(ShortcutKeyCode::Digit4, true, false, false),
             binding_code(ShortcutKeyCode::Numpad4, true, false, false),
+        ],
+        ShortcutAction::ToggleWorkspacePane(WorkspacePane::Logger) => vec![
+            binding_code(ShortcutKeyCode::Digit0, true, false, false),
+            binding_code(ShortcutKeyCode::Numpad0, true, false, false),
         ],
         ShortcutAction::SwitchWorkspaceTabPrevious => {
             vec![binding_code(
@@ -1258,6 +1268,9 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         }
         ShortcutAction::ToggleWorkspacePane(WorkspacePane::PianoRoll) => {
             Some(ShortcutActionId::TogglePianoRollPane)
+        }
+        ShortcutAction::ToggleWorkspacePane(WorkspacePane::Mixer) => {
+            Some(ShortcutActionId::ToggleMixerPane)
         }
         ShortcutAction::ToggleWorkspacePane(WorkspacePane::Logger) => {
             Some(ShortcutActionId::ToggleLoggerPane)

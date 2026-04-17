@@ -12,7 +12,7 @@ iced_core = "0.14.0"
 
 [dependencies]
 directories = "5.0.1"
-iced = { workspace = true, features = ["canvas", "image", "tokio", "svg"] }
+iced = { workspace = true, features = ["canvas", "image", "lazy", "tokio", "svg"] }
 iced_core = { workspace = true }
 iced-code-editor = { path = "crates/iced-code-editor" }
 lilypalooza-audio = { path = "crates/lilypalooza-audio" }
@@ -51,3 +51,6 @@ dbg_macro = "warn"
 todo = "warn"
 unwrap_used = "warn"
 undocumented_unsafe_blocks = "deny"
+
+[patch."https://github.com/ales-tsurko/knyst"]
+knyst = { path = "target/knyst-fork/knyst" }

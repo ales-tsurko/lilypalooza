@@ -390,7 +390,9 @@ impl Lilypalooza {
         match pane {
             WorkspacePaneKind::PianoRoll => self.restore_piano_roll_scroll(),
             WorkspacePaneKind::Score => self.restore_score_scroll(),
-            WorkspacePaneKind::Editor | WorkspacePaneKind::Logger => Task::none(),
+            WorkspacePaneKind::Mixer | WorkspacePaneKind::Editor | WorkspacePaneKind::Logger => {
+                Task::none()
+            }
         }
     }
 
