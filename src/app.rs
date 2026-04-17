@@ -31,9 +31,9 @@ use score_cursor::{ScoreCursorMaps, ScoreCursorPlacement};
 use update::update;
 use view::view;
 
+mod controls;
 mod dock_view;
 mod editor;
-mod knob;
 mod messages;
 mod mixer;
 mod piano_roll;

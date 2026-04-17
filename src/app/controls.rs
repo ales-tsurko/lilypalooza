@@ -1,12 +1,18 @@
+use std::time::{Duration, Instant};
+
 use iced::widget::canvas::{self as canvas_widget, Path, Stroke};
 use iced::widget::{canvas, container};
 use iced::{Color, Element, Length, Point, Radians, Rectangle, Renderer, Theme, alignment, mouse};
 
+const FADER_WIDTH: f32 = 30.0;
+const FADER_HANDLE_HEIGHT: f32 = 18.0;
+const FADER_RAIL_WIDTH: f32 = 6.0;
 const GAIN_KNOB_SIZE: f32 = 48.0;
 const PAN_KNOB_SIZE: f32 = 42.0;
 const KNOB_ANGLE_START: f32 = 135.0;
 const KNOB_ANGLE_END: f32 = 405.0;
 const KNOB_CENTER_ANGLE: f32 = (KNOB_ANGLE_START + KNOB_ANGLE_END) * 0.5;
+const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(350);
 const PAN_ZERO_EPSILON: f32 = 0.025;
 const DEFAULT_DRAG_SCALAR: f32 = 0.008;
 const DEFAULT_WHEEL_SCALAR: f32 = 0.05;
@@ -23,6 +29,7 @@ pub(super) fn pan_knob<'a, Message: Clone + 'a>(
             mode: KnobMode::Bipolar {
                 zero_epsilon: PAN_ZERO_EPSILON,
             },
+            default_value: 0.0,
             drag_scalar: DEFAULT_DRAG_SCALAR,
             wheel_scalar: DEFAULT_WHEEL_SCALAR,
             on_change: Box::new(on_change),
@@ -46,6 +53,7 @@ pub(super) fn gain_knob<'a, Message: Clone + 'a>(
                 min: GAIN_MIN_DB,
                 max: GAIN_MAX_DB,
             },
+            default_value: 0.0,
             drag_scalar: 0.35,
             wheel_scalar: 1.0,
             on_change: Box::new(on_change),
@@ -58,9 +66,39 @@ pub(super) fn gain_knob<'a, Message: Clone + 'a>(
     .into()
 }
 
+pub(super) fn gain_fader<'a, Message: Clone + 'a>(
+    value: f32,
+    on_change: impl Fn(f32) -> Message + 'a,
+) -> Element<'a, Message> {
+    container(
+        canvas(GainFader {
+            value: clamp_gain(value),
+            default_value: 0.0,
+            drag_scalar: 0.35,
+            wheel_scalar: 1.0,
+            on_change: Box::new(on_change),
+        })
+        .width(Length::Fixed(FADER_WIDTH))
+        .height(Length::Fill),
+    )
+    .width(Length::Fixed(FADER_WIDTH))
+    .height(Length::Fill)
+    .align_x(alignment::Horizontal::Center)
+    .into()
+}
+
 struct Knob<'a, Message> {
     value: f32,
     mode: KnobMode,
+    default_value: f32,
+    drag_scalar: f32,
+    wheel_scalar: f32,
+    on_change: Box<dyn Fn(f32) -> Message + 'a>,
+}
+
+struct GainFader<'a, Message> {
+    value: f32,
+    default_value: f32,
     drag_scalar: f32,
     wheel_scalar: f32,
     on_change: Box<dyn Fn(f32) -> Message + 'a>,
@@ -76,6 +114,14 @@ enum KnobMode {
 struct KnobState {
     dragging: bool,
     last_cursor_y: Option<f32>,
+    last_press_at: Option<Instant>,
+}
+
+#[derive(Default)]
+struct GainFaderState {
+    dragging: bool,
+    last_cursor_y: Option<f32>,
+    last_press_at: Option<Instant>,
 }
 
 impl<Message: Clone> canvas_widget::Program<Message> for Knob<'_, Message> {
@@ -90,15 +136,28 @@ impl<Message: Clone> canvas_widget::Program<Message> for Knob<'_, Message> {
     ) -> Option<canvas_widget::Action<Message>> {
         match event {
             canvas_widget::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                if let Some(position) = cursor.position_over(bounds) {
+                if cursor.position_over(bounds).is_some()
+                    && let Some(position) = cursor.position()
+                {
+                    let now = Instant::now();
+                    if is_double_click(state.last_press_at, now) {
+                        state.dragging = false;
+                        state.last_cursor_y = None;
+                        state.last_press_at = None;
+                        return Some(
+                            canvas_widget::Action::publish((self.on_change)(self.default_value))
+                                .and_capture(),
+                        );
+                    }
+                    state.last_press_at = Some(now);
                     state.dragging = true;
                     state.last_cursor_y = Some(position.y);
                     return Some(canvas_widget::Action::capture());
                 }
             }
-            canvas_widget::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            canvas_widget::Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 if state.dragging
-                    && let (Some(last_y), Some(position)) = (state.last_cursor_y, cursor.position())
+                    && let Some(last_y) = state.last_cursor_y
                 {
                     state.last_cursor_y = Some(position.y);
                     let next = self.apply_drag_delta(position.y - last_y);
@@ -226,6 +285,178 @@ impl<Message: Clone> canvas_widget::Program<Message> for Knob<'_, Message> {
     }
 }
 
+impl<Message: Clone> canvas_widget::Program<Message> for GainFader<'_, Message> {
+    type State = GainFaderState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &canvas_widget::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas_widget::Action<Message>> {
+        match event {
+            canvas_widget::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                if cursor.position_over(bounds).is_some()
+                    && let Some(position) = cursor.position()
+                {
+                    let now = Instant::now();
+                    if is_double_click(state.last_press_at, now) {
+                        state.dragging = false;
+                        state.last_cursor_y = None;
+                        state.last_press_at = None;
+                        return Some(
+                            canvas_widget::Action::publish((self.on_change)(self.default_value))
+                                .and_capture(),
+                        );
+                    }
+                    state.last_press_at = Some(now);
+                    state.dragging = true;
+                    state.last_cursor_y = Some(position.y);
+                    return Some(canvas_widget::Action::capture());
+                }
+            }
+            canvas_widget::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                if state.dragging
+                    && let Some(last_y) = state.last_cursor_y
+                {
+                    state.last_cursor_y = Some(position.y);
+                    let next = self.apply_drag_delta(position.y - last_y);
+                    return Some(
+                        canvas_widget::Action::publish((self.on_change)(next)).and_capture(),
+                    );
+                }
+            }
+            canvas_widget::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                if cursor.position_in(bounds).is_some() {
+                    let next = self.apply_scroll_delta(*delta);
+                    return Some(
+                        canvas_widget::Action::publish((self.on_change)(next)).and_capture(),
+                    );
+                }
+            }
+            canvas_widget::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                state.dragging = false;
+                state.last_cursor_y = None;
+            }
+            _ => {}
+        }
+
+        None
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if state.dragging {
+            mouse::Interaction::Grabbing
+        } else if cursor.position_in(bounds).is_some() {
+            mouse::Interaction::Grab
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+
+    fn draw(
+        &self,
+        state: &Self::State,
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Vec<canvas_widget::Geometry> {
+        let palette = theme.extended_palette();
+        let mut frame = canvas_widget::Frame::new(renderer, bounds.size());
+        let hover = state.dragging || cursor.position_in(bounds).is_some();
+        let accent = if hover {
+            palette.primary.strong.color
+        } else {
+            palette.primary.base.color
+        };
+
+        let rail_width = FADER_RAIL_WIDTH;
+        let rail_x = (bounds.width - rail_width) * 0.5;
+        let rail_y = 8.0;
+        let rail_height = (bounds.height - rail_y * 2.0).max(FADER_HANDLE_HEIGHT + 6.0);
+        let rail_bounds = Rectangle {
+            x: rail_x,
+            y: rail_y,
+            width: rail_width,
+            height: rail_height,
+        };
+        let handle_center_y = gain_value_to_y(self.value, rail_bounds);
+        let fill_bounds = Rectangle {
+            x: rail_bounds.x,
+            y: handle_center_y,
+            width: rail_bounds.width,
+            height: (rail_bounds.y + rail_bounds.height - handle_center_y).max(0.0),
+        };
+        let handle_bounds = Rectangle {
+            x: 4.0,
+            y: (handle_center_y - FADER_HANDLE_HEIGHT * 0.5)
+                .clamp(2.0, bounds.height - FADER_HANDLE_HEIGHT - 2.0),
+            width: (bounds.width - 8.0).max(12.0),
+            height: FADER_HANDLE_HEIGHT,
+        };
+
+        frame.fill(
+            &Path::rectangle(
+                Point::new(rail_bounds.x, rail_bounds.y),
+                iced::Size::new(rail_bounds.width, rail_bounds.height),
+            ),
+            palette.background.weak.color,
+        );
+        frame.stroke(
+            &Path::rectangle(
+                Point::new(rail_bounds.x, rail_bounds.y),
+                iced::Size::new(rail_bounds.width, rail_bounds.height),
+            ),
+            Stroke::default()
+                .with_width(1.0)
+                .with_color(palette.background.strong.color),
+        );
+
+        frame.fill(
+            &Path::rectangle(
+                Point::new(fill_bounds.x, fill_bounds.y),
+                iced::Size::new(fill_bounds.width, fill_bounds.height),
+            ),
+            accent,
+        );
+
+        frame.fill(
+            &Path::rectangle(
+                Point::new(handle_bounds.x, handle_bounds.y),
+                iced::Size::new(handle_bounds.width, handle_bounds.height),
+            ),
+            palette.background.base.color,
+        );
+        frame.stroke(
+            &Path::rectangle(
+                Point::new(handle_bounds.x, handle_bounds.y),
+                iced::Size::new(handle_bounds.width, handle_bounds.height),
+            ),
+            Stroke::default()
+                .with_width(1.0)
+                .with_color(palette.background.strong.color),
+        );
+
+        let notch_y = handle_bounds.y + handle_bounds.height * 0.5;
+        frame.stroke(
+            &Path::line(
+                Point::new(handle_bounds.x + 5.0, notch_y),
+                Point::new(handle_bounds.x + handle_bounds.width - 5.0, notch_y),
+            ),
+            Stroke::default().with_width(2.0).with_color(accent),
+        );
+
+        vec![frame.into_geometry()]
+    }
+}
+
 impl<Message> Knob<'_, Message> {
     fn apply_drag_delta(&self, delta_y: f32) -> f32 {
         self.normalize(self.value - delta_y * self.drag_scalar)
@@ -300,6 +531,26 @@ impl<Message> Knob<'_, Message> {
     }
 }
 
+impl<Message> GainFader<'_, Message> {
+    fn apply_drag_delta(&self, delta_y: f32) -> f32 {
+        clamp_gain(self.value - delta_y * self.drag_scalar)
+    }
+
+    fn apply_scroll_delta(&self, delta: mouse::ScrollDelta) -> f32 {
+        let amount = match delta {
+            mouse::ScrollDelta::Lines { y, .. } => y * self.wheel_scalar,
+            mouse::ScrollDelta::Pixels { y, .. } => y / 120.0 * self.wheel_scalar,
+        };
+        clamp_gain(self.value + amount)
+    }
+}
+
+fn is_double_click(previous: Option<Instant>, now: Instant) -> bool {
+    previous
+        .map(|last| now.saturating_duration_since(last) <= DOUBLE_CLICK_THRESHOLD)
+        .unwrap_or(false)
+}
+
 fn clamp_pan(value: f32) -> f32 {
     value.clamp(-1.0, 1.0)
 }
@@ -308,11 +559,20 @@ fn clamp_gain(value: f32) -> f32 {
     value.clamp(GAIN_MIN_DB, GAIN_MAX_DB)
 }
 
+fn gain_value_to_y(value: f32, rail_bounds: Rectangle) -> f32 {
+    let normalized =
+        ((clamp_gain(value) - GAIN_MIN_DB) / (GAIN_MAX_DB - GAIN_MIN_DB)).clamp(0.0, 1.0);
+    rail_bounds.y + rail_bounds.height * (1.0 - normalized)
+}
+
 #[cfg(test)]
 mod tests {
+    use iced::Rectangle;
     use iced::mouse;
 
-    use super::{Knob, KnobMode};
+    use std::time::{Duration, Instant};
+
+    use super::{GainFader, Knob, KnobMode, gain_value_to_y, is_double_click};
 
     #[test]
     fn drag_delta_moves_pan_and_clamps() {
@@ -321,6 +581,7 @@ mod tests {
             mode: KnobMode::Bipolar {
                 zero_epsilon: 0.025,
             },
+            default_value: 0.0,
             drag_scalar: 0.008,
             wheel_scalar: 0.05,
             on_change: Box::new(|_| ()),
@@ -335,6 +596,7 @@ mod tests {
             mode: KnobMode::Bipolar {
                 zero_epsilon: 0.025,
             },
+            default_value: 0.0,
             drag_scalar: 0.008,
             wheel_scalar: 0.05,
             on_change: Box::new(|_| ()),
@@ -352,6 +614,7 @@ mod tests {
             mode: KnobMode::Bipolar {
                 zero_epsilon: 0.025,
             },
+            default_value: 0.0,
             drag_scalar: 0.008,
             wheel_scalar: 0.05,
             on_change: Box::new(|_| ()),
@@ -362,6 +625,7 @@ mod tests {
             mode: KnobMode::Bipolar {
                 zero_epsilon: 0.025,
             },
+            default_value: 0.0,
             drag_scalar: 0.008,
             wheel_scalar: 0.05,
             on_change: Box::new(|_| ()),
@@ -372,6 +636,7 @@ mod tests {
             mode: KnobMode::Bipolar {
                 zero_epsilon: 0.025,
             },
+            default_value: 0.0,
             drag_scalar: 0.008,
             wheel_scalar: 0.05,
             on_change: Box::new(|_| ()),
@@ -390,6 +655,7 @@ mod tests {
                 min: -60.0,
                 max: 12.0,
             },
+            default_value: 0.0,
             drag_scalar: 0.35,
             wheel_scalar: 1.0,
             on_change: Box::new(|_| ()),
@@ -397,5 +663,47 @@ mod tests {
 
         assert_eq!(knob.apply_drag_delta(500.0), -60.0);
         assert_eq!(knob.apply_drag_delta(-500.0), 12.0);
+    }
+
+    #[test]
+    fn gain_fader_drag_delta_clamps_to_gain_range() {
+        let fader = GainFader {
+            value: -12.0,
+            default_value: 0.0,
+            drag_scalar: 0.35,
+            wheel_scalar: 1.0,
+            on_change: Box::new(|_| ()),
+        };
+
+        assert_eq!(fader.apply_drag_delta(500.0), -60.0);
+        assert_eq!(fader.apply_drag_delta(-500.0), 12.0);
+    }
+
+    #[test]
+    fn gain_fader_y_is_monotonic() {
+        let rail = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 8.0,
+            height: 200.0,
+        };
+
+        let low = gain_value_to_y(-60.0, rail);
+        let mid = gain_value_to_y(-24.0, rail);
+        let high = gain_value_to_y(12.0, rail);
+
+        assert!(high < mid);
+        assert!(mid < low);
+    }
+
+    #[test]
+    fn double_click_detection_respects_threshold() {
+        let now = Instant::now();
+        assert!(is_double_click(Some(now - Duration::from_millis(100)), now));
+        assert!(!is_double_click(
+            Some(now - Duration::from_millis(500)),
+            now
+        ));
+        assert!(!is_double_click(None, now));
     }
 }

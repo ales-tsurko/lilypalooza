@@ -1,13 +1,11 @@
 use std::fmt;
 use std::sync::Arc;
 
-use iced::widget::{
-    button, column, container, lazy, pick_list, responsive, row, scrollable, text, vertical_slider,
-};
+use iced::widget::{button, column, container, lazy, pick_list, responsive, row, scrollable, text};
 use iced::{Element, Fill, FillPortion, Length, alignment};
 use lilypalooza_audio::{InstrumentSlotState, MixerState, SoundfontProcessorState};
 
-use super::knob::{gain_knob, pan_knob};
+use super::controls::{gain_fader, gain_knob, pan_knob};
 use super::messages::MixerMessage;
 use super::{Lilypalooza, Message};
 use crate::{fonts, ui_style};
@@ -580,14 +578,10 @@ fn strip_shell<'a>(
 
         content = match gain_mode {
             GainControlMode::Fader => content.push(
-                container(
-                    vertical_slider(-60.0..=12.0, gain_db.clamp(-60.0, 12.0), on_gain)
-                        .step(0.1)
-                        .height(Fill),
-                )
-                .width(Fill)
-                .height(Length::Fill)
-                .center_x(Fill),
+                container(gain_fader(gain_db, on_gain))
+                    .width(Fill)
+                    .height(Length::Fill)
+                    .center_x(Fill),
             ),
             GainControlMode::Knob => content.push(gain_knob(gain_db, on_gain)),
         };
