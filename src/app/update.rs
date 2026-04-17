@@ -208,6 +208,28 @@ fn dock_node_min_width(
     }
 }
 
+fn dock_node_min_height(
+    node: &pane_grid::Node,
+    state: &pane_grid::State<DockGroupId>,
+    app: &Lilypalooza,
+) -> f32 {
+    match node {
+        pane_grid::Node::Pane(pane) => state
+            .get(*pane)
+            .map(|group_id| super::dock_view::workspace_group_min_height(app, *group_id))
+            .unwrap_or(0.0),
+        pane_grid::Node::Split { axis, a, b, .. } => {
+            let first = dock_node_min_height(a, state, app);
+            let second = dock_node_min_height(b, state, app);
+
+            match axis {
+                pane_grid::Axis::Horizontal => first + second,
+                pane_grid::Axis::Vertical => first.max(second),
+            }
+        }
+    }
+}
+
 fn dock_drop_region(bounds: iced::Rectangle, position: iced::Point) -> DockDropRegion {
     let relative_x = ((position.x - bounds.x) / bounds.width.max(1.0)).clamp(0.0, 1.0);
     let relative_y = ((position.y - bounds.y) / bounds.height.max(1.0)).clamp(0.0, 1.0);

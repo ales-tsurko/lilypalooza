@@ -2,21 +2,27 @@ use std::fmt;
 use std::sync::Arc;
 
 use iced::widget::{
-    button, column, container, lazy, pick_list, row, scrollable, text, vertical_slider,
+    button, column, container, lazy, pick_list, responsive, row, scrollable, text, vertical_slider,
 };
 use iced::{Element, Fill, FillPortion, Length, alignment};
 use lilypalooza_audio::{InstrumentSlotState, MixerState, SoundfontProcessorState};
 
-use super::knob::pan_knob;
+use super::knob::{gain_knob, pan_knob};
 use super::messages::MixerMessage;
 use super::{Lilypalooza, Message};
 use crate::{fonts, ui_style};
+
+pub(super) const MIXER_MIN_HEIGHT: f32 = 340.0;
+pub(super) const MIXER_MIN_WIDTH: f32 = 520.0;
 
 const MAIN_STRIP_WIDTH: f32 = 148.0;
 const STRIP_WIDTH: f32 = 156.0;
 const STRIP_SPACING: f32 = 10.0;
 const INSTRUMENT_PICKER_HEIGHT: f32 = 28.0;
+const SECTION_HEADER_HEIGHT: f32 = 28.0;
+const STRIP_MIN_HEIGHT: f32 = 140.0;
 const STRIP_TOGGLE_SIZE: f32 = 28.0;
+const COMPACT_GAIN_SWITCH_OFFSET: f32 = 20.0;
 
 struct StripActions<'a> {
     solo: Option<(bool, Message)>,
@@ -186,6 +192,8 @@ impl fmt::Display for InstrumentChoice {
 struct MainStripDependency {
     gain_bits: u32,
     pan_bits: u32,
+    compact_gain: bool,
+    strip_height_bits: u32,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -195,6 +203,8 @@ struct TrackStripDependency {
     selected: Option<InstrumentChoice>,
     gain_bits: u32,
     pan_bits: u32,
+    compact_gain: bool,
+    strip_height_bits: u32,
     soloed: bool,
     muted: bool,
 }
@@ -205,8 +215,16 @@ struct BusStripDependency {
     name: String,
     gain_bits: u32,
     pan_bits: u32,
+    compact_gain: bool,
+    strip_height_bits: u32,
     soloed: bool,
     muted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GainControlMode {
+    Fader,
+    Knob,
 }
 
 pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
@@ -220,32 +238,70 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
     };
     let mixer = playback.mixer_state();
 
-    row![
-        container(sticky_master_strip(mixer))
-            .width(Length::Fixed(MAIN_STRIP_WIDTH))
-            .height(Fill),
-        container(instrument_track_area(mixer))
-            .width(FillPortion(5))
-            .height(Fill),
-        container(bus_track_area(mixer))
-            .width(FillPortion(2))
+    responsive(move |size| {
+        let gain_mode = gain_control_mode(size.height);
+        let strip_height =
+            (size.height - (ui_style::PADDING_SM as f32 * 2.0) - SECTION_HEADER_HEIGHT)
+                .max(STRIP_MIN_HEIGHT);
+
+        row![
+            container(master_track_area(mixer, strip_height, gain_mode))
+                .width(Length::Fixed(MAIN_STRIP_WIDTH))
+                .height(Fill),
+            container(instrument_track_area(mixer, strip_height, gain_mode))
+                .width(FillPortion(5))
+                .height(Fill),
+            container(bus_track_area(mixer, strip_height, gain_mode))
+                .width(FillPortion(2))
+                .height(Fill)
+        ]
+        .spacing(ui_style::SPACE_SM)
+        .padding(ui_style::PADDING_SM)
+        .width(Fill)
+        .height(Fill)
+        .into()
+    })
+    .into()
+}
+
+fn master_track_area(
+    mixer: &MixerState,
+    strip_height: f32,
+    gain_mode: GainControlMode,
+) -> Element<'_, Message> {
+    let master_row = row![sticky_master_strip(mixer, strip_height, gain_mode)]
+        .align_y(alignment::Vertical::Top)
+        .height(Length::Fixed(strip_height));
+
+    column![
+        section_title("Main"),
+        scrollable(master_row)
+            .direction(scrollable::Direction::Horizontal(
+                scrollable::Scrollbar::new()
+            ))
+            .style(ui_style::workspace_scrollable)
+            .width(Fill)
             .height(Fill)
     ]
-    .spacing(ui_style::SPACE_SM)
-    .padding(ui_style::PADDING_SM)
-    .width(Fill)
+    .spacing(ui_style::SPACE_XS)
     .height(Fill)
     .into()
 }
 
-fn sticky_master_strip(mixer: &MixerState) -> Element<'_, Message> {
+fn sticky_master_strip(
+    mixer: &MixerState,
+    strip_height: f32,
+    gain_mode: GainControlMode,
+) -> Element<'_, Message> {
     let master = mixer.master();
     lazy(
         MainStripDependency {
             gain_bits: master.state.gain_db.to_bits(),
             pan_bits: master.state.pan.to_bits(),
+            compact_gain: matches!(gain_mode, GainControlMode::Knob),
+            strip_height_bits: strip_height.to_bits(),
         },
-        |dependency| {
+        move |dependency| {
             strip_panel(
                 strip_shell(
                     "Main",
@@ -262,21 +318,32 @@ fn sticky_master_strip(mixer: &MixerState) -> Element<'_, Message> {
                             Message::Mixer(MixerMessage::SetMasterPan(value))
                         })),
                     },
+                    f32::from_bits(dependency.strip_height_bits),
+                    if dependency.compact_gain {
+                        GainControlMode::Knob
+                    } else {
+                        GainControlMode::Fader
+                    },
                 ),
                 MAIN_STRIP_WIDTH,
+                f32::from_bits(dependency.strip_height_bits),
             )
         },
     )
     .into()
 }
 
-fn instrument_track_area(mixer: &MixerState) -> Element<'_, Message> {
+fn instrument_track_area(
+    mixer: &MixerState,
+    strip_height: f32,
+    gain_mode: GainControlMode,
+) -> Element<'_, Message> {
     let options: Arc<[InstrumentChoice]> = instrument_choices(mixer).into();
     let track_row = mixer.tracks().iter().fold(
         row![]
             .spacing(STRIP_SPACING)
             .align_y(alignment::Vertical::Top)
-            .height(Fill),
+            .height(Length::Fixed(strip_height)),
         move |row, track| {
             let track_index = track.id.index();
             let selected = selected_instrument_choice(&track.instrument, mixer);
@@ -288,12 +355,15 @@ fn instrument_track_area(mixer: &MixerState) -> Element<'_, Message> {
                     selected,
                     gain_bits: track.state.gain_db.to_bits(),
                     pan_bits: track.state.pan.to_bits(),
+                    compact_gain: matches!(gain_mode, GainControlMode::Knob),
+                    strip_height_bits: strip_height.to_bits(),
                     soloed: track.state.soloed,
                     muted: track.state.muted,
                 },
                 move |dependency| {
                     let name = dependency.name.clone();
                     let selected = dependency.selected.clone();
+                    let strip_height = f32::from_bits(dependency.strip_height_bits);
                     strip_panel(
                         strip_shell(
                             name,
@@ -327,8 +397,15 @@ fn instrument_track_area(mixer: &MixerState) -> Element<'_, Message> {
                                     Message::Mixer(MixerMessage::SetTrackPan(track_index, value))
                                 })),
                             },
+                            strip_height,
+                            if dependency.compact_gain {
+                                GainControlMode::Knob
+                            } else {
+                                GainControlMode::Fader
+                            },
                         ),
                         STRIP_WIDTH,
+                        strip_height,
                     )
                 },
             ))
@@ -350,12 +427,16 @@ fn instrument_track_area(mixer: &MixerState) -> Element<'_, Message> {
     .into()
 }
 
-fn bus_track_area(mixer: &MixerState) -> Element<'_, Message> {
+fn bus_track_area(
+    mixer: &MixerState,
+    strip_height: f32,
+    gain_mode: GainControlMode,
+) -> Element<'_, Message> {
     let bus_row = mixer.buses().iter().fold(
         row![]
             .spacing(STRIP_SPACING)
             .align_y(alignment::Vertical::Top)
-            .height(Fill),
+            .height(Length::Fixed(strip_height)),
         |row, bus| {
             row.push(lazy(
                 BusStripDependency {
@@ -363,6 +444,8 @@ fn bus_track_area(mixer: &MixerState) -> Element<'_, Message> {
                     name: bus.name.clone(),
                     gain_bits: bus.state.gain_db.to_bits(),
                     pan_bits: bus.state.pan.to_bits(),
+                    compact_gain: matches!(gain_mode, GainControlMode::Knob),
+                    strip_height_bits: strip_height.to_bits(),
                     soloed: bus.state.soloed,
                     muted: bus.state.muted,
                 },
@@ -371,6 +454,7 @@ fn bus_track_area(mixer: &MixerState) -> Element<'_, Message> {
                     let bus_id = dependency.id;
                     let gain_db = f32::from_bits(dependency.gain_bits);
                     let pan = f32::from_bits(dependency.pan_bits);
+                    let strip_height = f32::from_bits(dependency.strip_height_bits);
                     let soloed = dependency.soloed;
                     let muted = dependency.muted;
                     strip_panel(
@@ -395,8 +479,15 @@ fn bus_track_area(mixer: &MixerState) -> Element<'_, Message> {
                                     Message::Mixer(MixerMessage::SetBusPan(bus_id, value))
                                 })),
                             },
+                            strip_height,
+                            if dependency.compact_gain {
+                                GainControlMode::Knob
+                            } else {
+                                GainControlMode::Fader
+                            },
                         ),
                         STRIP_WIDTH,
+                        strip_height,
                     )
                 },
             ))
@@ -445,6 +536,8 @@ fn strip_shell<'a>(
     gain_db: f32,
     pan: f32,
     actions: StripActions<'a>,
+    strip_height: f32,
+    gain_mode: GainControlMode,
 ) -> Element<'a, Message> {
     let mut content = column![section_title(title.into())]
         .spacing(ui_style::SPACE_XS)
@@ -460,14 +553,16 @@ fn strip_shell<'a>(
 
     content = content.push(
         row![
-            actions.solo.map_or_else(
-                || container(text("")).width(Fill).into(),
-                |(active, message)| strip_toggle_button("S", active, message),
-            ),
-            actions.mute.map_or_else(
-                || container(text("")).width(Fill).into(),
-                |(active, message)| strip_toggle_button("M", active, message),
-            ),
+            actions
+                .solo
+                .map_or_else(strip_toggle_placeholder, |(active, message)| {
+                    strip_toggle_button("S", active, message)
+                },),
+            actions
+                .mute
+                .map_or_else(strip_toggle_placeholder, |(active, message)| {
+                    strip_toggle_button("M", active, message)
+                },),
         ]
         .spacing(ui_style::SPACE_XS)
         .width(Fill)
@@ -481,9 +576,10 @@ fn strip_shell<'a>(
     }
 
     if let Some(on_gain) = actions.on_gain {
-        content = content
-            .push(text(format!("{gain_db:.1} dB")).size(ui_style::FONT_SIZE_UI_XS))
-            .push(
+        content = content.push(text(format!("{gain_db:.1} dB")).size(ui_style::FONT_SIZE_UI_XS));
+
+        content = match gain_mode {
+            GainControlMode::Fader => content.push(
                 container(
                     vertical_slider(-60.0..=12.0, gain_db.clamp(-60.0, 12.0), on_gain)
                         .step(0.1)
@@ -492,21 +588,31 @@ fn strip_shell<'a>(
                 .width(Fill)
                 .height(Length::Fill)
                 .center_x(Fill),
-            );
+            ),
+            GainControlMode::Knob => content.push(gain_knob(gain_db, on_gain)),
+        };
     }
 
     container(content)
         .padding(ui_style::PADDING_SM)
         .width(Fill)
-        .height(Fill)
+        .height(Length::Fixed(strip_height))
         .style(ui_style::pane_main_surface)
         .into()
 }
 
-fn strip_panel<'a>(content: Element<'a, Message>, width: f32) -> Element<'a, Message> {
+fn gain_control_mode(pane_height: f32) -> GainControlMode {
+    if pane_height <= MIXER_MIN_HEIGHT + COMPACT_GAIN_SWITCH_OFFSET {
+        GainControlMode::Knob
+    } else {
+        GainControlMode::Fader
+    }
+}
+
+fn strip_panel<'a>(content: Element<'a, Message>, width: f32, height: f32) -> Element<'a, Message> {
     container(content)
         .width(Length::Fixed(width))
-        .height(Fill)
+        .height(Length::Fixed(height))
         .style(ui_style::pane_main_surface)
         .into()
 }
@@ -533,6 +639,13 @@ fn strip_toggle_button(
     .height(Length::Fixed(STRIP_TOGGLE_SIZE))
     .on_press(message)
     .into()
+}
+
+fn strip_toggle_placeholder() -> Element<'static, Message> {
+    container(text(""))
+        .width(Length::Fixed(STRIP_TOGGLE_SIZE))
+        .height(Length::Fixed(STRIP_TOGGLE_SIZE))
+        .into()
 }
 
 fn instrument_choices(mixer: &MixerState) -> Vec<InstrumentChoice> {
@@ -587,7 +700,10 @@ fn selected_instrument_choice(
 mod tests {
     use lilypalooza_audio::{InstrumentSlotState, MixerState};
 
-    use super::{InstrumentChoice, selected_instrument_choice};
+    use super::{
+        COMPACT_GAIN_SWITCH_OFFSET, GainControlMode, InstrumentChoice, MIXER_MIN_HEIGHT,
+        STRIP_TOGGLE_SIZE, gain_control_mode, selected_instrument_choice,
+    };
 
     #[test]
     fn empty_slot_maps_to_none_choice() {
@@ -610,5 +726,27 @@ mod tests {
                 program: 2,
             })
         );
+    }
+
+    #[test]
+    fn short_mixer_height_uses_gain_knob_mode() {
+        assert_eq!(gain_control_mode(MIXER_MIN_HEIGHT), GainControlMode::Knob);
+        assert_eq!(
+            gain_control_mode(MIXER_MIN_HEIGHT - 10.0),
+            GainControlMode::Knob
+        );
+        assert_eq!(
+            gain_control_mode(MIXER_MIN_HEIGHT + COMPACT_GAIN_SWITCH_OFFSET - 1.0),
+            GainControlMode::Knob
+        );
+        assert_eq!(
+            gain_control_mode(MIXER_MIN_HEIGHT + COMPACT_GAIN_SWITCH_OFFSET + 1.0),
+            GainControlMode::Fader
+        );
+    }
+
+    #[test]
+    fn empty_toggle_slots_use_track_toggle_size() {
+        assert_eq!(STRIP_TOGGLE_SIZE, 28.0);
     }
 }

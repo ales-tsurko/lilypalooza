@@ -1801,12 +1801,24 @@ pub(super) fn workspace_group_min_width(app: &Lilypalooza, group_id: super::Dock
     };
 
     let min_content_width = if group.tabs.contains(&WorkspacePaneKind::Mixer) {
-        420.0
+        super::mixer::MIXER_MIN_WIDTH
     } else {
         0.0
     };
 
     (tabs_width + menu_width + HEADER_WIDTH_SAFETY).max(min_content_width)
+}
+
+pub(super) fn workspace_group_min_height(app: &Lilypalooza, group_id: super::DockGroupId) -> f32 {
+    let Some(group) = app.workspace_group(group_id) else {
+        return 0.0;
+    };
+
+    if group.tabs.contains(&WorkspacePaneKind::Mixer) {
+        super::mixer::MIXER_MIN_HEIGHT
+    } else {
+        0.0
+    }
 }
 
 fn workspace_tab_min_width(pane: WorkspacePaneKind) -> f32 {

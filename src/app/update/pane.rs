@@ -207,19 +207,31 @@ impl Lilypalooza {
             return ratio.clamp(0.05, 0.95);
         };
 
-        if axis != pane_grid::Axis::Vertical {
-            return ratio.clamp(0.05, 0.95);
-        }
-
         let Some((first, second)) = split_children(self.workspace_panes.layout(), split) else {
             return ratio.clamp(0.05, 0.95);
         };
 
-        let total_width = region.width.max(1.0);
-        let min_first = dock_node_min_width(first, &self.workspace_panes, self).min(total_width);
-        let min_second = dock_node_min_width(second, &self.workspace_panes, self).min(total_width);
-        let min_ratio = (min_first / total_width).clamp(0.05, 0.95);
-        let max_ratio = (1.0 - min_second / total_width).clamp(0.05, 0.95);
+        let (total_size, min_first, min_second) = match axis {
+            pane_grid::Axis::Horizontal => {
+                let total_height = region.height.max(1.0);
+                let first_min =
+                    dock_node_min_height(first, &self.workspace_panes, self).min(total_height);
+                let second_min =
+                    dock_node_min_height(second, &self.workspace_panes, self).min(total_height);
+                (total_height, first_min, second_min)
+            }
+            pane_grid::Axis::Vertical => {
+                let total_width = region.width.max(1.0);
+                let first_min =
+                    dock_node_min_width(first, &self.workspace_panes, self).min(total_width);
+                let second_min =
+                    dock_node_min_width(second, &self.workspace_panes, self).min(total_width);
+                (total_width, first_min, second_min)
+            }
+        };
+
+        let min_ratio = (min_first / total_size).clamp(0.05, 0.95);
+        let max_ratio = (1.0 - min_second / total_size).clamp(0.05, 0.95);
 
         if min_ratio > max_ratio {
             ratio.clamp(0.05, 0.95)
