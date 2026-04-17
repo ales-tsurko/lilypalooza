@@ -496,6 +496,21 @@ impl Deref for MixerHandle<'_> {
 
 #[allow(missing_docs)]
 impl MixerHandle<'_> {
+    pub fn replace_state(&mut self, state: MixerState) -> Result<(), AudioEngineError> {
+        self.mark_runtime_dirty();
+        let settings = self.mixer.runtime.meter_settings();
+        let new_runtime = MixerRuntime::attach(self.context, self.commands, &settings, &state)?;
+        let old_runtime = std::mem::replace(&mut self.mixer.runtime, new_runtime);
+        self.mixer.state = state;
+        old_runtime.free();
+        for track in self.mixer.state.tracks() {
+            self.sequencer
+                .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
+        }
+        drain_commands(self.commands);
+        Ok(())
+    }
+
     pub fn set_soundfont(&mut self, resource: SoundfontResource) -> Result<(), AudioEngineError> {
         self.mark_runtime_dirty();
         let soundfont_id = resource.id.clone();

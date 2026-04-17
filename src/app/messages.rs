@@ -28,6 +28,7 @@ pub(super) enum Message {
     Prompt(PromptMessage),
     KeyPressed(KeyPress),
     ModifiersChanged(keyboard::Modifiers),
+    PrimaryMousePressed(bool),
     Tick,
     Frame(Instant),
     WindowResized(Size),

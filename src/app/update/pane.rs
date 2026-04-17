@@ -91,9 +91,7 @@ impl Lilypalooza {
                 }
 
                 self.hovered_tooltip_key = key;
-                self.tooltip_hover_started_at =
-                    self.hovered_tooltip_key.as_ref().map(|_| Instant::now());
-                self.open_tooltip_key = None;
+                self.open_tooltip_key = self.hovered_tooltip_key.clone();
             }
             PaneMessage::ToggleWorkspacePane(pane) => {
                 self.open_project_menu = false;

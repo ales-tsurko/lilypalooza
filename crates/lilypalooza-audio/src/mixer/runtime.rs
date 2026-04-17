@@ -161,6 +161,22 @@ pub(crate) struct MixerRuntime {
 }
 
 impl MixerRuntime {
+    pub(crate) fn free(self) {
+        self.master.free();
+        for runtime in self.tracks.into_iter().flatten() {
+            runtime.free();
+        }
+        for runtime in self.buses.into_values() {
+            runtime.free();
+        }
+    }
+}
+
+impl MixerRuntime {
+    pub(crate) fn meter_settings(&self) -> AudioEngineSettings {
+        self.meter_settings
+    }
+
     pub(crate) fn instrument_handle(&self, track_id: TrackId) -> Option<InstrumentRuntimeHandle> {
         Some(
             self.tracks
@@ -716,6 +732,21 @@ impl MasterRuntime {
             }
             connect_stereo(previous, node_id_of(self.strip));
         });
+    }
+
+    fn free(self) {
+        for effect in self.effects {
+            free_effect(effect);
+        }
+        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.strip)));
+        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.strip)));
+        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self._meter_node)));
+        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self._meter_node)));
+        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.input)));
+        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.input)));
+        knyst_commands().free_node(node_id_of(self.strip));
+        knyst_commands().free_node(node_id_of(self._meter_node));
+        knyst_commands().free_node(node_id_of(self.input));
     }
 }
 

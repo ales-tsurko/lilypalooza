@@ -403,10 +403,18 @@ impl Lilypalooza {
                 update(self, Message::Editor(EditorMessage::SaveRequested))
             }
             ShortcutAction::EditorUndo => {
-                self.dispatch_active_editor_widget_message(iced_code_editor::Message::Undo)
+                if self.focused_workspace_pane == Some(WorkspacePaneKind::Mixer) {
+                    self.undo_mixer_operation()
+                } else {
+                    self.dispatch_active_editor_widget_message(iced_code_editor::Message::Undo)
+                }
             }
             ShortcutAction::EditorRedo => {
-                self.dispatch_active_editor_widget_message(iced_code_editor::Message::Redo)
+                if self.focused_workspace_pane == Some(WorkspacePaneKind::Mixer) {
+                    self.redo_mixer_operation()
+                } else {
+                    self.dispatch_active_editor_widget_message(iced_code_editor::Message::Redo)
+                }
             }
             ShortcutAction::EditorCopy => {
                 self.dispatch_active_editor_widget_message(iced_code_editor::Message::Copy)

@@ -156,9 +156,11 @@ const PIANO_ROLL_CONTEXTUAL_ACTIONS: [ShortcutAction; 5] = [
     ShortcutAction::TransportRewind,
 ];
 
-const MIXER_CONTEXTUAL_ACTIONS: [ShortcutAction; 2] = [
+const MIXER_CONTEXTUAL_ACTIONS: [ShortcutAction; 4] = [
     ShortcutAction::TransportPlayPause,
     ShortcutAction::TransportRewind,
+    ShortcutAction::EditorUndo,
+    ShortcutAction::EditorRedo,
 ];
 
 const EDITOR_CONTEXTUAL_ACTIONS: &[ShortcutAction] = &[
@@ -1385,6 +1387,28 @@ mod tests {
         assert_eq!(
             resolve_contextual(&ShortcutSettings::default(), WorkspacePane::Mixer, input),
             Some(ShortcutAction::TransportRewind)
+        );
+    }
+
+    #[test]
+    fn resolves_mixer_undo_binding() {
+        let input = code_input(keyboard::key::Code::KeyZ, true, false, false);
+        assert_eq!(
+            resolve_contextual(&ShortcutSettings::default(), WorkspacePane::Mixer, input),
+            Some(ShortcutAction::EditorUndo)
+        );
+    }
+
+    #[test]
+    fn resolves_mixer_redo_binding() {
+        let input = if cfg!(target_os = "macos") {
+            code_input(keyboard::key::Code::KeyZ, true, false, true)
+        } else {
+            code_input(keyboard::key::Code::KeyY, true, false, false)
+        };
+        assert_eq!(
+            resolve_contextual(&ShortcutSettings::default(), WorkspacePane::Mixer, input),
+            Some(ShortcutAction::EditorRedo)
         );
     }
 

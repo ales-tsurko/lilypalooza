@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 use iced::event;
 use iced::keyboard;
 use iced::widget::{Id, pane_grid, svg};
-use iced::{Point, Rectangle, Size, Subscription, Task, window};
+use iced::{Point, Rectangle, Size, Subscription, Task, mouse, window};
 use iced_core::{Bytes, image};
 use lilypalooza_audio::AudioEngine;
+use lilypalooza_audio::MixerState;
 use tempfile::TempDir;
 
 use crate::browser_file_watcher::BrowserFileWatcher;
@@ -48,7 +49,6 @@ const MIN_WINDOW_WIDTH: f32 = 960.0;
 const MIN_WINDOW_HEIGHT: f32 = 640.0;
 const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_millis(120);
 const EDITOR_TABBAR_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(16);
-const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
 pub(super) const EDITOR_TABBAR_SCROLL_ID: &str = "editor-tabbar-scroll";
 pub(super) const EDITOR_FILE_BROWSER_SCROLL_ID: &str = "editor-file-browser-scroll";
@@ -114,6 +114,9 @@ struct Lilypalooza {
     browser_history_next_stash_id: u64,
     browser_undo_stack: Vec<BrowserHistoryEntry>,
     browser_redo_stack: Vec<BrowserHistoryEntry>,
+    mixer_undo_stack: Vec<MixerState>,
+    mixer_redo_stack: Vec<MixerState>,
+    pending_mixer_undo_snapshot: Option<MixerState>,
     build_dir: Option<TempDir>,
     compile_requested: bool,
     compile_outputs_loading: bool,
@@ -146,7 +149,6 @@ struct Lilypalooza {
     shortcuts_selected_action: Option<settings::ShortcutActionId>,
     hovered_tooltip_key: Option<String>,
     open_tooltip_key: Option<String>,
-    tooltip_hover_started_at: Option<Instant>,
     pressed_editor_tab: Option<u64>,
     hovered_editor_tab: Option<u64>,
     dragged_editor_tab: Option<u64>,
@@ -194,6 +196,7 @@ struct Lilypalooza {
     piano_roll_viewport_cursor: Option<iced::Point>,
     transport_seek_preview: Option<f32>,
     keyboard_modifiers: keyboard::Modifiers,
+    primary_mouse_pressed: bool,
     shortcut_settings: settings::ShortcutSettings,
     project_root: Option<PathBuf>,
     project_name: Option<String>,
@@ -549,6 +552,9 @@ fn new(
         browser_history_next_stash_id: 1,
         browser_undo_stack: Vec::new(),
         browser_redo_stack: Vec::new(),
+        mixer_undo_stack: Vec::new(),
+        mixer_redo_stack: Vec::new(),
+        pending_mixer_undo_snapshot: None,
         build_dir: None,
         compile_requested: false,
         compile_outputs_loading: false,
@@ -581,7 +587,6 @@ fn new(
         shortcuts_selected_action: None,
         hovered_tooltip_key: None,
         open_tooltip_key: None,
-        tooltip_hover_started_at: None,
         pressed_editor_tab: None,
         hovered_editor_tab: None,
         dragged_editor_tab: None,
@@ -639,6 +644,7 @@ fn new(
         piano_roll_viewport_cursor: None,
         transport_seek_preview: None,
         keyboard_modifiers: keyboard::Modifiers::default(),
+        primary_mouse_pressed: false,
         shortcut_settings: stored_settings.shortcuts.clone(),
         project_root: None,
         project_name: None,
@@ -718,10 +724,6 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
             .push(iced::time::every(EDITOR_TABBAR_AUTOSCROLL_INTERVAL).map(|_| Message::Tick));
     }
 
-    if app.hovered_tooltip_key.is_some() && app.open_tooltip_key != app.hovered_tooltip_key {
-        subscriptions.push(iced::time::every(Duration::from_millis(50)).map(|_| Message::Tick));
-    }
-
     if app.score_zoom_preview_active() || app.score_zoom_persist_pending {
         subscriptions.push(iced::time::every(SCORE_ZOOM_PREVIEW_INTERVAL).map(|_| Message::Tick));
     }
@@ -786,6 +788,12 @@ fn runtime_event_to_message(
             physical_key,
             modifiers,
         })),
+        iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            Some(Message::PrimaryMousePressed(true))
+        }
+        iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            Some(Message::PrimaryMousePressed(false))
+        }
         iced::Event::Window(window::Event::CloseRequested) => Some(Message::WindowCloseRequested),
         _ => None,
     }
