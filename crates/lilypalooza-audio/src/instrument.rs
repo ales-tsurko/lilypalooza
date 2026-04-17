@@ -264,8 +264,10 @@ impl Gen for InstrumentProcessorNode {
             };
             match event {
                 ScheduledInstrumentEvent::Reset { generation } => {
-                    self.active_generation = generation;
-                    self.processor.reset();
+                    if generation_is_current_or_newer(generation, self.active_generation) {
+                        self.active_generation = generation;
+                        self.processor.reset();
+                    }
                 }
                 ScheduledInstrumentEvent::Midi { generation, event } => {
                     if generation == self.active_generation {
@@ -545,6 +547,11 @@ fn decode_instrument_event(bytes: &[u8]) -> Option<ScheduledInstrumentEvent> {
         1 => Some(ScheduledInstrumentEvent::Reset { generation }),
         _ => None,
     }
+}
+
+fn generation_is_current_or_newer(candidate: u32, current: u32) -> bool {
+    let delta = candidate.wrapping_sub(current);
+    delta == 0 || delta < (u32::MAX / 2)
 }
 
 fn encode_midi_event(event: MidiEvent, bytes: &mut [u8]) {
@@ -847,5 +854,71 @@ mod tests {
         }
 
         panic!("immediate reset and panic should silence active soundfont node");
+    }
+
+    #[test]
+    fn stale_reset_generation_does_not_silence_newer_note() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let handle = harness.context().with_activation(|| {
+            let node = handle(InstrumentProcessorNode::new(Box::new(GateProcessor {
+                active: false,
+            })));
+            graph_output(0, node.channels(2));
+            InstrumentRuntimeHandle::new(node)
+        });
+
+        harness.commands().transport_pause();
+        harness
+            .commands()
+            .transport_seek_to_beats(Beats::from_beats(1));
+        thread::sleep(Duration::from_millis(10));
+
+        handle.schedule_reset_at(harness.commands(), Beats::from_beats_f64(1.01), 1);
+        handle.schedule_reset_at(harness.commands(), Beats::from_beats_f64(1.02), 2);
+        handle.schedule_midi_at_with_offset(
+            harness.commands(),
+            Beats::from_beats_f64(1.03),
+            2,
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
+        handle.schedule_reset_at(harness.commands(), Beats::from_beats_f64(1.04), 1);
+        harness.commands().transport_play();
+
+        let mut heard_signal = false;
+        let mut signal_after_stale_reset = false;
+        for _ in 0..512 {
+            harness.process_block();
+            let has_signal = harness.output_has_signal();
+            if has_signal {
+                heard_signal = true;
+            }
+            let beat = harness
+                .commands()
+                .current_transport_snapshot()
+                .and_then(|snapshot| snapshot.beats)
+                .unwrap_or(Beats::ZERO);
+            if beat >= Beats::from_beats_f64(1.045) && has_signal {
+                signal_after_stale_reset = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        assert!(heard_signal, "newer generation note should produce signal");
+        assert!(
+            signal_after_stale_reset,
+            "stale reset from an older generation must not silence newer playback"
+        );
+    }
+
+    #[test]
+    fn generation_ordering_rejects_stale_reset_after_increment() {
+        assert!(super::generation_is_current_or_newer(2, 1));
+        assert!(super::generation_is_current_or_newer(2, 2));
+        assert!(!super::generation_is_current_or_newer(1, 2));
     }
 }
