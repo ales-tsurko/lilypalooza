@@ -618,13 +618,11 @@ impl MixerHandle<'_> {
         id: TrackId,
         name: impl Into<String>,
     ) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.name = name.into();
         Ok(())
     }
 
     pub fn set_track_gain_db(&mut self, id: TrackId, gain_db: f32) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.state.gain_db = gain_db;
         self.mixer
             .runtime
@@ -633,7 +631,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_track_pan(&mut self, id: TrackId, pan: f32) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.state.pan = pan.clamp(-1.0, 1.0);
         self.mixer
             .runtime
@@ -642,7 +639,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_track_muted(&mut self, id: TrackId, muted: bool) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.state.muted = muted;
         self.mixer
             .runtime
@@ -651,7 +647,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_track_soloed(&mut self, id: TrackId, soloed: bool) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.state.soloed = soloed;
         self.mixer
             .runtime
@@ -664,7 +659,6 @@ impl MixerHandle<'_> {
         id: TrackId,
         route: TrackRoute,
     ) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.set_track_route(id, route)?;
         self.mixer.runtime.sync_track_routing(
             self.context,
@@ -680,7 +674,6 @@ impl MixerHandle<'_> {
         id: TrackId,
         routing: TrackRouting,
     ) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.set_track_routing(id, routing)?;
         self.mixer.runtime.sync_track_routing(
             self.context,
@@ -692,7 +685,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn add_track_send(&mut self, id: TrackId, send: BusSend) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.add_track_bus_send(id, send)?;
         self.mixer.runtime.sync_track_routing(
             self.context,
@@ -709,7 +701,6 @@ impl MixerHandle<'_> {
         index: usize,
         send: BusSend,
     ) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.set_track_bus_send(id, index, send)?;
         self.mixer.runtime.sync_track_routing(
             self.context,
@@ -725,7 +716,6 @@ impl MixerHandle<'_> {
         id: TrackId,
         index: usize,
     ) -> Result<BusSend, AudioEngineError> {
-        self.mark_runtime_dirty();
         let removed = self.mixer.state.remove_track_bus_send(id, index)?;
         self.mixer.runtime.sync_track_routing(
             self.context,
@@ -737,7 +727,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_bus_gain_db(&mut self, id: BusId, gain_db: f32) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.bus_mut(id)?.state.gain_db = gain_db;
         self.mixer
             .runtime
@@ -750,7 +739,6 @@ impl MixerHandle<'_> {
         id: BusId,
         effects: Vec<EffectSlotState>,
     ) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.bus_mut(id)?.effects = effects;
         self.mixer
             .runtime
@@ -759,7 +747,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_bus_pan(&mut self, id: BusId, pan: f32) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.bus_mut(id)?.state.pan = pan.clamp(-1.0, 1.0);
         self.mixer
             .runtime
@@ -768,7 +755,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_bus_muted(&mut self, id: BusId, muted: bool) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.bus_mut(id)?.state.muted = muted;
         self.mixer
             .runtime
@@ -777,7 +763,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_bus_soloed(&mut self, id: BusId, soloed: bool) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.bus_mut(id)?.state.soloed = soloed;
         self.mixer
             .runtime
@@ -786,7 +771,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_bus_route(&mut self, id: BusId, route: TrackRoute) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.set_bus_route(id, route)?;
         self.mixer
             .runtime
@@ -799,7 +783,6 @@ impl MixerHandle<'_> {
         id: BusId,
         routing: TrackRouting,
     ) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.set_bus_routing(id, routing)?;
         self.mixer
             .runtime
@@ -808,7 +791,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn add_bus_send(&mut self, id: BusId, send: BusSend) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.add_bus_send(id, send)?;
         self.mixer
             .runtime
@@ -822,7 +804,6 @@ impl MixerHandle<'_> {
         index: usize,
         send: BusSend,
     ) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.set_bus_send(id, index, send)?;
         self.mixer
             .runtime
@@ -835,7 +816,6 @@ impl MixerHandle<'_> {
         id: BusId,
         index: usize,
     ) -> Result<BusSend, AudioEngineError> {
-        self.mark_runtime_dirty();
         let removed = self.mixer.state.remove_bus_send(id, index)?;
         self.mixer
             .runtime
@@ -844,7 +824,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_master_gain_db(&mut self, gain_db: f32) {
-        self.mark_runtime_dirty();
         self.mixer.state.master.state.gain_db = gain_db;
         self.mixer
             .runtime
@@ -852,7 +831,6 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_master_pan(&mut self, pan: f32) {
-        self.mark_runtime_dirty();
         self.mixer.state.master.state.pan = pan.clamp(-1.0, 1.0);
         self.mixer
             .runtime

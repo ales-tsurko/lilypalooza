@@ -8,8 +8,8 @@ use iced::keyboard;
 use iced::widget::{Id, pane_grid, svg};
 use iced::{Point, Rectangle, Size, Subscription, Task, mouse, window};
 use iced_core::{Bytes, image};
-use lilypalooza_audio::AudioEngine;
 use lilypalooza_audio::MixerState;
+use lilypalooza_audio::{AudioEngine, AudioEngineOptions};
 use tempfile::TempDir;
 
 use crate::browser_file_watcher::BrowserFileWatcher;
@@ -535,6 +535,12 @@ fn new(
         .and_then(|layout| first_active_workspace_pane(layout, &dock_groups))
         .or_else(|| dock_groups.values().next().map(|group| group.active));
 
+    let (playback, playback_init_error) =
+        match AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default()) {
+            Ok(engine) => (Some(engine), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
+
     let mut app = Lilypalooza {
         theme: iced::Theme::Dark,
         window_width: MIN_WINDOW_WIDTH,
@@ -561,7 +567,7 @@ fn new(
         compile_generation: 0,
         spinner_step: 0,
         compile_session: None,
-        playback: None,
+        playback,
         soundfont_status: SoundfontStatus::NotSelected,
         workspace_panes,
         dock_layout,
@@ -670,6 +676,10 @@ fn new(
     }
     if let Some(error) = state_error {
         app.logger.push(format!("State load failed: {error}"));
+    }
+    if let Some(error) = playback_init_error {
+        app.logger
+            .push(format!("Playback engine startup failed: {error}"));
     }
 
     app.restore_editor_session(

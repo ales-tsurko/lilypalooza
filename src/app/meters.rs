@@ -268,18 +268,19 @@ fn visible_scale_marks(height: f32) -> Vec<f32> {
 
     let mut marks = Vec::with_capacity(SCALE_DB_MARKS.len());
     for (index, db) in SCALE_DB_MARKS.iter().copied().enumerate() {
-        if index == 0 || index == SCALE_DB_MARKS.len() - 1 || index % stride == 0 {
-            if marks.last().copied() != Some(db) {
-                marks.push(db);
-            }
+        if (index == 0 || index == SCALE_DB_MARKS.len() - 1 || index % stride == 0)
+            && marks.last().copied() != Some(db)
+        {
+            marks.push(db);
         }
     }
 
     if marks.first().copied() != Some(SCALE_DB_MARKS[0]) {
         marks.insert(0, SCALE_DB_MARKS[0]);
     }
-    if marks.last().copied() != Some(*SCALE_DB_MARKS.last().unwrap()) {
-        marks.push(*SCALE_DB_MARKS.last().unwrap());
+    let last_mark = SCALE_DB_MARKS[SCALE_DB_MARKS.len() - 1];
+    if marks.last().copied() != Some(last_mark) {
+        marks.push(last_mark);
     }
 
     marks

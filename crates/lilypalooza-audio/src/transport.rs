@@ -125,6 +125,7 @@ impl<'a> Transport<'a> {
 
     /// Pauses playback.
     pub fn pause(&mut self) {
+        let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
         let current_beat = self
             .snapshot()
             .map(|snapshot| snapshot.beats_position)
@@ -135,9 +136,14 @@ impl<'a> Transport<'a> {
         if let Some(mixer) = self.mixer.as_deref() {
             mixer.reset_meters();
         }
+        if !has_loaded_score {
+            self.commands.transport_pause();
+            wait_for_transport_paused(self.commands);
+            return;
+        }
         self.commands.clear_scheduled_changes();
         wait_for_controller_barrier(self.commands);
-        if let Some(sequencer) = self.sequencer {
+        if has_loaded_score && let Some(sequencer) = self.sequencer {
             sequencer.prepare_for_pause(self.commands, current_beat);
             wait_for_controller_barrier(self.commands);
             wait_for_transport_advance(self.commands, Duration::from_millis(250));
@@ -146,7 +152,7 @@ impl<'a> Transport<'a> {
         wait_for_transport_paused(self.commands);
         self.commands.transport_seek_to_beats(current_beat);
         wait_for_transport_beats(self.commands, current_beat);
-        if let Some(sequencer) = self.sequencer {
+        if has_loaded_score && let Some(sequencer) = self.sequencer {
             sequencer.mark_dirty_for_seek(current_beat, false);
         }
     }
@@ -154,21 +160,31 @@ impl<'a> Transport<'a> {
     /// Rewinds to the start and pauses playback.
     pub fn rewind(&mut self) {
         let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
+        let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
         if was_playing {
             self.seek_beats(0.0);
         } else {
+            if !has_loaded_score {
+                if let Some(sequencer) = self.sequencer {
+                    sequencer.set_playing(false);
+                }
+                self.commands.transport_pause();
+                wait_for_transport_paused(self.commands);
+                self.commands.transport_seek_to_beats(Beats::ZERO);
+                wait_for_transport_beats(self.commands, Beats::ZERO);
+                return;
+            }
             self.commands.transport_pause();
             wait_for_transport_paused(self.commands);
             self.commands.clear_scheduled_changes();
             wait_for_controller_barrier(self.commands);
             if let Some(sequencer) = self.sequencer {
                 sequencer.set_playing(false);
-                self.commands.transport_seek_to_beats(Beats::ZERO);
-                wait_for_transport_beats(self.commands, Beats::ZERO);
+            }
+            self.commands.transport_seek_to_beats(Beats::ZERO);
+            wait_for_transport_beats(self.commands, Beats::ZERO);
+            if has_loaded_score && let Some(sequencer) = self.sequencer {
                 sequencer.mark_dirty_for_seek(Beats::ZERO, false);
-            } else {
-                self.commands.transport_seek_to_beats(Beats::ZERO);
-                wait_for_transport_beats(self.commands, Beats::ZERO);
             }
         }
     }
@@ -176,6 +192,7 @@ impl<'a> Transport<'a> {
     /// Seeks transport to an absolute seconds position.
     pub fn seek_seconds(&mut self, position: f64) {
         let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
+        let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
         if !was_playing {
             self.flush_runtime_if_dirty();
         }
@@ -186,9 +203,23 @@ impl<'a> Transport<'a> {
         if let Some(mixer) = self.mixer.as_deref() {
             mixer.reset_meters();
         }
+        if !has_loaded_score {
+            self.commands.transport_pause();
+            wait_for_transport_paused(self.commands);
+            self.commands.transport_seek_to_seconds(position);
+            let _ = wait_for_transport_seconds(self.commands, position);
+            if was_playing {
+                self.commands.transport_play();
+                wait_for_transport_playing(self.commands);
+            }
+            return;
+        }
         self.commands.clear_scheduled_changes();
         wait_for_controller_barrier(self.commands);
-        if was_playing && let Some(sequencer) = self.sequencer {
+        if was_playing
+            && has_loaded_score
+            && let Some(sequencer) = self.sequencer
+        {
             let current_beat = self
                 .snapshot()
                 .map(|snapshot| snapshot.beats_position)
@@ -203,7 +234,7 @@ impl<'a> Transport<'a> {
         let target_beat = wait_for_transport_seconds(self.commands, position)
             .map(|snapshot| snapshot.beats_position)
             .unwrap_or(Beats::ZERO);
-        if let Some(sequencer) = self.sequencer {
+        if has_loaded_score && let Some(sequencer) = self.sequencer {
             sequencer.mark_dirty_for_seek(target_beat, was_playing);
             if was_playing {
                 sequencer.prepare_for_play(self.commands, target_beat);
@@ -213,7 +244,7 @@ impl<'a> Transport<'a> {
         if was_playing {
             wait_for_controller_barrier(self.commands);
             self.commands.transport_play();
-            if let Some(sequencer) = self.sequencer {
+            if has_loaded_score && let Some(sequencer) = self.sequencer {
                 sequencer.set_playing(true);
             }
             wait_for_transport_playing(self.commands);
@@ -223,6 +254,7 @@ impl<'a> Transport<'a> {
     /// Seeks transport to an absolute beats position.
     pub fn seek_beats(&mut self, position: f64) {
         let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
+        let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
         if !was_playing {
             self.flush_runtime_if_dirty();
         }
@@ -233,9 +265,23 @@ impl<'a> Transport<'a> {
         if let Some(mixer) = self.mixer.as_deref() {
             mixer.reset_meters();
         }
+        if !has_loaded_score {
+            self.commands.transport_pause();
+            wait_for_transport_paused(self.commands);
+            self.commands.transport_seek_to_beats(position);
+            wait_for_transport_beats(self.commands, position);
+            if was_playing {
+                self.commands.transport_play();
+                wait_for_transport_playing(self.commands);
+            }
+            return;
+        }
         self.commands.clear_scheduled_changes();
         wait_for_controller_barrier(self.commands);
-        if was_playing && let Some(sequencer) = self.sequencer {
+        if was_playing
+            && has_loaded_score
+            && let Some(sequencer) = self.sequencer
+        {
             let current_beat = self
                 .snapshot()
                 .map(|snapshot| snapshot.beats_position)
@@ -248,7 +294,7 @@ impl<'a> Transport<'a> {
         wait_for_transport_paused(self.commands);
         self.commands.transport_seek_to_beats(position);
         wait_for_transport_beats(self.commands, position);
-        if let Some(sequencer) = self.sequencer {
+        if has_loaded_score && let Some(sequencer) = self.sequencer {
             sequencer.mark_dirty_for_seek(position, was_playing);
             if was_playing {
                 sequencer.prepare_for_play(self.commands, position);
@@ -258,7 +304,7 @@ impl<'a> Transport<'a> {
         if was_playing {
             wait_for_controller_barrier(self.commands);
             self.commands.transport_play();
-            if let Some(sequencer) = self.sequencer {
+            if has_loaded_score && let Some(sequencer) = self.sequencer {
                 sequencer.set_playing(true);
             }
             wait_for_transport_playing(self.commands);

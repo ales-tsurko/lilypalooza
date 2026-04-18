@@ -115,6 +115,15 @@ impl Sequencer {
         self.inner.lock().expect("sequencer mutex poisoned").playing
     }
 
+    pub(crate) fn has_loaded_score(&self) -> bool {
+        !self
+            .inner
+            .lock()
+            .expect("sequencer mutex poisoned")
+            .sequences
+            .is_empty()
+    }
+
     pub(crate) fn process_tick(&self, commands: &mut MultiThreadedKnystCommands) {
         self.inner
             .lock()

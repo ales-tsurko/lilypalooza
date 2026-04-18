@@ -857,6 +857,86 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_midi_reaches_late_added_soundfont_node() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        harness.process_blocks(8);
+
+        let handle = harness.context().with_activation(|| {
+            let loaded = LoadedSoundfont::load(&test_soundfont_resource())
+                .expect("test soundfont should load");
+            let processor = SoundfontProcessor::new(
+                &loaded.soundfont,
+                SoundfontSynthSettings::new(44_100, 64),
+                SoundfontProcessorState::default(),
+            )
+            .expect("soundfont processor should initialize");
+            let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
+            graph_output(0, node.channels(2));
+            InstrumentRuntimeHandle::new(node)
+        });
+
+        harness.commands().transport_play();
+        handle.send_midi(
+            harness.commands(),
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
+
+        for _ in 0..256 {
+            harness.process_block();
+            if harness.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        panic!("scheduled MIDI did not reach late-added soundfont node");
+    }
+
+    #[test]
+    fn direct_note_on_reaches_soundfont_node_added_after_transport_reset() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        harness.commands().transport_pause();
+        harness
+            .commands()
+            .transport_seek_to_beats(Beats::from_beats_f64(0.0));
+        harness.process_blocks(8);
+
+        let handle = harness.context().with_activation(|| {
+            let loaded = LoadedSoundfont::load(&test_soundfont_resource())
+                .expect("test soundfont should load");
+            let processor = SoundfontProcessor::new(
+                &loaded.soundfont,
+                SoundfontSynthSettings::new(44_100, 64),
+                SoundfontProcessorState::default(),
+            )
+            .expect("soundfont processor should initialize");
+            let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
+            graph_output(0, node.channels(2));
+            InstrumentRuntimeHandle::new(node)
+        });
+
+        harness.commands().transport_play();
+        harness.process_blocks(8);
+        harness.context().with_activation(|| {
+            handle.note_on(0, 60, 100);
+        });
+
+        for _ in 0..256 {
+            harness.process_block();
+            if harness.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        panic!("direct note_on did not reach soundfont node added after transport reset");
+    }
+
+    #[test]
     fn stale_reset_generation_does_not_silence_newer_note() {
         let mut harness = OfflineHarness::new(44_100, 64);
         let handle = harness.context().with_activation(|| {
