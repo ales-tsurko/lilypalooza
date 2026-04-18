@@ -24,26 +24,41 @@ mod ui_style;
 
 fn main() -> iced::Result {
     let startup = startup_options();
-    app::run(startup.soundfont, startup.score)
+    app::run(startup.soundfont, startup.score, startup.audio_enabled)
 }
 
 struct StartupOptions {
+    audio_enabled: bool,
     soundfont: Option<PathBuf>,
     score: Option<PathBuf>,
 }
 
 fn startup_options() -> StartupOptions {
+    startup_options_from_iter(env::args_os().skip(1))
+}
+
+fn startup_options_from_iter<I>(arguments: I) -> StartupOptions
+where
+    I: IntoIterator<Item = OsString>,
+{
     const SOUND_FONT_ENV: &str = "LILYPALOOZA_SOUNDFONT";
     const SOUND_FONT_FLAG: &str = "--soundfont";
+    const NO_AUDIO_FLAG: &str = "--no-audio";
     const SCORE_ENV: &str = "LILYPALOOZA_SCORE";
     const SCORE_FLAG: &str = "--score";
     const SCORE_ALIAS_FLAG: &str = "--file";
 
-    let mut args = env::args_os().skip(1).peekable();
+    let mut args = arguments.into_iter().peekable();
+    let mut audio_enabled = true;
     let mut cli_soundfont: Option<PathBuf> = None;
     let mut cli_score: Option<PathBuf> = None;
 
     while let Some(argument) = args.next() {
+        if argument == NO_AUDIO_FLAG {
+            audio_enabled = false;
+            continue;
+        }
+
         if argument == SOUND_FONT_FLAG {
             let Some(value) = args.next() else {
                 eprintln!("Ignoring {SOUND_FONT_FLAG}: no path was provided");
@@ -101,9 +116,25 @@ fn startup_options() -> StartupOptions {
             .map(PathBuf::from)
     });
 
-    StartupOptions { soundfont, score }
+    StartupOptions {
+        audio_enabled,
+        soundfont,
+        score,
+    }
 }
 
 fn is_empty_os_string(value: &OsString) -> bool {
     value.to_str().is_none_or(str::is_empty)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::startup_options_from_iter;
+    use std::ffi::OsString;
+
+    #[test]
+    fn parses_no_audio_flag() {
+        let startup = startup_options_from_iter([OsString::from("--no-audio")]);
+        assert!(!startup.audio_enabled);
+    }
 }

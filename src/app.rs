@@ -47,7 +47,9 @@ mod view;
 
 const MIN_WINDOW_WIDTH: f32 = 960.0;
 const MIN_WINDOW_HEIGHT: f32 = 640.0;
-const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_millis(120);
+const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const EDITOR_TICK_INTERVAL: Duration = Duration::from_millis(500);
+const SPINNER_POLL_INTERVAL: Duration = Duration::from_millis(120);
 const EDITOR_TABBAR_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(16);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
 pub(super) const EDITOR_TABBAR_SCROLL_ID: &str = "editor-tabbar-scroll";
@@ -67,6 +69,8 @@ const SVG_PAGE_BRIGHTNESS_STEP: u8 = 10;
 const SCORE_ZOOM_PREVIEW_INTERVAL: Duration = Duration::from_millis(16);
 const SCORE_ZOOM_PREVIEW_SETTLE_DELAY: Duration = Duration::from_millis(120);
 const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(33);
+const MIXER_PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(66);
+const PASSIVE_PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(120);
 pub(super) const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 pub(super) fn editor_file_browser_column_scroll_id(index: usize) -> Id {
@@ -169,6 +173,10 @@ struct Lilypalooza {
     browser_drop_target: Option<BrowserDropTarget>,
     editor_tabbar_scroll_x: f32,
     editor_tabbar_viewport_width: f32,
+    mixer_instrument_scroll_x: f32,
+    mixer_instrument_viewport_width: f32,
+    mixer_bus_scroll_x: f32,
+    mixer_bus_viewport_width: f32,
     editor_tabbar_autoscroll_direction: i8,
     editor_tabbar_drag_pointer_x: Option<f32>,
     pending_reveal_editor_tab: Option<u64>,
@@ -439,9 +447,19 @@ enum EditorContinuation {
     ExitApp,
 }
 
-pub fn run(startup_soundfont: Option<PathBuf>, startup_score: Option<PathBuf>) -> iced::Result {
+pub fn run(
+    startup_soundfont: Option<PathBuf>,
+    startup_score: Option<PathBuf>,
+    audio_enabled: bool,
+) -> iced::Result {
     iced::application(
-        move || new(startup_soundfont.clone(), startup_score.clone()),
+        move || {
+            new(
+                startup_soundfont.clone(),
+                startup_score.clone(),
+                audio_enabled,
+            )
+        },
         update,
         view,
     )
@@ -469,6 +487,7 @@ pub fn run(startup_soundfont: Option<PathBuf>, startup_score: Option<PathBuf>) -
 fn new(
     startup_soundfont: Option<PathBuf>,
     startup_score: Option<PathBuf>,
+    audio_enabled: bool,
 ) -> (Lilypalooza, Task<Message>) {
     let default_settings = settings::AppSettings::default();
     let default_global_state = GlobalState::default();
@@ -535,11 +554,14 @@ fn new(
         .and_then(|layout| first_active_workspace_pane(layout, &dock_groups))
         .or_else(|| dock_groups.values().next().map(|group| group.active));
 
-    let (playback, playback_init_error) =
+    let (playback, playback_init_error) = if audio_enabled {
         match AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default()) {
             Ok(engine) => (Some(engine), None),
             Err(error) => (None, Some(error.to_string())),
-        };
+        }
+    } else {
+        (None, None)
+    };
 
     let mut app = Lilypalooza {
         theme: iced::Theme::Dark,
@@ -613,6 +635,10 @@ fn new(
         browser_drop_target: None,
         editor_tabbar_scroll_x: 0.0,
         editor_tabbar_viewport_width: 0.0,
+        mixer_instrument_scroll_x: 0.0,
+        mixer_instrument_viewport_width: 0.0,
+        mixer_bus_scroll_x: 0.0,
+        mixer_bus_viewport_width: 0.0,
         editor_tabbar_autoscroll_direction: 0,
         editor_tabbar_drag_pointer_x: None,
         pending_reveal_editor_tab: None,
@@ -663,6 +689,9 @@ fn new(
     };
 
     app.logger.push("Checking LilyPond availability");
+    if !audio_enabled {
+        app.logger.push("Audio engine disabled by --no-audio");
+    }
     if let Some(path) = startup_soundfont.as_ref() {
         app.logger
             .push(format!("Startup soundfont requested: {}", path.display()));
@@ -701,7 +730,7 @@ fn new(
         Message::BrowserHistoryCleanupFinished,
     ));
 
-    if let Some(path) = startup_soundfont {
+    if audio_enabled && let Some(path) = startup_soundfont {
         startup_tasks.push(Task::done(Message::File(FileMessage::SoundfontPicked(
             Some(path),
         ))));
@@ -719,14 +748,16 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
         event::listen_with(runtime_event_to_message),
     ];
 
-    if app.compile_session.is_some()
-        || app.score_watcher.is_some()
-        || app.browser_file_watcher.is_some()
-        || app.editor.has_document()
-        || app.spinner_active()
-        || app.playback.is_some()
-    {
-        subscriptions.push(iced::time::every(BACKGROUND_POLL_INTERVAL).map(|_| Message::Tick));
+    if app.watch_poll_active() {
+        subscriptions.push(iced::time::every(WATCH_POLL_INTERVAL).map(|_| Message::Tick));
+    }
+
+    if app.editor_tick_active() {
+        subscriptions.push(iced::time::every(EDITOR_TICK_INTERVAL).map(|_| Message::Tick));
+    }
+
+    if app.spinner_active() {
+        subscriptions.push(iced::time::every(SPINNER_POLL_INTERVAL).map(|_| Message::Tick));
     }
 
     if app.dragged_editor_tab.is_some() {
@@ -738,8 +769,8 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
         subscriptions.push(iced::time::every(SCORE_ZOOM_PREVIEW_INTERVAL).map(|_| Message::Tick));
     }
 
-    if app.playback.is_some() && app.piano_roll.playback_is_playing() {
-        subscriptions.push(iced::time::every(PLAYBACK_POLL_INTERVAL).map(Message::Frame));
+    if let Some(interval) = app.playback_poll_interval() {
+        subscriptions.push(iced::time::every(interval).map(Message::Frame));
     }
 
     Subscription::batch(subscriptions)
@@ -810,6 +841,43 @@ fn runtime_event_to_message(
 }
 
 impl Lilypalooza {
+    fn watch_poll_active(&self) -> bool {
+        self.compile_session.is_some()
+            || self.score_watcher.is_some()
+            || self.browser_file_watcher.is_some()
+            || self.editor_file_watcher.is_some()
+    }
+
+    fn editor_tick_active(&self) -> bool {
+        self.editor.has_document() && self.group_for_pane(WorkspacePaneKind::Editor).is_some()
+    }
+
+    fn score_pane_visible(&self) -> bool {
+        self.group_for_pane(WorkspacePaneKind::Score).is_some()
+    }
+
+    fn piano_roll_pane_visible(&self) -> bool {
+        self.group_for_pane(WorkspacePaneKind::PianoRoll).is_some()
+    }
+
+    fn mixer_pane_visible(&self) -> bool {
+        self.group_for_pane(WorkspacePaneKind::Mixer).is_some()
+    }
+
+    fn playback_poll_interval(&self) -> Option<Duration> {
+        if !(self.playback.is_some() && self.piano_roll.playback_is_playing()) {
+            return None;
+        }
+
+        if self.score_pane_visible() || self.piano_roll_pane_visible() {
+            Some(PLAYBACK_POLL_INTERVAL)
+        } else if self.mixer_pane_visible() {
+            Some(MIXER_PLAYBACK_POLL_INTERVAL)
+        } else {
+            Some(PASSIVE_PLAYBACK_POLL_INTERVAL)
+        }
+    }
+
     fn patch_macos_quit_menu(&mut self) {
         #[cfg(target_os = "macos")]
         {
@@ -1193,7 +1261,7 @@ mod tests {
     use std::fs;
 
     fn test_app() -> Lilypalooza {
-        let (mut app, _task) = new(None, None);
+        let (mut app, _task) = new(None, None, false);
         let _ = update(
             &mut app,
             Message::Shortcuts(messages::ShortcutsMessage::OpenDialog),
@@ -1202,13 +1270,22 @@ mod tests {
     }
 
     fn test_editor_app() -> Lilypalooza {
-        let (app, _task) = new(None, None);
+        let (app, _task) = new(None, None, false);
         app
     }
 
     fn apply_messages(app: &mut Lilypalooza, messages: Vec<Message>) {
         for message in messages {
             let _ = update(app, message);
+        }
+    }
+
+    fn hide_workspace_pane(app: &mut Lilypalooza, pane: WorkspacePaneKind) {
+        for group in app.dock_groups.values_mut() {
+            group.tabs.retain(|candidate| *candidate != pane);
+            if group.active == pane && !group.tabs.is_empty() {
+                group.active = group.tabs[0];
+            }
         }
     }
 
@@ -1273,6 +1350,27 @@ mod tests {
                 editor::EditorBrowserColumnSummary::FilePreview { .. } => None,
             })
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn playback_poll_interval_is_visibility_aware() {
+        let (mut app, _task) = new(None, None, false);
+        app.piano_roll.set_playback_position(0, 1, true);
+
+        assert_eq!(app.playback_poll_interval(), Some(PLAYBACK_POLL_INTERVAL));
+
+        hide_workspace_pane(&mut app, WorkspacePaneKind::Score);
+        hide_workspace_pane(&mut app, WorkspacePaneKind::PianoRoll);
+        assert_eq!(
+            app.playback_poll_interval(),
+            Some(MIXER_PLAYBACK_POLL_INTERVAL)
+        );
+
+        hide_workspace_pane(&mut app, WorkspacePaneKind::Mixer);
+        assert_eq!(
+            app.playback_poll_interval(),
+            Some(PASSIVE_PLAYBACK_POLL_INTERVAL)
+        );
     }
 
     #[test]

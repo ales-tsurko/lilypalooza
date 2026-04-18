@@ -47,6 +47,7 @@ mod score;
 
 pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
     match message {
+        Message::Noop => Task::none(),
         Message::StartupChecked(result) => app.handle_startup_checked(result),
         Message::BrowserHistoryCleanupFinished(_result) => Task::none(),
         Message::Pane(message) => app.handle_pane_message(message),

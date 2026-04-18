@@ -12,7 +12,10 @@ pub mod transport;
 #[cfg(test)]
 mod test_utils;
 
-pub use engine::{AudioEngine, AudioEngineError, AudioEngineOptions, AudioEngineSettings};
+pub use engine::{
+    AudioEngine, AudioEngineError, AudioEngineOptions, AudioEngineSettings,
+    EngineObservabilitySnapshot,
+};
 pub use instrument::{
     EffectKind, EffectProcessor, EffectRuntimeHandle, EffectSlotState, InstrumentKind,
     InstrumentProcessor, InstrumentRuntimeHandle, InstrumentSlotState, MidiEvent, ParamValue,

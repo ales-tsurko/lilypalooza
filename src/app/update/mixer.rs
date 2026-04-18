@@ -88,6 +88,14 @@ impl Lilypalooza {
             MixerMessage::AddBus => {
                 let _ = mixer.add_bus(format!("Bus {}", mixer.bus_count() + 1));
             }
+            MixerMessage::InstrumentViewportScrolled(viewport) => {
+                self.mixer_instrument_scroll_x = viewport.absolute_offset().x;
+                self.mixer_instrument_viewport_width = viewport.bounds().width;
+            }
+            MixerMessage::BusViewportScrolled(viewport) => {
+                self.mixer_bus_scroll_x = viewport.absolute_offset().x;
+                self.mixer_bus_viewport_width = viewport.bounds().width;
+            }
             MixerMessage::ResetMasterMeter => mixer.reset_master_meter(),
             MixerMessage::SetMasterGain(gain) => mixer.set_master_gain_db(gain),
             MixerMessage::SetMasterPan(pan) => mixer.set_master_pan(pan),
@@ -189,7 +197,9 @@ fn mixer_message_history_mode(
     match message {
         MixerMessage::ResetMasterMeter
         | MixerMessage::ResetTrackMeter(_)
-        | MixerMessage::ResetBusMeter(_) => MixerHistoryMode::None,
+        | MixerMessage::ResetBusMeter(_)
+        | MixerMessage::InstrumentViewportScrolled(_)
+        | MixerMessage::BusViewportScrolled(_) => MixerHistoryMode::None,
         MixerMessage::SetMasterGain(_)
         | MixerMessage::SetMasterPan(_)
         | MixerMessage::SetTrackGain(_, _)

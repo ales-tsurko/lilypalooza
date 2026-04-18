@@ -39,12 +39,17 @@ const METER_STACK_SPACING: f32 = 6.0;
 const STRIP_STACK_SPACING: f32 = 2.0;
 const LABEL_CONTROL_SPACING: f32 = ui_style::SPACE_XS as f32;
 const TITLE_TOP_SPACING: f32 = 6.0;
+const STRIP_VIRTUALIZATION_OVERSCAN: usize = 2;
 
 struct StripActions<'a> {
     solo: Option<(bool, Message)>,
     mute: Option<(bool, Message)>,
     on_gain: Option<Box<dyn Fn(f32) -> Message + 'a>>,
     on_pan: Option<Box<dyn Fn(f32) -> Message + 'a>>,
+}
+
+fn noop_message() -> Message {
+    Message::Noop
 }
 
 const GM_PROGRAM_NAMES: [&str; 128] = [
@@ -343,62 +348,150 @@ enum GainControlMode {
 }
 
 pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
-    let Some(playback) = app.playback.as_ref() else {
-        return container(text("Mixer unavailable"))
-            .width(Fill)
-            .height(Fill)
-            .center_x(Fill)
-            .center_y(Fill)
-            .into();
-    };
-    let mixer = playback.mixer_state();
-    let meter_snapshot = playback.meter_snapshot();
     let colors = meter_colors(&app.theme);
 
-    responsive(move |size| {
-        let gain_mode = gain_control_mode(size.height);
-        let strip_height =
-            (size.height - (ui_style::PADDING_SM as f32 * 2.0) - SECTION_HEADER_HEIGHT)
-                .max(STRIP_MIN_HEIGHT);
+    if let Some(playback) = app.playback.as_ref() {
+        let mixer = playback.mixer_state();
+        let meter_snapshot = playback.meter_snapshot();
 
-        row![
-            container(master_track_area(
-                mixer,
-                &meter_snapshot,
-                colors,
-                strip_height,
-                gain_mode,
-            ))
-            .width(Length::Fixed(MAIN_SECTION_WIDTH))
+        return responsive(move |size| {
+            let gain_mode = gain_control_mode(size.height);
+            let strip_height =
+                (size.height - (ui_style::PADDING_SM as f32 * 2.0) - SECTION_HEADER_HEIGHT)
+                    .max(STRIP_MIN_HEIGHT);
+
+            row![
+                container(master_track_area(
+                    mixer,
+                    &meter_snapshot,
+                    colors,
+                    strip_height,
+                    gain_mode,
+                    true,
+                ))
+                .width(Length::Fixed(MAIN_SECTION_WIDTH))
+                .height(Fill)
+                .style(ui_style::mixer_side_group_surface),
+                container(instrument_track_area(
+                    mixer,
+                    &meter_snapshot,
+                    colors,
+                    strip_height,
+                    gain_mode,
+                    app.mixer_instrument_scroll_x,
+                    app.mixer_instrument_viewport_width.max(size.width * 0.5),
+                    true,
+                ))
+                .width(FillPortion(5))
+                .height(Fill)
+                .style(ui_style::mixer_instrument_group_surface),
+                container(bus_track_area(
+                    mixer,
+                    &meter_snapshot,
+                    colors,
+                    strip_height,
+                    gain_mode,
+                    app.mixer_bus_scroll_x,
+                    app.mixer_bus_viewport_width.max(size.width * 0.2),
+                    true,
+                ))
+                .width(FillPortion(2))
+                .height(Fill)
+                .style(ui_style::mixer_side_group_surface)
+            ]
+            .spacing(ui_style::SPACE_SM)
+            .padding(ui_style::PADDING_SM)
+            .width(Fill)
             .height(Fill)
-            .style(ui_style::mixer_side_group_surface),
-            container(instrument_track_area(
-                mixer,
-                &meter_snapshot,
-                colors,
-                strip_height,
-                gain_mode,
-            ))
-            .width(FillPortion(5))
-            .height(Fill)
-            .style(ui_style::mixer_instrument_group_surface),
-            container(bus_track_area(
-                mixer,
-                &meter_snapshot,
-                colors,
-                strip_height,
-                gain_mode,
-            ))
-            .width(FillPortion(2))
-            .height(Fill)
-            .style(ui_style::mixer_side_group_surface)
-        ]
-        .spacing(ui_style::SPACE_SM)
-        .padding(ui_style::PADDING_SM)
-        .width(Fill)
-        .height(Fill)
-        .into()
+            .into()
+        })
+        .into();
+    }
+
+    content_without_audio(app, colors)
+}
+
+fn content_without_audio(app: &Lilypalooza, colors: MeterColors) -> Element<'static, Message> {
+    let mixer = MixerState::new();
+    let meter_snapshot = MixerMeterSnapshot::default();
+    let instrument_scroll_x = app.mixer_instrument_scroll_x;
+    let instrument_viewport_width = app.mixer_instrument_viewport_width;
+    let bus_scroll_x = app.mixer_bus_scroll_x;
+    let bus_viewport_width = app.mixer_bus_viewport_width;
+
+    responsive(move |size| {
+        mixer_layout_without_audio(
+            &mixer,
+            &meter_snapshot,
+            colors,
+            size,
+            instrument_scroll_x,
+            instrument_viewport_width,
+            bus_scroll_x,
+            bus_viewport_width,
+        )
     })
+    .into()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mixer_layout_without_audio(
+    mixer: &MixerState,
+    meter_snapshot: &MixerMeterSnapshot,
+    colors: MeterColors,
+    size: iced::Size,
+    instrument_scroll_x: f32,
+    instrument_viewport_width: f32,
+    bus_scroll_x: f32,
+    bus_viewport_width: f32,
+) -> Element<'static, Message> {
+    let gain_mode = gain_control_mode(size.height);
+    let strip_height = (size.height - (ui_style::PADDING_SM as f32 * 2.0) - SECTION_HEADER_HEIGHT)
+        .max(STRIP_MIN_HEIGHT);
+
+    row![
+        container(master_track_area(
+            mixer,
+            meter_snapshot,
+            colors,
+            strip_height,
+            gain_mode,
+            false,
+        ))
+        .width(Length::Fixed(MAIN_SECTION_WIDTH))
+        .height(Fill)
+        .style(ui_style::mixer_side_group_surface),
+        container(instrument_track_area(
+            mixer,
+            meter_snapshot,
+            colors,
+            strip_height,
+            gain_mode,
+            instrument_scroll_x,
+            instrument_viewport_width.max(size.width * 0.5),
+            false,
+        ))
+        .width(FillPortion(5))
+        .height(Fill)
+        .style(ui_style::mixer_instrument_group_surface),
+        container(bus_track_area(
+            mixer,
+            meter_snapshot,
+            colors,
+            strip_height,
+            gain_mode,
+            bus_scroll_x,
+            bus_viewport_width.max(size.width * 0.2),
+            false,
+        ))
+        .width(FillPortion(2))
+        .height(Fill)
+        .style(ui_style::mixer_side_group_surface)
+    ]
+    .spacing(ui_style::SPACE_SM)
+    .padding(ui_style::PADDING_SM)
+    .width(Fill)
+    .height(Fill)
     .into()
 }
 
@@ -408,13 +501,15 @@ fn master_track_area(
     colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
+    controls_enabled: bool,
 ) -> Element<'static, Message> {
     let master_row = row![sticky_master_strip(
         mixer,
         meters.main,
         colors,
         strip_height,
-        gain_mode
+        gain_mode,
+        controls_enabled,
     )]
     .align_y(alignment::Vertical::Top)
     .height(Length::Fixed(strip_height));
@@ -456,6 +551,7 @@ fn sticky_master_strip(
     colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
+    controls_enabled: bool,
 ) -> Element<'static, Message> {
     let master = mixer.master();
     lazy(
@@ -484,14 +580,26 @@ fn sticky_master_strip(
                     StripActions {
                         solo: None,
                         mute: None,
-                        on_gain: Some(Box::new(|value| {
-                            Message::Mixer(MixerMessage::SetMasterGain(value))
+                        on_gain: Some(Box::new(move |value| {
+                            if controls_enabled {
+                                Message::Mixer(MixerMessage::SetMasterGain(value))
+                            } else {
+                                noop_message()
+                            }
                         })),
-                        on_pan: Some(Box::new(|value| {
-                            Message::Mixer(MixerMessage::SetMasterPan(value))
+                        on_pan: Some(Box::new(move |value| {
+                            if controls_enabled {
+                                Message::Mixer(MixerMessage::SetMasterPan(value))
+                            } else {
+                                noop_message()
+                            }
                         })),
                     },
-                    Some(Message::Mixer(MixerMessage::ResetMasterMeter)),
+                    Some(if controls_enabled {
+                        Message::Mixer(MixerMessage::ResetMasterMeter)
+                    } else {
+                        noop_message()
+                    }),
                     f32::from_bits(dependency.strip_height_bits),
                     meter_scale_visible(gain_mode),
                     gain_mode,
@@ -504,19 +612,31 @@ fn sticky_master_strip(
     .into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn instrument_track_area(
     mixer: &MixerState,
     meters: &MixerMeterSnapshot,
     colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
+    scroll_x: f32,
+    viewport_width: f32,
+    controls_enabled: bool,
 ) -> Element<'static, Message> {
-    let options: Arc<[InstrumentChoice]> = instrument_choices(mixer).into();
-    let track_row = mixer.tracks().iter().fold(
+    let options: Arc<[InstrumentChoice]> = if controls_enabled {
+        instrument_choices(mixer).into()
+    } else {
+        vec![InstrumentChoice::None].into()
+    };
+    let visible = visible_strip_window(mixer.tracks().len(), scroll_x, viewport_width);
+    let left_spacer = strip_span_width(visible.start);
+    let right_spacer = strip_span_width(mixer.tracks().len().saturating_sub(visible.end));
+    let track_row = mixer.tracks()[visible.clone()].iter().fold(
         row![]
             .spacing(STRIP_SPACING)
             .align_y(alignment::Vertical::Top)
-            .height(Length::Fixed(strip_height)),
+            .height(Length::Fixed(strip_height))
+            .push(horizontal_spacer(left_spacer)),
         move |row, track| {
             let track_index = track.id.index();
             let selected = selected_instrument_choice(&track.instrument, mixer);
@@ -549,18 +669,22 @@ fn instrument_track_area(
                     strip_panel(
                         strip_shell(
                             name,
-                            Some(
+                            Some({
                                 pick_list(options.clone(), selected, move |choice| {
-                                    Message::Mixer(MixerMessage::SelectTrackInstrument(
-                                        track_index,
-                                        choice,
-                                    ))
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::SelectTrackInstrument(
+                                            track_index,
+                                            choice,
+                                        ))
+                                    } else {
+                                        noop_message()
+                                    }
                                 })
                                 .placeholder("Instrument")
                                 .text_size(ui_style::FONT_SIZE_UI_XS.saturating_sub(3))
                                 .width(Fill)
-                                .into(),
-                            ),
+                                .into()
+                            }),
                             f32::from_bits(dependency.gain_bits),
                             f32::from_bits(dependency.pan_bits),
                             dependency.meter.snapshot(),
@@ -568,20 +692,46 @@ fn instrument_track_area(
                             StripActions {
                                 solo: Some((
                                     dependency.soloed,
-                                    Message::Mixer(MixerMessage::ToggleTrackSolo(track_index)),
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::ToggleTrackSolo(track_index))
+                                    } else {
+                                        noop_message()
+                                    },
                                 )),
                                 mute: Some((
                                     dependency.muted,
-                                    Message::Mixer(MixerMessage::ToggleTrackMute(track_index)),
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::ToggleTrackMute(track_index))
+                                    } else {
+                                        noop_message()
+                                    },
                                 )),
                                 on_gain: Some(Box::new(move |value| {
-                                    Message::Mixer(MixerMessage::SetTrackGain(track_index, value))
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::SetTrackGain(
+                                            track_index,
+                                            value,
+                                        ))
+                                    } else {
+                                        noop_message()
+                                    }
                                 })),
                                 on_pan: Some(Box::new(move |value| {
-                                    Message::Mixer(MixerMessage::SetTrackPan(track_index, value))
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::SetTrackPan(
+                                            track_index,
+                                            value,
+                                        ))
+                                    } else {
+                                        noop_message()
+                                    }
                                 })),
                             },
-                            Some(Message::Mixer(MixerMessage::ResetTrackMeter(track_index))),
+                            Some(if controls_enabled {
+                                Message::Mixer(MixerMessage::ResetTrackMeter(track_index))
+                            } else {
+                                noop_message()
+                            }),
                             strip_height,
                             meter_scale_visible(gain_mode),
                             gain_mode,
@@ -593,6 +743,7 @@ fn instrument_track_area(
             ))
         },
     );
+    let track_row = track_row.push(horizontal_spacer(right_spacer));
 
     column![
         container(section_header_bar(row![section_title("Instrument Tracks")]))
@@ -606,6 +757,9 @@ fn instrument_track_area(
                 .direction(scrollable::Direction::Horizontal(
                     scrollable::Scrollbar::new()
                 ))
+                .on_scroll(
+                    |viewport| Message::Mixer(MixerMessage::InstrumentViewportScrolled(viewport))
+                )
                 .style(ui_style::workspace_scrollable)
                 .width(Fill)
                 .height(Fill),
@@ -625,18 +779,26 @@ fn instrument_track_area(
     .into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bus_track_area(
     mixer: &MixerState,
     meters: &MixerMeterSnapshot,
     colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
+    scroll_x: f32,
+    viewport_width: f32,
+    controls_enabled: bool,
 ) -> Element<'static, Message> {
-    let bus_row = mixer.buses().iter().fold(
+    let visible = visible_strip_window(mixer.buses().len(), scroll_x, viewport_width);
+    let left_spacer = strip_span_width(visible.start);
+    let right_spacer = strip_span_width(mixer.buses().len().saturating_sub(visible.end));
+    let bus_row = mixer.buses()[visible.clone()].iter().fold(
         row![]
             .spacing(STRIP_SPACING)
             .align_y(alignment::Vertical::Top)
-            .height(Length::Fixed(strip_height)),
+            .height(Length::Fixed(strip_height))
+            .push(horizontal_spacer(left_spacer)),
         |row, bus| {
             row.push(lazy(
                 BusStripDependency {
@@ -682,20 +844,40 @@ fn bus_track_area(
                             StripActions {
                                 solo: Some((
                                     soloed,
-                                    Message::Mixer(MixerMessage::ToggleBusSolo(bus_id)),
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::ToggleBusSolo(bus_id))
+                                    } else {
+                                        noop_message()
+                                    },
                                 )),
                                 mute: Some((
                                     muted,
-                                    Message::Mixer(MixerMessage::ToggleBusMute(bus_id)),
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::ToggleBusMute(bus_id))
+                                    } else {
+                                        noop_message()
+                                    },
                                 )),
                                 on_gain: Some(Box::new(move |value| {
-                                    Message::Mixer(MixerMessage::SetBusGain(bus_id, value))
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::SetBusGain(bus_id, value))
+                                    } else {
+                                        noop_message()
+                                    }
                                 })),
                                 on_pan: Some(Box::new(move |value| {
-                                    Message::Mixer(MixerMessage::SetBusPan(bus_id, value))
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::SetBusPan(bus_id, value))
+                                    } else {
+                                        noop_message()
+                                    }
                                 })),
                             },
-                            Some(Message::Mixer(MixerMessage::ResetBusMeter(bus_id))),
+                            Some(if controls_enabled {
+                                Message::Mixer(MixerMessage::ResetBusMeter(bus_id))
+                            } else {
+                                noop_message()
+                            }),
                             strip_height,
                             meter_scale_visible(gain_mode),
                             gain_mode,
@@ -707,6 +889,7 @@ fn bus_track_area(
             ))
         },
     );
+    let bus_row = bus_row.push(horizontal_spacer(right_spacer));
 
     column![
         container(section_header_bar(
@@ -719,7 +902,11 @@ fn bus_track_area(
                         ui_style::PADDING_BUTTON_COMPACT_V,
                         ui_style::PADDING_BUTTON_COMPACT_H
                     ])
-                    .on_press(Message::Mixer(MixerMessage::AddBus)),
+                    .on_press_maybe(Some(if controls_enabled {
+                        Message::Mixer(MixerMessage::AddBus)
+                    } else {
+                        noop_message()
+                    })),
                 container(text("")).width(Length::Fixed(HEADER_SIDE_INSET)),
             ]
             .align_y(alignment::Vertical::Center),
@@ -734,6 +921,7 @@ fn bus_track_area(
                 .direction(scrollable::Direction::Horizontal(
                     scrollable::Scrollbar::new()
                 ))
+                .on_scroll(|viewport| Message::Mixer(MixerMessage::BusViewportScrolled(viewport)))
                 .style(ui_style::workspace_scrollable)
                 .width(Fill)
                 .height(Fill),
@@ -765,6 +953,41 @@ fn section_title<'a>(label: impl Into<String>) -> Element<'a, Message> {
     .height(Length::Fixed(SECTION_HEADER_HEIGHT))
     .center_y(Length::Fixed(SECTION_HEADER_HEIGHT))
     .into()
+}
+
+fn visible_strip_window(
+    total: usize,
+    scroll_x: f32,
+    viewport_width: f32,
+) -> std::ops::Range<usize> {
+    if total == 0 {
+        return 0..0;
+    }
+
+    let stride = STRIP_WIDTH + STRIP_SPACING;
+    let first_visible = (scroll_x.max(0.0) / stride.max(1.0)).floor() as usize;
+    let visible_count = ((viewport_width.max(stride) / stride.max(1.0)).ceil() as usize)
+        .saturating_add(STRIP_VIRTUALIZATION_OVERSCAN * 2);
+    let start = first_visible
+        .saturating_sub(STRIP_VIRTUALIZATION_OVERSCAN)
+        .min(total);
+    let end = start.saturating_add(visible_count).min(total);
+    start..end
+}
+
+fn strip_span_width(count: usize) -> f32 {
+    if count == 0 {
+        0.0
+    } else {
+        count as f32 * STRIP_WIDTH + count.saturating_sub(1) as f32 * STRIP_SPACING
+    }
+}
+
+fn horizontal_spacer(width: f32) -> Element<'static, Message> {
+    container(text(""))
+        .width(Length::Fixed(width.max(0.0)))
+        .height(Fill)
+        .into()
 }
 
 fn section_header_bar<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
@@ -1086,9 +1309,10 @@ mod tests {
     use super::{
         COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
         INSTRUMENT_PICKER_HEIGHT, InstrumentChoice, MAIN_SECTION_WIDTH, MAIN_STRIP_WIDTH,
-        MIXER_MIN_HEIGHT, STRIP_TOGGLE_SIZE, StripMeterSnapshot, VALUE_LABEL_HEIGHT,
-        control_stack_height, gain_control_height, gain_control_mode, meter_control_height,
-        meter_peak_label, meter_scale_visible, selected_instrument_choice,
+        MIXER_MIN_HEIGHT, STRIP_TOGGLE_SIZE, STRIP_VIRTUALIZATION_OVERSCAN, STRIP_WIDTH,
+        StripMeterSnapshot, VALUE_LABEL_HEIGHT, control_stack_height, gain_control_height,
+        gain_control_mode, meter_control_height, meter_peak_label, meter_scale_visible,
+        selected_instrument_choice, visible_strip_window,
     };
     use lilypalooza_audio::mixer::ChannelMeterSnapshot;
 
@@ -1197,5 +1421,15 @@ mod tests {
     fn compact_gain_mode_hides_meter_scale() {
         assert!(!meter_scale_visible(GainControlMode::Knob));
         assert!(meter_scale_visible(GainControlMode::Fader));
+    }
+
+    #[test]
+    fn visible_strip_window_limits_rendered_strip_count() {
+        let visible = visible_strip_window(128, 0.0, STRIP_WIDTH * 4.0);
+        assert!(visible.end - visible.start <= 4 + STRIP_VIRTUALIZATION_OVERSCAN * 2);
+
+        let scrolled = visible_strip_window(128, STRIP_WIDTH * 40.0, STRIP_WIDTH * 4.0);
+        assert!(scrolled.start >= 38);
+        assert!(scrolled.end <= 46);
     }
 }

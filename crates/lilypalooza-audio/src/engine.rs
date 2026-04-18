@@ -21,6 +21,10 @@ use crate::transport::Transport;
 
 const CONTROLLER_BARRIER_TIMEOUT: Duration = Duration::from_millis(250);
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
+const SCHEDULER_PLAYING_POLL_MIN: Duration = Duration::from_millis(4);
+const SCHEDULER_PLAYING_POLL_MAX: Duration = Duration::from_millis(12);
+const SCHEDULER_PAUSED_POLL_INTERVAL: Duration = Duration::from_millis(24);
+const SCHEDULER_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(48);
 
 /// Startup options for the audio engine.
 #[derive(Debug, Clone, Default)]
@@ -73,6 +77,17 @@ pub enum AudioEngineError {
     /// Failed to start the scheduler thread.
     #[error(transparent)]
     Thread(#[from] std::io::Error),
+}
+
+/// Runtime observability snapshot for the engine callback path.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EngineObservabilitySnapshot {
+    /// Current callback load ratio (`1.0` means exactly one block budget).
+    pub load_ratio: f32,
+    /// Peak callback load ratio observed since engine start.
+    pub peak_load_ratio: f32,
+    /// Number of detected callback-overrun/dropout-like issues.
+    pub dropout_count: u64,
 }
 
 impl AudioEngine {
@@ -163,6 +178,19 @@ impl AudioEngine {
 
     pub fn meter_snapshot(&self) -> MixerMeterSnapshot {
         self.mixer.meter_snapshot()
+    }
+
+    pub fn observability_snapshot(&mut self) -> Option<EngineObservabilitySnapshot> {
+        let receiver = self.commands.request_observability_snapshot();
+        receiver
+            .recv_timeout(SETTLE_TIMEOUT)
+            .ok()
+            .flatten()
+            .map(|snapshot| EngineObservabilitySnapshot {
+                load_ratio: snapshot.load_ratio,
+                peak_load_ratio: snapshot.peak_load_ratio,
+                dropout_count: snapshot.dropout_count,
+            })
     }
 
     pub fn clear_score(&mut self) {
@@ -309,9 +337,34 @@ fn start_scheduler_thread(
             set_scheduler_thread_priority(settings);
             while !shutdown.load(Ordering::Acquire) {
                 sequencer.process_tick(&mut commands);
-                thread::sleep(Duration::from_millis(2));
+                thread::sleep(scheduler_poll_interval(&sequencer, settings));
             }
         })
+}
+
+fn scheduler_poll_interval(sequencer: &Sequencer, settings: AudioEngineSettings) -> Duration {
+    scheduler_poll_interval_for_state(
+        sequencer.has_loaded_score(),
+        sequencer.is_playing(),
+        settings,
+    )
+}
+
+fn scheduler_poll_interval_for_state(
+    has_loaded_score: bool,
+    is_playing: bool,
+    settings: AudioEngineSettings,
+) -> Duration {
+    if !has_loaded_score {
+        return SCHEDULER_IDLE_POLL_INTERVAL;
+    }
+    if !is_playing {
+        return SCHEDULER_PAUSED_POLL_INTERVAL;
+    }
+
+    let block_seconds = settings.block_size.max(1) as f64 / settings.sample_rate.max(1) as f64;
+    Duration::from_secs_f64(block_seconds / 2.0)
+        .clamp(SCHEDULER_PLAYING_POLL_MIN, SCHEDULER_PLAYING_POLL_MAX)
 }
 
 fn set_scheduler_thread_priority(settings: AudioEngineSettings) {
@@ -324,14 +377,16 @@ fn set_scheduler_thread_priority(settings: AudioEngineSettings) {
 #[cfg(test)]
 mod tests {
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use knyst::controller::KnystCommands;
     use knyst::graph::SimultaneousChanges;
     use knyst::handles::HandleData;
     use knyst::prelude::{Beats, BlockSize, GenState, Sample, graph_output, handle, impl_gen};
 
-    use super::{AudioEngine, AudioEngineOptions, wait_for_transport_reset_to};
+    use super::{
+        AudioEngine, AudioEngineOptions, AudioEngineSettings, wait_for_transport_reset_to,
+    };
     use crate::instrument::InstrumentSlotState;
     use crate::instrument::{
         InstrumentProcessor, InstrumentProcessorNode, MidiEvent, ParamValue, Processor,
@@ -350,6 +405,27 @@ mod tests {
         active: bool,
     }
 
+    #[test]
+    fn scheduler_poll_interval_slows_down_when_idle_or_paused() {
+        let settings = AudioEngineSettings {
+            sample_rate: 44_100,
+            block_size: 64,
+        };
+
+        assert_eq!(
+            super::scheduler_poll_interval_for_state(false, false, settings),
+            super::SCHEDULER_IDLE_POLL_INTERVAL
+        );
+        assert_eq!(
+            super::scheduler_poll_interval_for_state(true, false, settings),
+            super::SCHEDULER_PAUSED_POLL_INTERVAL
+        );
+        assert_eq!(
+            super::scheduler_poll_interval_for_state(true, true, settings),
+            super::SCHEDULER_PLAYING_POLL_MIN
+        );
+    }
+
     fn settle_backend(backend: &SharedTestBackendHandle) {
         for _ in 0..50 {
             backend.process_block();
@@ -360,6 +436,14 @@ mod tests {
     fn raw_transport_play(engine: &mut AudioEngine) {
         engine.commands.transport_play();
         super::wait_for_transport_settled(&mut engine.commands);
+    }
+
+    fn benchmark_blocks(backend: &SharedTestBackendHandle, blocks: usize) -> Duration {
+        let started = Instant::now();
+        for _ in 0..blocks {
+            backend.process_block();
+        }
+        started.elapsed()
     }
 
     fn render_soundfont_program(program: u8) -> Vec<Sample> {
@@ -381,8 +465,11 @@ mod tests {
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
-        engine.transport().play();
-        super::wait_for_transport_settled(&mut engine.commands);
+        raw_transport_play(&mut engine);
+        for _ in 0..8 {
+            backend_handle.process_block();
+            thread::sleep(Duration::from_millis(2));
+        }
         let handle = engine
             .mixer
             .instrument_handle(TrackId(0))
@@ -400,6 +487,70 @@ mod tests {
         }
 
         panic!("engine end-to-end path produced silence");
+    }
+
+    #[test]
+    #[ignore = "manual perf report"]
+    fn perf_report_engine_block_costs() {
+        const BLOCKS: usize = 20_000;
+
+        let (empty_backend, empty_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let _empty_engine = AudioEngine::start(
+            MixerState::new(),
+            empty_backend,
+            AudioEngineOptions::default(),
+        )
+        .expect("empty engine should start");
+        settle_backend(&empty_handle);
+        let empty_idle = benchmark_blocks(&empty_handle, BLOCKS);
+
+        let (armed_backend, armed_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut armed_engine = AudioEngine::start(
+            MixerState::new(),
+            armed_backend,
+            AudioEngineOptions::default(),
+        )
+        .expect("armed engine should start");
+        {
+            let mut mixer = armed_engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .expect("track should accept soundfont");
+        }
+        settle_backend(&armed_handle);
+        let armed_idle = benchmark_blocks(&armed_handle, BLOCKS);
+
+        let (play_backend, play_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut play_engine = AudioEngine::start(
+            MixerState::new(),
+            play_backend,
+            AudioEngineOptions::default(),
+        )
+        .expect("playback engine should start");
+        play_engine
+            .replace_score_from_midi_bytes(&simple_midi_bytes(480))
+            .expect("midi should load");
+        {
+            let mut mixer = play_engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .expect("track should accept soundfont");
+        }
+        settle_backend(&play_handle);
+        play_engine.transport().play();
+        settle_backend(&play_handle);
+        let playback = benchmark_blocks(&play_handle, BLOCKS);
+
+        eprintln!(
+            "engine perf over {BLOCKS} blocks: empty_idle={:?} armed_idle={:?} playback={:?}",
+            empty_idle, armed_idle, playback
+        );
     }
 
     #[impl_gen]
@@ -488,7 +639,6 @@ mod tests {
         let mut engine =
             AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
                 .expect("engine should start");
-        let _audio = backend_handle.start_realtime();
 
         {
             let mut mixer = engine.mixer();
@@ -546,7 +696,6 @@ mod tests {
         let mut engine =
             AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
                 .expect("engine should start");
-        let _audio = backend_handle.start_realtime();
 
         {
             let mut mixer = engine.mixer();
@@ -605,6 +754,7 @@ mod tests {
         }
         settle_backend(&backend_handle);
         engine.transport().play();
+        settle_backend(&backend_handle);
 
         for _ in 0..1024 {
             backend_handle.process_block();
@@ -647,6 +797,7 @@ mod tests {
                 .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
+        settle_backend(&backend_handle);
 
         for _ in 0..1024 {
             backend_handle.process_block();
@@ -731,6 +882,7 @@ mod tests {
                 .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
+        settle_backend(&backend_handle);
 
         for _ in 0..1024 {
             backend_handle.process_block();
@@ -1813,6 +1965,7 @@ mod tests {
         engine.transport().rewind();
         engine.transport().pause();
         engine.transport().play();
+        settle_backend(&backend_handle);
 
         for _ in 0..1024 {
             backend_handle.process_block();

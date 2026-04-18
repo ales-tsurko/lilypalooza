@@ -172,7 +172,7 @@ impl Lilypalooza {
     pub(in crate::app) fn handle_tick(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
 
-        if self.playback.is_some() {
+        if self.playback.is_some() && self.piano_roll.playback_is_playing() {
             self.refresh_playback_position();
         }
 
@@ -203,7 +203,9 @@ impl Lilypalooza {
         self.poll_editor_file_watcher(&mut tasks);
         self.poll_browser_file_watcher(&mut tasks);
 
-        if let Some(tab_id) = self.editor.active_tab_id() {
+        if self.editor_tick_active()
+            && let Some(tab_id) = self.editor.active_tab_id()
+        {
             let task = self.editor.update(tab_id, &iced_code_editor::Message::Tick);
             tasks.push(self.map_editor_widget_task(tab_id, task));
         }

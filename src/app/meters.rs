@@ -20,7 +20,6 @@ const SCALE_LABEL_MIN_GAP: f32 = 11.0;
 const CHANNEL_INSET: f32 = 0.5;
 const CLIP_HEIGHT: f32 = 5.0;
 const HOLD_HEIGHT: f32 = 2.0;
-const METER_SEGMENTS: usize = 40;
 const SCALE_DB_MARKS: [f32; 7] = [0.0, -6.0, -12.0, -18.0, -24.0, -36.0, -60.0];
 
 pub(super) fn stereo_meter_width(with_scale: bool) -> f32 {
@@ -40,7 +39,7 @@ pub(super) fn stereo_meter<'a, Message: 'a>(
     colors: MeterColors,
     height: f32,
 ) -> Element<'a, Message> {
-    shader_widget(MeterProgram::new(snapshot, colors))
+    shader_widget(MeterProgram::new(snapshot, colors, height.max(1.0)))
         .width(Length::Fixed(METER_TOTAL_WIDTH))
         .height(Length::Fixed(height.max(1.0)))
         .into()
@@ -117,6 +116,7 @@ fn meter_db_to_normalized(db: f32) -> f32 {
     ((db - STRIP_METER_MIN_DB) / (STRIP_METER_MAX_DB - STRIP_METER_MIN_DB)).clamp(0.0, 1.0)
 }
 
+#[cfg(test)]
 fn meter_gradient_color(colors: MeterColors, normalized_level: f32) -> Color {
     let t = normalized_level.clamp(0.0, 1.0);
     if t < 0.72 {
@@ -126,15 +126,85 @@ fn meter_gradient_color(colors: MeterColors, normalized_level: f32) -> Color {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct MeterShaderData {
+    left_level: f32,
+    right_level: f32,
+    left_hold: f32,
+    right_hold: f32,
+    rail_y: f32,
+    rail_height: f32,
+    hold_thickness: f32,
+    clip_thickness: f32,
+    clip_latched: f32,
+    channel_inset: f32,
+    _pad0: [f32; 2],
+    rail_color: [f32; 4],
+    safe_color: [f32; 4],
+    warning_color: [f32; 4],
+    hot_color: [f32; 4],
+    hold_color: [f32; 4],
+    clip_color: [f32; 4],
+}
+
+fn meter_shader_data(snapshot: StripMeterSnapshot, height: f32) -> MeterShaderData {
+    let (rail_y, rail_height) = meter_rail_layout(height);
+
+    MeterShaderData {
+        left_level: snapshot.left.level,
+        right_level: snapshot.right.level,
+        left_hold: snapshot.left.hold,
+        right_hold: snapshot.right.hold,
+        rail_y: rail_y / height.max(1.0),
+        rail_height: rail_height / height.max(1.0),
+        hold_thickness: HOLD_HEIGHT / height.max(1.0),
+        clip_thickness: CLIP_HEIGHT / height.max(1.0),
+        clip_latched: if snapshot.clip_latched { 1.0 } else { 0.0 },
+        channel_inset: CHANNEL_INSET / CHANNEL_WIDTH.max(1.0),
+        _pad0: [0.0; 2],
+        rail_color: [0.0; 4],
+        safe_color: [0.0; 4],
+        warning_color: [0.0; 4],
+        hot_color: [0.0; 4],
+        hold_color: [0.0; 4],
+        clip_color: [0.0; 4],
+    }
+}
+
+fn meter_shader_data_with_colors(
+    snapshot: StripMeterSnapshot,
+    colors: MeterColors,
+    height: f32,
+) -> MeterShaderData {
+    let mut data = meter_shader_data(snapshot, height);
+    data.rail_color = color_array(colors.rail);
+    data.safe_color = color_array(colors.safe);
+    data.warning_color = color_array(colors.warning);
+    data.hot_color = color_array(colors.hot);
+    data.hold_color = color_array(colors.hold);
+    data.clip_color = color_array(colors.clip);
+    data
+}
+
+fn color_array(color: Color) -> [f32; 4] {
+    [color.r, color.g, color.b, color.a]
+}
+
 #[derive(Debug, Clone, Copy)]
 struct MeterProgram {
     snapshot: StripMeterSnapshot,
     colors: MeterColors,
+    height: f32,
 }
 
 impl MeterProgram {
-    fn new(snapshot: StripMeterSnapshot, colors: MeterColors) -> Self {
-        Self { snapshot, colors }
+    fn new(snapshot: StripMeterSnapshot, colors: MeterColors, height: f32) -> Self {
+        Self {
+            snapshot,
+            colors,
+            height,
+        }
     }
 }
 
@@ -148,14 +218,26 @@ impl<Message> shader::Program<Message> for MeterProgram {
         _cursor: iced::mouse::Cursor,
         bounds: Rectangle,
     ) -> Self::Primitive {
-        MeterPrimitive::new(self.snapshot, self.colors, bounds)
+        MeterPrimitive::new(meter_shader_data_with_colors(
+            self.snapshot,
+            self.colors,
+            self.height.min(bounds.height).max(1.0),
+        ))
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct MeterVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+    data: MeterShaderData,
 }
 
 #[derive(Debug, Clone)]
 struct MeterPrimitive {
     key: u64,
-    vertices: Box<[MeterVertex]>,
+    vertices: [MeterVertex; 6],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -164,48 +246,41 @@ struct MeterScale {
 }
 
 impl MeterPrimitive {
-    fn new(snapshot: StripMeterSnapshot, colors: MeterColors, bounds: Rectangle) -> Self {
-        let mut vertices = Vec::new();
-        let channel_width = (bounds.width - METER_GAP) * 0.5;
-        let left_x = 0.0;
-        let right_x = channel_width + METER_GAP;
-
-        push_channel_meter(
-            &mut vertices,
-            left_x,
-            channel_width,
-            bounds.height,
-            snapshot.left.level,
-            snapshot.left.hold,
-            colors,
-            snapshot.clip_latched,
-        );
-        push_channel_meter(
-            &mut vertices,
-            right_x,
-            channel_width,
-            bounds.height,
-            snapshot.right.level,
-            snapshot.right.hold,
-            colors,
-            snapshot.clip_latched,
-        );
-
+    fn new(data: MeterShaderData) -> Self {
+        let vertices = quad_vertices(data);
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         for vertex in &vertices {
             for value in vertex.position {
                 value.to_bits().hash(&mut hasher);
             }
-            for value in vertex.color {
+            for value in vertex.uv {
                 value.to_bits().hash(&mut hasher);
+            }
+            for value in bytemuck::bytes_of(&vertex.data) {
+                value.hash(&mut hasher);
             }
         }
 
         Self {
             key: hasher.finish(),
-            vertices: vertices.into_boxed_slice(),
+            vertices,
         }
     }
+}
+
+fn quad_vertices(data: MeterShaderData) -> [MeterVertex; 6] {
+    [
+        meter_vertex([-1.0, 1.0], [0.0, 0.0], data),
+        meter_vertex([1.0, 1.0], [1.0, 0.0], data),
+        meter_vertex([-1.0, -1.0], [0.0, 1.0], data),
+        meter_vertex([-1.0, -1.0], [0.0, 1.0], data),
+        meter_vertex([1.0, 1.0], [1.0, 0.0], data),
+        meter_vertex([1.0, -1.0], [1.0, 1.0], data),
+    ]
+}
+
+fn meter_vertex(position: [f32; 2], uv: [f32; 2], data: MeterShaderData) -> MeterVertex {
+    MeterVertex { position, uv, data }
 }
 
 impl<Message> canvas_widget::Program<Message> for MeterScale {
@@ -343,7 +418,19 @@ impl shader::Pipeline for MeterPipeline {
                 buffers: &[iced::wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<MeterVertex>() as u64,
                     step_mode: iced::wgpu::VertexStepMode::Vertex,
-                    attributes: &iced::wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
+                    attributes: &iced::wgpu::vertex_attr_array![
+                        0 => Float32x2,
+                        1 => Float32x2,
+                        2 => Float32x4,
+                        3 => Float32x4,
+                        4 => Float32x4,
+                        5 => Float32x4,
+                        6 => Float32x4,
+                        7 => Float32x4,
+                        8 => Float32x4,
+                        9 => Float32x4,
+                        10 => Float32x4
+                    ],
                 }],
             },
             fragment: Some(iced::wgpu::FragmentState {
@@ -376,6 +463,10 @@ impl shader::Pipeline for MeterPipeline {
             buffers: HashMap::new(),
         }
     }
+
+    fn trim(&mut self) {
+        self.buffers.clear();
+    }
 }
 
 impl MeterPipeline {
@@ -403,245 +494,139 @@ impl MeterPipeline {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct MeterVertex {
-    position: [f32; 2],
-    color: [f32; 4],
-}
-
-#[allow(clippy::too_many_arguments)]
-fn push_channel_meter(
-    vertices: &mut Vec<MeterVertex>,
-    x: f32,
-    width: f32,
-    height: f32,
-    level: f32,
-    hold: f32,
-    colors: MeterColors,
-    clip_latched: bool,
-) {
-    let total_width = METER_TOTAL_WIDTH;
-    let inset_x = x + CHANNEL_INSET;
-    let inset_width = (width - CHANNEL_INSET * 2.0).max(0.0);
-    let (rail_y, rail_height) = meter_rail_layout(height);
-    push_rect(
-        vertices,
-        inset_x,
-        rail_y,
-        inset_width,
-        rail_height,
-        colors.rail,
-        total_width,
-        height,
-    );
-
-    let visible_from_y = rail_y + rail_height * (1.0 - level.clamp(0.0, 1.0));
-    let segment_height = rail_height / METER_SEGMENTS as f32;
-    for segment in 0..METER_SEGMENTS {
-        let segment_top = rail_y + segment as f32 * segment_height;
-        let segment_bottom =
-            (rail_y + (segment + 1) as f32 * segment_height).min(rail_y + rail_height);
-        if segment_bottom <= visible_from_y {
-            continue;
-        }
-
-        let visible_top = segment_top.max(visible_from_y);
-        let visible_height = segment_bottom - visible_top;
-        if visible_height <= 0.0 {
-            continue;
-        }
-
-        let normalized = 1.0 - (((segment_top + segment_bottom) * 0.5 - rail_y) / rail_height);
-        push_rect(
-            vertices,
-            inset_x,
-            visible_top,
-            inset_width,
-            visible_height,
-            meter_gradient_color(colors, normalized),
-            total_width,
-            height,
-        );
-    }
-
-    let hold_y = (rail_y + rail_height * (1.0 - hold.clamp(0.0, 1.0)) - HOLD_HEIGHT * 0.5)
-        .clamp(rail_y, rail_y + rail_height - HOLD_HEIGHT);
-    push_rect(
-        vertices,
-        inset_x,
-        hold_y,
-        inset_width,
-        HOLD_HEIGHT,
-        colors.hold,
-        total_width,
-        height,
-    );
-
-    if clip_latched {
-        push_rect(
-            vertices,
-            inset_x,
-            rail_y,
-            inset_width,
-            CLIP_HEIGHT,
-            colors.clip,
-            total_width,
-            height,
-        );
-    }
-}
-
 fn meter_rail_layout(total_height: f32) -> (f32, f32) {
     fader_rail_layout(total_height)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn push_rect(
-    vertices: &mut Vec<MeterVertex>,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    color: Color,
-    total_width: f32,
-    total_height: f32,
-) {
-    let left = x / total_width * 2.0 - 1.0;
-    let right = (x + width) / total_width * 2.0 - 1.0;
-    let top = 1.0 - y / total_height * 2.0;
-    let bottom = 1.0 - (y + height) / total_height * 2.0;
-    let color = [color.r, color.g, color.b, color.a];
-
-    vertices.extend_from_slice(&[
-        MeterVertex {
-            position: [left, top],
-            color,
-        },
-        MeterVertex {
-            position: [right, top],
-            color,
-        },
-        MeterVertex {
-            position: [left, bottom],
-            color,
-        },
-        MeterVertex {
-            position: [left, bottom],
-            color,
-        },
-        MeterVertex {
-            position: [right, top],
-            color,
-        },
-        MeterVertex {
-            position: [right, bottom],
-            color,
-        },
-    ]);
 }
 
 const METER_SHADER: &str = r#"
 struct VertexIn {
     @location(0) position: vec2<f32>,
-    @location(1) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) levels: vec4<f32>,
+    @location(3) rail_layout: vec4<f32>,
+    @location(4) flags: vec4<f32>,
+    @location(5) rail_color: vec4<f32>,
+    @location(6) safe_color: vec4<f32>,
+    @location(7) warning_color: vec4<f32>,
+    @location(8) hot_color: vec4<f32>,
+    @location(9) hold_color: vec4<f32>,
+    @location(10) clip_color: vec4<f32>,
 };
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
-    @location(0) color: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) levels: vec4<f32>,
+    @location(2) rail_layout: vec4<f32>,
+    @location(3) flags: vec4<f32>,
+    @location(4) rail_color: vec4<f32>,
+    @location(5) safe_color: vec4<f32>,
+    @location(6) warning_color: vec4<f32>,
+    @location(7) hot_color: vec4<f32>,
+    @location(8) hold_color: vec4<f32>,
+    @location(9) clip_color: vec4<f32>,
 };
 
 @vertex
 fn vs_main(input: VertexIn) -> VertexOut {
     var out: VertexOut;
     out.position = vec4<f32>(input.position, 0.0, 1.0);
-    out.color = input.color;
+    out.uv = input.uv;
+    out.levels = input.levels;
+    out.rail_layout = input.rail_layout;
+    out.flags = input.flags;
+    out.rail_color = input.rail_color;
+    out.safe_color = input.safe_color;
+    out.warning_color = input.warning_color;
+    out.hot_color = input.hot_color;
+    out.hold_color = input.hold_color;
+    out.clip_color = input.clip_color;
     return out;
+}
+
+fn meter_gradient(safe: vec4<f32>, warning: vec4<f32>, hot: vec4<f32>, t: f32) -> vec4<f32> {
+    if t < 0.72 {
+        return mix(safe, warning, t / 0.72);
+    }
+    return mix(warning, hot, (t - 0.72) / 0.28);
 }
 
 @fragment
 fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
-    return input.color;
+    let gap = 1.0 / 22.0;
+    let channel_width = (1.0 - gap) * 0.5;
+    let is_left = input.uv.x < channel_width;
+    let channel_start = select(channel_width + gap, 0.0, is_left);
+    let local_x = (input.uv.x - channel_start) / channel_width;
+    let rail_y = input.rail_layout.x;
+    let rail_height = input.rail_layout.y;
+    let hold_thickness = input.rail_layout.z;
+    let clip_thickness = input.rail_layout.w;
+    let clip_latched = input.flags.x;
+    let channel_inset = input.flags.y;
+
+    if input.uv.y < rail_y || input.uv.y > rail_y + rail_height {
+        return vec4<f32>(0.0);
+    }
+
+    if local_x < channel_inset || local_x > 1.0 - channel_inset {
+        return vec4<f32>(0.0);
+    }
+
+    let local_y = (input.uv.y - rail_y) / rail_height;
+    let level = select(input.levels.y, input.levels.x, is_left);
+    let hold = select(input.levels.w, input.levels.z, is_left);
+    var color = input.rail_color;
+
+    if local_y >= 1.0 - level {
+        let gradient_t = clamp(1.0 - local_y, 0.0, 1.0);
+        color = meter_gradient(input.safe_color, input.warning_color, input.hot_color, gradient_t);
+    }
+
+    if abs(local_y - (1.0 - hold)) <= hold_thickness * 0.5 / rail_height {
+        color = vec4<f32>(input.hold_color.xyz, 1.0);
+    }
+
+    if clip_latched > 0.5 && local_y <= clip_thickness / rail_height {
+        color = input.clip_color;
+    }
+
+    return color;
 }
 "#;
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CHANNEL_INSET, CHANNEL_WIDTH, FADER_HANDLE_VISUAL_WIDTH, METER_TOTAL_WIDTH, MeterColors,
-        SCALE_DB_MARKS, SCALE_LABEL_MIN_GAP, brighten_color, meter_db_to_normalized,
-        meter_gradient_color, meter_rail_layout, push_channel_meter, visible_scale_marks,
+        FADER_HANDLE_VISUAL_WIDTH, METER_TOTAL_WIDTH, MeterColors, SCALE_DB_MARKS,
+        SCALE_LABEL_MIN_GAP, brighten_color, meter_db_to_normalized, meter_gradient_color,
+        meter_rail_layout, meter_shader_data, visible_scale_marks,
     };
     use crate::app::controls::fader_rail_layout;
     use lilypalooza_audio::mixer::{ChannelMeterSnapshot, StripMeterSnapshot};
 
     #[test]
-    fn meter_geometry_grows_monotonically_with_level() {
-        let colors = MeterColors {
-            rail: iced::Color::BLACK,
-            safe: iced::Color::WHITE,
-            warning: iced::Color::WHITE,
-            hot: iced::Color::WHITE,
-            hold: iced::Color::WHITE,
-            clip: iced::Color::WHITE,
-            scale_text: iced::Color::WHITE,
-            scale_tick: iced::Color::WHITE,
+    fn meter_shader_data_is_compact_and_preserves_values() {
+        let snapshot = StripMeterSnapshot {
+            left: ChannelMeterSnapshot {
+                level: 0.25,
+                hold: 0.5,
+            },
+            right: ChannelMeterSnapshot {
+                level: 0.75,
+                hold: 0.9,
+            },
+            clip_latched: true,
         };
 
-        let mut low = Vec::new();
-        push_channel_meter(&mut low, 0.0, CHANNEL_WIDTH, 120.0, 0.2, 0.2, colors, false);
-        let mut high = Vec::new();
-        push_channel_meter(
-            &mut high,
-            0.0,
-            CHANNEL_WIDTH,
-            120.0,
-            0.8,
-            0.8,
-            colors,
-            false,
-        );
+        let data = meter_shader_data(snapshot, 120.0);
 
-        assert!(high.len() >= low.len());
-    }
-
-    #[test]
-    fn clip_flag_adds_clip_geometry() {
-        let colors = MeterColors {
-            rail: iced::Color::BLACK,
-            safe: iced::Color::WHITE,
-            warning: iced::Color::WHITE,
-            hot: iced::Color::WHITE,
-            hold: iced::Color::WHITE,
-            clip: iced::Color::WHITE,
-            scale_text: iced::Color::WHITE,
-            scale_tick: iced::Color::WHITE,
-        };
-        let mut without_clip = Vec::new();
-        push_channel_meter(
-            &mut without_clip,
-            0.0,
-            CHANNEL_WIDTH,
-            120.0,
-            0.9,
-            0.9,
-            colors,
-            false,
-        );
-        let mut with_clip = Vec::new();
-        push_channel_meter(
-            &mut with_clip,
-            0.0,
-            CHANNEL_WIDTH,
-            120.0,
-            0.9,
-            0.9,
-            colors,
-            true,
-        );
-
-        assert!(with_clip.len() > without_clip.len());
+        assert_eq!(data.left_level, 0.25);
+        assert_eq!(data.left_hold, 0.5);
+        assert_eq!(data.right_level, 0.75);
+        assert_eq!(data.right_hold, 0.9);
+        assert_eq!(data.clip_latched, 1.0);
+        assert!(data.rail_height > 0.0);
     }
 
     #[test]
@@ -692,75 +677,14 @@ mod tests {
     }
 
     #[test]
-    fn meter_geometry_stays_inside_meter_lane() {
-        let colors = MeterColors {
-            rail: iced::Color::BLACK,
-            safe: iced::Color::WHITE,
-            warning: iced::Color::WHITE,
-            hot: iced::Color::WHITE,
-            hold: iced::Color::WHITE,
-            clip: iced::Color::WHITE,
-            scale_text: iced::Color::WHITE,
-            scale_tick: iced::Color::WHITE,
-        };
-        let mut vertices = Vec::new();
-        push_channel_meter(
-            &mut vertices,
-            0.0,
-            CHANNEL_WIDTH,
-            120.0,
-            0.9,
-            0.9,
-            colors,
-            true,
-        );
-
-        let max_x = vertices
-            .iter()
-            .map(|vertex| (vertex.position[0] + 1.0) * 0.5 * METER_TOTAL_WIDTH)
-            .fold(0.0, f32::max);
-
-        assert!(max_x <= CHANNEL_WIDTH - CHANNEL_INSET + 0.001);
-    }
-
-    #[test]
     fn meter_geometry_stays_inside_meter_rail_height() {
-        let colors = MeterColors {
-            rail: iced::Color::BLACK,
-            safe: iced::Color::WHITE,
-            warning: iced::Color::WHITE,
-            hot: iced::Color::WHITE,
-            hold: iced::Color::WHITE,
-            clip: iced::Color::WHITE,
-            scale_text: iced::Color::WHITE,
-            scale_tick: iced::Color::WHITE,
-        };
         let height = 120.0;
         let (rail_y, rail_height) = meter_rail_layout(height);
         let rail_bottom = rail_y + rail_height;
-        let mut vertices = Vec::new();
-        push_channel_meter(
-            &mut vertices,
-            0.0,
-            CHANNEL_WIDTH,
-            height,
-            0.9,
-            0.9,
-            colors,
-            true,
-        );
+        let data = meter_shader_data(StripMeterSnapshot::default(), height);
 
-        let min_y = vertices
-            .iter()
-            .map(|vertex| (1.0 - vertex.position[1]) * 0.5 * height)
-            .fold(f32::INFINITY, f32::min);
-        let max_y = vertices
-            .iter()
-            .map(|vertex| (1.0 - vertex.position[1]) * 0.5 * height)
-            .fold(0.0, f32::max);
-
-        assert!(min_y >= rail_y - 0.001);
-        assert!(max_y <= rail_bottom + 0.001);
+        assert!(data.rail_y >= rail_y / height - 0.001);
+        assert!(data.rail_y + data.rail_height <= rail_bottom / height + 0.001);
     }
 
     #[test]

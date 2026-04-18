@@ -13,6 +13,7 @@ use super::{
 
 #[derive(Debug, Clone)]
 pub(super) enum Message {
+    Noop,
     StartupChecked(Result<crate::lilypond::VersionCheck, String>),
     BrowserHistoryCleanupFinished(Result<(), String>),
     Pane(PaneMessage),
@@ -232,6 +233,8 @@ pub(super) enum PianoRollMessage {
 #[derive(Debug, Clone)]
 pub(super) enum MixerMessage {
     AddBus,
+    InstrumentViewportScrolled(iced::widget::scrollable::Viewport),
+    BusViewportScrolled(iced::widget::scrollable::Viewport),
     ResetMasterMeter,
     SetMasterGain(f32),
     SetMasterPan(f32),

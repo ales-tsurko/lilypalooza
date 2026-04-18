@@ -51,6 +51,12 @@ impl Lilypalooza {
             soundfont_path.display()
         ));
 
+        if self.playback.is_none() {
+            self.logger
+                .push("Skipping soundfont load because audio engine is disabled");
+            return;
+        }
+
         if let Some(playback) = self.playback.as_mut()
             && let Err(error) = load_soundfont_resource(playback, &soundfont_path)
         {
@@ -74,20 +80,14 @@ impl Lilypalooza {
         };
         let selected_file = current_file.path.clone();
         let SoundfontStatus::Ready(soundfont_path) = &self.soundfont_status else {
+            if self.playback.is_none() {
+                return;
+            }
             return;
         };
         let Some(playback) = self.playback.as_mut() else {
-            let error = String::from("Playback engine unavailable");
-            self.logger.push(error.clone());
-            self.show_prompt(
-                ErrorPrompt::new(
-                    "Playback Error",
-                    error,
-                    ErrorFatality::Recoverable,
-                    PromptButtons::Ok,
-                ),
-                None,
-            );
+            self.logger
+                .push("Skipping playback sync because audio engine is disabled");
             return;
         };
 
@@ -209,7 +209,11 @@ impl Lilypalooza {
             let current_tick = self.piano_roll.playback_tick().min(total_ticks);
             self.piano_roll
                 .set_playback_position(current_tick, total_ticks, false);
-            self.refresh_score_cursor_overlay();
+            if self.score_pane_visible() {
+                self.refresh_score_cursor_overlay();
+            } else {
+                self.score_cursor_overlay = None;
+            }
             return;
         };
 
@@ -226,7 +230,11 @@ impl Lilypalooza {
 
         self.piano_roll
             .set_playback_position(current_tick, total_ticks, is_playing);
-        self.refresh_score_cursor_overlay();
+        if self.score_pane_visible() {
+            self.refresh_score_cursor_overlay();
+        } else {
+            self.score_cursor_overlay = None;
+        }
     }
     pub(in crate::app) fn current_midi_total_ticks(&self) -> u64 {
         self.piano_roll
