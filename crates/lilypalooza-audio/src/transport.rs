@@ -1,12 +1,15 @@
 //! Playback transport control and state snapshots.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use knyst::prelude::{Beats, KnystCommands, MultiThreadedKnystCommands, Seconds, TransportState};
 
 use crate::mixer::Mixer;
 use crate::sequencer::Sequencer;
+
+const CONTROLLER_BARRIER_TIMEOUT: Duration = Duration::from_millis(250);
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
+const TRANSPORT_POLL_INTERVAL: Duration = Duration::from_millis(2);
 
 /// Playback state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -79,7 +82,6 @@ pub struct Transport<'a> {
     commands: &'a mut MultiThreadedKnystCommands,
     mixer: Option<&'a mut Mixer>,
     sequencer: Option<&'a Sequencer>,
-    runtime_dirty: Option<&'a AtomicBool>,
 }
 
 impl<'a> Transport<'a> {
@@ -87,19 +89,16 @@ impl<'a> Transport<'a> {
         commands: &'a mut MultiThreadedKnystCommands,
         mixer: Option<&'a mut Mixer>,
         sequencer: Option<&'a Sequencer>,
-        runtime_dirty: Option<&'a AtomicBool>,
     ) -> Self {
         Self {
             commands,
             mixer,
             sequencer,
-            runtime_dirty,
         }
     }
 
     /// Starts playback.
     pub fn play(&mut self) {
-        self.flush_runtime_if_dirty();
         let pending_position = self.sequencer.and_then(Sequencer::pending_position);
         let current_beat = self
             .snapshot()
@@ -108,19 +107,20 @@ impl<'a> Transport<'a> {
         let start_beat = pending_position.unwrap_or(current_beat);
         if start_beat != current_beat {
             self.commands.transport_seek_to_beats(start_beat);
+            wait_for_transport_settled(self.commands);
             wait_for_transport_beats(self.commands, start_beat);
         }
-        self.commands.clear_scheduled_changes();
-        wait_for_controller_barrier(self.commands);
         if let Some(sequencer) = self.sequencer {
             sequencer.prepare_for_play(self.commands, start_beat);
         }
         wait_for_controller_barrier(self.commands);
         self.commands.transport_play();
+        wait_for_transport_settled(self.commands);
+        wait_for_transport_state(self.commands, TransportState::Playing);
         if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(true);
+            sequencer.process_tick(self.commands);
         }
-        wait_for_transport_playing(self.commands);
     }
 
     /// Pauses playback.
@@ -138,7 +138,8 @@ impl<'a> Transport<'a> {
         }
         if !has_loaded_score {
             self.commands.transport_pause();
-            wait_for_transport_paused(self.commands);
+            wait_for_transport_settled(self.commands);
+            wait_for_transport_state(self.commands, TransportState::Paused);
             return;
         }
         self.commands.clear_scheduled_changes();
@@ -149,8 +150,10 @@ impl<'a> Transport<'a> {
             wait_for_transport_advance(self.commands, Duration::from_millis(250));
         }
         self.commands.transport_pause();
-        wait_for_transport_paused(self.commands);
+        wait_for_transport_settled(self.commands);
+        wait_for_transport_state(self.commands, TransportState::Paused);
         self.commands.transport_seek_to_beats(current_beat);
+        wait_for_transport_settled(self.commands);
         wait_for_transport_beats(self.commands, current_beat);
         if has_loaded_score && let Some(sequencer) = self.sequencer {
             sequencer.mark_dirty_for_seek(current_beat, false);
@@ -169,19 +172,23 @@ impl<'a> Transport<'a> {
                     sequencer.set_playing(false);
                 }
                 self.commands.transport_pause();
-                wait_for_transport_paused(self.commands);
+                wait_for_transport_settled(self.commands);
+                wait_for_transport_state(self.commands, TransportState::Paused);
                 self.commands.transport_seek_to_beats(Beats::ZERO);
+                wait_for_transport_settled(self.commands);
                 wait_for_transport_beats(self.commands, Beats::ZERO);
                 return;
             }
             self.commands.transport_pause();
-            wait_for_transport_paused(self.commands);
+            wait_for_transport_settled(self.commands);
+            wait_for_transport_state(self.commands, TransportState::Paused);
             self.commands.clear_scheduled_changes();
             wait_for_controller_barrier(self.commands);
             if let Some(sequencer) = self.sequencer {
                 sequencer.set_playing(false);
             }
             self.commands.transport_seek_to_beats(Beats::ZERO);
+            wait_for_transport_settled(self.commands);
             wait_for_transport_beats(self.commands, Beats::ZERO);
             if has_loaded_score && let Some(sequencer) = self.sequencer {
                 sequencer.mark_dirty_for_seek(Beats::ZERO, false);
@@ -193,9 +200,6 @@ impl<'a> Transport<'a> {
     pub fn seek_seconds(&mut self, position: f64) {
         let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
         let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
-        if !was_playing {
-            self.flush_runtime_if_dirty();
-        }
         let position = Seconds::from_seconds_f64(position.max(0.0));
         if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(false);
@@ -205,12 +209,15 @@ impl<'a> Transport<'a> {
         }
         if !has_loaded_score {
             self.commands.transport_pause();
-            wait_for_transport_paused(self.commands);
+            wait_for_transport_settled(self.commands);
+            wait_for_transport_state(self.commands, TransportState::Paused);
             self.commands.transport_seek_to_seconds(position);
-            let _ = wait_for_transport_seconds(self.commands, position);
+            wait_for_transport_settled(self.commands);
+            wait_for_transport_seconds(self.commands, position);
             if was_playing {
                 self.commands.transport_play();
-                wait_for_transport_playing(self.commands);
+                wait_for_transport_settled(self.commands);
+                wait_for_transport_state(self.commands, TransportState::Playing);
             }
             return;
         }
@@ -229,9 +236,14 @@ impl<'a> Transport<'a> {
             wait_for_transport_advance(self.commands, Duration::from_millis(80));
         }
         self.commands.transport_pause();
-        wait_for_transport_paused(self.commands);
+        wait_for_transport_settled(self.commands);
+        wait_for_transport_state(self.commands, TransportState::Paused);
         self.commands.transport_seek_to_seconds(position);
-        let target_beat = wait_for_transport_seconds(self.commands, position)
+        wait_for_transport_settled(self.commands);
+        wait_for_transport_seconds(self.commands, position);
+        let target_beat = self
+            .snapshot()
+            .ok()
             .map(|snapshot| snapshot.beats_position)
             .unwrap_or(Beats::ZERO);
         if has_loaded_score && let Some(sequencer) = self.sequencer {
@@ -244,10 +256,12 @@ impl<'a> Transport<'a> {
         if was_playing {
             wait_for_controller_barrier(self.commands);
             self.commands.transport_play();
+            wait_for_transport_settled(self.commands);
+            wait_for_transport_state(self.commands, TransportState::Playing);
             if has_loaded_score && let Some(sequencer) = self.sequencer {
                 sequencer.set_playing(true);
+                sequencer.process_tick(self.commands);
             }
-            wait_for_transport_playing(self.commands);
         }
     }
 
@@ -255,9 +269,6 @@ impl<'a> Transport<'a> {
     pub fn seek_beats(&mut self, position: f64) {
         let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
         let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
-        if !was_playing {
-            self.flush_runtime_if_dirty();
-        }
         let position = Beats::from_beats_f64(position.max(0.0));
         if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(false);
@@ -267,12 +278,15 @@ impl<'a> Transport<'a> {
         }
         if !has_loaded_score {
             self.commands.transport_pause();
-            wait_for_transport_paused(self.commands);
+            wait_for_transport_settled(self.commands);
+            wait_for_transport_state(self.commands, TransportState::Paused);
             self.commands.transport_seek_to_beats(position);
+            wait_for_transport_settled(self.commands);
             wait_for_transport_beats(self.commands, position);
             if was_playing {
                 self.commands.transport_play();
-                wait_for_transport_playing(self.commands);
+                wait_for_transport_settled(self.commands);
+                wait_for_transport_state(self.commands, TransportState::Playing);
             }
             return;
         }
@@ -291,8 +305,10 @@ impl<'a> Transport<'a> {
             wait_for_transport_advance(self.commands, Duration::from_millis(80));
         }
         self.commands.transport_pause();
-        wait_for_transport_paused(self.commands);
+        wait_for_transport_settled(self.commands);
+        wait_for_transport_state(self.commands, TransportState::Paused);
         self.commands.transport_seek_to_beats(position);
+        wait_for_transport_settled(self.commands);
         wait_for_transport_beats(self.commands, position);
         if has_loaded_score && let Some(sequencer) = self.sequencer {
             sequencer.mark_dirty_for_seek(position, was_playing);
@@ -304,10 +320,12 @@ impl<'a> Transport<'a> {
         if was_playing {
             wait_for_controller_barrier(self.commands);
             self.commands.transport_play();
+            wait_for_transport_settled(self.commands);
+            wait_for_transport_state(self.commands, TransportState::Playing);
             if has_loaded_score && let Some(sequencer) = self.sequencer {
                 sequencer.set_playing(true);
+                sequencer.process_tick(self.commands);
             }
-            wait_for_transport_playing(self.commands);
         }
     }
 
@@ -326,99 +344,56 @@ impl<'a> Transport<'a> {
             snapshot.beats.unwrap_or(Beats::ZERO),
         ))
     }
-
-    fn flush_runtime_if_dirty(&mut self) {
-        if self
-            .runtime_dirty
-            .is_some_and(|dirty| dirty.swap(false, Ordering::AcqRel))
-        {
-            flush_pending_runtime_changes(self.commands, Beats::ZERO);
-        }
-    }
-}
-
-fn flush_pending_runtime_changes(commands: &mut MultiThreadedKnystCommands, target_beat: Beats) {
-    commands.transport_play();
-    wait_for_transport_playing(commands);
-    std::thread::sleep(Duration::from_millis(25));
-    commands.transport_pause();
-    wait_for_controller_barrier(commands);
-    commands.transport_seek_to_beats(Beats::ZERO);
-    wait_for_transport_beats(commands, Beats::ZERO);
-    if target_beat != Beats::ZERO {
-        commands.transport_seek_to_beats(target_beat);
-        wait_for_transport_beats(commands, target_beat);
-    }
 }
 
 fn wait_for_controller_barrier(commands: &mut MultiThreadedKnystCommands) {
     let receiver = commands.request_transport_snapshot();
-    let _ = receiver.recv_timeout(Duration::from_millis(50));
+    let _ = receiver.recv_timeout(CONTROLLER_BARRIER_TIMEOUT);
 }
 
-fn wait_for_transport_beats(commands: &mut MultiThreadedKnystCommands, target_beats: Beats) {
-    for _ in 0..50 {
-        let Some(snapshot) = commands.current_transport_snapshot() else {
-            std::thread::sleep(Duration::from_millis(2));
-            continue;
-        };
+fn wait_for_transport_settled(commands: &mut MultiThreadedKnystCommands) {
+    let receiver = commands.request_transport_settled();
+    let _ = receiver.recv_timeout(SETTLE_TIMEOUT);
+}
 
-        let beats_match = snapshot.beats.unwrap_or(Beats::ZERO) == target_beats;
-        if beats_match {
+fn wait_for_transport_state(commands: &mut MultiThreadedKnystCommands, expected: TransportState) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < SETTLE_TIMEOUT {
+        if commands
+            .current_transport_snapshot()
+            .is_some_and(|snapshot| snapshot.state == expected)
+        {
             return;
         }
+        std::thread::sleep(TRANSPORT_POLL_INTERVAL);
     }
 }
 
-fn wait_for_transport_playing(commands: &mut MultiThreadedKnystCommands) {
-    for _ in 0..50 {
-        let Some(snapshot) = commands.current_transport_snapshot() else {
-            std::thread::sleep(Duration::from_millis(2));
-            continue;
-        };
-
-        if snapshot.state == TransportState::Playing {
+fn wait_for_transport_beats(commands: &mut MultiThreadedKnystCommands, expected: Beats) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < SETTLE_TIMEOUT {
+        if commands
+            .current_transport_snapshot()
+            .and_then(|snapshot| snapshot.beats)
+            .is_some_and(|beats| beats == expected)
+        {
             return;
         }
+        std::thread::sleep(TRANSPORT_POLL_INTERVAL);
     }
 }
 
-fn wait_for_transport_paused(commands: &mut MultiThreadedKnystCommands) {
-    for _ in 0..50 {
-        let Some(snapshot) = commands.current_transport_snapshot() else {
-            std::thread::sleep(Duration::from_millis(2));
-            continue;
-        };
-
-        if snapshot.state == TransportState::Paused {
+fn wait_for_transport_seconds(commands: &mut MultiThreadedKnystCommands, expected: Seconds) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < SETTLE_TIMEOUT {
+        if commands
+            .current_transport_snapshot()
+            .is_some_and(|snapshot| snapshot.seconds == expected)
+        {
             return;
         }
+        std::thread::sleep(TRANSPORT_POLL_INTERVAL);
     }
-}
-
-fn wait_for_transport_seconds(
-    commands: &mut MultiThreadedKnystCommands,
-    target_seconds: Seconds,
-) -> Option<TransportSnapshot> {
-    for _ in 0..50 {
-        let Some(snapshot) = commands.current_transport_snapshot() else {
-            std::thread::sleep(Duration::from_millis(2));
-            continue;
-        };
-
-        if (snapshot.seconds.to_seconds_f64() - target_seconds.to_seconds_f64()).abs() <= 1.0e-6 {
-            return Some(TransportSnapshot::new(
-                match snapshot.state {
-                    TransportState::Playing => PlaybackState::Playing,
-                    TransportState::Paused => PlaybackState::Paused,
-                },
-                snapshot.seconds,
-                snapshot.beats.unwrap_or(Beats::ZERO),
-            ));
-        }
-    }
-
-    None
 }
 
 fn wait_for_transport_advance(commands: &mut MultiThreadedKnystCommands, duration: Duration) {
@@ -428,14 +403,15 @@ fn wait_for_transport_advance(commands: &mut MultiThreadedKnystCommands, duratio
     };
     let start_seconds = start.seconds.to_seconds_f64();
     let target_seconds = start_seconds + duration.as_secs_f64();
-    for _ in 0..100 {
+    let start = std::time::Instant::now();
+    while start.elapsed() < SETTLE_TIMEOUT {
         let Some(snapshot) = commands.current_transport_snapshot() else {
-            std::thread::sleep(Duration::from_millis(2));
+            std::thread::sleep(TRANSPORT_POLL_INTERVAL);
             continue;
         };
         if snapshot.seconds.to_seconds_f64() >= target_seconds {
             return;
         }
-        std::thread::sleep(Duration::from_millis(2));
+        std::thread::sleep(TRANSPORT_POLL_INTERVAL);
     }
 }

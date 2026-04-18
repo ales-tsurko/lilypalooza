@@ -4,12 +4,11 @@ pub(crate) mod runtime;
 mod track;
 
 use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use knyst::controller::KnystCommands;
 use knyst::modal_interface::KnystContext;
-use knyst::prelude::MultiThreadedKnystCommands;
+use knyst::prelude::{Beats, MultiThreadedKnystCommands, TransportState};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{AudioEngineError, AudioEngineSettings};
@@ -17,11 +16,14 @@ use crate::instrument::{
     EffectSlotState, InstrumentRuntimeHandle, InstrumentSlotState, SoundfontResource,
 };
 use crate::sequencer::Sequencer;
-use runtime::{MixerRuntime, MixerRuntimeError};
+use runtime::{MixerRuntime, MixerRuntimeError, TrackInstrumentSync};
 pub use track::{
     BusId, BusSend, BusTrack, INSTRUMENT_TRACK_COUNT, MasterTrack, MixerTrack, TrackId, TrackRoute,
     TrackRouting, TrackState,
 };
+
+const GRAPH_SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
+const PLAYHEAD_SNAPSHOT_POLL_INTERVAL: Duration = Duration::from_millis(2);
 
 /// Strip meter minimum displayed level in dBFS.
 pub const STRIP_METER_MIN_DB: f32 = -60.0;
@@ -459,7 +461,6 @@ impl Mixer {
 pub struct MixerHandle<'a> {
     mixer: &'a mut Mixer,
     sequencer: &'a Sequencer,
-    runtime_dirty: &'a AtomicBool,
     context: &'a KnystContext,
     commands: &'a mut MultiThreadedKnystCommands,
 }
@@ -468,21 +469,15 @@ impl<'a> MixerHandle<'a> {
     pub(crate) fn new(
         mixer: &'a mut Mixer,
         sequencer: &'a Sequencer,
-        runtime_dirty: &'a AtomicBool,
         context: &'a KnystContext,
         commands: &'a mut MultiThreadedKnystCommands,
     ) -> MixerHandle<'a> {
         Self {
             mixer,
             sequencer,
-            runtime_dirty,
             context,
             commands,
         }
-    }
-
-    fn mark_runtime_dirty(&self) {
-        self.runtime_dirty.store(true, Ordering::Release);
     }
 }
 
@@ -497,22 +492,20 @@ impl Deref for MixerHandle<'_> {
 #[allow(missing_docs)]
 impl MixerHandle<'_> {
     pub fn replace_state(&mut self, state: MixerState) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         let settings = self.mixer.runtime.meter_settings();
         let new_runtime = MixerRuntime::attach(self.context, self.commands, &settings, &state)?;
         let old_runtime = std::mem::replace(&mut self.mixer.runtime, new_runtime);
         self.mixer.state = state;
         old_runtime.free();
+        settle_graph_mutation(self.commands);
         for track in self.mixer.state.tracks() {
             self.sequencer
                 .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
         }
-        drain_commands(self.commands);
         Ok(())
     }
 
     pub fn set_soundfont(&mut self, resource: SoundfontResource) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         let soundfont_id = resource.id.clone();
         self.mixer.state.set_soundfont(resource);
         self.mixer.runtime.sync_soundfonts(&self.mixer.state)?;
@@ -522,16 +515,15 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             &soundfont_id,
         )?;
+        settle_graph_mutation(self.commands);
         for track in self.mixer.state.tracks() {
             self.sequencer
                 .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
         }
-        drain_commands(self.commands);
         Ok(())
     }
 
     pub fn remove_soundfont(&mut self, id: &str) -> Result<SoundfontResource, AudioEngineError> {
-        self.mark_runtime_dirty();
         let removed = self.mixer.state.remove_soundfont(id)?;
         self.mixer.runtime.sync_soundfonts(&self.mixer.state)?;
         self.mixer.runtime.sync_tracks_for_soundfont(
@@ -540,29 +532,29 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             &removed.id,
         )?;
+        settle_graph_mutation(self.commands);
         for track in self.mixer.state.tracks() {
             self.sequencer
                 .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
         }
-        drain_commands(self.commands);
         Ok(removed)
     }
 
     pub fn add_bus(&mut self, name: impl Into<String>) -> Result<BusId, AudioEngineError> {
-        self.mark_runtime_dirty();
         let bus_id = self.mixer.state.add_bus(name);
         self.mixer
             .runtime
             .add_bus(self.context, self.commands, &self.mixer.state, bus_id)?;
+        settle_graph_mutation(self.commands);
         Ok(bus_id)
     }
 
     pub fn remove_bus(&mut self, id: BusId) -> Result<BusTrack, AudioEngineError> {
-        self.mark_runtime_dirty();
         let removed = self.mixer.state.remove_bus(id)?;
         self.mixer
             .runtime
             .remove_bus(self.commands, &self.mixer.state, id)?;
+        settle_graph_mutation(self.commands);
         Ok(removed)
     }
 
@@ -571,23 +563,31 @@ impl MixerHandle<'_> {
         id: TrackId,
         instrument: InstrumentSlotState,
     ) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.instrument = instrument;
-        self.mixer.runtime.sync_track_instrument(
+        let sync = self.mixer.runtime.sync_track_instrument(
             self.context,
             self.commands,
             &self.mixer.state,
             id,
         )?;
-        self.mixer.runtime.sync_track_routing(
-            self.context,
-            self.commands,
-            &self.mixer.state,
-            id,
-        )?;
-        self.sequencer
-            .sync_track_handle(id, self.mixer.instrument_handle(id));
-        drain_commands(self.commands);
+        if matches!(sync, TrackInstrumentSync::GraphChanged) {
+            self.mixer.runtime.sync_track_routing(
+                self.context,
+                self.commands,
+                &self.mixer.state,
+                id,
+            )?;
+            settle_graph_mutation(self.commands);
+            self.sequencer
+                .sync_track_handle(id, self.mixer.instrument_handle(id));
+            if self.sequencer.is_playing() {
+                if let Some(current_beat) = current_playing_beat(self.commands) {
+                    self.sequencer.process_tick_at(self.commands, current_beat);
+                } else {
+                    self.sequencer.process_tick(self.commands);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -596,7 +596,6 @@ impl MixerHandle<'_> {
         id: TrackId,
         effects: Vec<EffectSlotState>,
     ) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.track_mut(id)?.effects = effects;
         self.mixer.runtime.sync_track_effects(
             self.context,
@@ -610,6 +609,7 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             id,
         )?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 
@@ -666,6 +666,7 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             id,
         )?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 
@@ -681,6 +682,7 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             id,
         )?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 
@@ -692,6 +694,7 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             id,
         )?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 
@@ -708,6 +711,7 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             id,
         )?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 
@@ -723,6 +727,7 @@ impl MixerHandle<'_> {
             &self.mixer.state,
             id,
         )?;
+        settle_graph_mutation(self.commands);
         Ok(removed)
     }
 
@@ -743,6 +748,7 @@ impl MixerHandle<'_> {
         self.mixer
             .runtime
             .sync_bus_effects(self.context, self.commands, &self.mixer.state, id)?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 
@@ -775,6 +781,7 @@ impl MixerHandle<'_> {
         self.mixer
             .runtime
             .sync_bus_routing(self.context, self.commands, &self.mixer.state, id)?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 
@@ -787,6 +794,7 @@ impl MixerHandle<'_> {
         self.mixer
             .runtime
             .sync_bus_routing(self.context, self.commands, &self.mixer.state, id)?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 
@@ -795,6 +803,7 @@ impl MixerHandle<'_> {
         self.mixer
             .runtime
             .sync_bus_routing(self.context, self.commands, &self.mixer.state, id)?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 
@@ -808,6 +817,7 @@ impl MixerHandle<'_> {
         self.mixer
             .runtime
             .sync_bus_routing(self.context, self.commands, &self.mixer.state, id)?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 
@@ -820,6 +830,7 @@ impl MixerHandle<'_> {
         self.mixer
             .runtime
             .sync_bus_routing(self.context, self.commands, &self.mixer.state, id)?;
+        settle_graph_mutation(self.commands);
         Ok(removed)
     }
 
@@ -853,22 +864,35 @@ impl MixerHandle<'_> {
         &mut self,
         effects: Vec<EffectSlotState>,
     ) -> Result<(), AudioEngineError> {
-        self.mark_runtime_dirty();
         self.mixer.state.master.effects = effects;
         self.mixer
             .runtime
             .sync_master_effects(self.context, self.commands, &self.mixer.state)?;
+        settle_graph_mutation(self.commands);
         Ok(())
     }
 }
 
-fn drain_commands(commands: &mut MultiThreadedKnystCommands) {
+fn settle_graph_mutation(commands: &mut MultiThreadedKnystCommands) {
     let Ok(receiver) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        commands.request_transport_snapshot()
+        commands.request_graph_settled()
     })) else {
         return;
     };
-    let _ = receiver.recv_timeout(Duration::from_millis(20));
+    let _ = receiver.recv_timeout(GRAPH_SETTLE_TIMEOUT);
+}
+
+fn current_playing_beat(commands: &mut MultiThreadedKnystCommands) -> Option<Beats> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < GRAPH_SETTLE_TIMEOUT {
+        if let Some(snapshot) = commands.current_transport_snapshot()
+            && snapshot.state == TransportState::Playing
+        {
+            return snapshot.beats;
+        }
+        std::thread::sleep(PLAYHEAD_SNAPSHOT_POLL_INTERVAL);
+    }
+    None
 }
 
 #[cfg(test)]

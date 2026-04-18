@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 use serde::{Deserialize, Serialize};
@@ -111,6 +112,48 @@ impl LoadedSoundfont {
 pub struct SoundfontProcessor {
     synthesizer: Synthesizer,
     state: SoundfontProcessorState,
+    shared_program: Option<SharedSoundfontProgramState>,
+    applied_shared_revision: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SharedSoundfontProgramState {
+    inner: Arc<SharedSoundfontProgramStateInner>,
+}
+
+#[derive(Debug)]
+struct SharedSoundfontProgramStateInner {
+    bank: AtomicU16,
+    program: AtomicU32,
+    revision: AtomicU32,
+}
+
+impl SharedSoundfontProgramState {
+    pub(crate) fn new(bank: u16, program: u8) -> Self {
+        Self {
+            inner: Arc::new(SharedSoundfontProgramStateInner {
+                bank: AtomicU16::new(bank),
+                program: AtomicU32::new(u32::from(program)),
+                revision: AtomicU32::new(1),
+            }),
+        }
+    }
+
+    pub(crate) fn update(&self, bank: u16, program: u8) {
+        self.inner.bank.store(bank, Ordering::Relaxed);
+        self.inner
+            .program
+            .store(u32::from(program), Ordering::Relaxed);
+        self.inner.revision.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u16, u8, u32) {
+        (
+            self.inner.bank.load(Ordering::Relaxed),
+            self.inner.program.load(Ordering::Relaxed) as u8,
+            self.inner.revision.load(Ordering::Relaxed),
+        )
+    }
 }
 
 const SOUNDFONT_PARAMS: &[ParameterDescriptor] = &[
@@ -136,10 +179,20 @@ const SOUNDFONT_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
 impl SoundfontProcessor {
     const TRACK_CHANNEL: i32 = 0;
 
+    #[cfg(test)]
     pub fn new(
         soundfont: &Arc<SoundFont>,
         settings: SoundfontSynthSettings,
         state: SoundfontProcessorState,
+    ) -> Result<Self, SoundfontSynthError> {
+        Self::new_with_shared_program(soundfont, settings, state, None)
+    }
+
+    pub(crate) fn new_with_shared_program(
+        soundfont: &Arc<SoundFont>,
+        settings: SoundfontSynthSettings,
+        state: SoundfontProcessorState,
+        shared_program: Option<SharedSoundfontProgramState>,
     ) -> Result<Self, SoundfontSynthError> {
         let mut synth_settings = SynthesizerSettings::new(settings.sample_rate);
         synth_settings.block_size = settings.block_size;
@@ -151,7 +204,15 @@ impl SoundfontProcessor {
                 source,
             }
         })?;
-        let mut processor = Self { synthesizer, state };
+        let applied_shared_revision = shared_program
+            .as_ref()
+            .map_or(0, |shared| shared.snapshot().2);
+        let mut processor = Self {
+            synthesizer,
+            state,
+            shared_program,
+            applied_shared_revision,
+        };
         processor.apply_program();
         Ok(processor)
     }
@@ -178,6 +239,20 @@ impl SoundfontProcessor {
             i32::from(self.state.program),
             0,
         );
+    }
+
+    fn sync_shared_program(&mut self) {
+        let Some(shared) = &self.shared_program else {
+            return;
+        };
+        let (bank, program, revision) = shared.snapshot();
+        if revision == self.applied_shared_revision {
+            return;
+        }
+        self.state.bank = bank;
+        self.state.program = program;
+        self.applied_shared_revision = revision;
+        self.apply_program();
     }
 }
 
@@ -220,6 +295,7 @@ impl Processor for SoundfontProcessor {
 
 impl InstrumentProcessor for SoundfontProcessor {
     fn handle_midi(&mut self, event: MidiEvent) {
+        self.sync_shared_program();
         match event {
             MidiEvent::NoteOn { note, velocity, .. } => {
                 self.synthesizer
@@ -281,6 +357,7 @@ impl InstrumentProcessor for SoundfontProcessor {
     }
 
     fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.sync_shared_program();
         self.synthesizer.render(left, right);
     }
 }

@@ -3,12 +3,12 @@
 mod gain_effect;
 pub(crate) mod soundfont_synth;
 
-#[cfg(test)]
 use std::time::Duration;
 
 use knyst::r#gen::{Gen, GenContext};
 use knyst::graph::{EventChange, EventPayload};
 use knyst::handles::{GenericHandle, Handle, HandleData};
+use knyst::modal_interface::knyst_commands;
 use knyst::prelude::{
     BlockSize, GenState, KnystCommands, MultiThreadedKnystCommands, Resources, Sample, impl_gen,
 };
@@ -363,6 +363,7 @@ impl InstrumentRuntimeHandle {
     const IMMEDIATE_EVENT_LEAD: Duration = Duration::from_millis(30);
     #[cfg(test)]
     const IMMEDIATE_EVENT_STEP: Duration = Duration::from_millis(2);
+    const LIVE_EVENT_DELAY: Duration = Duration::from_millis(2);
 
     pub(crate) fn new(handle: Handle<GenericHandle>) -> Self {
         Self(handle)
@@ -442,45 +443,38 @@ impl InstrumentRuntimeHandle {
         Self::IMMEDIATE_EVENT_LEAD + Self::IMMEDIATE_EVENT_STEP.saturating_mul(step)
     }
 
-    /// Sends one note-on.
-    pub fn note_on(&self, channel: u8, note: u8, velocity: u8) {
-        self.0.event(
-            "event",
-            encode_instrument_event(ScheduledInstrumentEvent::Midi {
-                generation: 0,
-                event: MidiEvent::NoteOn {
-                    channel,
-                    note,
-                    velocity,
-                },
-            }),
-        );
-    }
-
-    /// Sends one note-off.
-    pub fn note_off(&self, channel: u8, note: u8, velocity: u8) {
-        self.0.event(
-            "event",
-            encode_instrument_event(ScheduledInstrumentEvent::Midi {
-                generation: 0,
-                event: MidiEvent::NoteOff {
-                    channel,
-                    note,
-                    velocity,
-                },
-            }),
-        );
-    }
-
-    /// Sends one generic MIDI event.
-    pub fn midi(&self, event: MidiEvent) {
-        self.0.event(
-            "event",
+    fn send_live_midi(&self, event: MidiEvent) {
+        knyst_commands().schedule_event(EventChange::duration_from_now(
+            self.node_id().event_input("event"),
             encode_instrument_event(ScheduledInstrumentEvent::Midi {
                 generation: 0,
                 event,
             }),
-        );
+            Self::LIVE_EVENT_DELAY,
+        ));
+    }
+
+    /// Sends one note-on.
+    pub fn note_on(&self, channel: u8, note: u8, velocity: u8) {
+        self.send_live_midi(MidiEvent::NoteOn {
+            channel,
+            note,
+            velocity,
+        });
+    }
+
+    /// Sends one note-off.
+    pub fn note_off(&self, channel: u8, note: u8, velocity: u8) {
+        self.send_live_midi(MidiEvent::NoteOff {
+            channel,
+            note,
+            velocity,
+        });
+    }
+
+    /// Sends one generic MIDI event.
+    pub fn midi(&self, event: MidiEvent) {
+        self.send_live_midi(event);
     }
 }
 
@@ -897,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_note_on_reaches_soundfont_node_added_after_transport_reset() {
+    fn direct_midi_reaches_soundfont_node_added_after_transport_reset() {
         let mut harness = OfflineHarness::new(44_100, 64);
         harness.commands().transport_pause();
         harness
@@ -921,9 +915,14 @@ mod tests {
 
         harness.commands().transport_play();
         harness.process_blocks(8);
-        harness.context().with_activation(|| {
-            handle.note_on(0, 60, 100);
-        });
+        handle.send_midi(
+            harness.commands(),
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
 
         for _ in 0..256 {
             harness.process_block();
@@ -933,7 +932,7 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
 
-        panic!("direct note_on did not reach soundfont node added after transport reset");
+        panic!("direct MIDI did not reach soundfont node added after transport reset");
     }
 
     #[test]

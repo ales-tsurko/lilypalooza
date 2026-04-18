@@ -12,6 +12,8 @@ use crate::instrument::{InstrumentRuntimeHandle, MidiEvent as EngineMidiEvent};
 use crate::mixer::{INSTRUMENT_TRACK_COUNT, TrackId};
 use crate::transport::{Transport, TransportError};
 
+const CONTROLLER_BARRIER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Sequencer errors.
 #[derive(thiserror::Error, Debug)]
 pub enum SequencerError {
@@ -131,7 +133,6 @@ impl Sequencer {
             .process_tick(commands);
     }
 
-    #[cfg(test)]
     pub(crate) fn process_tick_at(
         &self,
         commands: &mut MultiThreadedKnystCommands,
@@ -244,7 +245,7 @@ impl<'a> SequencerHandle<'a> {
             return Ok(beats_to_ticks(position, ppq));
         }
 
-        let beats = Transport::new(self.commands, None, None, None)
+        let beats = Transport::new(self.commands, None, None)
             .snapshot()?
             .beats_position;
         Ok(beats_to_ticks(beats, ppq))
@@ -289,7 +290,7 @@ impl<'a> SequencerHandle<'a> {
 
 fn wait_for_controller_barrier(commands: &mut MultiThreadedKnystCommands) {
     let receiver = commands.request_transport_snapshot();
-    let _ = receiver.recv_timeout(std::time::Duration::from_millis(50));
+    let _ = receiver.recv_timeout(CONTROLLER_BARRIER_TIMEOUT);
 }
 
 struct SequencerState {

@@ -11,7 +11,7 @@ use knyst::controller::KnystCommands;
 use knyst::graph::{Graph, RunGraph, RunGraphSettings};
 use knyst::inspection::GraphInspection;
 use knyst::modal_interface::KnystContext;
-use knyst::prelude::{KnystSphere, MultiThreadedKnystCommands, Sample, SphereSettings};
+use knyst::prelude::{Beats, KnystSphere, MultiThreadedKnystCommands, Sample, SphereSettings};
 use knyst::resources::{Resources, ResourcesSettings};
 use midly::num::{u4, u7, u15, u24, u28};
 use midly::{
@@ -61,7 +61,7 @@ impl OfflineHarness {
         .expect("offline sphere should start");
         let context = sphere.context();
         let commands = sphere.commands();
-        Self {
+        let mut harness = Self {
             backend,
             controller,
             sphere,
@@ -72,7 +72,19 @@ impl OfflineHarness {
                 sample_rate,
                 block_size,
             },
+        };
+        harness.commands.transport_pause();
+        harness.commands.transport_seek_to_beats(Beats::ZERO);
+        for _ in 0..64 {
+            harness.process_block();
+            if let Some(snapshot) = harness.commands.current_transport_snapshot()
+                && snapshot.state == knyst::prelude::TransportState::Paused
+                && snapshot.beats.unwrap_or(Beats::ZERO) == Beats::ZERO
+            {
+                break;
+            }
         }
+        harness
     }
 
     pub(crate) fn commands(&mut self) -> &mut MultiThreadedKnystCommands {
@@ -96,6 +108,28 @@ impl OfflineHarness {
         for _ in 0..count {
             self.process_block();
         }
+    }
+
+    pub(crate) fn wait_for_graph_settled(&mut self) {
+        let receiver = self.commands.request_graph_settled();
+        for _ in 0..256 {
+            self.process_block();
+            if receiver.try_recv().is_ok() {
+                return;
+            }
+        }
+        panic!("graph should settle in offline harness");
+    }
+
+    pub(crate) fn wait_for_transport_settled(&mut self) {
+        let receiver = self.commands.request_transport_settled();
+        for _ in 0..256 {
+            self.process_block();
+            if receiver.try_recv().is_ok() {
+                return;
+            }
+        }
+        panic!("transport should settle in offline harness");
     }
 
     pub(crate) fn output_channel(&self, channel: usize) -> &[Sample] {

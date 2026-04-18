@@ -19,6 +19,9 @@ use crate::mixer::{Mixer, MixerError, MixerHandle, MixerMeterSnapshot, MixerStat
 use crate::sequencer::{Sequencer, SequencerError, SequencerHandle};
 use crate::transport::Transport;
 
+const CONTROLLER_BARRIER_TIMEOUT: Duration = Duration::from_millis(250);
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Startup options for the audio engine.
 #[derive(Debug, Clone, Default)]
 pub struct AudioEngineOptions {
@@ -41,7 +44,6 @@ pub struct AudioEngineSettings {
 pub struct AudioEngine {
     mixer: Mixer,
     sequencer: Sequencer,
-    runtime_dirty: Arc<AtomicBool>,
     scheduler_shutdown: Arc<AtomicBool>,
     scheduler_thread: Option<JoinHandle<()>>,
     backend: Box<dyn AudioBackend>,
@@ -103,7 +105,6 @@ impl AudioEngine {
         let mixer = Mixer::new(&context, &mut commands, &settings, mixer)?;
         let sequencer = Sequencer::new(options.chase_notes_on_seek);
         sequencer.configure_schedule_lead(settings.block_size, settings.sample_rate);
-        let runtime_dirty = Arc::new(AtomicBool::new(true));
         for track in mixer.state.tracks() {
             sequencer.sync_track_handle(track.id, mixer.instrument_handle(track.id));
         }
@@ -117,7 +118,6 @@ impl AudioEngine {
         Ok(Self {
             mixer,
             sequencer,
-            runtime_dirty,
             scheduler_shutdown,
             scheduler_thread,
             backend: Box::new(backend),
@@ -139,7 +139,6 @@ impl AudioEngine {
             &mut self.commands,
             Some(&mut self.mixer),
             Some(&self.sequencer),
-            Some(self.runtime_dirty.as_ref()),
         )
     }
 
@@ -148,7 +147,6 @@ impl AudioEngine {
         MixerHandle::new(
             &mut self.mixer,
             &self.sequencer,
-            self.runtime_dirty.as_ref(),
             &self.context,
             &mut self.commands,
         )
@@ -184,12 +182,8 @@ impl AudioEngine {
 
     /// Flushes pending runtime configuration changes through the running graph.
     pub fn flush(&mut self) {
-        self.runtime_dirty.store(false, Ordering::Release);
-        self.commands.transport_play();
-        thread::sleep(Duration::from_millis(25));
-        self.commands.transport_pause();
-        self.commands.transport_seek_to_beats(Beats::ZERO);
-        wait_for_transport_reset(&mut self.commands);
+        let receiver = self.commands.request_graph_settled();
+        let _ = receiver.recv_timeout(SETTLE_TIMEOUT);
     }
 
     fn prepare_for_score_reload(&mut self) {
@@ -205,7 +199,7 @@ impl AudioEngine {
 
         if !has_loaded_score {
             self.commands.transport_pause();
-            wait_for_transport_paused(&mut self.commands);
+            wait_for_transport_settled(&mut self.commands);
             self.commands.transport_seek_to_beats(Beats::ZERO);
             wait_for_transport_reset(&mut self.commands);
             return;
@@ -220,7 +214,7 @@ impl AudioEngine {
         wait_for_transport_advance(&mut self.commands, Duration::from_millis(80));
 
         self.commands.transport_pause();
-        wait_for_transport_paused(&mut self.commands);
+        wait_for_transport_settled(&mut self.commands);
         self.commands.transport_seek_to_beats(Beats::ZERO);
         wait_for_transport_reset(&mut self.commands);
     }
@@ -243,40 +237,14 @@ fn wait_for_transport_reset(commands: &mut MultiThreadedKnystCommands) {
     }
 }
 
-#[cfg(test)]
-fn wait_for_transport_playing(commands: &mut MultiThreadedKnystCommands) {
-    for _ in 0..50 {
-        let Some(snapshot) = commands.current_transport_snapshot() else {
-            thread::sleep(Duration::from_millis(2));
-            continue;
-        };
-
-        if snapshot.state == knyst::prelude::TransportState::Playing {
-            return;
-        }
-
-        thread::sleep(Duration::from_millis(2));
-    }
-}
-
 fn wait_for_controller_barrier(commands: &mut MultiThreadedKnystCommands) {
     let receiver = commands.request_transport_snapshot();
-    let _ = receiver.recv_timeout(Duration::from_millis(50));
+    let _ = receiver.recv_timeout(CONTROLLER_BARRIER_TIMEOUT);
 }
 
-fn wait_for_transport_paused(commands: &mut MultiThreadedKnystCommands) {
-    for _ in 0..50 {
-        let Some(snapshot) = commands.current_transport_snapshot() else {
-            thread::sleep(Duration::from_millis(2));
-            continue;
-        };
-
-        if snapshot.state == knyst::prelude::TransportState::Paused {
-            return;
-        }
-
-        thread::sleep(Duration::from_millis(2));
-    }
+fn wait_for_transport_settled(commands: &mut MultiThreadedKnystCommands) {
+    let receiver = commands.request_transport_settled();
+    let _ = receiver.recv_timeout(SETTLE_TIMEOUT);
 }
 
 fn wait_for_transport_advance(commands: &mut MultiThreadedKnystCommands, timeout: Duration) {
@@ -355,7 +323,6 @@ fn set_scheduler_thread_priority(settings: AudioEngineSettings) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
 
@@ -390,12 +357,16 @@ mod tests {
         }
     }
 
+    fn raw_transport_play(engine: &mut AudioEngine) {
+        engine.commands.transport_play();
+        super::wait_for_transport_settled(&mut engine.commands);
+    }
+
     fn render_soundfont_program(program: u8) -> Vec<Sample> {
         let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
         let mut engine =
             AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
                 .expect("engine should start");
-        let _audio = backend_handle.start_realtime();
 
         {
             let mut mixer = engine.mixer();
@@ -410,11 +381,15 @@ mod tests {
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
-        engine
-            .sequencer()
-            .replace_from_midi_bytes(&simple_midi_bytes(480))
-            .expect("midi should load");
         engine.transport().play();
+        super::wait_for_transport_settled(&mut engine.commands);
+        let handle = engine
+            .mixer
+            .instrument_handle(TrackId(0))
+            .expect("track runtime should expose instrument handle");
+        engine.context.with_activation(|| {
+            handle.note_on(0, 60, 100);
+        });
 
         for _ in 0..1024 {
             backend_handle.process_block();
@@ -648,7 +623,6 @@ mod tests {
         let mut engine =
             AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
                 .expect("engine should start");
-        let _audio = backend_handle.start_realtime();
 
         engine
             .sequencer()
@@ -1044,7 +1018,7 @@ mod tests {
             .expect("track runtime should expose instrument handle");
 
         settle_backend(&backend_handle);
-        engine.commands.transport_play();
+        raw_transport_play(&mut engine);
         for _ in 0..8 {
             backend_handle.process_block();
             thread::sleep(Duration::from_millis(2));
@@ -1100,8 +1074,8 @@ mod tests {
         };
 
         settle_backend(&backend_handle);
-        engine.commands.transport_play();
-        super::wait_for_transport_playing(&mut engine.commands);
+        raw_transport_play(&mut engine);
+        super::wait_for_transport_settled(&mut engine.commands);
         for _ in 0..8 {
             backend_handle.process_block();
             thread::sleep(Duration::from_millis(2));
@@ -1138,7 +1112,9 @@ mod tests {
         }
 
         engine.commands.transport_pause();
+        super::wait_for_transport_settled(&mut engine.commands);
         engine.commands.transport_seek_to_beats(Beats::ZERO);
+        super::wait_for_transport_settled(&mut engine.commands);
 
         let handle = {
             let mut mixer = engine.mixer();
@@ -1152,7 +1128,8 @@ mod tests {
         };
 
         settle_backend(&backend_handle);
-        engine.commands.transport_play();
+        raw_transport_play(&mut engine);
+        super::wait_for_transport_settled(&mut engine.commands);
         for _ in 0..8 {
             backend_handle.process_block();
             thread::sleep(Duration::from_millis(2));
@@ -1179,7 +1156,6 @@ mod tests {
         let mut engine =
             AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
                 .expect("engine should start");
-        let _audio = backend_handle.start_realtime();
 
         engine
             .sequencer()
@@ -1243,7 +1219,6 @@ mod tests {
                 &mut engine.commands,
                 Some(&mut engine.mixer),
                 Some(&engine.sequencer),
-                Some(engine.runtime_dirty.as_ref()),
             );
             transport.play();
         }
@@ -1301,79 +1276,110 @@ mod tests {
     }
 
     #[test]
-    fn track_rename_does_not_dirty_audio_runtime() {
+    fn track_rename_does_not_require_graph_settle() {
         let backend = TestBackend::new(44_100, 64, 2);
         let mut engine =
             AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
                 .expect("engine should start");
-        engine.flush();
-        assert!(
-            !engine.runtime_dirty.load(Ordering::Acquire),
-            "flush should clear runtime dirty state"
-        );
 
         engine
             .mixer()
             .set_track_name(TrackId(0), "Violin")
             .expect("track rename should succeed");
-
-        assert!(
-            !engine.runtime_dirty.load(Ordering::Acquire),
-            "renaming a track must not dirty the audio runtime"
-        );
     }
 
     #[test]
-    fn soundfont_load_dirties_audio_runtime_for_next_play_flush() {
-        let backend = TestBackend::new(44_100, 64, 2);
+    fn soundfont_load_commits_graph_changes_immediately() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
         let mut engine =
             AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
                 .expect("engine should start");
-        engine.flush();
-        assert!(
-            !engine.runtime_dirty.load(Ordering::Acquire),
-            "flush should clear runtime dirty state"
-        );
+        let _audio = backend_handle.start_realtime();
 
         engine
             .mixer()
             .set_soundfont(test_soundfont_resource())
             .expect("soundfont should load");
 
-        assert!(
-            engine.runtime_dirty.load(Ordering::Acquire),
-            "loading a soundfont must dirty the audio runtime so play can flush topology changes"
+        let mut mixer = engine.mixer();
+        mixer
+            .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+            .expect("track should accept soundfont instrument");
+
+        let handle = engine
+            .mixer
+            .instrument_handle(TrackId(0))
+            .expect("track runtime should expose instrument handle");
+        raw_transport_play(&mut engine);
+        for _ in 0..8 {
+            backend_handle.process_block();
+            thread::sleep(Duration::from_millis(2));
+        }
+        handle.send_midi(
+            &mut engine.commands,
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
         );
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("soundfont load did not commit graph changes immediately");
     }
 
     #[test]
-    fn track_instrument_assignment_dirties_audio_runtime_for_next_play_flush() {
-        let backend = TestBackend::new(44_100, 64, 2);
+    fn track_instrument_assignment_commits_graph_changes_immediately() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
         let mut engine =
             AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
                 .expect("engine should start");
-        engine.flush();
+        let _audio = backend_handle.start_realtime();
+
         {
             let mut mixer = engine.mixer();
             mixer
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .expect("track should accept soundfont instrument");
         }
-        assert!(
-            engine.runtime_dirty.load(Ordering::Acquire),
-            "loading a soundfont must dirty the audio runtime"
-        );
-        engine.flush();
 
-        engine
-            .mixer()
-            .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
-            .expect("track should accept soundfont instrument");
-
-        assert!(
-            engine.runtime_dirty.load(Ordering::Acquire),
-            "assigning a track instrument must dirty the audio runtime so play can flush topology changes"
+        let handle = engine
+            .mixer
+            .instrument_handle(TrackId(0))
+            .expect("track runtime should expose instrument handle");
+        raw_transport_play(&mut engine);
+        for _ in 0..8 {
+            backend_handle.process_block();
+            thread::sleep(Duration::from_millis(2));
+        }
+        handle.send_midi(
+            &mut engine.commands,
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
         );
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("track instrument assignment did not commit graph changes immediately");
     }
 
     #[test]
@@ -1388,7 +1394,6 @@ mod tests {
             },
         )
         .expect("engine should start");
-        let _audio = backend_handle.start_realtime();
 
         {
             let mut mixer = engine.mixer();
@@ -1846,7 +1851,7 @@ mod tests {
         let mut changes = SimultaneousChanges::duration_from_now(Duration::ZERO);
         changes.push(node_id.change().set("value", 1.0));
         engine.commands.schedule_changes(changes);
-        engine.commands.transport_play();
+        raw_transport_play(&mut engine);
 
         for _ in 0..128 {
             backend_handle.process_block();
@@ -1881,7 +1886,7 @@ mod tests {
             .commands
             .transport_seek_to_beats(Beats::from_beats(1));
         wait_for_transport_reset_to(&mut engine.commands, Beats::from_beats(1));
-        engine.commands.transport_play();
+        raw_transport_play(&mut engine);
 
         for _ in 0..8 {
             backend_handle.process_block();
@@ -1941,7 +1946,7 @@ mod tests {
                 velocity: 100,
             },
         );
-        engine.commands.transport_play();
+        raw_transport_play(&mut engine);
 
         for _ in 0..1024 {
             backend_handle.process_block();
@@ -1992,7 +1997,7 @@ mod tests {
                 velocity: 100,
             },
         );
-        engine.commands.transport_play();
+        raw_transport_play(&mut engine);
 
         for _ in 0..1024 {
             backend_handle.process_block();
@@ -2032,7 +2037,7 @@ mod tests {
             .expect("track runtime should expose instrument handle");
 
         engine.transport().seek_beats(1.0);
-        engine.commands.transport_play();
+        raw_transport_play(&mut engine);
 
         for _ in 0..8 {
             backend_handle.process_block();
@@ -2056,6 +2061,464 @@ mod tests {
             thread::sleep(Duration::from_millis(2));
         }
 
-        panic!("paused seek followed by immediate MIDI into soundfont track produced silence");
+        let meters = engine.meter_snapshot();
+        panic!(
+            "paused seek followed by immediate MIDI into soundfont track produced silence; meters={meters:?}"
+        );
+    }
+
+    #[test]
+    fn paused_seek_then_direct_note_on_into_soundfont_track_produces_signal() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        let handle = {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .expect("track should accept soundfont instrument");
+            engine
+                .mixer
+                .instrument_handle(TrackId(0))
+                .expect("track runtime should expose instrument handle")
+        };
+        settle_backend(&backend_handle);
+
+        engine.transport().seek_beats(1.0);
+        raw_transport_play(&mut engine);
+        super::wait_for_transport_settled(&mut engine.commands);
+
+        for _ in 0..8 {
+            backend_handle.process_block();
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        engine.context.with_activation(|| {
+            handle.note_on(0, 60, 100);
+        });
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("paused seek followed by direct note_on into soundfont track produced silence");
+    }
+
+    #[test]
+    fn direct_note_on_into_soundfont_track_without_seek_produces_signal() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        let handle = {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .expect("track should accept soundfont instrument");
+            engine
+                .mixer
+                .instrument_handle(TrackId(0))
+                .expect("track runtime should expose instrument handle")
+        };
+        settle_backend(&backend_handle);
+
+        raw_transport_play(&mut engine);
+        super::wait_for_transport_settled(&mut engine.commands);
+
+        for _ in 0..8 {
+            backend_handle.process_block();
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        engine.context.with_activation(|| {
+            handle.note_on(0, 60, 100);
+        });
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        let meters = engine.meter_snapshot();
+        panic!(
+            "direct note_on into soundfont track without seek produced silence; meters={meters:?}"
+        );
+    }
+
+    #[test]
+    fn scheduled_midi_into_program_switched_soundfont_track_produces_signal() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .expect("track should accept soundfont instrument");
+        }
+        settle_backend(&backend_handle);
+
+        let handle = engine
+            .mixer
+            .instrument_handle(TrackId(0))
+            .expect("track runtime should expose instrument handle");
+
+        engine.commands.transport_pause();
+        engine.commands.transport_seek_to_beats(Beats::ZERO);
+        wait_for_transport_reset_to(&mut engine.commands, Beats::ZERO);
+        handle.schedule_midi_at_with_offset(
+            &mut engine.commands,
+            Beats::from_beats_f64(0.25),
+            0,
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
+        raw_transport_play(&mut engine);
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("scheduled MIDI into program-switched soundfont track produced silence");
+    }
+
+    #[test]
+    fn delayed_score_with_preplay_program_selection_produces_master_output() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        engine
+            .sequencer()
+            .replace_from_midi_bytes(&delayed_note_midi_bytes(480, 480))
+            .expect("midi should load");
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .expect("track should accept soundfont instrument");
+        }
+        settle_backend(&backend_handle);
+        engine.transport().play();
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("delayed score with pre-play program selection produced silence");
+    }
+
+    #[test]
+    fn delayed_score_with_preplay_default_program_selection_produces_master_output() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        engine
+            .sequencer()
+            .replace_from_midi_bytes(&delayed_note_midi_bytes(480, 480))
+            .expect("midi should load");
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .expect("track should accept soundfont instrument");
+        }
+        settle_backend(&backend_handle);
+        engine.transport().play();
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("delayed score with pre-play default program selection produced silence");
+    }
+
+    #[test]
+    fn direct_midi_after_score_load_and_preplay_instrument_selection_reaches_master() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        engine
+            .sequencer()
+            .replace_from_midi_bytes(&delayed_note_midi_bytes(480, 480))
+            .expect("midi should load");
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .expect("track should accept soundfont instrument");
+        }
+        settle_backend(&backend_handle);
+        raw_transport_play(&mut engine);
+        for _ in 0..8 {
+            backend_handle.process_block();
+            thread::sleep(Duration::from_millis(2));
+        }
+        let handle = engine
+            .mixer
+            .instrument_handle(TrackId(0))
+            .expect("track runtime should expose instrument handle");
+        handle.send_midi(
+            &mut engine.commands,
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("direct MIDI after score load and pre-play instrument selection produced silence");
+    }
+
+    #[test]
+    fn scheduled_midi_after_score_load_and_preplay_instrument_selection_reaches_master() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        engine
+            .sequencer()
+            .replace_from_midi_bytes(&delayed_note_midi_bytes(480, 480))
+            .expect("midi should load");
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .expect("track should accept soundfont instrument");
+        }
+        settle_backend(&backend_handle);
+        let handle = engine
+            .mixer
+            .instrument_handle(TrackId(0))
+            .expect("track runtime should expose instrument handle");
+
+        engine.commands.transport_pause();
+        engine.commands.transport_seek_to_beats(Beats::ZERO);
+        wait_for_transport_reset_to(&mut engine.commands, Beats::ZERO);
+        handle.schedule_midi_at_with_offset(
+            &mut engine.commands,
+            Beats::from_beats_f64(1.0),
+            0,
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
+        handle.schedule_midi_at_with_offset(
+            &mut engine.commands,
+            Beats::from_beats_f64(2.0),
+            0,
+            MidiEvent::NoteOff {
+                channel: 0,
+                note: 60,
+                velocity: 0,
+            },
+        );
+        raw_transport_play(&mut engine);
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!(
+            "scheduled MIDI after score load and pre-play instrument selection produced silence"
+        );
+    }
+
+    #[test]
+    fn scheduled_midi_after_live_instrument_selection_during_playback_reaches_master() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+        }
+        settle_backend(&backend_handle);
+        raw_transport_play(&mut engine);
+        for _ in 0..8 {
+            backend_handle.process_block();
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .expect("track should accept soundfont instrument");
+        }
+        let handle = engine
+            .mixer
+            .instrument_handle(TrackId(0))
+            .expect("track runtime should expose instrument handle");
+        let current_beat = engine
+            .transport()
+            .snapshot()
+            .expect("transport snapshot should be available")
+            .beats_position;
+        handle.schedule_midi_at_with_offset(
+            &mut engine.commands,
+            current_beat + Beats::from_beats_f64(1.0),
+            0,
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
+        handle.schedule_midi_at_with_offset(
+            &mut engine.commands,
+            current_beat + Beats::from_beats_f64(2.0),
+            0,
+            MidiEvent::NoteOff {
+                channel: 0,
+                note: 60,
+                velocity: 0,
+            },
+        );
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("scheduled MIDI after live instrument selection during playback produced silence");
+    }
+
+    #[test]
+    fn direct_midi_after_live_program_selection_during_playback_reaches_master() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+        }
+        settle_backend(&backend_handle);
+        raw_transport_play(&mut engine);
+        for _ in 0..8 {
+            backend_handle.process_block();
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .expect("track should accept soundfont instrument");
+        }
+        let handle = engine
+            .mixer
+            .instrument_handle(TrackId(0))
+            .expect("track runtime should expose instrument handle");
+        handle.send_midi(
+            &mut engine.commands,
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
+
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("direct MIDI after live program selection during playback produced silence");
     }
 }

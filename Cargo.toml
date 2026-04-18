@@ -52,6 +52,3 @@ dbg_macro = "warn"
 todo = "warn"
 unwrap_used = "warn"
 undocumented_unsafe_blocks = "deny"
-
-[patch."https://github.com/ales-tsurko/knyst"]
-knyst = { path = "target/knyst-fork/knyst" }
