@@ -13,6 +13,10 @@ use std::time::{Duration, Instant};
 use lilypalooza_audio::{
     AudioEngine, AudioEngineOptions, InstrumentSlotState, MixerState, SoundfontResource, TrackId,
 };
+use midly::num::{u4, u7, u15, u24, u28};
+use midly::{
+    Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = options_from_iter(env::args_os().skip(1));
@@ -42,8 +46,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if let Some(midi) = &options.midi {
-        let bytes = fs::read(midi)?;
+    if let Some(bytes) = options
+        .midi
+        .as_ref()
+        .map(fs::read)
+        .transpose()?
+        .or_else(|| options.synthetic_midi.then(|| simple_midi_bytes(480)))
+    {
         engine.replace_score_from_midi_bytes(&bytes)?;
     }
 
@@ -53,9 +62,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("pid={}", std::process::id());
     eprintln!(
-        "soundfont={:?} midi={:?} assign_tracks={} base_program={} play={} duration={}s report={}ms",
+        "soundfont={:?} midi={:?} synthetic_midi={} assign_tracks={} base_program={} play={} duration={}s report={}ms",
         options.soundfont,
         options.midi,
+        options.synthetic_midi,
         options.assign_tracks,
         options.base_program,
         options.play,
@@ -94,6 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Options {
     soundfont: Option<PathBuf>,
     midi: Option<PathBuf>,
+    synthetic_midi: bool,
     assign_tracks: usize,
     base_program: u8,
     play: bool,
@@ -109,6 +120,7 @@ where
     let mut options = Options {
         soundfont: None,
         midi: None,
+        synthetic_midi: false,
         assign_tracks: 0,
         base_program: 0,
         play: false,
@@ -120,6 +132,7 @@ where
         match argument.to_string_lossy().as_ref() {
             "--soundfont" => options.soundfont = args.next().map(PathBuf::from),
             "--midi" => options.midi = args.next().map(PathBuf::from),
+            "--synthetic-midi" => options.synthetic_midi = true,
             "--assign-tracks" => {
                 if let Some(value) = args.next() {
                     options.assign_tracks = value.to_string_lossy().parse().unwrap_or(0);
@@ -150,6 +163,54 @@ where
     options
 }
 
+fn simple_midi_bytes(ppq: u16) -> Vec<u8> {
+    let header = Header::new(Format::Parallel, Timing::Metrical(u15::from(ppq)));
+    let tempo_track: Track<'static> = vec![
+        TrackEvent {
+            delta: u28::from(0),
+            kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::from(500_000))),
+        },
+        TrackEvent {
+            delta: u28::from(0),
+            kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+        },
+    ];
+    let note_track: Track<'static> = vec![
+        TrackEvent {
+            delta: u28::from(0),
+            kind: TrackEventKind::Midi {
+                channel: u4::from(0),
+                message: MidiMessage::NoteOn {
+                    key: u7::from(60),
+                    vel: u7::from(100),
+                },
+            },
+        },
+        TrackEvent {
+            delta: u28::from(480),
+            kind: TrackEventKind::Midi {
+                channel: u4::from(0),
+                message: MidiMessage::NoteOff {
+                    key: u7::from(60),
+                    vel: u7::from(0),
+                },
+            },
+        },
+        TrackEvent {
+            delta: u28::from(0),
+            kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+        },
+    ];
+    let smf = Smf {
+        header,
+        tracks: vec![tempo_track, note_track],
+    };
+    let mut bytes = Vec::new();
+    smf.write_std(&mut bytes)
+        .expect("example midi should serialize");
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::options_from_iter;
@@ -162,6 +223,7 @@ mod tests {
             OsString::from("a.sf2"),
             OsString::from("--midi"),
             OsString::from("b.mid"),
+            OsString::from("--synthetic-midi"),
             OsString::from("--assign-tracks"),
             OsString::from("4"),
             OsString::from("--base-program"),
@@ -180,6 +242,7 @@ mod tests {
             options.midi.as_deref(),
             Some(PathBuf::from("b.mid").as_path())
         );
+        assert!(options.synthetic_midi);
         assert_eq!(options.assign_tracks, 4);
         assert_eq!(options.base_program, 8);
         assert!(options.play);

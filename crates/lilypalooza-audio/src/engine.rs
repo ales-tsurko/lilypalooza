@@ -21,6 +21,7 @@ use crate::transport::Transport;
 
 const CONTROLLER_BARRIER_TIMEOUT: Duration = Duration::from_millis(250);
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
+const TRANSPORT_POLL_INTERVAL: Duration = Duration::from_millis(2);
 const SCHEDULER_PLAYING_POLL_MIN: Duration = Duration::from_millis(4);
 const SCHEDULER_PLAYING_POLL_MAX: Duration = Duration::from_millis(12);
 const SCHEDULER_PAUSED_POLL_INTERVAL: Duration = Duration::from_millis(24);
@@ -57,6 +58,7 @@ pub struct AudioEngine {
     sphere: KnystSphere,
     context: KnystContext,
     commands: MultiThreadedKnystCommands,
+    transport_request_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Errors returned by the audio engine facade.
@@ -124,6 +126,7 @@ impl AudioEngine {
             sequencer.sync_track_handle(track.id, mixer.instrument_handle(track.id));
         }
         let scheduler_shutdown = Arc::new(AtomicBool::new(false));
+        let transport_request_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let scheduler_thread = Some(start_scheduler_thread(
             context.commands(),
             sequencer.clone(),
@@ -140,6 +143,7 @@ impl AudioEngine {
             sphere,
             context,
             commands,
+            transport_request_generation,
         })
     }
 
@@ -155,6 +159,84 @@ impl AudioEngine {
             Some(&mut self.mixer),
             Some(&self.sequencer),
         )
+    }
+
+    pub fn request_play(&mut self) {
+        let generation = self
+            .transport_request_generation
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        let generation_ref = self.transport_request_generation.clone();
+        let mut commands = self.commands.clone();
+        let sequencer = self.sequencer.clone();
+        thread::spawn(move || {
+            if generation_ref.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let pending_position = sequencer.pending_position();
+            let current_beat = commands
+                .current_transport_snapshot()
+                .and_then(|snapshot| snapshot.beats)
+                .unwrap_or(Beats::ZERO);
+            let start_beat = pending_position.unwrap_or(current_beat);
+            if start_beat != current_beat {
+                commands.transport_seek_to_beats(start_beat);
+                wait_for_transport_settled(&mut commands);
+                wait_for_transport_beats(&mut commands, start_beat);
+            }
+            if generation_ref.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            sequencer.prepare_for_play(&mut commands, start_beat);
+            wait_for_controller_barrier(&mut commands);
+            if generation_ref.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            commands.transport_play();
+            wait_for_transport_settled(&mut commands);
+            if generation_ref.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            sequencer.set_playing(true);
+            sequencer.process_tick(&mut commands);
+        });
+    }
+
+    pub fn request_pause(&mut self) {
+        let generation = self
+            .transport_request_generation
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        let generation_ref = self.transport_request_generation.clone();
+        let mut commands = self.commands.clone();
+        let sequencer = self.sequencer.clone();
+        let current_beat = commands
+            .current_transport_snapshot()
+            .and_then(|snapshot| snapshot.beats)
+            .unwrap_or(Beats::ZERO);
+        let has_loaded_score = sequencer.has_loaded_score();
+        sequencer.set_playing(false);
+        self.mixer.reset_meters();
+        commands.clear_scheduled_changes();
+        commands.transport_pause();
+        if has_loaded_score {
+            sequencer.mark_dirty_for_seek(current_beat, false);
+        }
+        thread::spawn(move || {
+            wait_for_transport_settled(&mut commands);
+            if generation_ref.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if !has_loaded_score {
+                return;
+            }
+            commands.transport_seek_to_beats(current_beat);
+            wait_for_transport_settled(&mut commands);
+            if generation_ref.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            wait_for_transport_beats(&mut commands, current_beat);
+        });
     }
 
     /// Returns the mixer control handle.
@@ -273,6 +355,24 @@ fn wait_for_controller_barrier(commands: &mut MultiThreadedKnystCommands) {
 fn wait_for_transport_settled(commands: &mut MultiThreadedKnystCommands) {
     let receiver = commands.request_transport_settled();
     let _ = receiver.recv_timeout(SETTLE_TIMEOUT);
+}
+
+fn wait_for_transport_beats(commands: &mut MultiThreadedKnystCommands, expected: Beats) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < SETTLE_TIMEOUT {
+        if commands
+            .current_transport_snapshot()
+            .and_then(|snapshot| snapshot.beats)
+            .is_some_and(|position| {
+                (position.as_beats_f64() - expected.as_beats_f64()).abs() < 1e-6
+            })
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(
+            TRANSPORT_POLL_INTERVAL.as_millis() as u64
+        ));
+    }
 }
 
 fn wait_for_transport_advance(commands: &mut MultiThreadedKnystCommands, timeout: Duration) {
@@ -1598,6 +1698,63 @@ mod tests {
         let debug = engine.sequencer.debug_state();
         panic!(
             "paused seek followed by play produced silence; before_play={before_play:?}; after_play={after_play:?}; debug={debug:?}; max_peak={max_peak}"
+        );
+    }
+
+    #[test]
+    fn paused_seek_then_play_immediate_starts_from_seek_position() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine = AudioEngine::start(
+            MixerState::new(),
+            backend,
+            AudioEngineOptions {
+                chase_notes_on_seek: true,
+                ..AudioEngineOptions::default()
+            },
+        )
+        .expect("engine should start");
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .expect("track should accept soundfont instrument");
+        }
+        settle_backend(&backend_handle);
+
+        engine
+            .sequencer()
+            .replace_from_midi_bytes(&sustained_note_midi_bytes(480, 1920))
+            .expect("midi should load");
+        engine.transport().seek_beats(1.0);
+        engine.transport().play_immediate();
+
+        let mut max_peak = 0.0_f32;
+        for _ in 0..128 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                return;
+            }
+            let peak = backend_handle
+                .output_channel(0)
+                .into_iter()
+                .chain(backend_handle.output_channel(1))
+                .map(f32::abs)
+                .fold(0.0_f32, f32::max);
+            max_peak = max_peak.max(peak);
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        let snapshot = engine
+            .transport()
+            .snapshot()
+            .expect("transport snapshot should be available");
+        let debug = engine.sequencer.debug_state();
+        panic!(
+            "paused seek followed by play_immediate produced silence; snapshot={snapshot:?}; debug={debug:?}; max_peak={max_peak}"
         );
     }
 

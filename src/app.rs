@@ -9,7 +9,7 @@ use iced::widget::{Id, pane_grid, svg};
 use iced::{Point, Rectangle, Size, Subscription, Task, mouse, window};
 use iced_core::{Bytes, image};
 use lilypalooza_audio::MixerState;
-use lilypalooza_audio::{AudioEngine, AudioEngineOptions};
+use lilypalooza_audio::{AudioEngine, AudioEngineOptions, PlaybackState as AudioPlaybackState};
 use tempfile::TempDir;
 
 use crate::browser_file_watcher::BrowserFileWatcher;
@@ -68,8 +68,7 @@ const MAX_SVG_PAGE_BRIGHTNESS: u8 = 100;
 const SVG_PAGE_BRIGHTNESS_STEP: u8 = 10;
 const SCORE_ZOOM_PREVIEW_INTERVAL: Duration = Duration::from_millis(16);
 const SCORE_ZOOM_PREVIEW_SETTLE_DELAY: Duration = Duration::from_millis(120);
-const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(33);
-const MIXER_PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(66);
+const ACTIVE_PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(33);
 const PASSIVE_PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(120);
 pub(super) const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
@@ -128,6 +127,7 @@ struct Lilypalooza {
     spinner_step: usize,
     compile_session: Option<lilypond::CompileSession>,
     playback: Option<AudioEngine>,
+    audio_isolation: bool,
     soundfont_status: SoundfontStatus,
     workspace_panes: pane_grid::State<DockGroupId>,
     dock_layout: Option<DockNode>,
@@ -202,6 +202,8 @@ struct Lilypalooza {
     score_zoom_preview: Option<ScoreZoomPreview>,
     score_zoom_preview_pending: Option<ScoreZoomPreviewRequest>,
     piano_roll_viewport_cursor: Option<iced::Point>,
+    pending_playback_tick: Option<u64>,
+    pending_transport_state: Option<AudioPlaybackState>,
     transport_seek_preview: Option<f32>,
     keyboard_modifiers: keyboard::Modifiers,
     primary_mouse_pressed: bool,
@@ -451,6 +453,7 @@ pub fn run(
     startup_soundfont: Option<PathBuf>,
     startup_score: Option<PathBuf>,
     audio_enabled: bool,
+    audio_isolation: bool,
 ) -> iced::Result {
     iced::application(
         move || {
@@ -458,6 +461,7 @@ pub fn run(
                 startup_soundfont.clone(),
                 startup_score.clone(),
                 audio_enabled,
+                audio_isolation,
             )
         },
         update,
@@ -488,6 +492,7 @@ fn new(
     startup_soundfont: Option<PathBuf>,
     startup_score: Option<PathBuf>,
     audio_enabled: bool,
+    audio_isolation: bool,
 ) -> (Lilypalooza, Task<Message>) {
     let default_settings = settings::AppSettings::default();
     let default_global_state = GlobalState::default();
@@ -591,6 +596,7 @@ fn new(
         compile_session: None,
         playback,
         soundfont_status: SoundfontStatus::NotSelected,
+        audio_isolation,
         workspace_panes,
         dock_layout,
         dock_groups,
@@ -674,6 +680,8 @@ fn new(
         score_zoom_preview: None,
         score_zoom_preview_pending: None,
         piano_roll_viewport_cursor: None,
+        pending_playback_tick: None,
+        pending_transport_state: None,
         transport_seek_preview: None,
         keyboard_modifiers: keyboard::Modifiers::default(),
         primary_mouse_pressed: false,
@@ -689,6 +697,10 @@ fn new(
     };
 
     app.logger.push("Checking LilyPond availability");
+    if audio_isolation {
+        app.logger
+            .push("Audio isolation mode enabled: mixer folded, 4 default SoundFont tracks armed");
+    }
     if !audio_enabled {
         app.logger.push("Audio engine disabled by --no-audio");
     }
@@ -709,6 +721,10 @@ fn new(
     if let Some(error) = playback_init_error {
         app.logger
             .push(format!("Playback engine startup failed: {error}"));
+    }
+
+    if audio_isolation {
+        let _ = app.fold_workspace_pane(WorkspacePaneKind::Mixer);
     }
 
     app.restore_editor_session(
@@ -869,10 +885,9 @@ impl Lilypalooza {
             return None;
         }
 
-        if self.score_pane_visible() || self.piano_roll_pane_visible() {
-            Some(PLAYBACK_POLL_INTERVAL)
-        } else if self.mixer_pane_visible() {
-            Some(MIXER_PLAYBACK_POLL_INTERVAL)
+        if self.score_pane_visible() || self.piano_roll_pane_visible() || self.mixer_pane_visible()
+        {
+            Some(ACTIVE_PLAYBACK_POLL_INTERVAL)
         } else {
             Some(PASSIVE_PLAYBACK_POLL_INTERVAL)
         }
@@ -1261,7 +1276,7 @@ mod tests {
     use std::fs;
 
     fn test_app() -> Lilypalooza {
-        let (mut app, _task) = new(None, None, false);
+        let (mut app, _task) = new(None, None, false, false);
         let _ = update(
             &mut app,
             Message::Shortcuts(messages::ShortcutsMessage::OpenDialog),
@@ -1270,7 +1285,7 @@ mod tests {
     }
 
     fn test_editor_app() -> Lilypalooza {
-        let (app, _task) = new(None, None, false);
+        let (app, _task) = new(None, None, false, false);
         app
     }
 
@@ -1354,16 +1369,29 @@ mod tests {
 
     #[test]
     fn playback_poll_interval_is_visibility_aware() {
-        let (mut app, _task) = new(None, None, false);
+        let (mut app, _task) = new(None, None, false, false);
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
         app.piano_roll.set_playback_position(0, 1, true);
 
-        assert_eq!(app.playback_poll_interval(), Some(PLAYBACK_POLL_INTERVAL));
-
-        hide_workspace_pane(&mut app, WorkspacePaneKind::Score);
-        hide_workspace_pane(&mut app, WorkspacePaneKind::PianoRoll);
         assert_eq!(
             app.playback_poll_interval(),
-            Some(MIXER_PLAYBACK_POLL_INTERVAL)
+            Some(ACTIVE_PLAYBACK_POLL_INTERVAL)
+        );
+
+        hide_workspace_pane(&mut app, WorkspacePaneKind::Score);
+        assert_eq!(
+            app.playback_poll_interval(),
+            Some(ACTIVE_PLAYBACK_POLL_INTERVAL)
+        );
+
+        hide_workspace_pane(&mut app, WorkspacePaneKind::PianoRoll);
+        let _ = app.unfold_workspace_pane(WorkspacePaneKind::Mixer);
+        assert_eq!(
+            app.playback_poll_interval(),
+            Some(ACTIVE_PLAYBACK_POLL_INTERVAL)
         );
 
         hide_workspace_pane(&mut app, WorkspacePaneKind::Mixer);

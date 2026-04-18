@@ -2929,7 +2929,7 @@ mod tests {
         let alpha = root.path().join("alpha");
         fs::create_dir(&alpha).expect("alpha dir");
 
-        let (app, _task) = super::super::new(None, None, false);
+        let (app, _task) = super::super::new(None, None, false, false);
         let column = crate::app::editor::EditorBrowserColumnSummary::Directory {
             entries: vec![crate::app::editor::EditorBrowserEntrySummary {
                 path: alpha.clone(),
@@ -2955,7 +2955,7 @@ mod tests {
     #[test]
     fn browser_header_click_emits_focus_message() {
         let root = tempfile::TempDir::new().expect("tempdir");
-        let (mut app, _task) = super::super::new(None, None, false);
+        let (mut app, _task) = super::super::new(None, None, false, false);
         app.project_root = Some(root.path().to_path_buf());
         app.editor.set_project_root(Some(root.path().to_path_buf()));
         app.editor.toggle_file_browser();

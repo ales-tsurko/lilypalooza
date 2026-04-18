@@ -123,6 +123,34 @@ impl<'a> Transport<'a> {
         }
     }
 
+    /// Starts playback immediately without blocking for transport settlement.
+    ///
+    /// This is intended for interactive UI toggles where responsiveness matters
+    /// more than synchronously waiting for the playing transport state to be
+    /// fully observed on the calling thread.
+    pub fn play_immediate(&mut self) {
+        let pending_position = self.sequencer.and_then(Sequencer::pending_position);
+        let current_beat = self
+            .snapshot()
+            .map(|snapshot| snapshot.beats_position)
+            .unwrap_or(Beats::ZERO);
+        let start_beat = pending_position.unwrap_or(current_beat);
+        if start_beat != current_beat {
+            self.commands.transport_seek_to_beats(start_beat);
+            wait_for_transport_settled(self.commands);
+            wait_for_transport_beats(self.commands, start_beat);
+        }
+        if let Some(sequencer) = self.sequencer {
+            sequencer.prepare_for_play(self.commands, start_beat);
+        }
+        wait_for_controller_barrier(self.commands);
+        self.commands.transport_play();
+        if let Some(sequencer) = self.sequencer {
+            sequencer.set_playing(true);
+            sequencer.process_tick(self.commands);
+        }
+    }
+
     /// Pauses playback.
     pub fn pause(&mut self) {
         let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
@@ -155,6 +183,33 @@ impl<'a> Transport<'a> {
         self.commands.transport_seek_to_beats(current_beat);
         wait_for_transport_settled(self.commands);
         wait_for_transport_beats(self.commands, current_beat);
+        if has_loaded_score && let Some(sequencer) = self.sequencer {
+            sequencer.mark_dirty_for_seek(current_beat, false);
+        }
+    }
+
+    /// Pauses playback immediately without blocking for transport settlement.
+    ///
+    /// This is intended for interactive UI toggles where responsiveness matters
+    /// more than synchronously waiting for the paused transport state to be
+    /// fully observed on the calling thread.
+    pub fn pause_immediate(&mut self) {
+        let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
+        let current_beat = self
+            .snapshot()
+            .map(|snapshot| snapshot.beats_position)
+            .unwrap_or(Beats::ZERO);
+        if let Some(sequencer) = self.sequencer {
+            sequencer.set_playing(false);
+        }
+        if let Some(mixer) = self.mixer.as_deref() {
+            mixer.reset_meters();
+        }
+        self.commands.clear_scheduled_changes();
+        if has_loaded_score && let Some(sequencer) = self.sequencer {
+            sequencer.prepare_for_pause_immediate(self.commands);
+        }
+        self.commands.transport_pause();
         if has_loaded_score && let Some(sequencer) = self.sequencer {
             sequencer.mark_dirty_for_seek(current_beat, false);
         }
@@ -324,6 +379,44 @@ impl<'a> Transport<'a> {
             wait_for_transport_state(self.commands, TransportState::Playing);
             if has_loaded_score && let Some(sequencer) = self.sequencer {
                 sequencer.set_playing(true);
+                sequencer.process_tick(self.commands);
+            }
+        }
+    }
+
+    /// Seeks transport immediately without blocking for transport settlement.
+    ///
+    /// This is intended for interactive UI seeking. Exact settled seeking is
+    /// still available through `seek_beats`.
+    pub fn seek_beats_immediate(&mut self, position: f64) {
+        let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
+        let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
+        let position = Beats::from_beats_f64(position.max(0.0));
+        if let Some(sequencer) = self.sequencer {
+            sequencer.set_playing(false);
+        }
+        if let Some(mixer) = self.mixer.as_deref() {
+            mixer.reset_meters();
+        }
+        self.commands.clear_scheduled_changes();
+        if was_playing
+            && has_loaded_score
+            && let Some(sequencer) = self.sequencer
+        {
+            sequencer.prepare_for_pause_immediate(self.commands);
+        }
+        self.commands.transport_pause();
+        self.commands.transport_seek_to_beats(position);
+        if has_loaded_score && let Some(sequencer) = self.sequencer {
+            sequencer.mark_dirty_for_seek(position, was_playing);
+            if was_playing {
+                sequencer.prepare_for_play(self.commands, position);
+                sequencer.set_playing(true);
+            }
+        }
+        if was_playing {
+            self.commands.transport_play();
+            if has_loaded_score && let Some(sequencer) = self.sequencer {
                 sequencer.process_tick(self.commands);
             }
         }

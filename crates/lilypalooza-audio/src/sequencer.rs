@@ -95,6 +95,13 @@ impl Sequencer {
             .schedule_pause_reset_at(at, commands);
     }
 
+    pub(crate) fn prepare_for_pause_immediate(&self, commands: &mut MultiThreadedKnystCommands) {
+        self.inner
+            .lock()
+            .expect("sequencer mutex poisoned")
+            .dispatch_immediate_pause_reset(commands);
+    }
+
     pub(crate) fn mark_dirty_for_seek(&self, position: Beats, needs_reset_on_play: bool) {
         let mut inner = self.inner.lock().expect("sequencer mutex poisoned");
         inner.dirty = true;
@@ -601,6 +608,27 @@ impl SequencerState {
             self.dispatch_chase_events_at(at, commands);
         }
     }
+
+    fn dispatch_immediate_pause_reset(&mut self, commands: &mut MultiThreadedKnystCommands) {
+        let mut tracks = BTreeSet::new();
+        for sequence in &self.sequences {
+            tracks.insert(sequence.target_track);
+        }
+        for track in tracks {
+            self.generations[track.index()] = self.generations[track.index()].wrapping_add(1);
+            let Some(handle) = self
+                .instrument_handles
+                .get(track.index())
+                .copied()
+                .flatten()
+            else {
+                continue;
+            };
+            let generation = self.generations[track.index()];
+            handle.send_reset_live(commands, generation);
+            dispatch_immediate_panic_events(handle, generation, commands);
+        }
+    }
 }
 
 fn offset_beats(
@@ -640,6 +668,29 @@ fn dispatch_scheduled_panic_events(
                 event,
             );
             frame_offset += 2;
+        }
+    }
+}
+
+fn dispatch_immediate_panic_events(
+    handle: InstrumentRuntimeHandle,
+    generation: u32,
+    commands: &mut MultiThreadedKnystCommands,
+) {
+    let mut step = 1;
+    for channel in 0..16_u8 {
+        for event in [
+            EngineMidiEvent::AllSoundOff { channel },
+            EngineMidiEvent::AllNotesOff { channel },
+            EngineMidiEvent::ResetAllControllers { channel },
+        ] {
+            handle.send_midi_immediate(
+                commands,
+                generation,
+                event,
+                InstrumentRuntimeHandle::immediate_event_delay(step),
+            );
+            step += 1;
         }
     }
 }

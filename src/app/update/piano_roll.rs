@@ -144,25 +144,22 @@ impl Lilypalooza {
             PianoRollMessage::TransportPlayPause => {
                 self.transport_seek_preview = None;
                 if let Some(playback) = self.playback.as_mut() {
-                    let is_playing = playback
-                        .transport()
-                        .snapshot()
-                        .map(|snapshot| {
-                            snapshot.playback_state == lilypalooza_audio::PlaybackState::Playing
-                        })
-                        .unwrap_or(false);
+                    let is_playing = self.piano_roll.playback_is_playing();
 
                     if is_playing {
-                        playback.transport().pause();
+                        self.pending_transport_state =
+                            Some(lilypalooza_audio::PlaybackState::Paused);
+                        playback.transport().pause_immediate();
                     } else {
-                        playback.transport().play();
+                        self.pending_transport_state =
+                            Some(lilypalooza_audio::PlaybackState::Playing);
+                        playback.transport().play_immediate();
                     }
 
                     let current_tick = self.piano_roll.playback_tick();
                     let total_ticks = self.current_midi_total_ticks();
                     self.piano_roll
                         .set_playback_position(current_tick, total_ticks, !is_playing);
-                    self.refresh_playback_position();
                 } else {
                     self.show_prompt(
                         ErrorPrompt::new(
@@ -179,23 +176,7 @@ impl Lilypalooza {
                 self.transport_seek_preview = None;
                 let target_tick = self.rewind_target_tick();
 
-                if let Some(playback) = self.playback.as_mut() {
-                    if target_tick == 0 {
-                        playback.transport().rewind();
-                    } else if let Some(current_file) = self.piano_roll.current_file() {
-                        let ppq = f64::from(current_file.data.ppq.max(1));
-                        playback.transport().seek_beats(target_tick as f64 / ppq);
-                    }
-                    let total_ticks = self.current_midi_total_ticks();
-                    self.piano_roll.set_playback_position(
-                        target_tick.min(total_ticks),
-                        total_ticks,
-                        false,
-                    );
-                    self.refresh_playback_position();
-                } else {
-                    self.seek_playback_ticks(target_tick);
-                }
+                self.seek_playback_ticks(target_tick);
             }
         }
 

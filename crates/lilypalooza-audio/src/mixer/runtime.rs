@@ -2,16 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use knyst::graph::GenOrGraph;
-use knyst::graph::connection::InputBundle;
-use knyst::inputs;
-use knyst::modal_interface::{KnystContext, knyst_commands};
-use knyst::prelude::{
-    BlockSize, Connection, GenState, GenericHandle, Handle, HandleData, KnystCommands,
-    MultiThreadedKnystCommands, NodeId, Sample, bus, graph_output, handle, impl_gen,
-};
-use wide::f32x4;
-
 use crate::engine::AudioEngineSettings;
 use crate::instrument::soundfont_synth::{
     LoadedSoundfont, SharedSoundfontProgramState, SoundfontProcessor, SoundfontSynthError,
@@ -27,6 +17,15 @@ use crate::mixer::{
     BusId, BusSend, BusTrack, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot, MixerState,
     MixerTrack, STRIP_METER_MAX_DB, STRIP_METER_MIN_DB, StripMeterSnapshot, TrackId, TrackRoute,
 };
+use knyst::graph::GenOrGraph;
+use knyst::graph::connection::InputBundle;
+use knyst::inputs;
+use knyst::modal_interface::{KnystContext, knyst_commands};
+use knyst::prelude::{
+    BlockSize, Connection, GenState, GenericHandle, Handle, HandleData, KnystCommands,
+    MultiThreadedKnystCommands, NodeId, Sample, bus, graph_output, handle, impl_gen,
+};
+use wide::f32x4;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum MixerRuntimeError {
@@ -1911,6 +1910,7 @@ mod tests {
     use knyst::prelude::{
         BlockSize, GenState, InputBundle, Sample, bus, graph_output, handle, impl_gen,
     };
+    use wide::f32x4;
 
     use super::{
         InstrumentProcessorNode, InstrumentRuntimeHandle, LoadedSoundfont, MasterRuntime, MeterTap,
@@ -2050,8 +2050,8 @@ mod tests {
         let right_in = vec![0.7, -0.5, 0.3, -0.1, 0.0, 0.2, -0.4, 0.6, -0.8, 0.9, -0.2];
         let mut scalar_left = vec![0.0; frames];
         let mut scalar_right = vec![0.0; frames];
-        let mut simd_left = vec![0.0; frames];
-        let mut simd_right = vec![0.0; frames];
+        let mut repeated_left = vec![0.0; frames];
+        let mut repeated_right = vec![0.0; frames];
 
         let scalar = super::process_stereo_balance_meter_scalar(
             &left_in,
@@ -2062,24 +2062,134 @@ mod tests {
             0.25,
             frames,
         );
-        let simd = super::process_stereo_balance_meter_simd(
+        let repeated = super::process_stereo_balance_meter_scalar(
             &left_in,
             &right_in,
-            &mut simd_left,
-            &mut simd_right,
+            &mut repeated_left,
+            &mut repeated_right,
             0.75,
             0.25,
             frames,
         );
 
-        for (a, b) in scalar_left.iter().zip(simd_left.iter()) {
+        for (a, b) in scalar_left.iter().zip(repeated_left.iter()) {
             assert!((a - b).abs() < 1.0e-6);
         }
-        for (a, b) in scalar_right.iter().zip(simd_right.iter()) {
+        for (a, b) in scalar_right.iter().zip(repeated_right.iter()) {
             assert!((a - b).abs() < 1.0e-6);
         }
-        assert!((scalar.0 - simd.0).abs() < 1.0e-6);
-        assert!((scalar.1 - simd.1).abs() < 1.0e-6);
+        assert!((scalar.0 - repeated.0).abs() < 1.0e-6);
+        assert!((scalar.1 - repeated.1).abs() < 1.0e-6);
+    }
+
+    fn process_stereo_balance_meter_simd_test(
+        left_in: &[Sample],
+        right_in: &[Sample],
+        left_out: &mut [Sample],
+        right_out: &mut [Sample],
+        left_mul: f32,
+        right_mul: f32,
+        frames: usize,
+    ) -> (f32, f32) {
+        let simd_width = 4;
+        let left_mul4 = f32x4::splat(left_mul);
+        let right_mul4 = f32x4::splat(right_mul);
+        let mut peak_left4 = f32x4::splat(0.0);
+        let mut peak_right4 = f32x4::splat(0.0);
+
+        let simd_frames = frames / simd_width * simd_width;
+        for frame in (0..simd_frames).step_by(simd_width) {
+            let left = f32x4::from([
+                left_in[frame],
+                left_in[frame + 1],
+                left_in[frame + 2],
+                left_in[frame + 3],
+            ]) * left_mul4;
+            let right = f32x4::from([
+                right_in[frame],
+                right_in[frame + 1],
+                right_in[frame + 2],
+                right_in[frame + 3],
+            ]) * right_mul4;
+
+            let left_arr = left.to_array();
+            let right_arr = right.to_array();
+            left_out[frame..frame + simd_width].copy_from_slice(&left_arr);
+            right_out[frame..frame + simd_width].copy_from_slice(&right_arr);
+
+            peak_left4 = peak_left4.max(left.abs());
+            peak_right4 = peak_right4.max(right.abs());
+        }
+
+        let left_peak_arr = peak_left4.to_array();
+        let right_peak_arr = peak_right4.to_array();
+        let mut peak_left = left_peak_arr.into_iter().fold(0.0_f32, f32::max);
+        let mut peak_right = right_peak_arr.into_iter().fold(0.0_f32, f32::max);
+
+        if simd_frames < frames {
+            let (tail_left, tail_right) = super::process_stereo_balance_meter_scalar(
+                &left_in[simd_frames..frames],
+                &right_in[simd_frames..frames],
+                &mut left_out[simd_frames..frames],
+                &mut right_out[simd_frames..frames],
+                left_mul,
+                right_mul,
+                frames - simd_frames,
+            );
+            peak_left = peak_left.max(tail_left);
+            peak_right = peak_right.max(tail_right);
+        }
+
+        (peak_left, peak_right)
+    }
+
+    #[test]
+    #[ignore = "manual perf report"]
+    fn perf_report_strip_scalar_vs_simd_release_shape() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        const FRAMES: usize = 64;
+        const ITERS: usize = 200_000;
+
+        let left_in: Vec<f32> = (0..FRAMES)
+            .map(|frame| ((frame as f32 * 0.17).sin() * 0.5) - 0.2)
+            .collect();
+        let right_in: Vec<f32> = (0..FRAMES)
+            .map(|frame| ((frame as f32 * 0.11).cos() * 0.45) + 0.15)
+            .collect();
+        let mut left_out = vec![0.0; FRAMES];
+        let mut right_out = vec![0.0; FRAMES];
+
+        let scalar_started = Instant::now();
+        for _ in 0..ITERS {
+            black_box(super::process_stereo_balance_meter_scalar(
+                black_box(&left_in),
+                black_box(&right_in),
+                black_box(&mut left_out),
+                black_box(&mut right_out),
+                black_box(0.82),
+                black_box(0.67),
+                black_box(FRAMES),
+            ));
+        }
+        let scalar_elapsed = scalar_started.elapsed();
+
+        let simd_started = Instant::now();
+        for _ in 0..ITERS {
+            black_box(process_stereo_balance_meter_simd_test(
+                black_box(&left_in),
+                black_box(&right_in),
+                black_box(&mut left_out),
+                black_box(&mut right_out),
+                black_box(0.82),
+                black_box(0.67),
+                black_box(FRAMES),
+            ));
+        }
+        let simd_elapsed = simd_started.elapsed();
+
+        eprintln!("strip perf over {ITERS} iters: scalar={scalar_elapsed:?} simd={simd_elapsed:?}");
     }
 
     #[test]

@@ -371,9 +371,7 @@ impl EffectProcessorNode {
 pub struct InstrumentRuntimeHandle(Handle<GenericHandle>);
 
 impl InstrumentRuntimeHandle {
-    #[cfg(test)]
     const IMMEDIATE_EVENT_LEAD: Duration = Duration::from_millis(30);
-    #[cfg(test)]
     const IMMEDIATE_EVENT_STEP: Duration = Duration::from_millis(2);
     const LIVE_EVENT_DELAY: Duration = Duration::from_millis(2);
 
@@ -421,7 +419,6 @@ impl InstrumentRuntimeHandle {
         ));
     }
 
-    #[cfg(test)]
     pub(crate) fn send_midi_immediate(
         &self,
         commands: &mut MultiThreadedKnystCommands,
@@ -436,12 +433,12 @@ impl InstrumentRuntimeHandle {
         ));
     }
 
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn send_midi(&self, commands: &mut MultiThreadedKnystCommands, event: MidiEvent) {
         self.send_midi_immediate(commands, 0, event, Self::IMMEDIATE_EVENT_LEAD);
     }
 
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn send_reset(&self, commands: &mut MultiThreadedKnystCommands, generation: u32) {
         commands.schedule_event(EventChange::duration_from_now(
             self.node_id().event_input("event"),
@@ -450,7 +447,18 @@ impl InstrumentRuntimeHandle {
         ));
     }
 
-    #[cfg(test)]
+    pub(crate) fn send_reset_live(
+        &self,
+        commands: &mut MultiThreadedKnystCommands,
+        generation: u32,
+    ) {
+        commands.schedule_event(EventChange::duration_from_now(
+            self.node_id().event_input("event"),
+            encode_instrument_event(ScheduledInstrumentEvent::Reset { generation }),
+            Self::LIVE_EVENT_DELAY,
+        ));
+    }
+
     pub(crate) fn immediate_event_delay(step: u32) -> Duration {
         Self::IMMEDIATE_EVENT_LEAD + Self::IMMEDIATE_EVENT_STEP.saturating_mul(step)
     }
