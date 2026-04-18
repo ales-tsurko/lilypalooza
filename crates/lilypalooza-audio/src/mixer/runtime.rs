@@ -14,8 +14,9 @@ use crate::instrument::{
     generation_is_current_or_newer,
 };
 use crate::mixer::{
-    BusId, BusSend, BusTrack, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot, MixerState,
-    MixerTrack, STRIP_METER_MAX_DB, STRIP_METER_MIN_DB, StripMeterSnapshot, TrackId, TrackRoute,
+    BusId, BusSend, BusTrack, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot,
+    MixerMeterSnapshotWindow, MixerState, MixerTrack, STRIP_METER_MAX_DB, STRIP_METER_MIN_DB,
+    StripMeterSnapshot, TrackId, TrackRoute,
 };
 use knyst::graph::GenOrGraph;
 use knyst::graph::connection::InputBundle;
@@ -257,6 +258,46 @@ impl MixerRuntime {
                                 runtime.meter.snapshot()
                             }),
                     )
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn meter_snapshot_window(
+        &self,
+        mixer: &MixerState,
+        track_range: std::ops::Range<usize>,
+        bus_range: std::ops::Range<usize>,
+    ) -> MixerMeterSnapshotWindow {
+        let track_end = track_range.end.min(mixer.tracks().len());
+        let bus_end = bus_range.end.min(mixer.buses().len());
+
+        MixerMeterSnapshotWindow {
+            main: self.master.meter.snapshot(),
+            tracks: mixer.tracks()[track_range.start.min(track_end)..track_end]
+                .iter()
+                .enumerate()
+                .map(|(offset, _)| {
+                    let index = track_range.start + offset;
+                    self.tracks
+                        .get(index)
+                        .and_then(|runtime| runtime.as_ref())
+                        .map_or_else(StripMeterSnapshot::default, |runtime| {
+                            runtime.meter.snapshot()
+                        })
+                })
+                .collect(),
+            buses: mixer.buses()[bus_range.start.min(bus_end)..bus_end]
+                .iter()
+                .enumerate()
+                .map(|(offset, _)| {
+                    let index = bus_range.start + offset;
+                    let id = mixer.buses()[index].id;
+                    self.buses
+                        .get(&id)
+                        .map_or_else(StripMeterSnapshot::default, |runtime| {
+                            runtime.meter.snapshot()
+                        })
                 })
                 .collect(),
         }

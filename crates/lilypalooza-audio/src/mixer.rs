@@ -4,6 +4,7 @@ pub(crate) mod runtime;
 mod track;
 
 use std::ops::Deref;
+use std::ops::Range;
 use std::time::Duration;
 
 use knyst::controller::KnystCommands;
@@ -84,6 +85,17 @@ pub struct MixerMeterSnapshot {
     pub tracks: Vec<StripMeterSnapshot>,
     /// Bus strip meter states.
     pub buses: Vec<(BusId, StripMeterSnapshot)>,
+}
+
+/// Visible mixer meter window snapshot.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MixerMeterSnapshotWindow {
+    /// Main strip meter state.
+    pub main: StripMeterSnapshot,
+    /// Visible instrument track meter states in window order.
+    pub tracks: Vec<StripMeterSnapshot>,
+    /// Visible bus meter states in window order.
+    pub buses: Vec<StripMeterSnapshot>,
 }
 
 /// Serializable mixer state with fixed instrument tracks, dynamic buses, and a dedicated master.
@@ -435,6 +447,15 @@ impl Mixer {
 
     pub(crate) fn meter_snapshot(&self) -> MixerMeterSnapshot {
         self.runtime.meter_snapshot(&self.state)
+    }
+
+    pub(crate) fn meter_snapshot_window(
+        &self,
+        track_range: Range<usize>,
+        bus_range: Range<usize>,
+    ) -> MixerMeterSnapshotWindow {
+        self.runtime
+            .meter_snapshot_window(&self.state, track_range, bus_range)
     }
 
     pub(crate) fn reset_meters(&self) {

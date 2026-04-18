@@ -147,12 +147,8 @@ impl Lilypalooza {
                     let is_playing = self.piano_roll.playback_is_playing();
 
                     if is_playing {
-                        self.pending_transport_state =
-                            Some(lilypalooza_audio::PlaybackState::Paused);
                         playback.transport().pause_immediate();
                     } else {
-                        self.pending_transport_state =
-                            Some(lilypalooza_audio::PlaybackState::Playing);
                         playback.transport().play_immediate();
                     }
 

@@ -137,13 +137,10 @@ impl<'a> Transport<'a> {
         let start_beat = pending_position.unwrap_or(current_beat);
         if start_beat != current_beat {
             self.commands.transport_seek_to_beats(start_beat);
-            wait_for_transport_settled(self.commands);
-            wait_for_transport_beats(self.commands, start_beat);
         }
         if let Some(sequencer) = self.sequencer {
             sequencer.prepare_for_play(self.commands, start_beat);
         }
-        wait_for_controller_barrier(self.commands);
         self.commands.transport_play();
         if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(true);

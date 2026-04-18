@@ -6,8 +6,8 @@ use iced::widget::{
 };
 use iced::{Element, Fill, FillPortion, Length, alignment};
 use lilypalooza_audio::mixer::{
-    ChannelMeterSnapshot, MixerMeterSnapshot, STRIP_METER_MAX_DB, STRIP_METER_MIN_DB,
-    StripMeterSnapshot,
+    ChannelMeterSnapshot, MixerMeterSnapshot, MixerMeterSnapshotWindow, STRIP_METER_MAX_DB,
+    STRIP_METER_MIN_DB, StripMeterSnapshot,
 };
 use lilypalooza_audio::{InstrumentSlotState, MixerState, SoundfontProcessorState};
 
@@ -352,18 +352,29 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
 
     if let Some(playback) = app.playback.as_ref() {
         let mixer = playback.mixer_state();
-        let meter_snapshot = playback.meter_snapshot();
 
         return responsive(move |size| {
             let gain_mode = gain_control_mode(size.height);
             let strip_height =
                 (size.height - (ui_style::PADDING_SM as f32 * 2.0) - SECTION_HEADER_HEIGHT)
                     .max(STRIP_MIN_HEIGHT);
+            let instrument_visible = visible_strip_window(
+                mixer.tracks().len(),
+                app.mixer_instrument_scroll_x,
+                app.mixer_instrument_viewport_width.max(size.width * 0.5),
+            );
+            let bus_visible = visible_strip_window(
+                mixer.buses().len(),
+                app.mixer_bus_scroll_x,
+                app.mixer_bus_viewport_width.max(size.width * 0.2),
+            );
+            let meter_window =
+                playback.meter_snapshot_window(instrument_visible.clone(), bus_visible.clone());
 
             row![
                 container(master_track_area(
                     mixer,
-                    &meter_snapshot,
+                    meter_window.main,
                     colors,
                     strip_height,
                     gain_mode,
@@ -374,12 +385,11 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                 .style(ui_style::mixer_side_group_surface),
                 container(instrument_track_area(
                     mixer,
-                    &meter_snapshot,
+                    &meter_window,
                     colors,
                     strip_height,
                     gain_mode,
-                    app.mixer_instrument_scroll_x,
-                    app.mixer_instrument_viewport_width.max(size.width * 0.5),
+                    instrument_visible,
                     true,
                 ))
                 .width(FillPortion(5))
@@ -387,12 +397,11 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                 .style(ui_style::mixer_instrument_group_surface),
                 container(bus_track_area(
                     mixer,
-                    &meter_snapshot,
+                    &meter_window,
                     colors,
                     strip_height,
                     gain_mode,
-                    app.mixer_bus_scroll_x,
-                    app.mixer_bus_viewport_width.max(size.width * 0.2),
+                    bus_visible,
                     true,
                 ))
                 .width(FillPortion(2))
@@ -448,11 +457,29 @@ fn mixer_layout_without_audio(
     let gain_mode = gain_control_mode(size.height);
     let strip_height = (size.height - (ui_style::PADDING_SM as f32 * 2.0) - SECTION_HEADER_HEIGHT)
         .max(STRIP_MIN_HEIGHT);
+    let instrument_visible = visible_strip_window(
+        mixer.tracks().len(),
+        instrument_scroll_x,
+        instrument_viewport_width.max(size.width * 0.5),
+    );
+    let bus_visible = visible_strip_window(
+        mixer.buses().len(),
+        bus_scroll_x,
+        bus_viewport_width.max(size.width * 0.2),
+    );
+    let meter_window = MixerMeterSnapshotWindow {
+        main: meter_snapshot.main,
+        tracks: meter_snapshot.tracks[instrument_visible.clone()].to_vec(),
+        buses: meter_snapshot.buses[bus_visible.clone()]
+            .iter()
+            .map(|(_, snapshot)| *snapshot)
+            .collect(),
+    };
 
     row![
         container(master_track_area(
             mixer,
-            meter_snapshot,
+            meter_window.main,
             colors,
             strip_height,
             gain_mode,
@@ -463,12 +490,11 @@ fn mixer_layout_without_audio(
         .style(ui_style::mixer_side_group_surface),
         container(instrument_track_area(
             mixer,
-            meter_snapshot,
+            &meter_window,
             colors,
             strip_height,
             gain_mode,
-            instrument_scroll_x,
-            instrument_viewport_width.max(size.width * 0.5),
+            instrument_visible,
             false,
         ))
         .width(FillPortion(5))
@@ -476,12 +502,11 @@ fn mixer_layout_without_audio(
         .style(ui_style::mixer_instrument_group_surface),
         container(bus_track_area(
             mixer,
-            meter_snapshot,
+            &meter_window,
             colors,
             strip_height,
             gain_mode,
-            bus_scroll_x,
-            bus_viewport_width.max(size.width * 0.2),
+            bus_visible,
             false,
         ))
         .width(FillPortion(2))
@@ -497,7 +522,7 @@ fn mixer_layout_without_audio(
 
 fn master_track_area(
     mixer: &MixerState,
-    meters: &MixerMeterSnapshot,
+    meter_snapshot: StripMeterSnapshot,
     colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
@@ -505,7 +530,7 @@ fn master_track_area(
 ) -> Element<'static, Message> {
     let master_row = row![sticky_master_strip(
         mixer,
-        meters.main,
+        meter_snapshot,
         colors,
         strip_height,
         gain_mode,
@@ -615,12 +640,11 @@ fn sticky_master_strip(
 #[allow(clippy::too_many_arguments)]
 fn instrument_track_area(
     mixer: &MixerState,
-    meters: &MixerMeterSnapshot,
+    meters: &MixerMeterSnapshotWindow,
     colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
-    scroll_x: f32,
-    viewport_width: f32,
+    visible: std::ops::Range<usize>,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
     let options: Arc<[InstrumentChoice]> = if controls_enabled {
@@ -628,16 +652,15 @@ fn instrument_track_area(
     } else {
         vec![InstrumentChoice::None].into()
     };
-    let visible = visible_strip_window(mixer.tracks().len(), scroll_x, viewport_width);
     let left_spacer = strip_span_width(visible.start);
     let right_spacer = strip_span_width(mixer.tracks().len().saturating_sub(visible.end));
-    let track_row = mixer.tracks()[visible.clone()].iter().fold(
+    let track_row = mixer.tracks()[visible.clone()].iter().enumerate().fold(
         row![]
             .spacing(STRIP_SPACING)
             .align_y(alignment::Vertical::Top)
             .height(Length::Fixed(strip_height))
             .push(horizontal_spacer(left_spacer)),
-        move |row, track| {
+        move |row, (local_index, track)| {
             let track_index = track.id.index();
             let selected = selected_instrument_choice(&track.instrument, mixer);
             let options = options.clone();
@@ -649,7 +672,7 @@ fn instrument_track_area(
                     gain_bits: track.state.gain_db.to_bits(),
                     pan_bits: track.state.pan.to_bits(),
                     meter: MeterDependency::from_snapshot(
-                        meters.tracks.get(track_index).copied().unwrap_or_default(),
+                        meters.tracks.get(local_index).copied().unwrap_or_default(),
                     ),
                     colors: MeterColorsDependency::from_colors(colors),
                     compact_gain: matches!(gain_mode, GainControlMode::Knob),
@@ -782,24 +805,22 @@ fn instrument_track_area(
 #[allow(clippy::too_many_arguments)]
 fn bus_track_area(
     mixer: &MixerState,
-    meters: &MixerMeterSnapshot,
+    meters: &MixerMeterSnapshotWindow,
     colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
-    scroll_x: f32,
-    viewport_width: f32,
+    visible: std::ops::Range<usize>,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
-    let visible = visible_strip_window(mixer.buses().len(), scroll_x, viewport_width);
     let left_spacer = strip_span_width(visible.start);
     let right_spacer = strip_span_width(mixer.buses().len().saturating_sub(visible.end));
-    let bus_row = mixer.buses()[visible.clone()].iter().fold(
+    let bus_row = mixer.buses()[visible.clone()].iter().enumerate().fold(
         row![]
             .spacing(STRIP_SPACING)
             .align_y(alignment::Vertical::Top)
             .height(Length::Fixed(strip_height))
             .push(horizontal_spacer(left_spacer)),
-        |row, bus| {
+        |row, (local_index, bus)| {
             row.push(lazy(
                 BusStripDependency {
                     id: bus.id.0,
@@ -807,12 +828,7 @@ fn bus_track_area(
                     gain_bits: bus.state.gain_db.to_bits(),
                     pan_bits: bus.state.pan.to_bits(),
                     meter: MeterDependency::from_snapshot(
-                        meters
-                            .buses
-                            .iter()
-                            .find(|(id, _)| *id == bus.id)
-                            .map(|(_, snapshot)| *snapshot)
-                            .unwrap_or_default(),
+                        meters.buses.get(local_index).copied().unwrap_or_default(),
                     ),
                     colors: MeterColorsDependency::from_colors(colors),
                     compact_gain: matches!(gain_mode, GainControlMode::Knob),

@@ -1,6 +1,7 @@
 //! Top-level audio engine state.
 #![allow(missing_docs)]
 
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -15,13 +16,14 @@ use knyst::prelude::{
     Beats, KnystCommands, KnystSphere, MultiThreadedKnystCommands, SphereSettings,
 };
 
-use crate::mixer::{Mixer, MixerError, MixerHandle, MixerMeterSnapshot, MixerState};
+use crate::mixer::{
+    Mixer, MixerError, MixerHandle, MixerMeterSnapshot, MixerMeterSnapshotWindow, MixerState,
+};
 use crate::sequencer::{Sequencer, SequencerError, SequencerHandle};
 use crate::transport::Transport;
 
 const CONTROLLER_BARRIER_TIMEOUT: Duration = Duration::from_millis(250);
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
-const TRANSPORT_POLL_INTERVAL: Duration = Duration::from_millis(2);
 const SCHEDULER_PLAYING_POLL_MIN: Duration = Duration::from_millis(4);
 const SCHEDULER_PLAYING_POLL_MAX: Duration = Duration::from_millis(12);
 const SCHEDULER_PAUSED_POLL_INTERVAL: Duration = Duration::from_millis(24);
@@ -58,7 +60,6 @@ pub struct AudioEngine {
     sphere: KnystSphere,
     context: KnystContext,
     commands: MultiThreadedKnystCommands,
-    transport_request_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Errors returned by the audio engine facade.
@@ -126,7 +127,6 @@ impl AudioEngine {
             sequencer.sync_track_handle(track.id, mixer.instrument_handle(track.id));
         }
         let scheduler_shutdown = Arc::new(AtomicBool::new(false));
-        let transport_request_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let scheduler_thread = Some(start_scheduler_thread(
             context.commands(),
             sequencer.clone(),
@@ -143,7 +143,6 @@ impl AudioEngine {
             sphere,
             context,
             commands,
-            transport_request_generation,
         })
     }
 
@@ -159,84 +158,6 @@ impl AudioEngine {
             Some(&mut self.mixer),
             Some(&self.sequencer),
         )
-    }
-
-    pub fn request_play(&mut self) {
-        let generation = self
-            .transport_request_generation
-            .fetch_add(1, Ordering::SeqCst)
-            + 1;
-        let generation_ref = self.transport_request_generation.clone();
-        let mut commands = self.commands.clone();
-        let sequencer = self.sequencer.clone();
-        thread::spawn(move || {
-            if generation_ref.load(Ordering::SeqCst) != generation {
-                return;
-            }
-            let pending_position = sequencer.pending_position();
-            let current_beat = commands
-                .current_transport_snapshot()
-                .and_then(|snapshot| snapshot.beats)
-                .unwrap_or(Beats::ZERO);
-            let start_beat = pending_position.unwrap_or(current_beat);
-            if start_beat != current_beat {
-                commands.transport_seek_to_beats(start_beat);
-                wait_for_transport_settled(&mut commands);
-                wait_for_transport_beats(&mut commands, start_beat);
-            }
-            if generation_ref.load(Ordering::SeqCst) != generation {
-                return;
-            }
-            sequencer.prepare_for_play(&mut commands, start_beat);
-            wait_for_controller_barrier(&mut commands);
-            if generation_ref.load(Ordering::SeqCst) != generation {
-                return;
-            }
-            commands.transport_play();
-            wait_for_transport_settled(&mut commands);
-            if generation_ref.load(Ordering::SeqCst) != generation {
-                return;
-            }
-            sequencer.set_playing(true);
-            sequencer.process_tick(&mut commands);
-        });
-    }
-
-    pub fn request_pause(&mut self) {
-        let generation = self
-            .transport_request_generation
-            .fetch_add(1, Ordering::SeqCst)
-            + 1;
-        let generation_ref = self.transport_request_generation.clone();
-        let mut commands = self.commands.clone();
-        let sequencer = self.sequencer.clone();
-        let current_beat = commands
-            .current_transport_snapshot()
-            .and_then(|snapshot| snapshot.beats)
-            .unwrap_or(Beats::ZERO);
-        let has_loaded_score = sequencer.has_loaded_score();
-        sequencer.set_playing(false);
-        self.mixer.reset_meters();
-        commands.clear_scheduled_changes();
-        commands.transport_pause();
-        if has_loaded_score {
-            sequencer.mark_dirty_for_seek(current_beat, false);
-        }
-        thread::spawn(move || {
-            wait_for_transport_settled(&mut commands);
-            if generation_ref.load(Ordering::SeqCst) != generation {
-                return;
-            }
-            if !has_loaded_score {
-                return;
-            }
-            commands.transport_seek_to_beats(current_beat);
-            wait_for_transport_settled(&mut commands);
-            if generation_ref.load(Ordering::SeqCst) != generation {
-                return;
-            }
-            wait_for_transport_beats(&mut commands, current_beat);
-        });
     }
 
     /// Returns the mixer control handle.
@@ -260,6 +181,14 @@ impl AudioEngine {
 
     pub fn meter_snapshot(&self) -> MixerMeterSnapshot {
         self.mixer.meter_snapshot()
+    }
+
+    pub fn meter_snapshot_window(
+        &self,
+        track_range: Range<usize>,
+        bus_range: Range<usize>,
+    ) -> MixerMeterSnapshotWindow {
+        self.mixer.meter_snapshot_window(track_range, bus_range)
     }
 
     pub fn observability_snapshot(&mut self) -> Option<EngineObservabilitySnapshot> {
@@ -357,24 +286,6 @@ fn wait_for_transport_settled(commands: &mut MultiThreadedKnystCommands) {
     let _ = receiver.recv_timeout(SETTLE_TIMEOUT);
 }
 
-fn wait_for_transport_beats(commands: &mut MultiThreadedKnystCommands, expected: Beats) {
-    let start = std::time::Instant::now();
-    while start.elapsed() < SETTLE_TIMEOUT {
-        if commands
-            .current_transport_snapshot()
-            .and_then(|snapshot| snapshot.beats)
-            .is_some_and(|position| {
-                (position.as_beats_f64() - expected.as_beats_f64()).abs() < 1e-6
-            })
-        {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(
-            TRANSPORT_POLL_INTERVAL.as_millis() as u64
-        ));
-    }
-}
-
 fn wait_for_transport_advance(commands: &mut MultiThreadedKnystCommands, timeout: Duration) {
     let start = std::time::Instant::now();
     let initial = commands
@@ -417,7 +328,7 @@ impl From<crate::mixer::runtime::MixerRuntimeError> for AudioEngineError {
 
 impl Drop for AudioEngine {
     fn drop(&mut self) {
-        self.scheduler_shutdown.store(true, Ordering::Release);
+        self.scheduler_shutdown.store(true, Ordering::Relaxed);
         if let Some(thread) = self.scheduler_thread.take() {
             let _ = thread.join();
         }
@@ -431,23 +342,20 @@ fn start_scheduler_thread(
     shutdown: Arc<AtomicBool>,
     settings: AudioEngineSettings,
 ) -> Result<JoinHandle<()>, std::io::Error> {
+    let mut runner = sequencer.scheduler_runner();
     thread::Builder::new()
         .name("lilypalooza-sequencer".to_string())
         .spawn(move || {
             set_scheduler_thread_priority(settings);
-            while !shutdown.load(Ordering::Acquire) {
-                sequencer.process_tick(&mut commands);
-                thread::sleep(scheduler_poll_interval(&sequencer, settings));
+            while !shutdown.load(Ordering::Relaxed) {
+                runner.process_tick(&mut commands);
+                thread::sleep(scheduler_poll_interval_for_state(
+                    runner.sequencer.has_loaded_score(),
+                    runner.sequencer.is_playing(),
+                    settings,
+                ));
             }
         })
-}
-
-fn scheduler_poll_interval(sequencer: &Sequencer, settings: AudioEngineSettings) -> Duration {
-    scheduler_poll_interval_for_state(
-        sequencer.has_loaded_score(),
-        sequencer.is_playing(),
-        settings,
-    )
 }
 
 fn scheduler_poll_interval_for_state(

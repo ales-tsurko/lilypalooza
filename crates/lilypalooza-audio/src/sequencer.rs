@@ -1,16 +1,19 @@
 //! MIDI-track sequencer and score scheduler.
 
+use arc_swap::ArcSwap;
+use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use knyst::prelude::{Beats, KnystCommands, MultiThreadedKnystCommands};
 use knyst::scheduling::{MusicalTimeMap, TempoChange};
 use knyst::time::SUBBEAT_TESIMALS_PER_BEAT;
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::instrument::{InstrumentRuntimeHandle, MidiEvent as EngineMidiEvent};
 use crate::mixer::{INSTRUMENT_TRACK_COUNT, TrackId};
-use crate::transport::{Transport, TransportError};
+use crate::transport::TransportError;
 
 const CONTROLLER_BARRIER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 
@@ -31,7 +34,76 @@ pub enum SequencerError {
 /// Score-backed sequencer state.
 #[derive(Clone)]
 pub struct Sequencer {
-    inner: Arc<Mutex<SequencerState>>,
+    hot: Arc<SequencerHotState>,
+    config: Arc<ArcSwap<SequencerConfig>>,
+    runtime: Arc<ArcSwap<SequencerRuntime>>,
+    scheduler_updates_tx: Sender<SequencerSchedulerUpdate>,
+    scheduler_updates_rx: Arc<Mutex<Option<Receiver<SequencerSchedulerUpdate>>>>,
+}
+
+enum SequencerSchedulerUpdate {
+    Config(Arc<SequencerConfig>),
+    Both(Arc<SequencerConfig>, Arc<SequencerRuntime>),
+}
+
+struct SequencerHotState {
+    playing: AtomicBool,
+    dirty: AtomicBool,
+    needs_reset_on_play: AtomicBool,
+    has_loaded_score: AtomicBool,
+    ppq: AtomicU16,
+    total_ticks: AtomicU64,
+    current_beats_bits: AtomicU64,
+    pending_position_present: AtomicBool,
+    pending_position_bits: AtomicU64,
+}
+
+impl SequencerHotState {
+    fn new() -> Self {
+        Self {
+            playing: AtomicBool::new(false),
+            dirty: AtomicBool::new(false),
+            needs_reset_on_play: AtomicBool::new(false),
+            has_loaded_score: AtomicBool::new(false),
+            ppq: AtomicU16::new(0),
+            total_ticks: AtomicU64::new(0),
+            current_beats_bits: AtomicU64::new(Beats::ZERO.as_beats_f64().to_bits()),
+            pending_position_present: AtomicBool::new(false),
+            pending_position_bits: AtomicU64::new(0),
+        }
+    }
+
+    fn load_pending_position(&self) -> Option<Beats> {
+        self.pending_position_present
+            .load(Ordering::Acquire)
+            .then(|| {
+                Beats::from_beats_f64(f64::from_bits(
+                    self.pending_position_bits.load(Ordering::Acquire),
+                ))
+            })
+    }
+
+    fn store_pending_position(&self, position: Option<Beats>) {
+        if let Some(position) = position {
+            self.pending_position_bits
+                .store(position.as_beats_f64().to_bits(), Ordering::Release);
+            self.pending_position_present.store(true, Ordering::Release);
+        } else {
+            self.pending_position_present
+                .store(false, Ordering::Release);
+        }
+    }
+
+    fn load_current_position(&self) -> Beats {
+        Beats::from_beats_f64(f64::from_bits(
+            self.current_beats_bits.load(Ordering::Relaxed),
+        ))
+    }
+
+    fn store_current_position(&self, position: Beats) {
+        self.current_beats_bits
+            .store(position.as_beats_f64().to_bits(), Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -53,8 +125,31 @@ impl Sequencer {
     /// Creates an empty sequencer.
     #[must_use]
     pub fn new(chase_notes_on_seek: bool) -> Self {
+        let config = Arc::new(SequencerConfig::new(chase_notes_on_seek));
+        let (scheduler_updates_tx, scheduler_updates_rx) = unbounded();
         Self {
-            inner: Arc::new(Mutex::new(SequencerState::new(chase_notes_on_seek))),
+            hot: Arc::new(SequencerHotState::new()),
+            config: Arc::new(ArcSwap::from(config.clone())),
+            runtime: Arc::new(ArcSwap::from(Arc::new(SequencerRuntime::new(
+                config.sequences.len(),
+            )))),
+            scheduler_updates_tx,
+            scheduler_updates_rx: Arc::new(Mutex::new(Some(scheduler_updates_rx))),
+        }
+    }
+
+    pub(crate) fn scheduler_runner(&self) -> SequencerRunner {
+        let updates_rx = self
+            .scheduler_updates_rx
+            .lock()
+            .expect("scheduler update receiver lock should not be poisoned")
+            .take()
+            .expect("sequencer scheduler runner can only be created once");
+        SequencerRunner {
+            sequencer: self.clone(),
+            config: self.config.load_full(),
+            runtime: self.runtime.load_full(),
+            updates_rx,
         }
     }
 
@@ -63,18 +158,28 @@ impl Sequencer {
         track_id: TrackId,
         handle: Option<InstrumentRuntimeHandle>,
     ) {
-        let mut inner = self.inner.lock().expect("sequencer mutex poisoned");
-        if let Some(slot) = inner.instrument_handles.get_mut(track_id.index()) {
+        let current = self.config.load_full();
+        let mut next = (*current).clone();
+        if let Some(slot) = next.instrument_handles.get_mut(track_id.index()) {
             *slot = handle;
         }
-        inner.dirty = true;
+        let next = Arc::new(next);
+        self.config.store(next.clone());
+        let _ = self
+            .scheduler_updates_tx
+            .send(SequencerSchedulerUpdate::Config(next));
+        self.hot.dirty.store(true, Ordering::Release);
     }
 
     pub(crate) fn configure_schedule_lead(&self, block_size: usize, sample_rate: usize) {
-        self.inner
-            .lock()
-            .expect("sequencer mutex poisoned")
-            .configure_schedule_lead(block_size, sample_rate);
+        let current = self.config.load_full();
+        let mut next = (*current).clone();
+        next.configure_schedule_lead(block_size, sample_rate);
+        let next = Arc::new(next);
+        self.config.store(next.clone());
+        let _ = self
+            .scheduler_updates_tx
+            .send(SequencerSchedulerUpdate::Config(next));
     }
 
     pub(crate) fn prepare_for_play(
@@ -82,62 +187,79 @@ impl Sequencer {
         commands: &mut MultiThreadedKnystCommands,
         _start_beat: Beats,
     ) {
-        self.inner
-            .lock()
-            .expect("sequencer mutex poisoned")
-            .prepare_for_play(commands, _start_beat);
+        let config = self.config.load();
+        let runtime = self.runtime.load();
+        let pending_position = self.hot.load_pending_position();
+        let needs_reset_on_play = self.hot.needs_reset_on_play.swap(false, Ordering::AcqRel);
+        let position = pending_position.unwrap_or(_start_beat);
+        reset_schedule_state_at(&config, &runtime, position);
+        if needs_reset_on_play {
+            schedule_reset_and_chase_at(&config, &runtime, position, commands);
+        } else if config.chase_notes_on_seek {
+            dispatch_chase_events_at(&config, &runtime, position, commands);
+        }
+        schedule_window(
+            &config,
+            &runtime,
+            position,
+            position + config.lookahead,
+            commands,
+            config.initial_frame_offset,
+        );
+        self.hot.store_pending_position(None);
+        self.hot.store_current_position(position);
+        self.hot.dirty.store(false, Ordering::Release);
+        self.hot.playing.store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn prepare_for_pause(&self, commands: &mut MultiThreadedKnystCommands, at: Beats) {
-        self.inner
-            .lock()
-            .expect("sequencer mutex poisoned")
-            .schedule_pause_reset_at(at, commands);
+        let config = self.config.load();
+        let runtime = self.runtime.load();
+        schedule_pause_reset_at(&config, &runtime, at, commands);
     }
 
     pub(crate) fn prepare_for_pause_immediate(&self, commands: &mut MultiThreadedKnystCommands) {
-        self.inner
-            .lock()
-            .expect("sequencer mutex poisoned")
-            .dispatch_immediate_pause_reset(commands);
+        let config = self.config.load();
+        let runtime = self.runtime.load();
+        dispatch_immediate_pause_reset(&config, &runtime, commands);
     }
 
     pub(crate) fn mark_dirty_for_seek(&self, position: Beats, needs_reset_on_play: bool) {
-        let mut inner = self.inner.lock().expect("sequencer mutex poisoned");
-        inner.dirty = true;
-        inner.pending_position = Some(position);
-        inner.needs_reset_on_play = needs_reset_on_play;
+        self.hot.dirty.store(true, Ordering::Release);
+        self.hot.store_pending_position(Some(position));
+        self.hot.store_current_position(position);
+        self.hot
+            .needs_reset_on_play
+            .store(needs_reset_on_play, Ordering::Release);
     }
 
     pub(crate) fn set_playing(&self, playing: bool) {
-        self.inner.lock().expect("sequencer mutex poisoned").playing = playing;
+        self.hot.playing.store(playing, Ordering::Relaxed);
     }
 
     pub(crate) fn pending_position(&self) -> Option<Beats> {
-        self.inner
-            .lock()
-            .expect("sequencer mutex poisoned")
-            .pending_position
+        self.hot.load_pending_position()
     }
 
     pub(crate) fn is_playing(&self) -> bool {
-        self.inner.lock().expect("sequencer mutex poisoned").playing
+        self.hot.playing.load(Ordering::Relaxed)
     }
 
     pub(crate) fn has_loaded_score(&self) -> bool {
-        !self
-            .inner
-            .lock()
-            .expect("sequencer mutex poisoned")
-            .sequences
-            .is_empty()
+        self.hot.has_loaded_score.load(Ordering::Relaxed)
     }
 
     pub(crate) fn process_tick(&self, commands: &mut MultiThreadedKnystCommands) {
-        self.inner
-            .lock()
-            .expect("sequencer mutex poisoned")
-            .process_tick(commands);
+        if !self.hot.playing.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let Some(snapshot) = commands.current_transport_snapshot() else {
+            return;
+        };
+        let current_beat = snapshot.beats.unwrap_or(Beats::ZERO);
+        self.hot.store_current_position(current_beat);
+        self.process_tick_at(commands, current_beat);
     }
 
     pub(crate) fn process_tick_at(
@@ -145,19 +267,48 @@ impl Sequencer {
         commands: &mut MultiThreadedKnystCommands,
         current_beat: Beats,
     ) {
-        self.inner
-            .lock()
-            .expect("sequencer mutex poisoned")
-            .process_tick_at(commands, current_beat);
+        let config = self.config.load();
+        let runtime = self.runtime.load();
+        let dirty = self.hot.dirty.swap(false, Ordering::AcqRel);
+        let pending_position = self.hot.load_pending_position();
+        let needs_reset_on_play = if dirty {
+            self.hot.needs_reset_on_play.swap(false, Ordering::AcqRel)
+        } else {
+            false
+        };
+        if dirty {
+            let position = pending_position.unwrap_or(current_beat);
+            reset_schedule_state_at(&config, &runtime, position);
+            if needs_reset_on_play {
+                schedule_reset_and_chase_at(&config, &runtime, position, commands);
+            } else if config.chase_notes_on_seek {
+                dispatch_chase_events_at(&config, &runtime, position, commands);
+            }
+            schedule_window(
+                &config,
+                &runtime,
+                position,
+                position + config.lookahead,
+                commands,
+                config.initial_frame_offset,
+            );
+            self.hot.store_pending_position(None);
+            return;
+        }
+
+        process_tick_at(&config, &runtime, commands, current_beat);
     }
 
     #[cfg(test)]
     pub(crate) fn debug_state(&self) -> SequencerDebugState {
-        let inner = self.inner.lock().expect("sequencer mutex poisoned");
         SequencerDebugState {
-            reset_count: inner.reset_count,
-            schedule_count: inner.schedule_count,
-            scheduled_event_count: inner.scheduled_event_count,
+            reset_count: self.runtime.load().reset_count.load(Ordering::Relaxed),
+            schedule_count: self.runtime.load().schedule_count.load(Ordering::Relaxed),
+            scheduled_event_count: self
+                .runtime
+                .load()
+                .scheduled_event_count
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -217,73 +368,91 @@ impl<'a> SequencerHandle<'a> {
 
         self.replace_tempo_map(&tempo_points);
         wait_for_controller_barrier(self.commands);
-
-        let mut inner = self
+        let current = self.sequencer.config.load_full();
+        let mut next = (*current).clone();
+        next.tempo_map = build_tempo_map(&tempo_points);
+        next.sequences = sequences;
+        next.ppq = ppq;
+        next.total_ticks = total_ticks;
+        let has_loaded_score = !next.sequences.is_empty();
+        self.sequencer.config.store(Arc::new(next.clone()));
+        let next = Arc::new(next);
+        let runtime = Arc::new(SequencerRuntime::new(next.sequences.len()));
+        self.sequencer.config.store(next.clone());
+        self.sequencer.runtime.store(runtime.clone());
+        let _ = self
             .sequencer
-            .inner
-            .lock()
-            .expect("sequencer mutex poisoned");
-        inner.tempo_map = build_tempo_map(&tempo_points);
-        inner.sequences = sequences;
-        inner.next_indices = vec![0; inner.sequences.len()];
-        inner.ppq = ppq;
-        inner.total_ticks = total_ticks;
-        inner.scheduled_until = Beats::ZERO;
-        inner.pending_position = None;
-        inner.dirty = true;
-        drop(inner);
+            .scheduler_updates_tx
+            .send(SequencerSchedulerUpdate::Both(next.clone(), runtime));
+        self.sequencer.hot.ppq.store(ppq, Ordering::Relaxed);
+        self.sequencer
+            .hot
+            .total_ticks
+            .store(total_ticks, Ordering::Relaxed);
+        self.sequencer
+            .hot
+            .has_loaded_score
+            .store(has_loaded_score, Ordering::Relaxed);
+        self.sequencer.hot.store_pending_position(None);
+        self.sequencer.hot.store_current_position(Beats::ZERO);
+        self.sequencer.hot.dirty.store(true, Ordering::Release);
         Ok(())
     }
 
     /// Returns the current playback position in MIDI ticks.
     pub fn playback_tick(&mut self) -> Result<u64, SequencerError> {
-        let (ppq, playing, pending_position) = {
-            let inner = self
-                .sequencer
-                .inner
-                .lock()
-                .expect("sequencer mutex poisoned");
-            (inner.ppq, inner.playing, inner.pending_position)
-        };
+        let ppq = self.sequencer.hot.ppq.load(Ordering::Relaxed);
+        let playing = self.sequencer.hot.playing.load(Ordering::Relaxed);
+        let pending_position = self.sequencer.hot.load_pending_position();
         if ppq == 0 {
             return Ok(0);
         }
         if !playing && let Some(position) = pending_position {
             return Ok(beats_to_ticks(position, ppq));
         }
+        Ok(beats_to_ticks(
+            self.sequencer.hot.load_current_position(),
+            ppq,
+        ))
+    }
 
-        let beats = Transport::new(self.commands, None, None)
-            .snapshot()?
-            .beats_position;
-        Ok(beats_to_ticks(beats, ppq))
+    /// Returns whether playback is currently running according to the sequencer hot state.
+    #[must_use]
+    pub fn playback_is_playing(&self) -> bool {
+        self.sequencer.hot.playing.load(Ordering::Relaxed)
     }
 
     /// Returns the total loaded MIDI duration in ticks.
     #[must_use]
     pub fn total_ticks(&self) -> u64 {
-        self.sequencer
-            .inner
-            .lock()
-            .expect("sequencer mutex poisoned")
-            .total_ticks
+        self.sequencer.hot.total_ticks.load(Ordering::Relaxed)
     }
 
     /// Clears the loaded score and scheduling state.
     pub fn clear(&mut self) {
-        let mut inner = self
+        let current = self.sequencer.config.load_full();
+        let mut next = (*current).clone();
+        next.sequences.clear();
+        next.tempo_map = MusicalTimeMap::new();
+        next.ppq = 0;
+        next.total_ticks = 0;
+        let next = Arc::new(next);
+        let runtime = Arc::new(SequencerRuntime::new(0));
+        self.sequencer.config.store(next.clone());
+        self.sequencer.runtime.store(runtime.clone());
+        let _ = self
             .sequencer
-            .inner
-            .lock()
-            .expect("sequencer mutex poisoned");
-        inner.sequences.clear();
-        inner.next_indices.clear();
-        inner.tempo_map = MusicalTimeMap::new();
-        inner.ppq = 0;
-        inner.total_ticks = 0;
-        inner.scheduled_until = Beats::ZERO;
-        inner.pending_position = None;
-        inner.dirty = true;
-        drop(inner);
+            .scheduler_updates_tx
+            .send(SequencerSchedulerUpdate::Both(next, runtime));
+        self.sequencer.hot.ppq.store(0, Ordering::Relaxed);
+        self.sequencer.hot.total_ticks.store(0, Ordering::Relaxed);
+        self.sequencer
+            .hot
+            .has_loaded_score
+            .store(false, Ordering::Relaxed);
+        self.sequencer.hot.store_pending_position(None);
+        self.sequencer.hot.store_current_position(Beats::ZERO);
+        self.sequencer.hot.dirty.store(true, Ordering::Release);
     }
 
     fn replace_tempo_map(&mut self, tempos: &[TempoPoint]) {
@@ -295,20 +464,86 @@ impl<'a> SequencerHandle<'a> {
     }
 }
 
+pub(crate) struct SequencerRunner {
+    pub(crate) sequencer: Sequencer,
+    config: Arc<SequencerConfig>,
+    runtime: Arc<SequencerRuntime>,
+    updates_rx: Receiver<SequencerSchedulerUpdate>,
+}
+
+impl SequencerRunner {
+    fn drain_updates(&mut self) {
+        loop {
+            match self.updates_rx.try_recv() {
+                Ok(SequencerSchedulerUpdate::Config(config)) => {
+                    self.config = config;
+                }
+                Ok(SequencerSchedulerUpdate::Both(config, runtime)) => {
+                    self.config = config;
+                    self.runtime = runtime;
+                }
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+            }
+        }
+    }
+
+    pub(crate) fn process_tick(&mut self, commands: &mut MultiThreadedKnystCommands) {
+        self.drain_updates();
+        if !self.sequencer.hot.playing.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let Some(snapshot) = commands.current_transport_snapshot() else {
+            return;
+        };
+        let current_beat = snapshot.beats.unwrap_or(Beats::ZERO);
+        self.sequencer.hot.store_current_position(current_beat);
+        let dirty = self.sequencer.hot.dirty.swap(false, Ordering::AcqRel);
+        let pending_position = self.sequencer.hot.load_pending_position();
+        let needs_reset_on_play = if dirty {
+            self.sequencer
+                .hot
+                .needs_reset_on_play
+                .swap(false, Ordering::AcqRel)
+        } else {
+            false
+        };
+        if dirty {
+            let position = pending_position.unwrap_or(current_beat);
+            reset_schedule_state_at(&self.config, &self.runtime, position);
+            if needs_reset_on_play {
+                schedule_reset_and_chase_at(&self.config, &self.runtime, position, commands);
+            } else if self.config.chase_notes_on_seek {
+                dispatch_chase_events_at(&self.config, &self.runtime, position, commands);
+            }
+            schedule_window(
+                &self.config,
+                &self.runtime,
+                position,
+                position + self.config.lookahead,
+                commands,
+                self.config.initial_frame_offset,
+            );
+            self.sequencer.hot.store_pending_position(None);
+            return;
+        }
+
+        process_tick_at(&self.config, &self.runtime, commands, current_beat);
+    }
+}
+
 fn wait_for_controller_barrier(commands: &mut MultiThreadedKnystCommands) {
     let receiver = commands.request_transport_snapshot();
     let _ = receiver.recv_timeout(CONTROLLER_BARRIER_TIMEOUT);
 }
 
-struct SequencerState {
-    generations: Vec<u32>,
+#[derive(Clone)]
+struct SequencerConfig {
     sequences: Vec<Sequence>,
-    next_indices: Vec<usize>,
     tempo_map: MusicalTimeMap,
     ppq: u16,
     total_ticks: u64,
     sample_rate: f64,
-    scheduled_until: Beats,
     lookahead: Beats,
     refill_margin: Beats,
     reset_frame_offset: i32,
@@ -316,29 +551,28 @@ struct SequencerState {
     initial_frame_offset: i32,
     instrument_handles: Vec<Option<InstrumentRuntimeHandle>>,
     chase_notes_on_seek: bool,
-    playing: bool,
-    dirty: bool,
-    needs_reset_on_play: bool,
-    pending_position: Option<Beats>,
-    #[cfg(test)]
-    reset_count: usize,
-    #[cfg(test)]
-    schedule_count: usize,
-    #[cfg(test)]
-    scheduled_event_count: usize,
 }
 
-impl SequencerState {
+struct SequencerRuntime {
+    generations: Box<[AtomicU32]>,
+    next_indices: Box<[AtomicUsize]>,
+    scheduled_until_bits: AtomicU64,
+    #[cfg(test)]
+    reset_count: AtomicUsize,
+    #[cfg(test)]
+    schedule_count: AtomicUsize,
+    #[cfg(test)]
+    scheduled_event_count: AtomicUsize,
+}
+
+impl SequencerConfig {
     fn new(chase_notes_on_seek: bool) -> Self {
         Self {
-            generations: vec![0; INSTRUMENT_TRACK_COUNT],
             sequences: Vec::new(),
-            next_indices: Vec::new(),
             tempo_map: MusicalTimeMap::new(),
             ppq: 0,
             total_ticks: 0,
             sample_rate: 44_100.0,
-            scheduled_until: Beats::ZERO,
             lookahead: Beats::from_beats(8),
             refill_margin: Beats::from_beats(2),
             reset_frame_offset: 256,
@@ -346,16 +580,6 @@ impl SequencerState {
             initial_frame_offset: 512,
             instrument_handles: vec![None; INSTRUMENT_TRACK_COUNT],
             chase_notes_on_seek,
-            playing: false,
-            dirty: false,
-            needs_reset_on_play: false,
-            pending_position: None,
-            #[cfg(test)]
-            reset_count: 0,
-            #[cfg(test)]
-            schedule_count: 0,
-            #[cfg(test)]
-            scheduled_event_count: 0,
         }
     }
 
@@ -366,268 +590,290 @@ impl SequencerState {
         self.chase_frame_offset = block * 72;
         self.initial_frame_offset = block * 80;
     }
+}
 
-    fn prepare_for_play(&mut self, commands: &mut MultiThreadedKnystCommands, start_beat: Beats) {
-        self.playing = true;
-        let position = self.pending_position.unwrap_or(start_beat);
-
-        self.reset_schedule_state_at(position);
-        if self.needs_reset_on_play {
-            self.schedule_reset_and_chase_at(position, commands);
-        } else if self.chase_notes_on_seek {
-            self.dispatch_chase_events_at(position, commands);
+impl SequencerRuntime {
+    fn new(sequence_count: usize) -> Self {
+        Self {
+            generations: (0..INSTRUMENT_TRACK_COUNT)
+                .map(|_| AtomicU32::new(0))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            next_indices: (0..sequence_count)
+                .map(|_| AtomicUsize::new(0))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            scheduled_until_bits: AtomicU64::new(Beats::ZERO.as_beats_f64().to_bits()),
+            #[cfg(test)]
+            reset_count: AtomicUsize::new(0),
+            #[cfg(test)]
+            schedule_count: AtomicUsize::new(0),
+            #[cfg(test)]
+            scheduled_event_count: AtomicUsize::new(0),
         }
-        self.schedule_window(
-            position,
-            position + self.lookahead,
-            commands,
-            self.initial_frame_offset,
-        );
-        self.needs_reset_on_play = false;
-        self.dirty = false;
     }
 
-    fn process_tick(&mut self, commands: &mut MultiThreadedKnystCommands) {
-        if !self.playing {
-            return;
-        }
+    fn load_scheduled_until(&self) -> Beats {
+        Beats::from_beats_f64(f64::from_bits(
+            self.scheduled_until_bits.load(Ordering::Relaxed),
+        ))
+    }
 
-        let Some(snapshot) = commands.current_transport_snapshot() else {
-            return;
+    fn store_scheduled_until(&self, position: Beats) {
+        self.scheduled_until_bits
+            .store(position.as_beats_f64().to_bits(), Ordering::Relaxed);
+    }
+}
+
+fn process_tick_at(
+    config: &SequencerConfig,
+    runtime: &SequencerRuntime,
+    commands: &mut MultiThreadedKnystCommands,
+    current_beat: Beats,
+) {
+    if runtime.load_scheduled_until() > current_beat + config.refill_margin {
+        return;
+    }
+
+    let window_start = runtime.load_scheduled_until().max(current_beat);
+    schedule_window(
+        config,
+        runtime,
+        window_start,
+        window_start + config.lookahead,
+        commands,
+        0,
+    );
+}
+
+fn schedule_window(
+    config: &SequencerConfig,
+    runtime: &SequencerRuntime,
+    window_start: Beats,
+    window_end: Beats,
+    commands: &mut MultiThreadedKnystCommands,
+    initial_frame_offset: i32,
+) {
+    #[cfg(test)]
+    {
+        runtime.schedule_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    let sample_rate = config.sample_rate;
+    let tempo_map = &config.tempo_map;
+    for (sequence_index, sequence) in config.sequences.iter().enumerate() {
+        let Some(handle) = config
+            .instrument_handles
+            .get(sequence.target_track.index())
+            .copied()
+            .flatten()
+        else {
+            continue;
         };
-        let current_beat = snapshot.beats.unwrap_or(Beats::ZERO);
-        self.process_tick_at(commands, current_beat);
-    }
+        let next_index = &runtime.next_indices[sequence_index];
+        let mut next = next_index.load(Ordering::Relaxed);
+        while let Some(first_event) = sequence.events.get(next) {
+            if first_event.at > window_end {
+                break;
+            }
 
-    fn process_tick_at(&mut self, commands: &mut MultiThreadedKnystCommands, current_beat: Beats) {
-        if self.dirty {
-            let position = self.pending_position.unwrap_or(current_beat);
-            self.reset_schedule_state_at(position);
-            self.schedule_reset_and_chase_at(position, commands);
-            self.schedule_window(
-                position,
-                position + self.lookahead,
-                commands,
-                self.initial_frame_offset,
-            );
-            self.dirty = false;
-            return;
-        }
-
-        if self.scheduled_until > current_beat + self.refill_margin {
-            return;
-        }
-
-        let window_start = self.scheduled_until.max(current_beat);
-        self.schedule_window(window_start, window_start + self.lookahead, commands, 0);
-    }
-
-    fn schedule_window(
-        &mut self,
-        window_start: Beats,
-        window_end: Beats,
-        commands: &mut MultiThreadedKnystCommands,
-        initial_frame_offset: i32,
-    ) {
-        #[cfg(test)]
-        {
-            self.schedule_count += 1;
-        }
-
-        let sample_rate = self.sample_rate;
-        let tempo_map = &self.tempo_map;
-        for (sequence, next_index) in self.sequences.iter().zip(self.next_indices.iter_mut()) {
-            let Some(handle) = self
-                .instrument_handles
-                .get(sequence.target_track.index())
-                .copied()
-                .flatten()
-            else {
-                continue;
-            };
-            while let Some(first_event) = sequence.events.get(*next_index) {
-                if first_event.at > window_end {
+            let event_time = first_event.at;
+            let group_start = next;
+            while let Some(next_event) = sequence.events.get(next) {
+                if next_event.at != event_time {
                     break;
                 }
-
-                let event_time = first_event.at;
-                let group_start = *next_index;
-                while let Some(next_event) = sequence.events.get(*next_index) {
-                    if next_event.at != event_time {
-                        break;
-                    }
-                    *next_index += 1;
-                }
-
-                if event_time < window_start {
-                    continue;
-                }
-
-                let mut frame_offset = if event_time == window_start {
-                    initial_frame_offset
-                } else {
-                    0
-                };
-                for timed_event in
-                    ordered_events_at_same_time(&sequence.events[group_start..*next_index])
-                {
-                    #[cfg(test)]
-                    {
-                        self.scheduled_event_count += 1;
-                    }
-                    handle.schedule_midi_at_with_offset(
-                        commands,
-                        offset_beats(tempo_map, sample_rate, timed_event.at, frame_offset),
-                        self.generations[sequence.target_track.index()],
-                        timed_event.event,
-                    );
-                    frame_offset += 2;
-                }
+                next += 1;
             }
-        }
 
-        self.scheduled_until = window_end;
-    }
-
-    fn reset_schedule_state_at(&mut self, at: Beats) {
-        self.next_indices = self
-            .sequences
-            .iter()
-            .map(|sequence| first_event_at_or_after(&sequence.events, at))
-            .collect();
-        self.scheduled_until = at;
-        self.pending_position = None;
-    }
-
-    fn schedule_pause_reset_at(&mut self, at: Beats, commands: &mut MultiThreadedKnystCommands) {
-        #[cfg(test)]
-        {
-            self.reset_count += 1;
-        }
-        let mut tracks = BTreeSet::new();
-        for sequence in &self.sequences {
-            tracks.insert(sequence.target_track);
-        }
-        for track in tracks {
-            self.generations[track.index()] = self.generations[track.index()].wrapping_add(1);
-            let Some(handle) = self
-                .instrument_handles
-                .get(track.index())
-                .copied()
-                .flatten()
-            else {
+            if event_time < window_start {
                 continue;
-            };
-            let generation = self.generations[track.index()];
-            handle.schedule_reset_at(
-                commands,
-                offset_beats(
-                    &self.tempo_map,
-                    self.sample_rate,
-                    at,
-                    self.reset_frame_offset,
-                ),
-                generation,
-            );
-            dispatch_scheduled_panic_events(
-                handle,
-                generation,
-                commands,
-                &self.tempo_map,
-                self.sample_rate,
-                at,
-                self.reset_frame_offset + 2,
-            );
-        }
-    }
+            }
 
-    fn dispatch_chase_events_at(&self, at: Beats, commands: &mut MultiThreadedKnystCommands) {
-        for sequence in &self.sequences {
-            let Some(handle) = self
-                .instrument_handles
-                .get(sequence.target_track.index())
-                .copied()
-                .flatten()
-            else {
-                continue;
+            let mut frame_offset = if event_time == window_start {
+                initial_frame_offset
+            } else {
+                0
             };
-            let generation = self.generations[sequence.target_track.index()];
-            let mut frame_offset = self.chase_frame_offset;
-            for event in chase_events_at(&sequence.events, at) {
+            for timed_event in ordered_events_at_same_time(&sequence.events[group_start..next]) {
+                #[cfg(test)]
+                {
+                    runtime
+                        .scheduled_event_count
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 handle.schedule_midi_at_with_offset(
                     commands,
-                    offset_beats(&self.tempo_map, self.sample_rate, at, frame_offset),
-                    generation,
-                    event,
+                    offset_beats(tempo_map, sample_rate, timed_event.at, frame_offset),
+                    runtime.generations[sequence.target_track.index()].load(Ordering::Relaxed),
+                    timed_event.event,
                 );
                 frame_offset += 2;
             }
         }
+        next_index.store(next, Ordering::Relaxed);
     }
 
-    fn schedule_reset_and_chase_at(
-        &mut self,
-        at: Beats,
-        commands: &mut MultiThreadedKnystCommands,
-    ) {
-        let mut tracks = BTreeSet::new();
-        for sequence in &self.sequences {
-            tracks.insert(sequence.target_track);
-        }
-        for track in tracks {
-            self.generations[track.index()] = self.generations[track.index()].wrapping_add(1);
-            let Some(handle) = self
-                .instrument_handles
-                .get(track.index())
-                .copied()
-                .flatten()
-            else {
-                continue;
-            };
-            handle.schedule_reset_at(
-                commands,
-                offset_beats(
-                    &self.tempo_map,
-                    self.sample_rate,
-                    at,
-                    self.reset_frame_offset,
-                ),
-                self.generations[track.index()],
-            );
-            dispatch_scheduled_panic_events(
-                handle,
-                self.generations[track.index()],
-                commands,
-                &self.tempo_map,
-                self.sample_rate,
+    runtime.store_scheduled_until(window_end);
+}
+
+fn reset_schedule_state_at(config: &SequencerConfig, runtime: &SequencerRuntime, at: Beats) {
+    for (sequence_index, sequence) in config.sequences.iter().enumerate() {
+        runtime.next_indices[sequence_index].store(
+            first_event_at_or_after(&sequence.events, at),
+            Ordering::Relaxed,
+        );
+    }
+    runtime.store_scheduled_until(at);
+}
+
+fn schedule_pause_reset_at(
+    config: &SequencerConfig,
+    runtime: &SequencerRuntime,
+    at: Beats,
+    commands: &mut MultiThreadedKnystCommands,
+) {
+    #[cfg(test)]
+    {
+        runtime.reset_count.fetch_add(1, Ordering::Relaxed);
+    }
+    let mut tracks = BTreeSet::new();
+    for sequence in &config.sequences {
+        tracks.insert(sequence.target_track);
+    }
+    for track in tracks {
+        let generation = runtime.generations[track.index()]
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        let Some(handle) = config
+            .instrument_handles
+            .get(track.index())
+            .copied()
+            .flatten()
+        else {
+            continue;
+        };
+        handle.schedule_reset_at(
+            commands,
+            offset_beats(
+                &config.tempo_map,
+                config.sample_rate,
                 at,
-                self.reset_frame_offset + 2,
+                config.reset_frame_offset,
+            ),
+            generation,
+        );
+        dispatch_scheduled_panic_events(
+            handle,
+            generation,
+            commands,
+            &config.tempo_map,
+            config.sample_rate,
+            at,
+            config.reset_frame_offset + 2,
+        );
+    }
+}
+
+fn dispatch_chase_events_at(
+    config: &SequencerConfig,
+    runtime: &SequencerRuntime,
+    at: Beats,
+    commands: &mut MultiThreadedKnystCommands,
+) {
+    for sequence in &config.sequences {
+        let Some(handle) = config
+            .instrument_handles
+            .get(sequence.target_track.index())
+            .copied()
+            .flatten()
+        else {
+            continue;
+        };
+        let generation = runtime.generations[sequence.target_track.index()].load(Ordering::Relaxed);
+        let mut frame_offset = config.chase_frame_offset;
+        for event in chase_events_at(&sequence.events, at) {
+            handle.schedule_midi_at_with_offset(
+                commands,
+                offset_beats(&config.tempo_map, config.sample_rate, at, frame_offset),
+                generation,
+                event,
             );
-        }
-        if self.chase_notes_on_seek {
-            self.dispatch_chase_events_at(at, commands);
+            frame_offset += 2;
         }
     }
+}
 
-    fn dispatch_immediate_pause_reset(&mut self, commands: &mut MultiThreadedKnystCommands) {
-        let mut tracks = BTreeSet::new();
-        for sequence in &self.sequences {
-            tracks.insert(sequence.target_track);
-        }
-        for track in tracks {
-            self.generations[track.index()] = self.generations[track.index()].wrapping_add(1);
-            let Some(handle) = self
-                .instrument_handles
-                .get(track.index())
-                .copied()
-                .flatten()
-            else {
-                continue;
-            };
-            let generation = self.generations[track.index()];
-            handle.send_reset_live(commands, generation);
-            dispatch_immediate_panic_events(handle, generation, commands);
-        }
+fn schedule_reset_and_chase_at(
+    config: &SequencerConfig,
+    runtime: &SequencerRuntime,
+    at: Beats,
+    commands: &mut MultiThreadedKnystCommands,
+) {
+    let mut tracks = BTreeSet::new();
+    for sequence in &config.sequences {
+        tracks.insert(sequence.target_track);
+    }
+    for track in tracks {
+        let generation = runtime.generations[track.index()]
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        let Some(handle) = config
+            .instrument_handles
+            .get(track.index())
+            .copied()
+            .flatten()
+        else {
+            continue;
+        };
+        handle.schedule_reset_at(
+            commands,
+            offset_beats(
+                &config.tempo_map,
+                config.sample_rate,
+                at,
+                config.reset_frame_offset,
+            ),
+            generation,
+        );
+        dispatch_scheduled_panic_events(
+            handle,
+            generation,
+            commands,
+            &config.tempo_map,
+            config.sample_rate,
+            at,
+            config.reset_frame_offset + 2,
+        );
+    }
+    if config.chase_notes_on_seek {
+        dispatch_chase_events_at(config, runtime, at, commands);
+    }
+}
+
+fn dispatch_immediate_pause_reset(
+    config: &SequencerConfig,
+    runtime: &SequencerRuntime,
+    commands: &mut MultiThreadedKnystCommands,
+) {
+    let mut tracks = BTreeSet::new();
+    for sequence in &config.sequences {
+        tracks.insert(sequence.target_track);
+    }
+    for track in tracks {
+        let generation = runtime.generations[track.index()]
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        let Some(handle) = config
+            .instrument_handles
+            .get(track.index())
+            .copied()
+            .flatten()
+        else {
+            continue;
+        };
+        handle.send_reset_live(commands, generation);
+        dispatch_immediate_panic_events(handle, generation, commands);
     }
 }
 
@@ -1025,9 +1271,9 @@ mod tests {
                 .expect("test midi should load");
         }
 
-        let inner = sequencer.inner.lock().expect("sequencer mutex poisoned");
-        assert_eq!(inner.sequences.len(), 1);
-        assert_eq!(inner.sequences[0].target_track, TrackId(0));
+        let config = sequencer.config.load_full();
+        assert_eq!(config.sequences.len(), 1);
+        assert_eq!(config.sequences[0].target_track, TrackId(0));
     }
 
     #[test]
@@ -1173,9 +1419,9 @@ mod tests {
                 .expect("test midi should load");
         }
 
-        let inner = sequencer.inner.lock().expect("sequencer mutex poisoned");
-        assert_eq!(inner.sequences.len(), 1);
-        let events = &inner.sequences[0].events;
+        let config = sequencer.config.load_full();
+        assert_eq!(config.sequences.len(), 1);
+        let events = &config.sequences[0].events;
         assert_eq!(events.len(), 2);
         assert_eq!(
             events[0],

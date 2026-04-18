@@ -9,7 +9,7 @@ use iced::widget::{Id, pane_grid, svg};
 use iced::{Point, Rectangle, Size, Subscription, Task, mouse, window};
 use iced_core::{Bytes, image};
 use lilypalooza_audio::MixerState;
-use lilypalooza_audio::{AudioEngine, AudioEngineOptions, PlaybackState as AudioPlaybackState};
+use lilypalooza_audio::{AudioEngine, AudioEngineOptions};
 use tempfile::TempDir;
 
 use crate::browser_file_watcher::BrowserFileWatcher;
@@ -202,8 +202,6 @@ struct Lilypalooza {
     score_zoom_preview: Option<ScoreZoomPreview>,
     score_zoom_preview_pending: Option<ScoreZoomPreviewRequest>,
     piano_roll_viewport_cursor: Option<iced::Point>,
-    pending_playback_tick: Option<u64>,
-    pending_transport_state: Option<AudioPlaybackState>,
     transport_seek_preview: Option<f32>,
     keyboard_modifiers: keyboard::Modifiers,
     primary_mouse_pressed: bool,
@@ -680,8 +678,6 @@ fn new(
         score_zoom_preview: None,
         score_zoom_preview_pending: None,
         piano_roll_viewport_cursor: None,
-        pending_playback_tick: None,
-        pending_transport_state: None,
         transport_seek_preview: None,
         keyboard_modifiers: keyboard::Modifiers::default(),
         primary_mouse_pressed: false,

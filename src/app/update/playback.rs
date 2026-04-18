@@ -188,7 +188,6 @@ impl Lilypalooza {
         self.transport_seek_preview = None;
         let total_ticks = self.current_midi_total_ticks();
         let tick = tick.min(total_ticks);
-        self.pending_playback_tick = Some(tick);
         let is_playing = self.piano_roll.playback_is_playing();
 
         if let (Some(playback), Some(current_file)) =
@@ -206,8 +205,6 @@ impl Lilypalooza {
     pub(in crate::app) fn refresh_playback_position(&mut self) {
         let total_ticks = self.current_midi_total_ticks();
         let Some(playback) = self.playback.as_mut() else {
-            self.pending_transport_state = None;
-            self.pending_playback_tick = None;
             let current_tick = self.piano_roll.playback_tick().min(total_ticks);
             self.piano_roll
                 .set_playback_position(current_tick, total_ticks, false);
@@ -219,37 +216,15 @@ impl Lilypalooza {
             return;
         };
 
-        let snapshot = playback.transport().snapshot().ok();
-        let actual_state = snapshot.map(|snapshot| snapshot.playback_state);
-        let is_playing = match (self.pending_transport_state, actual_state) {
-            (Some(expected), Some(actual)) if expected == actual => {
-                self.pending_transport_state = None;
-                expected == lilypalooza_audio::PlaybackState::Playing
-            }
-            (Some(expected), _) => expected == lilypalooza_audio::PlaybackState::Playing,
-            (None, Some(actual)) => actual == lilypalooza_audio::PlaybackState::Playing,
-            (None, None) => self.piano_roll.playback_is_playing(),
-        };
+        let is_playing = playback.sequencer().playback_is_playing();
         let actual_tick = playback
             .sequencer()
             .playback_tick()
             .map(|tick| tick.min(total_ticks))
             .unwrap_or_else(|_| self.piano_roll.playback_tick().min(total_ticks));
-        let current_tick = match self.pending_playback_tick {
-            Some(expected) if expected == actual_tick => {
-                self.pending_playback_tick = None;
-                actual_tick
-            }
-            Some(_) if is_playing => {
-                self.pending_playback_tick = None;
-                actual_tick
-            }
-            Some(expected) => expected.min(total_ticks),
-            None => actual_tick,
-        };
 
         self.piano_roll
-            .set_playback_position(current_tick, total_ticks, is_playing);
+            .set_playback_position(actual_tick, total_ticks, is_playing);
         if self.score_pane_visible() {
             self.refresh_score_cursor_overlay();
         } else {
