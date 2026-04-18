@@ -10,6 +10,7 @@ use knyst::prelude::{
     BlockSize, Connection, GenState, GenericHandle, Handle, HandleData, KnystCommands,
     MultiThreadedKnystCommands, NodeId, Sample, bus, graph_output, handle, impl_gen,
 };
+use wide::f32x4;
 
 use crate::engine::AudioEngineSettings;
 use crate::instrument::soundfont_synth::{
@@ -17,8 +18,10 @@ use crate::instrument::soundfont_synth::{
     SoundfontSynthSettings,
 };
 use crate::instrument::{
-    EffectProcessorNode, EffectRuntimeHandle, InstrumentKind, InstrumentProcessorNode,
-    InstrumentRuntimeHandle, ProcessorStateError, create_effect_processor,
+    EffectProcessorNode, EffectRuntimeHandle, InstrumentKind, InstrumentProcessor,
+    InstrumentProcessorNode, InstrumentRuntimeHandle, ProcessorStateError,
+    ScheduledInstrumentEvent, create_effect_processor, decode_instrument_event,
+    generation_is_current_or_newer,
 };
 use crate::mixer::{
     BusId, BusSend, BusTrack, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot, MixerState,
@@ -502,8 +505,26 @@ impl MixerRuntime {
             }
             return Ok(());
         }
-        if let Some(runtime) = runtime.as_mut() {
-            runtime.rebuild_effects(context, commands, &track.effects);
+        if let Some(existing) = runtime.take() {
+            let mut existing = existing;
+            if existing.rebuild_effects(context, commands, &track.effects) {
+                *runtime = Some(existing);
+            } else {
+                existing.free();
+                *runtime = Some(TrackRuntime::new(
+                    context,
+                    commands,
+                    track,
+                    TrackRuntimeBuildContext {
+                        settings: &self.meter_settings,
+                        mixer,
+                        master_input,
+                        bus_inputs: &bus_inputs,
+                        soundfonts: &self.soundfonts,
+                        soundfont_settings: self.soundfont_settings,
+                    },
+                )?);
+            }
         } else {
             *runtime = Some(TrackRuntime::new(
                 context,
@@ -728,7 +749,6 @@ struct MasterRuntime {
     input: Handle<GenericHandle>,
     effects: Vec<EffectRuntimeHandle>,
     strip: Handle<GenericHandle>,
-    _meter_node: Handle<GenericHandle>,
     meter: SharedStripMeter,
     level: SharedStripLevel,
 }
@@ -745,19 +765,20 @@ impl MasterRuntime {
             db_to_amplitude(mixer.master.state.gain_db),
             mixer.master.state.pan,
         );
-        let strip = handle_with_inputs(commands, StereoBalanceGain::new(level.clone()), inputs!());
-        let (input, meter_node) = context.with_activation(|| {
+        let strip = handle_with_inputs(
+            commands,
+            StereoBalanceMeter::new(level.clone(), meter.clone()),
+            inputs!(),
+        );
+        let input = context.with_activation(|| {
             let input = bus(2);
-            let meter_node = handle(MeterTap::new(meter.clone()));
-            connect_stereo(node_id_of(strip), node_id_of(meter_node));
-            graph_output(0, meter_node.channels(2));
-            (input, meter_node)
+            graph_output(0, strip.channels(2));
+            input
         });
         let mut runtime = Self {
             input,
             effects: Vec::new(),
             strip,
-            _meter_node: meter_node,
             meter,
             level,
         };
@@ -805,26 +826,21 @@ impl MasterRuntime {
         }
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.strip)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.strip)));
-        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self._meter_node)));
-        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self._meter_node)));
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.input)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.input)));
         knyst_commands().free_node(node_id_of(self.strip));
-        knyst_commands().free_node(node_id_of(self._meter_node));
         knyst_commands().free_node(node_id_of(self.input));
     }
 }
 
 struct TrackRuntime {
-    source_bus: Handle<GenericHandle>,
     effects: Vec<EffectRuntimeHandle>,
-    strip: Handle<GenericHandle>,
-    meter_node: Handle<GenericHandle>,
     meter: SharedStripMeter,
     level: SharedStripLevel,
     route_bus: Handle<GenericHandle>,
     instrument: Option<TrackInstrumentRuntime>,
     send_nodes: Vec<NodeId>,
+    signal_path: TrackSignalPath,
 }
 
 struct TrackRuntimeBuildContext<'a> {
@@ -837,6 +853,30 @@ struct TrackRuntimeBuildContext<'a> {
 }
 
 impl TrackRuntime {
+    fn pre_send_source_node(&self) -> NodeId {
+        match &self.signal_path {
+            TrackSignalPath::Separated { source_bus, .. } => node_id_of(*source_bus),
+            TrackSignalPath::Combined => self
+                .instrument
+                .as_ref()
+                .expect("combined track runtime must have an instrument")
+                .handle
+                .node_id(),
+        }
+    }
+
+    fn post_send_source_node(&self) -> NodeId {
+        match &self.signal_path {
+            TrackSignalPath::Separated { strip, .. } => node_id_of(*strip),
+            TrackSignalPath::Combined => self
+                .instrument
+                .as_ref()
+                .expect("combined track runtime must have an instrument")
+                .handle
+                .node_id(),
+        }
+    }
+
     fn new(
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
@@ -846,36 +886,54 @@ impl TrackRuntime {
         let initial_gain = track_effective_amplitude(build.mixer, track);
         let meter = SharedStripMeter::new(build.settings.sample_rate, build.settings.block_size);
         let level = SharedStripLevel::new(initial_gain, track.state.pan);
-        let strip = handle_with_inputs(commands, StereoBalanceGain::new(level.clone()), inputs!());
-        let (source_bus, meter_node, route_bus) = context.with_activation(|| {
-            let source_bus = bus(2);
-            let meter_node = handle(MeterTap::new(meter.clone()));
-            let route_bus = bus(2);
+        let route_bus = context.with_activation(|| bus(2));
 
-            connect_stereo(node_id_of(strip), node_id_of(meter_node));
-            connect_stereo(node_id_of(meter_node), node_id_of(route_bus));
-            (source_bus, meter_node, route_bus)
-        });
+        let mut instrument = None;
+        let signal_path = if track.effects.is_empty() {
+            if let Some(created_instrument) = create_track_instrument(
+                context,
+                track,
+                build.soundfonts,
+                build.soundfont_settings,
+                Some((level.clone(), meter.clone())),
+            )? {
+                context.with_activation(|| {
+                    created_instrument.connect(node_id_of(route_bus));
+                });
+                instrument = Some(created_instrument);
+                TrackSignalPath::Combined
+            } else {
+                TrackSignalPath::Separated {
+                    source_bus: create_track_source_bus(context),
+                    strip: create_track_strip(commands, level.clone(), meter.clone(), route_bus),
+                }
+            }
+        } else {
+            TrackSignalPath::Separated {
+                source_bus: create_track_source_bus(context),
+                strip: create_track_strip(commands, level.clone(), meter.clone(), route_bus),
+            }
+        };
 
         let mut runtime = Self {
-            source_bus,
             effects: Vec::new(),
-            strip,
-            meter_node,
             meter,
             level,
             route_bus,
-            instrument: None,
+            instrument,
             send_nodes: Vec::new(),
+            signal_path,
         };
-        runtime.rebuild_effects(context, commands, &track.effects);
-        runtime.sync_source(
-            context,
-            commands,
-            track,
-            build.soundfonts,
-            build.soundfont_settings,
-        )?;
+        if !matches!(runtime.signal_path, TrackSignalPath::Combined) {
+            runtime.rebuild_effects(context, commands, &track.effects);
+            runtime.sync_source(
+                context,
+                commands,
+                track,
+                build.soundfonts,
+                build.soundfont_settings,
+            )?;
+        }
         runtime.sync_routing(
             context,
             commands,
@@ -895,6 +953,34 @@ impl TrackRuntime {
         soundfonts: &HashMap<String, LoadedSoundfont>,
         soundfont_settings: SoundfontSynthSettings,
     ) -> Result<bool, MixerRuntimeError> {
+        if matches!(self.signal_path, TrackSignalPath::Combined) {
+            if let Some(instrument) = self.instrument.as_mut()
+                && instrument.update_in_place(track)?
+            {
+                return Ok(true);
+            }
+            context.with_activation(|| {
+                if let Some(instrument) = self.instrument.take() {
+                    instrument.free();
+                }
+            });
+            let Some(instrument) = create_track_instrument(
+                context,
+                track,
+                soundfonts,
+                soundfont_settings,
+                Some((self.level.clone(), self.meter.clone())),
+            )?
+            else {
+                return Ok(false);
+            };
+            context.with_activation(|| {
+                instrument.connect(node_id_of(self.route_bus));
+            });
+            self.instrument = Some(instrument);
+            return Ok(false);
+        }
+
         if let Some(instrument) = self.instrument.as_mut()
             && instrument.update_in_place(track)?
         {
@@ -904,16 +990,16 @@ impl TrackRuntime {
             if let Some(instrument) = self.instrument.take() {
                 instrument.free();
             }
-            knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.source_bus)));
+            knyst_commands().disconnect(Connection::clear_from_nodes(self.pre_send_source_node()));
         });
 
         let Some(instrument) =
-            create_track_instrument(context, track, soundfonts, soundfont_settings)?
+            create_track_instrument(context, track, soundfonts, soundfont_settings, None)?
         else {
             return Ok(false);
         };
         context.with_activation(|| {
-            instrument.connect(node_id_of(self.source_bus));
+            instrument.connect(self.pre_send_source_node());
         });
         self.instrument = Some(instrument);
         Ok(false)
@@ -924,13 +1010,16 @@ impl TrackRuntime {
         context: &KnystContext,
         _commands: &mut MultiThreadedKnystCommands,
         effects: &[crate::instrument::EffectSlotState],
-    ) {
+    ) -> bool {
+        if matches!(self.signal_path, TrackSignalPath::Combined) {
+            return effects.is_empty();
+        }
         context.with_activation(|| {
-            knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.source_bus)));
+            knyst_commands().disconnect(Connection::clear_to_nodes(self.pre_send_source_node()));
             for effect in self.effects.drain(..) {
                 free_effect(effect);
             }
-            let mut previous = node_id_of(self.source_bus);
+            let mut previous = self.pre_send_source_node();
             for effect in effects {
                 let Some(effect) = create_effect_runtime(effect) else {
                     continue;
@@ -940,8 +1029,9 @@ impl TrackRuntime {
                 previous = node;
                 self.effects.push(effect);
             }
-            connect_stereo(previous, node_id_of(self.strip));
+            connect_stereo(previous, self.post_send_source_node());
         });
+        true
     }
 
     fn apply_strip(
@@ -971,8 +1061,8 @@ impl TrackRuntime {
             commands,
             bus_inputs,
             &track.routing.sends,
-            node_id_of(self.source_bus),
-            node_id_of(self.strip),
+            self.pre_send_source_node(),
+            self.post_send_source_node(),
         );
         Ok(())
     }
@@ -1043,18 +1133,34 @@ impl TrackRuntime {
             knyst_commands().disconnect(Connection::clear_to_nodes(node));
             knyst_commands().free_node(node);
         }
-        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.strip)));
-        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.strip)));
-        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.meter_node)));
-        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.meter_node)));
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.route_bus)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.route_bus)));
-        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.source_bus)));
-        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.source_bus)));
-        knyst_commands().free_node(node_id_of(self.strip));
-        knyst_commands().free_node(node_id_of(self.meter_node));
+        self.signal_path.free();
         knyst_commands().free_node(node_id_of(self.route_bus));
-        knyst_commands().free_node(node_id_of(self.source_bus));
+    }
+}
+
+enum TrackSignalPath {
+    Separated {
+        source_bus: Handle<GenericHandle>,
+        strip: Handle<GenericHandle>,
+    },
+    Combined,
+}
+
+impl TrackSignalPath {
+    fn free(self) {
+        match self {
+            Self::Separated { source_bus, strip } => {
+                knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(strip)));
+                knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(strip)));
+                knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(source_bus)));
+                knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(source_bus)));
+                knyst_commands().free_node(node_id_of(strip));
+                knyst_commands().free_node(node_id_of(source_bus));
+            }
+            Self::Combined => {}
+        }
     }
 }
 
@@ -1121,7 +1227,6 @@ struct BusRuntime {
     input: Handle<GenericHandle>,
     effects: Vec<EffectRuntimeHandle>,
     strip: Handle<GenericHandle>,
-    meter_node: Handle<GenericHandle>,
     meter: SharedStripMeter,
     level: SharedStripLevel,
     route_bus: Handle<GenericHandle>,
@@ -1139,20 +1244,21 @@ impl BusRuntime {
         let initial_gain = bus_effective_amplitude(bus_track);
         let meter = SharedStripMeter::new(settings.sample_rate, settings.block_size);
         let level = SharedStripLevel::new(initial_gain, bus_track.state.pan);
-        let strip = handle_with_inputs(commands, StereoBalanceGain::new(level.clone()), inputs!());
-        let (input, meter_node, route_bus) = context.with_activation(|| {
+        let strip = handle_with_inputs(
+            commands,
+            StereoBalanceMeter::new(level.clone(), meter.clone()),
+            inputs!(),
+        );
+        let (input, route_bus) = context.with_activation(|| {
             let input = bus(2);
-            let meter_node = handle(MeterTap::new(meter.clone()));
             let route_bus = bus(2);
-            connect_stereo(node_id_of(strip), node_id_of(meter_node));
-            connect_stereo(node_id_of(meter_node), node_id_of(route_bus));
-            (input, meter_node, route_bus)
+            connect_stereo(node_id_of(strip), node_id_of(route_bus));
+            (input, route_bus)
         });
         let mut runtime = Self {
             input,
             effects: Vec::new(),
             strip,
-            meter_node,
             meter,
             level,
             route_bus,
@@ -1290,17 +1396,29 @@ impl BusRuntime {
         }
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.strip)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.strip)));
-        knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.meter_node)));
-        knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.meter_node)));
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.route_bus)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.route_bus)));
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.input)));
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.input)));
         knyst_commands().free_node(node_id_of(self.strip));
-        knyst_commands().free_node(node_id_of(self.meter_node));
         knyst_commands().free_node(node_id_of(self.route_bus));
         knyst_commands().free_node(node_id_of(self.input));
     }
+}
+
+fn create_track_source_bus(context: &KnystContext) -> Handle<GenericHandle> {
+    context.with_activation(|| bus(2))
+}
+
+fn create_track_strip(
+    commands: &mut MultiThreadedKnystCommands,
+    level: SharedStripLevel,
+    meter: SharedStripMeter,
+    route_bus: Handle<GenericHandle>,
+) -> Handle<GenericHandle> {
+    let strip = handle_with_inputs(commands, StereoBalanceMeter::new(level, meter), inputs!());
+    connect_stereo(node_id_of(strip), node_id_of(route_bus));
+    strip
 }
 
 fn create_track_instrument(
@@ -1308,6 +1426,7 @@ fn create_track_instrument(
     track: &MixerTrack,
     soundfonts: &HashMap<String, LoadedSoundfont>,
     soundfont_settings: SoundfontSynthSettings,
+    inline_strip: Option<(SharedStripLevel, SharedStripMeter)>,
 ) -> Result<Option<TrackInstrumentRuntime>, MixerRuntimeError> {
     match &track.instrument.kind {
         InstrumentKind::BuiltIn { instrument_id } => {
@@ -1327,7 +1446,15 @@ fn create_track_instrument(
                 Some(shared_program.clone()),
             )?;
             let instrument = context.with_activation(|| {
-                let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
+                let node = if let Some((level, meter)) = inline_strip {
+                    handle(TrackInstrumentStripNode::new(
+                        Box::new(processor),
+                        level,
+                        meter,
+                    ))
+                } else {
+                    handle(InstrumentProcessorNode::new(Box::new(processor)))
+                };
                 TrackInstrumentRuntime {
                     handle: InstrumentRuntimeHandle::new(node),
                     kind: TrackInstrumentRuntimeKind::Soundfont {
@@ -1383,11 +1510,13 @@ fn node_id_of<H: HandleData + Copy>(handle: Handle<H>) -> NodeId {
         .expect("runtime handles should always own one node")
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct MeterTap {
     meter: SharedStripMeter,
 }
 
+#[cfg(test)]
 #[impl_gen]
 impl MeterTap {
     #[new]
@@ -1464,6 +1593,89 @@ fn db_to_amplitude(db: f32) -> f32 {
     knyst::db_to_amplitude(db)
 }
 
+fn process_stereo_balance_meter_scalar(
+    left_in: &[Sample],
+    right_in: &[Sample],
+    left_out: &mut [Sample],
+    right_out: &mut [Sample],
+    left_mul: f32,
+    right_mul: f32,
+    frames: usize,
+) -> (f32, f32) {
+    let mut peak_left = 0.0_f32;
+    let mut peak_right = 0.0_f32;
+    for frame in 0..frames {
+        let left = left_in[frame] * left_mul;
+        let right = right_in[frame] * right_mul;
+        left_out[frame] = left;
+        right_out[frame] = right;
+        peak_left = peak_left.max(left.abs());
+        peak_right = peak_right.max(right.abs());
+    }
+    (peak_left, peak_right)
+}
+
+fn process_stereo_balance_meter_simd(
+    left_in: &[Sample],
+    right_in: &[Sample],
+    left_out: &mut [Sample],
+    right_out: &mut [Sample],
+    left_mul: f32,
+    right_mul: f32,
+    frames: usize,
+) -> (f32, f32) {
+    let simd_width = 4;
+    let left_mul4 = f32x4::splat(left_mul);
+    let right_mul4 = f32x4::splat(right_mul);
+    let mut peak_left4 = f32x4::splat(0.0);
+    let mut peak_right4 = f32x4::splat(0.0);
+
+    let simd_frames = frames / simd_width * simd_width;
+    for frame in (0..simd_frames).step_by(simd_width) {
+        let left = f32x4::from([
+            left_in[frame],
+            left_in[frame + 1],
+            left_in[frame + 2],
+            left_in[frame + 3],
+        ]) * left_mul4;
+        let right = f32x4::from([
+            right_in[frame],
+            right_in[frame + 1],
+            right_in[frame + 2],
+            right_in[frame + 3],
+        ]) * right_mul4;
+
+        let left_arr = left.to_array();
+        let right_arr = right.to_array();
+        left_out[frame..frame + simd_width].copy_from_slice(&left_arr);
+        right_out[frame..frame + simd_width].copy_from_slice(&right_arr);
+
+        peak_left4 = peak_left4.max(left.abs());
+        peak_right4 = peak_right4.max(right.abs());
+    }
+
+    let left_peak_arr = peak_left4.to_array();
+    let right_peak_arr = peak_right4.to_array();
+    let mut peak_left = left_peak_arr.into_iter().fold(0.0_f32, f32::max);
+    let mut peak_right = right_peak_arr.into_iter().fold(0.0_f32, f32::max);
+
+    if simd_frames < frames {
+        let (tail_left, tail_right) = process_stereo_balance_meter_scalar(
+            &left_in[simd_frames..frames],
+            &right_in[simd_frames..frames],
+            &mut left_out[simd_frames..frames],
+            &mut right_out[simd_frames..frames],
+            left_mul,
+            right_mul,
+            frames - simd_frames,
+        );
+        peak_left = peak_left.max(tail_left);
+        peak_right = peak_right.max(tail_right);
+    }
+
+    (peak_left, peak_right)
+}
+
 pub(super) struct StereoGain;
 
 #[impl_gen]
@@ -1493,10 +1705,12 @@ impl StereoGain {
     }
 }
 
+#[cfg(test)]
 pub(super) struct StereoBalanceGain {
     level: SharedStripLevel,
 }
 
+#[cfg(test)]
 #[impl_gen]
 impl StereoBalanceGain {
     #[new]
@@ -1522,6 +1736,170 @@ impl StereoBalanceGain {
             right_out[frame] = right_in[frame] * gain * right_gain;
         }
         GenState::Continue
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StereoBalanceMeter {
+    level: SharedStripLevel,
+    meter: SharedStripMeter,
+}
+
+#[impl_gen]
+impl StereoBalanceMeter {
+    #[new]
+    fn new(level: SharedStripLevel, meter: SharedStripMeter) -> Self {
+        Self { level, meter }
+    }
+
+    #[process]
+    fn process(
+        &mut self,
+        left_in: &[Sample],
+        right_in: &[Sample],
+        left_out: &mut [Sample],
+        right_out: &mut [Sample],
+        block_size: BlockSize,
+    ) -> GenState {
+        let gain = self.level.gain();
+        let pan = self.level.pan().clamp(-1.0, 1.0);
+        let left_gain = if pan > 0.0 { 1.0 - pan } else { 1.0 };
+        let right_gain = if pan < 0.0 { 1.0 + pan } else { 1.0 };
+        let left_mul = gain * left_gain;
+        let right_mul = gain * right_gain;
+        let (peak_left, peak_right) = process_stereo_balance_meter_simd(
+            left_in,
+            right_in,
+            left_out,
+            right_out,
+            left_mul,
+            right_mul,
+            block_size.0,
+        );
+
+        self.meter.observe_stereo(peak_left, peak_right);
+        GenState::Continue
+    }
+}
+
+struct TrackInstrumentStripNode {
+    active_generation: u32,
+    processor: Box<dyn InstrumentProcessor>,
+    scratch_left: Vec<Sample>,
+    scratch_right: Vec<Sample>,
+    level: SharedStripLevel,
+    meter: SharedStripMeter,
+}
+
+impl TrackInstrumentStripNode {
+    fn new(
+        processor: Box<dyn InstrumentProcessor>,
+        level: SharedStripLevel,
+        meter: SharedStripMeter,
+    ) -> Self {
+        Self {
+            active_generation: 0,
+            processor,
+            scratch_left: Vec::new(),
+            scratch_right: Vec::new(),
+            level,
+            meter,
+        }
+    }
+}
+
+impl knyst::r#gen::Gen for TrackInstrumentStripNode {
+    fn process(
+        &mut self,
+        ctx: knyst::r#gen::GenContext<'_, '_, '_>,
+        _resources: &mut knyst::Resources,
+    ) -> GenState {
+        let frames = ctx.outputs.block_size();
+        self.scratch_left.resize(frames, 0.0);
+        self.scratch_right.resize(frames, 0.0);
+
+        for event in ctx.events {
+            if event.input != 0 {
+                continue;
+            }
+            let knyst::graph::EventPayload::Bytes(bytes) = &event.payload else {
+                continue;
+            };
+            let Some(event) = decode_instrument_event(bytes) else {
+                continue;
+            };
+            match event {
+                ScheduledInstrumentEvent::Reset { generation } => {
+                    if generation_is_current_or_newer(generation, self.active_generation) {
+                        self.active_generation = generation;
+                        self.processor.reset();
+                    }
+                }
+                ScheduledInstrumentEvent::Midi { generation, event } => {
+                    if generation == self.active_generation {
+                        self.processor.handle_midi(event);
+                    }
+                }
+            }
+        }
+
+        self.processor.render(
+            &mut self.scratch_left[..frames],
+            &mut self.scratch_right[..frames],
+        );
+
+        let gain = self.level.gain();
+        let pan = self.level.pan().clamp(-1.0, 1.0);
+        let left_gain = if pan > 0.0 { 1.0 - pan } else { 1.0 };
+        let right_gain = if pan < 0.0 { 1.0 + pan } else { 1.0 };
+        let left_mul = gain * left_gain;
+        let right_mul = gain * right_gain;
+
+        let mut outputs = ctx.outputs.iter_mut();
+        let left_out = outputs.next().expect("track strip must expose left output");
+        let right_out = outputs
+            .next()
+            .expect("track strip must expose right output");
+
+        let (peak_left, peak_right) = process_stereo_balance_meter_simd(
+            &self.scratch_left[..frames],
+            &self.scratch_right[..frames],
+            left_out,
+            right_out,
+            left_mul,
+            right_mul,
+            frames,
+        );
+        self.meter.observe_stereo(peak_left, peak_right);
+
+        if self.processor.is_sleeping() {
+            GenState::Sleep
+        } else {
+            GenState::Continue
+        }
+    }
+
+    fn num_inputs(&self) -> usize {
+        0
+    }
+
+    fn num_outputs(&self) -> usize {
+        2
+    }
+
+    fn num_event_inputs(&self) -> usize {
+        1
+    }
+
+    fn event_input_desc(&self, input: usize) -> &'static str {
+        match input {
+            0 => "event",
+            _ => "",
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "TrackInstrumentStripNode"
     }
 }
 
@@ -1666,6 +2044,45 @@ mod tests {
     }
 
     #[test]
+    fn simd_strip_pass_matches_scalar_path() {
+        let frames = 11;
+        let left_in = vec![-0.9, -0.6, -0.3, 0.0, 0.2, 0.4, 0.6, 0.8, -0.7, 0.5, -0.1];
+        let right_in = vec![0.7, -0.5, 0.3, -0.1, 0.0, 0.2, -0.4, 0.6, -0.8, 0.9, -0.2];
+        let mut scalar_left = vec![0.0; frames];
+        let mut scalar_right = vec![0.0; frames];
+        let mut simd_left = vec![0.0; frames];
+        let mut simd_right = vec![0.0; frames];
+
+        let scalar = super::process_stereo_balance_meter_scalar(
+            &left_in,
+            &right_in,
+            &mut scalar_left,
+            &mut scalar_right,
+            0.75,
+            0.25,
+            frames,
+        );
+        let simd = super::process_stereo_balance_meter_simd(
+            &left_in,
+            &right_in,
+            &mut simd_left,
+            &mut simd_right,
+            0.75,
+            0.25,
+            frames,
+        );
+
+        for (a, b) in scalar_left.iter().zip(simd_left.iter()) {
+            assert!((a - b).abs() < 1.0e-6);
+        }
+        for (a, b) in scalar_right.iter().zip(simd_right.iter()) {
+            assert!((a - b).abs() < 1.0e-6);
+        }
+        assert!((scalar.0 - simd.0).abs() < 1.0e-6);
+        assert!((scalar.1 - simd.1).abs() < 1.0e-6);
+    }
+
+    #[test]
     fn reset_one_strip_meter_does_not_touch_another() {
         let left = SharedStripMeter::default();
         let right = SharedStripMeter::default();
@@ -1802,6 +2219,37 @@ mod tests {
 
         assert!(harness.errors().is_empty(), "{:?}", harness.errors());
         assert!(harness.output_has_signal());
+    }
+
+    #[test]
+    fn combined_track_soundfont_preserves_stereo_output_at_center_pan() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let mixer = build_soundfont_mixer(&mut harness).expect("mixer should initialize");
+        let handle = mixer
+            .instrument_handle(TrackId(0))
+            .expect("track instrument should exist");
+        harness.process_blocks(50);
+        harness.commands().transport_play();
+        harness.wait_for_transport_settled();
+
+        schedule_test_note(&mut harness, handle);
+        harness.process_blocks(50);
+
+        let left_peak = harness
+            .output_channel(0)
+            .iter()
+            .copied()
+            .map(f32::abs)
+            .fold(0.0, f32::max);
+        let right_peak = harness
+            .output_channel(1)
+            .iter()
+            .copied()
+            .map(f32::abs)
+            .fold(0.0, f32::max);
+
+        assert!(left_peak > 0.001, "left channel stayed silent");
+        assert!(right_peak > 0.001, "right channel stayed silent");
     }
 
     #[test]

@@ -110,6 +110,10 @@ pub trait InstrumentProcessor: Processor {
     fn handle_midi(&mut self, event: MidiEvent);
     /// Renders one stereo block.
     fn render(&mut self, left: &mut [f32], right: &mut [f32]);
+    /// Returns whether the processor can sleep until a new event or parameter change arrives.
+    fn is_sleeping(&self) -> bool {
+        false
+    }
 }
 
 /// Processor role for effects.
@@ -276,16 +280,24 @@ impl Gen for InstrumentProcessorNode {
                 }
             }
         }
-
         self.processor.render(
             &mut self.scratch_left[..frames],
             &mut self.scratch_right[..frames],
         );
-        for frame in 0..frames {
-            ctx.outputs.write(self.scratch_left[frame], 0, frame);
-            ctx.outputs.write(self.scratch_right[frame], 1, frame);
+        let mut outputs = ctx.outputs.iter_mut();
+        let left_out = outputs
+            .next()
+            .expect("instrument node must expose left output");
+        let right_out = outputs
+            .next()
+            .expect("instrument node must expose right output");
+        left_out[..frames].copy_from_slice(&self.scratch_left[..frames]);
+        right_out[..frames].copy_from_slice(&self.scratch_right[..frames]);
+        if self.processor.is_sleeping() {
+            GenState::Sleep
+        } else {
+            GenState::Continue
         }
-        GenState::Continue
     }
 
     fn num_inputs(&self) -> usize {
@@ -507,7 +519,7 @@ pub(crate) fn create_effect_processor(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScheduledInstrumentEvent {
+pub(crate) enum ScheduledInstrumentEvent {
     Midi { generation: u32, event: MidiEvent },
     Reset { generation: u32 },
 }
@@ -528,7 +540,7 @@ fn encode_instrument_event(event: ScheduledInstrumentEvent) -> EventPayload {
     EventPayload::Bytes(Box::new(bytes))
 }
 
-fn decode_instrument_event(bytes: &[u8]) -> Option<ScheduledInstrumentEvent> {
+pub(crate) fn decode_instrument_event(bytes: &[u8]) -> Option<ScheduledInstrumentEvent> {
     if bytes.len() != 10 {
         return None;
     }
@@ -543,7 +555,7 @@ fn decode_instrument_event(bytes: &[u8]) -> Option<ScheduledInstrumentEvent> {
     }
 }
 
-fn generation_is_current_or_newer(candidate: u32, current: u32) -> bool {
+pub(crate) fn generation_is_current_or_newer(candidate: u32, current: u32) -> bool {
     let delta = candidate.wrapping_sub(current);
     delta == 0 || delta < (u32::MAX / 2)
 }
@@ -702,6 +714,10 @@ mod tests {
             let value = if self.active { 1.0 } else { 0.0 };
             left.fill(value);
             right.fill(value);
+        }
+
+        fn is_sleeping(&self) -> bool {
+            !self.active
         }
     }
 

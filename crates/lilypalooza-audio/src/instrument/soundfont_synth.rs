@@ -114,6 +114,8 @@ pub struct SoundfontProcessor {
     state: SoundfontProcessorState,
     shared_program: Option<SharedSoundfontProgramState>,
     applied_shared_revision: u32,
+    needs_render: bool,
+    silent_blocks: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -212,6 +214,8 @@ impl SoundfontProcessor {
             state,
             shared_program,
             applied_shared_revision,
+            needs_render: false,
+            silent_blocks: 0,
         };
         processor.apply_program();
         Ok(processor)
@@ -239,6 +243,8 @@ impl SoundfontProcessor {
             i32::from(self.state.program),
             0,
         );
+        self.needs_render = false;
+        self.silent_blocks = 0;
     }
 
     fn sync_shared_program(&mut self) {
@@ -298,6 +304,10 @@ impl InstrumentProcessor for SoundfontProcessor {
         self.sync_shared_program();
         match event {
             MidiEvent::NoteOn { note, velocity, .. } => {
+                if velocity > 0 {
+                    self.needs_render = true;
+                    self.silent_blocks = 0;
+                }
                 self.synthesizer
                     .note_on(Self::TRACK_CHANNEL, i32::from(note), i32::from(velocity))
             }
@@ -346,9 +356,12 @@ impl InstrumentProcessor for SoundfontProcessor {
             MidiEvent::AllNotesOff { .. } => self
                 .synthesizer
                 .note_off_all_channel(Self::TRACK_CHANNEL, false),
-            MidiEvent::AllSoundOff { .. } => self
-                .synthesizer
-                .note_off_all_channel(Self::TRACK_CHANNEL, true),
+            MidiEvent::AllSoundOff { .. } => {
+                self.needs_render = false;
+                self.silent_blocks = 0;
+                self.synthesizer
+                    .note_off_all_channel(Self::TRACK_CHANNEL, true)
+            }
             MidiEvent::ResetAllControllers { .. } => {
                 self.synthesizer
                     .process_midi_message(Self::TRACK_CHANNEL, 0xB0, 121, 0)
@@ -358,7 +371,29 @@ impl InstrumentProcessor for SoundfontProcessor {
 
     fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
         self.sync_shared_program();
+        if !self.needs_render {
+            left.fill(0.0);
+            right.fill(0.0);
+            return;
+        }
         self.synthesizer.render(left, right);
+        let peak = left
+            .iter()
+            .chain(right.iter())
+            .map(|sample| sample.abs())
+            .fold(0.0_f32, f32::max);
+        if peak <= 1.0e-6 {
+            self.silent_blocks = self.silent_blocks.saturating_add(1);
+            if self.silent_blocks >= 8 {
+                self.needs_render = false;
+            }
+        } else {
+            self.silent_blocks = 0;
+        }
+    }
+
+    fn is_sleeping(&self) -> bool {
+        !self.needs_render
     }
 }
 
@@ -369,6 +404,7 @@ pub(crate) fn encode_soundfont_state(state: &SoundfontProcessorState) -> Process
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Instant;
 
     use super::{
         LoadedSoundfont, SoundfontProcessor, SoundfontProcessorState, SoundfontSynthSettings,
@@ -407,6 +443,32 @@ mod tests {
         }
 
         panic!("soundfont processor produced silence after note on");
+    }
+
+    #[test]
+    fn soundfont_processor_stays_silent_without_note_on() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut processor = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            SoundfontSynthSettings::new(44_100, 64),
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+
+        let mut left = vec![1.0; 64];
+        let mut right = vec![1.0; 64];
+        for _ in 0..8 {
+            processor.render(&mut left, &mut right);
+            assert!(
+                left.iter()
+                    .chain(right.iter())
+                    .all(|sample| sample.abs() <= 1.0e-6),
+                "soundfont processor should stay silent before any note on"
+            );
+            left.fill(1.0);
+            right.fill(1.0);
+        }
     }
 
     #[test]
@@ -692,6 +754,154 @@ mod tests {
                 .chain(violin_right.iter().zip(piano_right.iter()))
                 .any(|(a, b)| (a - b).abs() > 1.0e-6),
             "reset restored the SoundFont processor to the default piano program"
+        );
+    }
+
+    #[test]
+    fn soundfont_processor_reset_restores_silent_fast_path() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut processor = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            SoundfontSynthSettings::new(44_100, 64),
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+
+        processor.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+        let mut left = vec![0.0; 64];
+        let mut right = vec![0.0; 64];
+        processor.render(&mut left, &mut right);
+
+        processor.reset();
+        left.fill(1.0);
+        right.fill(1.0);
+        processor.render(&mut left, &mut right);
+        assert!(
+            left.iter()
+                .chain(right.iter())
+                .all(|sample| sample.abs() <= 1.0e-6),
+            "soundfont processor reset should restore the silent fast path"
+        );
+    }
+
+    #[test]
+    fn soundfont_processor_returns_to_silent_fast_path_after_release_tail() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut processor = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            SoundfontSynthSettings::new(44_100, 64),
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+
+        processor.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+        processor.handle_midi(MidiEvent::NoteOff {
+            channel: 0,
+            note: 60,
+            velocity: 0,
+        });
+
+        let mut left = vec![0.0; 64];
+        let mut right = vec![0.0; 64];
+        for _ in 0..1_024 {
+            processor.render(&mut left, &mut right);
+            if !processor.needs_render {
+                return;
+            }
+        }
+
+        panic!("soundfont processor never returned to the silent fast path after note release");
+    }
+
+    #[test]
+    fn soundfont_processor_reports_sleeping_when_dormant() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut processor = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            SoundfontSynthSettings::new(44_100, 64),
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+
+        assert!(
+            processor.is_sleeping(),
+            "fresh soundfont processor should start dormant"
+        );
+
+        processor.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+        assert!(
+            !processor.is_sleeping(),
+            "note on should wake the processor"
+        );
+
+        processor.handle_midi(MidiEvent::AllSoundOff { channel: 0 });
+        assert!(
+            processor.is_sleeping(),
+            "all sound off should return the processor to dormant state"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual perf report"]
+    fn perf_report_soundfont_processor_block_costs() {
+        const BLOCKS: usize = 20_000;
+        const BLOCK_SIZE: usize = 64;
+
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let settings = SoundfontSynthSettings::new(44_100, BLOCK_SIZE);
+
+        let mut idle = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            settings,
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+        let mut armed = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            settings,
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+        armed.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+
+        let mut idle_left = vec![0.0; BLOCK_SIZE];
+        let mut idle_right = vec![0.0; BLOCK_SIZE];
+        let idle_started = Instant::now();
+        for _ in 0..BLOCKS {
+            idle.render(&mut idle_left, &mut idle_right);
+        }
+        let idle_elapsed = idle_started.elapsed();
+
+        let mut armed_left = vec![0.0; BLOCK_SIZE];
+        let mut armed_right = vec![0.0; BLOCK_SIZE];
+        let armed_started = Instant::now();
+        for _ in 0..BLOCKS {
+            armed.render(&mut armed_left, &mut armed_right);
+        }
+        let armed_elapsed = armed_started.elapsed();
+
+        println!(
+            "soundfont processor perf over {BLOCKS} blocks: idle={idle_elapsed:?} armed={armed_elapsed:?}"
         );
     }
 }

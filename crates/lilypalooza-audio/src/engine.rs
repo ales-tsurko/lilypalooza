@@ -474,9 +474,14 @@ mod tests {
             .mixer
             .instrument_handle(TrackId(0))
             .expect("track runtime should expose instrument handle");
-        engine.context.with_activation(|| {
-            handle.note_on(0, 60, 100);
-        });
+        handle.send_midi(
+            &mut engine.commands,
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity: 100,
+            },
+        );
 
         for _ in 0..1024 {
             backend_handle.process_block();
