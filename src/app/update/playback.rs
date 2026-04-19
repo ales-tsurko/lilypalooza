@@ -1,15 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use lilypalooza_audio::{
-    AudioEngine, INSTRUMENT_TRACK_COUNT, InstrumentSlotState, SoundfontResource, TrackId,
-};
+use lilypalooza_audio::{AudioEngine, INSTRUMENT_TRACK_COUNT, SoundfontResource, TrackId};
 
 use super::*;
 
 const DEFAULT_SOUNDFONT_ID: &str = "default";
-const AUDIO_ISOLATION_PROGRAMS: [u8; 4] = [0, 1, 2, 3];
-
 impl Lilypalooza {
     pub(in crate::app) fn refresh_score_cursor_overlay(&mut self) {
         self.score_cursor_overlay = None;
@@ -64,8 +60,6 @@ impl Lilypalooza {
             if let Err(error) = load_soundfont_resource(playback, &soundfont_path) {
                 self.soundfont_status = SoundfontStatus::Error(error.clone());
                 self.logger.push(error.clone());
-            } else if self.audio_isolation {
-                bootstrap_audio_isolation_tracks(playback);
             }
         }
 
@@ -276,16 +270,6 @@ fn sync_playback_engine(
         }
     }
     Ok(())
-}
-
-fn bootstrap_audio_isolation_tracks(playback: &mut AudioEngine) {
-    let mut mixer = playback.mixer();
-    for (track_index, program) in AUDIO_ISOLATION_PROGRAMS.into_iter().enumerate() {
-        let _ = mixer.set_track_instrument(
-            TrackId(track_index as u16),
-            InstrumentSlotState::soundfont(DEFAULT_SOUNDFONT_ID, 0, program),
-        );
-    }
 }
 
 fn soundfont_name(path: &Path) -> String {

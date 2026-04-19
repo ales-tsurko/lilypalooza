@@ -127,7 +127,6 @@ struct Lilypalooza {
     spinner_step: usize,
     compile_session: Option<lilypond::CompileSession>,
     playback: Option<AudioEngine>,
-    audio_isolation: bool,
     soundfont_status: SoundfontStatus,
     workspace_panes: pane_grid::State<DockGroupId>,
     dock_layout: Option<DockNode>,
@@ -451,7 +450,6 @@ pub fn run(
     startup_soundfont: Option<PathBuf>,
     startup_score: Option<PathBuf>,
     audio_enabled: bool,
-    audio_isolation: bool,
 ) -> iced::Result {
     iced::application(
         move || {
@@ -459,7 +457,6 @@ pub fn run(
                 startup_soundfont.clone(),
                 startup_score.clone(),
                 audio_enabled,
-                audio_isolation,
             )
         },
         update,
@@ -490,7 +487,6 @@ fn new(
     startup_soundfont: Option<PathBuf>,
     startup_score: Option<PathBuf>,
     audio_enabled: bool,
-    audio_isolation: bool,
 ) -> (Lilypalooza, Task<Message>) {
     let default_settings = settings::AppSettings::default();
     let default_global_state = GlobalState::default();
@@ -594,7 +590,6 @@ fn new(
         compile_session: None,
         playback,
         soundfont_status: SoundfontStatus::NotSelected,
-        audio_isolation,
         workspace_panes,
         dock_layout,
         dock_groups,
@@ -693,10 +688,6 @@ fn new(
     };
 
     app.logger.push("Checking LilyPond availability");
-    if audio_isolation {
-        app.logger
-            .push("Audio isolation mode enabled: mixer folded, 4 default SoundFont tracks armed");
-    }
     if !audio_enabled {
         app.logger.push("Audio engine disabled by --no-audio");
     }
@@ -717,10 +708,6 @@ fn new(
     if let Some(error) = playback_init_error {
         app.logger
             .push(format!("Playback engine startup failed: {error}"));
-    }
-
-    if audio_isolation {
-        let _ = app.fold_workspace_pane(WorkspacePaneKind::Mixer);
     }
 
     app.restore_editor_session(
