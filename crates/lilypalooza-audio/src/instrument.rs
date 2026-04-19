@@ -3,6 +3,8 @@
 mod gain_effect;
 pub(crate) mod soundfont_synth;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use knyst::r#gen::{Gen, GenContext};
@@ -234,15 +236,35 @@ pub struct EffectSlotState {
 /// Knyst node wrapper for any instrument processor.
 pub(crate) struct InstrumentProcessorNode {
     active_generation: u32,
+    reset_state: SharedInstrumentResetState,
     processor: Box<dyn InstrumentProcessor>,
     scratch_left: Vec<Sample>,
     scratch_right: Vec<Sample>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SharedInstrumentResetState {
+    generation: Arc<AtomicU32>,
+}
+
+impl SharedInstrumentResetState {
+    pub(crate) fn request(&self, generation: u32) {
+        self.generation.store(generation, Ordering::Relaxed);
+    }
+
+    pub(crate) fn load(&self) -> u32 {
+        self.generation.load(Ordering::Relaxed)
+    }
+}
+
 impl InstrumentProcessorNode {
-    pub(crate) fn new(processor: Box<dyn InstrumentProcessor>) -> Self {
+    pub(crate) fn new(
+        processor: Box<dyn InstrumentProcessor>,
+        reset_state: SharedInstrumentResetState,
+    ) -> Self {
         Self {
             active_generation: 0,
+            reset_state,
             processor,
             scratch_left: Vec::new(),
             scratch_right: Vec::new(),
@@ -255,6 +277,14 @@ impl Gen for InstrumentProcessorNode {
         let frames = ctx.outputs.block_size();
         self.scratch_left.resize(frames, 0.0);
         self.scratch_right.resize(frames, 0.0);
+
+        let requested_reset = self.reset_state.load();
+        if requested_reset != self.active_generation
+            && generation_is_current_or_newer(requested_reset, self.active_generation)
+        {
+            self.active_generation = requested_reset;
+            self.processor.reset();
+        }
 
         for event in ctx.events {
             if event.input != 0 {
@@ -367,28 +397,42 @@ impl EffectProcessorNode {
 }
 
 /// Typed Knyst handle for instrument runtime nodes.
-#[derive(Clone, Copy, Debug)]
-pub struct InstrumentRuntimeHandle(Handle<GenericHandle>);
+#[derive(Clone, Debug)]
+pub struct InstrumentRuntimeHandle {
+    handle: Handle<GenericHandle>,
+    reset_state: SharedInstrumentResetState,
+}
 
 impl InstrumentRuntimeHandle {
     const IMMEDIATE_EVENT_LEAD: Duration = Duration::from_millis(30);
+    #[cfg(test)]
     const IMMEDIATE_EVENT_STEP: Duration = Duration::from_millis(2);
     const LIVE_EVENT_DELAY: Duration = Duration::from_millis(2);
 
-    pub(crate) fn new(handle: Handle<GenericHandle>) -> Self {
-        Self(handle)
+    pub(crate) fn new(
+        handle: Handle<GenericHandle>,
+        reset_state: SharedInstrumentResetState,
+    ) -> Self {
+        Self {
+            handle,
+            reset_state,
+        }
     }
 
     #[cfg(test)]
-    pub(crate) fn raw_handle(self) -> Handle<GenericHandle> {
-        self.0
+    pub(crate) fn raw_handle(&self) -> Handle<GenericHandle> {
+        self.handle
     }
 
-    pub(crate) fn node_id(self) -> knyst::prelude::NodeId {
-        self.0
+    pub(crate) fn node_id(&self) -> knyst::prelude::NodeId {
+        self.handle
             .node_ids()
             .next()
             .expect("instrument handle should always own one node")
+    }
+
+    pub(crate) fn request_reset_now(&self, generation: u32) {
+        self.reset_state.request(generation);
     }
 
     pub(crate) fn schedule_midi_at_with_offset(
@@ -447,18 +491,7 @@ impl InstrumentRuntimeHandle {
         ));
     }
 
-    pub(crate) fn send_reset_live(
-        &self,
-        commands: &mut MultiThreadedKnystCommands,
-        generation: u32,
-    ) {
-        commands.schedule_event(EventChange::duration_from_now(
-            self.node_id().event_input("event"),
-            encode_instrument_event(ScheduledInstrumentEvent::Reset { generation }),
-            Self::LIVE_EVENT_DELAY,
-        ));
-    }
-
+    #[cfg(test)]
     pub(crate) fn immediate_event_delay(step: u32) -> Duration {
         Self::IMMEDIATE_EVENT_LEAD + Self::IMMEDIATE_EVENT_STEP.saturating_mul(step)
     }
@@ -675,6 +708,7 @@ mod tests {
     use super::{
         InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle, MidiEvent,
         ParamValue, Processor, ProcessorDescriptor, ProcessorState, ProcessorStateError,
+        SharedInstrumentResetState,
         soundfont_synth::{
             LoadedSoundfont, SoundfontProcessor, SoundfontProcessorState, SoundfontSynthSettings,
         },
@@ -733,11 +767,13 @@ mod tests {
     fn reset_then_note_on_in_same_block_produces_signal() {
         let mut harness = OfflineHarness::new(44_100, 64);
         let handle = harness.context().with_activation(|| {
-            let node = handle(InstrumentProcessorNode::new(Box::new(GateProcessor {
-                active: true,
-            })));
+            let reset_state = SharedInstrumentResetState::default();
+            let node = handle(InstrumentProcessorNode::new(
+                Box::new(GateProcessor { active: true }),
+                reset_state.clone(),
+            ));
             graph_output(0, node.channels(2));
-            InstrumentRuntimeHandle::new(node)
+            InstrumentRuntimeHandle::new(node, reset_state)
         });
 
         harness.commands().transport_pause();
@@ -774,11 +810,13 @@ mod tests {
     fn immediate_reset_and_panic_silence_active_node() {
         let mut harness = OfflineHarness::new(44_100, 64);
         let handle = harness.context().with_activation(|| {
-            let node = handle(InstrumentProcessorNode::new(Box::new(GateProcessor {
-                active: false,
-            })));
+            let reset_state = SharedInstrumentResetState::default();
+            let node = handle(InstrumentProcessorNode::new(
+                Box::new(GateProcessor { active: false }),
+                reset_state.clone(),
+            ));
             graph_output(0, node.channels(2));
-            InstrumentRuntimeHandle::new(node)
+            InstrumentRuntimeHandle::new(node, reset_state)
         });
 
         harness.commands().transport_play();
@@ -831,9 +869,13 @@ mod tests {
                 SoundfontProcessorState::default(),
             )
             .expect("soundfont processor should initialize");
-            let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
+            let reset_state = SharedInstrumentResetState::default();
+            let node = handle(InstrumentProcessorNode::new(
+                Box::new(processor),
+                reset_state.clone(),
+            ));
             graph_output(0, node.channels(2));
-            InstrumentRuntimeHandle::new(node)
+            InstrumentRuntimeHandle::new(node, reset_state)
         });
 
         harness.commands().transport_play();
@@ -888,9 +930,13 @@ mod tests {
                 SoundfontProcessorState::default(),
             )
             .expect("soundfont processor should initialize");
-            let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
+            let reset_state = SharedInstrumentResetState::default();
+            let node = handle(InstrumentProcessorNode::new(
+                Box::new(processor),
+                reset_state.clone(),
+            ));
             graph_output(0, node.channels(2));
-            InstrumentRuntimeHandle::new(node)
+            InstrumentRuntimeHandle::new(node, reset_state)
         });
 
         harness.commands().transport_play();
@@ -932,9 +978,13 @@ mod tests {
                 SoundfontProcessorState::default(),
             )
             .expect("soundfont processor should initialize");
-            let node = handle(InstrumentProcessorNode::new(Box::new(processor)));
+            let reset_state = SharedInstrumentResetState::default();
+            let node = handle(InstrumentProcessorNode::new(
+                Box::new(processor),
+                reset_state.clone(),
+            ));
             graph_output(0, node.channels(2));
-            InstrumentRuntimeHandle::new(node)
+            InstrumentRuntimeHandle::new(node, reset_state)
         });
 
         harness.commands().transport_play();
@@ -963,11 +1013,13 @@ mod tests {
     fn stale_reset_generation_does_not_silence_newer_note() {
         let mut harness = OfflineHarness::new(44_100, 64);
         let handle = harness.context().with_activation(|| {
-            let node = handle(InstrumentProcessorNode::new(Box::new(GateProcessor {
-                active: false,
-            })));
+            let reset_state = SharedInstrumentResetState::default();
+            let node = handle(InstrumentProcessorNode::new(
+                Box::new(GateProcessor { active: false }),
+                reset_state.clone(),
+            ));
             graph_output(0, node.channels(2));
-            InstrumentRuntimeHandle::new(node)
+            InstrumentRuntimeHandle::new(node, reset_state)
         });
 
         harness.commands().transport_pause();

@@ -10,8 +10,8 @@ use crate::instrument::soundfont_synth::{
 use crate::instrument::{
     EffectProcessorNode, EffectRuntimeHandle, InstrumentKind, InstrumentProcessor,
     InstrumentProcessorNode, InstrumentRuntimeHandle, ProcessorStateError,
-    ScheduledInstrumentEvent, create_effect_processor, decode_instrument_event,
-    generation_is_current_or_newer,
+    ScheduledInstrumentEvent, SharedInstrumentResetState, create_effect_processor,
+    decode_instrument_event, generation_is_current_or_newer,
 };
 use crate::mixer::{
     BusId, BusSend, BusTrack, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot,
@@ -226,7 +226,8 @@ impl MixerRuntime {
                 .as_ref()?
                 .instrument
                 .as_ref()?
-                .handle,
+                .handle
+                .clone(),
         )
     }
 
@@ -1486,17 +1487,22 @@ fn create_track_instrument(
                 Some(shared_program.clone()),
             )?;
             let instrument = context.with_activation(|| {
+                let reset_state = SharedInstrumentResetState::default();
                 let node = if let Some((level, meter)) = inline_strip {
                     handle(TrackInstrumentStripNode::new(
                         Box::new(processor),
+                        reset_state.clone(),
                         level,
                         meter,
                     ))
                 } else {
-                    handle(InstrumentProcessorNode::new(Box::new(processor)))
+                    handle(InstrumentProcessorNode::new(
+                        Box::new(processor),
+                        reset_state.clone(),
+                    ))
                 };
                 TrackInstrumentRuntime {
-                    handle: InstrumentRuntimeHandle::new(node),
+                    handle: InstrumentRuntimeHandle::new(node, reset_state),
                     kind: TrackInstrumentRuntimeKind::Soundfont {
                         soundfont_id,
                         program: shared_program,
@@ -1824,6 +1830,7 @@ impl StereoBalanceMeter {
 
 struct TrackInstrumentStripNode {
     active_generation: u32,
+    reset_state: SharedInstrumentResetState,
     processor: Box<dyn InstrumentProcessor>,
     scratch_left: Vec<Sample>,
     scratch_right: Vec<Sample>,
@@ -1834,11 +1841,13 @@ struct TrackInstrumentStripNode {
 impl TrackInstrumentStripNode {
     fn new(
         processor: Box<dyn InstrumentProcessor>,
+        reset_state: SharedInstrumentResetState,
         level: SharedStripLevel,
         meter: SharedStripMeter,
     ) -> Self {
         Self {
             active_generation: 0,
+            reset_state,
             processor,
             scratch_left: Vec::new(),
             scratch_right: Vec::new(),
@@ -1857,6 +1866,14 @@ impl knyst::r#gen::Gen for TrackInstrumentStripNode {
         let frames = ctx.outputs.block_size();
         self.scratch_left.resize(frames, 0.0);
         self.scratch_right.resize(frames, 0.0);
+
+        let requested_reset = self.reset_state.load();
+        if requested_reset != self.active_generation
+            && generation_is_current_or_newer(requested_reset, self.active_generation)
+        {
+            self.active_generation = requested_reset;
+            self.processor.reset();
+        }
 
         for event in ctx.events {
             if event.input != 0 {
@@ -1955,8 +1972,8 @@ mod tests {
 
     use super::{
         InstrumentProcessorNode, InstrumentRuntimeHandle, LoadedSoundfont, MasterRuntime, MeterTap,
-        MixerRuntimeError, SharedStripMeter, SoundfontProcessor, SoundfontSynthSettings,
-        connect_stereo, node_id_of, normalize_meter_level,
+        MixerRuntimeError, SharedInstrumentResetState, SharedStripMeter, SoundfontProcessor,
+        SoundfontSynthSettings, connect_stereo, node_id_of, normalize_meter_level,
     };
     use crate::instrument::{
         InstrumentKind, InstrumentSlotState, MidiEvent, ProcessorState, soundfont_synth,
@@ -2619,12 +2636,16 @@ mod tests {
             let meter = SharedStripMeter::new(44_100, 64);
             let meter_node = handle(MeterTap::new(meter));
             let route_bus = bus(2);
-            let instrument = handle(InstrumentProcessorNode::new(Box::new(processor)));
+            let reset_state = SharedInstrumentResetState::default();
+            let instrument = handle(InstrumentProcessorNode::new(
+                Box::new(processor),
+                reset_state.clone(),
+            ));
             graph_output(0, route_bus.channels(2));
             connect_stereo(node_id_of(instrument), node_id_of(strip));
             connect_stereo(node_id_of(strip), node_id_of(meter_node));
             connect_stereo(node_id_of(meter_node), node_id_of(route_bus));
-            InstrumentRuntimeHandle::new(instrument)
+            InstrumentRuntimeHandle::new(instrument, reset_state)
         });
         harness.wait_for_graph_settled();
 
@@ -2671,13 +2692,17 @@ mod tests {
             let meter = SharedStripMeter::new(44_100, 64);
             let meter_node = handle(MeterTap::new(meter));
             let route_bus = bus(2);
-            let instrument = handle(InstrumentProcessorNode::new(Box::new(processor)));
+            let reset_state = SharedInstrumentResetState::default();
+            let instrument = handle(InstrumentProcessorNode::new(
+                Box::new(processor),
+                reset_state.clone(),
+            ));
             graph_output(0, route_bus.channels(2));
             connect_stereo(node_id_of(instrument), node_id_of(source_bus));
             connect_stereo(node_id_of(source_bus), node_id_of(strip));
             connect_stereo(node_id_of(strip), node_id_of(meter_node));
             connect_stereo(node_id_of(meter_node), node_id_of(route_bus));
-            InstrumentRuntimeHandle::new(instrument)
+            InstrumentRuntimeHandle::new(instrument, reset_state)
         });
         harness.wait_for_graph_settled();
 
@@ -2729,13 +2754,17 @@ mod tests {
             let meter = SharedStripMeter::new(44_100, 64);
             let meter_node = handle(MeterTap::new(meter));
             let route_bus = bus(2);
-            let instrument = handle(InstrumentProcessorNode::new(Box::new(processor)));
+            let reset_state = SharedInstrumentResetState::default();
+            let instrument = handle(InstrumentProcessorNode::new(
+                Box::new(processor),
+                reset_state.clone(),
+            ));
             connect_stereo(node_id_of(instrument), node_id_of(source_bus));
             connect_stereo(node_id_of(source_bus), node_id_of(strip));
             connect_stereo(node_id_of(strip), node_id_of(meter_node));
             connect_stereo(node_id_of(meter_node), node_id_of(route_bus));
             connect_stereo(node_id_of(route_bus), master.input_node());
-            InstrumentRuntimeHandle::new(instrument)
+            InstrumentRuntimeHandle::new(instrument, reset_state)
         });
         harness.wait_for_graph_settled();
 
@@ -2781,13 +2810,17 @@ mod tests {
             let meter = SharedStripMeter::new(44_100, 64);
             let meter_node = handle(MeterTap::new(meter));
             let route_bus = bus(2);
-            let instrument = handle(InstrumentProcessorNode::new(Box::new(processor)));
+            let reset_state = SharedInstrumentResetState::default();
+            let instrument = handle(InstrumentProcessorNode::new(
+                Box::new(processor),
+                reset_state.clone(),
+            ));
             connect_stereo(node_id_of(instrument), node_id_of(source_bus));
             connect_stereo(node_id_of(source_bus), node_id_of(strip));
             connect_stereo(node_id_of(strip), node_id_of(meter_node));
             connect_stereo(node_id_of(meter_node), node_id_of(route_bus));
             connect_stereo(node_id_of(route_bus), master.input_node());
-            InstrumentRuntimeHandle::new(instrument)
+            InstrumentRuntimeHandle::new(instrument, reset_state)
         });
         harness.wait_for_graph_settled();
 

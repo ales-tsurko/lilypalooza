@@ -1870,6 +1870,71 @@ mod tests {
     }
 
     #[test]
+    fn pause_immediate_resets_active_notes() {
+        let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine = AudioEngine::start(
+            MixerState::new(),
+            backend,
+            AudioEngineOptions {
+                chase_notes_on_seek: true,
+                ..AudioEngineOptions::default()
+            },
+        )
+        .expect("engine should start");
+        let _audio = backend_handle.start_realtime();
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .expect("track should accept soundfont instrument");
+        }
+        settle_backend(&backend_handle);
+
+        engine
+            .sequencer()
+            .replace_from_midi_bytes(&delayed_note_midi_bytes(480, 480))
+            .expect("midi should load");
+        engine.transport().seek_beats(1.5);
+        engine.transport().play();
+
+        let mut heard_signal = false;
+        for _ in 0..1024 {
+            backend_handle.process_block();
+            if backend_handle.output_has_signal() {
+                heard_signal = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            heard_signal,
+            "playback should produce signal before immediate pause"
+        );
+
+        engine.transport().pause_immediate();
+
+        let mut silent_blocks = 0_usize;
+        for _ in 0..256 {
+            backend_handle.process_block();
+            if !backend_handle.output_has_signal() {
+                silent_blocks += 1;
+                if silent_blocks >= 16 {
+                    return;
+                }
+            } else {
+                silent_blocks = 0;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        panic!("pause_immediate should eventually clear active notes");
+    }
+
+    #[test]
     fn rewind_while_playing_keeps_playback_running() {
         let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
         let mut engine = AudioEngine::start(
@@ -2096,13 +2161,15 @@ mod tests {
         let _audio = backend_handle.start_realtime();
 
         let instrument = engine.context.with_activation(|| {
-            let node = handle(InstrumentProcessorNode::new(Box::new(TestNoteProcessor {
-                active: false,
-            })));
+            let reset_state = crate::instrument::SharedInstrumentResetState::default();
+            let node = handle(InstrumentProcessorNode::new(
+                Box::new(TestNoteProcessor { active: false }),
+                reset_state.clone(),
+            ));
             graph_output(0, node.channels(2));
-            node
+            (node, reset_state)
         });
-        let handle = crate::instrument::InstrumentRuntimeHandle::new(instrument);
+        let handle = crate::instrument::InstrumentRuntimeHandle::new(instrument.0, instrument.1);
 
         engine.commands.transport_pause();
         engine
@@ -2145,13 +2212,15 @@ mod tests {
         let _audio = backend_handle.start_realtime();
 
         let instrument = engine.context.with_activation(|| {
-            let node = handle(InstrumentProcessorNode::new(Box::new(TestNoteProcessor {
-                active: false,
-            })));
+            let reset_state = crate::instrument::SharedInstrumentResetState::default();
+            let node = handle(InstrumentProcessorNode::new(
+                Box::new(TestNoteProcessor { active: false }),
+                reset_state.clone(),
+            ));
             graph_output(0, node.channels(2));
-            node
+            (node, reset_state)
         });
-        let handle = crate::instrument::InstrumentRuntimeHandle::new(instrument);
+        let handle = crate::instrument::InstrumentRuntimeHandle::new(instrument.0, instrument.1);
 
         engine.commands.transport_pause();
         engine

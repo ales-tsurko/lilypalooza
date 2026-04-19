@@ -665,7 +665,7 @@ fn schedule_window(
         let Some(handle) = config
             .instrument_handles
             .get(sequence.target_track.index())
-            .copied()
+            .cloned()
             .flatten()
         else {
             continue;
@@ -748,7 +748,7 @@ fn schedule_pause_reset_at(
         let Some(handle) = config
             .instrument_handles
             .get(track.index())
-            .copied()
+            .cloned()
             .flatten()
         else {
             continue;
@@ -785,7 +785,7 @@ fn dispatch_chase_events_at(
         let Some(handle) = config
             .instrument_handles
             .get(sequence.target_track.index())
-            .copied()
+            .cloned()
             .flatten()
         else {
             continue;
@@ -821,7 +821,7 @@ fn schedule_reset_and_chase_at(
         let Some(handle) = config
             .instrument_handles
             .get(track.index())
-            .copied()
+            .cloned()
             .flatten()
         else {
             continue;
@@ -854,7 +854,7 @@ fn schedule_reset_and_chase_at(
 fn dispatch_immediate_pause_reset(
     config: &SequencerConfig,
     runtime: &SequencerRuntime,
-    commands: &mut MultiThreadedKnystCommands,
+    _commands: &mut MultiThreadedKnystCommands,
 ) {
     let mut tracks = BTreeSet::new();
     for sequence in &config.sequences {
@@ -867,13 +867,12 @@ fn dispatch_immediate_pause_reset(
         let Some(handle) = config
             .instrument_handles
             .get(track.index())
-            .copied()
+            .cloned()
             .flatten()
         else {
             continue;
         };
-        handle.send_reset_live(commands, generation);
-        dispatch_immediate_panic_events(handle, generation, commands);
+        handle.request_reset_now(generation);
     }
 }
 
@@ -914,29 +913,6 @@ fn dispatch_scheduled_panic_events(
                 event,
             );
             frame_offset += 2;
-        }
-    }
-}
-
-fn dispatch_immediate_panic_events(
-    handle: InstrumentRuntimeHandle,
-    generation: u32,
-    commands: &mut MultiThreadedKnystCommands,
-) {
-    let mut step = 1;
-    for channel in 0..16_u8 {
-        for event in [
-            EngineMidiEvent::AllSoundOff { channel },
-            EngineMidiEvent::AllNotesOff { channel },
-            EngineMidiEvent::ResetAllControllers { channel },
-        ] {
-            handle.send_midi_immediate(
-                commands,
-                generation,
-                event,
-                InstrumentRuntimeHandle::immediate_event_delay(step),
-            );
-            step += 1;
         }
     }
 }

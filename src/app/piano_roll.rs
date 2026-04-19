@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use iced::widget::{
-    button, canvas, column, container, mouse_area, row, scrollable, slider, stack, svg, text,
-    text_input, tooltip,
+    button, canvas, canvas::Cache, column, container, mouse_area, row, scrollable, slider, stack,
+    svg, text, text_input, tooltip,
 };
 use iced::{
     Color, ContentFit, Element, Fill, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
@@ -1044,8 +1044,21 @@ struct TempoCanvas<'a> {
 
 #[derive(Debug, Default)]
 struct TempoCanvasState {
+    cache: Cache,
+    cache_key: Option<TempoCanvasCacheKey>,
     rewind_flag_press_origin: Option<Point>,
     dragging_rewind_flag: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TempoCanvasCacheKey {
+    total_ticks: u64,
+    ppq: u16,
+    zoom_x_bits: u32,
+    beat_subdivision: u8,
+    horizontal_scroll_bits: u32,
+    tempo_changes_len: usize,
+    bar_lines_len: usize,
 }
 
 impl canvas::Program<Message> for TempoCanvas<'_> {
@@ -1058,6 +1071,20 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        let cache_key = TempoCanvasCacheKey {
+            total_ticks: self.data.total_ticks,
+            ppq: self.data.ppq,
+            zoom_x_bits: self.zoom_x.to_bits(),
+            beat_subdivision: self.beat_subdivision,
+            horizontal_scroll_bits: self.horizontal_scroll.to_bits(),
+            tempo_changes_len: self.data.tempo_changes.len(),
+            bar_lines_len: self.data.bar_lines.len(),
+        };
+        if state.cache_key != Some(cache_key) {
+            state.cache.clear();
+            state.cache_key = Some(cache_key);
+        }
+
         let pixels_per_tick =
             BASE_PIXELS_PER_QUARTER * self.zoom_x / f32::from(self.data.ppq.max(1));
 
@@ -1154,48 +1181,52 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let palette = theme.extended_palette();
+        let pixels_per_tick =
+            BASE_PIXELS_PER_QUARTER * self.zoom_x / f32::from(self.data.ppq.max(1));
+        let static_geometry = state.cache.draw(renderer, bounds.size(), |frame| {
+            frame.fill_rectangle(
+                Point::new(0.0, 0.0),
+                bounds.size(),
+                palette.background.weak.color,
+            );
+
+            draw_bar_lines(
+                frame,
+                self.data,
+                pixels_per_tick,
+                self.horizontal_scroll,
+                0.0,
+                bounds.height,
+                palette,
+            );
+            draw_bar_numbers(
+                frame,
+                self.data,
+                pixels_per_tick,
+                self.horizontal_scroll,
+                bounds.height,
+                palette,
+            );
+            draw_tempo_markers(
+                frame,
+                self.data,
+                pixels_per_tick,
+                self.horizontal_scroll,
+                bounds.height,
+                palette,
+            );
+        });
+
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let pixels_per_tick =
             BASE_PIXELS_PER_QUARTER * self.zoom_x / f32::from(self.data.ppq.max(1));
-
-        frame.fill_rectangle(
-            Point::new(0.0, 0.0),
-            bounds.size(),
-            palette.background.weak.color,
-        );
-
-        draw_bar_lines(
-            &mut frame,
-            self.data,
-            pixels_per_tick,
-            self.horizontal_scroll,
-            0.0,
-            bounds.height,
-            palette,
-        );
-        draw_bar_numbers(
-            &mut frame,
-            self.data,
-            pixels_per_tick,
-            self.horizontal_scroll,
-            bounds.height,
-            palette,
-        );
-        draw_tempo_markers(
-            &mut frame,
-            self.data,
-            pixels_per_tick,
-            self.horizontal_scroll,
-            bounds.height,
-            palette,
-        );
         draw_rewind_flag(
             &mut frame,
             self.rewind_flag_tick,
@@ -1214,7 +1245,7 @@ impl canvas::Program<Message> for TempoCanvas<'_> {
             palette,
         );
 
-        vec![frame.into_geometry()]
+        vec![static_geometry, frame.into_geometry()]
     }
 
     fn mouse_interaction(
@@ -1325,7 +1356,24 @@ struct RollNotesCanvas<'a> {
 
 #[derive(Debug, Default)]
 struct RollNotesState {
+    cache: Cache,
+    cache_key: Option<RollNotesCacheKey>,
     stack_offsets: HashMap<NoteStackKey, usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RollNotesCacheKey {
+    total_ticks: u64,
+    ppq: u16,
+    min_pitch: u8,
+    max_pitch: u8,
+    notes_len: usize,
+    tracks_len: usize,
+    time_signatures_len: usize,
+    zoom_x_bits: u32,
+    beat_subdivision: u8,
+    track_mix_hash: u64,
+    global_solo_active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1373,6 +1421,24 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        let cache_key = RollNotesCacheKey {
+            total_ticks: self.data.total_ticks,
+            ppq: self.data.ppq,
+            min_pitch: self.data.min_pitch,
+            max_pitch: self.data.max_pitch,
+            notes_len: self.data.notes.len(),
+            tracks_len: self.data.tracks.len(),
+            time_signatures_len: self.data.time_signatures.len(),
+            zoom_x_bits: self.zoom_x.to_bits(),
+            beat_subdivision: self.beat_subdivision,
+            track_mix_hash: track_mix_hash(self.track_mix),
+            global_solo_active: self.global_solo_active,
+        };
+        if self.state_needs_cache_clear(state, cache_key) {
+            state.cache.clear();
+            state.cache_key = Some(cache_key);
+        }
+
         let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event else {
             return None;
         };
@@ -1402,6 +1468,7 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
 
             let offset = state.stack_offsets.entry(geometry.key).or_insert(0);
             *offset = (*offset + 1) % stack.len();
+            state.cache.clear();
 
             return Some(
                 canvas::Action::publish(Message::PianoRoll(PianoRollMessage::SetCursorTicks(tick)))
@@ -1426,38 +1493,78 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
         let palette = theme.extended_palette();
         let pixels_per_tick =
             BASE_PIXELS_PER_QUARTER * self.zoom_x / f32::from(self.data.ppq.max(1));
+        let static_geometry = state.cache.draw(renderer, bounds.size(), |frame| {
+            frame.fill_rectangle(
+                Point::new(0.0, 0.0),
+                bounds.size(),
+                palette.background.base.color,
+            );
+
+            for pitch in self.data.min_pitch..=self.data.max_pitch {
+                let y = pitch_to_y(self.data.max_pitch, pitch, NOTE_ROW_HEIGHT, 0.0);
+                let row_color = if is_black_key(pitch) {
+                    Color::from_rgba(0.0, 0.0, 0.0, 0.11)
+                } else {
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.08)
+                };
+
+                frame.fill_rectangle(
+                    Point::new(0.0, y),
+                    Size::new(bounds.width, NOTE_ROW_HEIGHT),
+                    row_color,
+                );
+            }
+
+            draw_grid(
+                frame,
+                self.data,
+                self.beat_subdivision,
+                pixels_per_tick,
+                bounds.height,
+                palette,
+            );
+
+            let notes = build_note_geometries(self.data, pixels_per_tick);
+            let stacks = build_note_stacks(&notes);
+            let draw_order = compute_note_draw_order(&notes, &stacks, &state.stack_offsets);
+            let label_notes = compute_stack_label_notes(
+                &stacks,
+                &state.stack_offsets,
+                &self.data.notes,
+                self.track_mix,
+                self.global_solo_active,
+            );
+
+            for note_index in draw_order {
+                let geometry = notes[note_index];
+                let note = &self.data.notes[note_index];
+                let stack_badge = label_notes.get(&geometry.key).and_then(|top| {
+                    if top.note_index == note_index {
+                        Some(StackBadge {
+                            position: top.position,
+                            len: top.len,
+                        })
+                    } else {
+                        None
+                    }
+                });
+                let show_label = !stacks.contains_key(&geometry.key) || stack_badge.is_some();
+                draw_note(
+                    frame,
+                    self.data,
+                    VisibilityState {
+                        track_mix: self.track_mix,
+                        global_solo_active: self.global_solo_active,
+                    },
+                    note,
+                    geometry,
+                    stack_badge,
+                    show_label,
+                );
+            }
+        });
 
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-
-        frame.fill_rectangle(
-            Point::new(0.0, 0.0),
-            bounds.size(),
-            palette.background.base.color,
-        );
-
-        for pitch in self.data.min_pitch..=self.data.max_pitch {
-            let y = pitch_to_y(self.data.max_pitch, pitch, NOTE_ROW_HEIGHT, 0.0);
-            let row_color = if is_black_key(pitch) {
-                Color::from_rgba(0.0, 0.0, 0.0, 0.11)
-            } else {
-                Color::from_rgba(1.0, 1.0, 1.0, 0.08)
-            };
-
-            frame.fill_rectangle(
-                Point::new(0.0, y),
-                Size::new(bounds.width, NOTE_ROW_HEIGHT),
-                row_color,
-            );
-        }
-
-        draw_grid(
-            &mut frame,
-            self.data,
-            self.beat_subdivision,
-            pixels_per_tick,
-            bounds.height,
-            palette,
-        );
         draw_playback_cursor(
             &mut frame,
             self.playback_tick,
@@ -1468,47 +1575,27 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
             palette,
         );
 
-        let notes = build_note_geometries(self.data, pixels_per_tick);
-        let stacks = build_note_stacks(&notes);
-        let draw_order = compute_note_draw_order(&notes, &stacks, &state.stack_offsets);
-        let label_notes = compute_stack_label_notes(
-            &stacks,
-            &state.stack_offsets,
-            &self.data.notes,
-            self.track_mix,
-            self.global_solo_active,
-        );
-
-        for note_index in draw_order {
-            let geometry = notes[note_index];
-            let note = &self.data.notes[note_index];
-            let stack_badge = label_notes.get(&geometry.key).and_then(|top| {
-                if top.note_index == note_index {
-                    Some(StackBadge {
-                        position: top.position,
-                        len: top.len,
-                    })
-                } else {
-                    None
-                }
-            });
-            let show_label = !stacks.contains_key(&geometry.key) || stack_badge.is_some();
-            draw_note(
-                &mut frame,
-                self.data,
-                VisibilityState {
-                    track_mix: self.track_mix,
-                    global_solo_active: self.global_solo_active,
-                },
-                note,
-                geometry,
-                stack_badge,
-                show_label,
-            );
-        }
-
-        vec![frame.into_geometry()]
+        vec![static_geometry, frame.into_geometry()]
     }
+}
+
+impl RollNotesCanvas<'_> {
+    fn state_needs_cache_clear(
+        &self,
+        state: &RollNotesState,
+        cache_key: RollNotesCacheKey,
+    ) -> bool {
+        state.cache_key != Some(cache_key)
+    }
+}
+
+fn track_mix_hash(track_mix: &[TrackMixState]) -> u64 {
+    let mut hash = 0u64;
+    for (index, state) in track_mix.iter().enumerate() {
+        let bits = ((state.muted as u64) << 1) | state.soloed as u64;
+        hash ^= bits.rotate_left((index % 63) as u32);
+    }
+    hash
 }
 
 fn draw_note(

@@ -214,7 +214,6 @@ struct MainStripDependency {
     gain_bits: u32,
     pan_bits: u32,
     meter: MeterDependency,
-    colors: MeterColorsDependency,
     compact_gain: bool,
     strip_height_bits: u32,
 }
@@ -227,7 +226,6 @@ struct TrackStripDependency {
     gain_bits: u32,
     pan_bits: u32,
     meter: MeterDependency,
-    colors: MeterColorsDependency,
     compact_gain: bool,
     strip_height_bits: u32,
     soloed: bool,
@@ -241,11 +239,18 @@ struct BusStripDependency {
     gain_bits: u32,
     pan_bits: u32,
     meter: MeterDependency,
-    colors: MeterColorsDependency,
     compact_gain: bool,
     strip_height_bits: u32,
     soloed: bool,
     muted: bool,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+struct MeterStackDependency {
+    meter: MeterDependency,
+    colors: MeterColorsDependency,
+    compact_gain: bool,
+    strip_height_bits: u32,
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -584,7 +589,6 @@ fn sticky_master_strip(
             gain_bits: master.state.gain_db.to_bits(),
             pan_bits: master.state.pan.to_bits(),
             meter: MeterDependency::from_snapshot(meter_snapshot),
-            colors: MeterColorsDependency::from_colors(colors),
             compact_gain: matches!(gain_mode, GainControlMode::Knob),
             strip_height_bits: strip_height.to_bits(),
         },
@@ -600,8 +604,19 @@ fn sticky_master_strip(
                     None,
                     f32::from_bits(dependency.gain_bits),
                     f32::from_bits(dependency.pan_bits),
-                    dependency.meter.snapshot(),
-                    dependency.colors.colors(),
+                    meter_stack(
+                        MeterStackDependency {
+                            meter: dependency.meter,
+                            colors: MeterColorsDependency::from_colors(colors),
+                            compact_gain: dependency.compact_gain,
+                            strip_height_bits: dependency.strip_height_bits,
+                        },
+                        Some(if controls_enabled {
+                            Message::Mixer(MixerMessage::ResetMasterMeter)
+                        } else {
+                            noop_message()
+                        }),
+                    ),
                     StripActions {
                         solo: None,
                         mute: None,
@@ -620,13 +635,7 @@ fn sticky_master_strip(
                             }
                         })),
                     },
-                    Some(if controls_enabled {
-                        Message::Mixer(MixerMessage::ResetMasterMeter)
-                    } else {
-                        noop_message()
-                    }),
                     f32::from_bits(dependency.strip_height_bits),
-                    meter_scale_visible(gain_mode),
                     gain_mode,
                 ),
                 MAIN_STRIP_WIDTH,
@@ -664,6 +673,14 @@ fn instrument_track_area(
             let track_index = track.id.index();
             let selected = selected_instrument_choice(&track.instrument, mixer);
             let options = options.clone();
+            let meter_dependency = MeterStackDependency {
+                meter: MeterDependency::from_snapshot(
+                    meters.tracks.get(local_index).copied().unwrap_or_default(),
+                ),
+                colors: MeterColorsDependency::from_colors(colors),
+                compact_gain: matches!(gain_mode, GainControlMode::Knob),
+                strip_height_bits: strip_height.to_bits(),
+            };
             row.push(lazy(
                 TrackStripDependency {
                     index: track_index,
@@ -671,10 +688,7 @@ fn instrument_track_area(
                     selected,
                     gain_bits: track.state.gain_db.to_bits(),
                     pan_bits: track.state.pan.to_bits(),
-                    meter: MeterDependency::from_snapshot(
-                        meters.tracks.get(local_index).copied().unwrap_or_default(),
-                    ),
-                    colors: MeterColorsDependency::from_colors(colors),
+                    meter: meter_dependency.meter,
                     compact_gain: matches!(gain_mode, GainControlMode::Knob),
                     strip_height_bits: strip_height.to_bits(),
                     soloed: track.state.soloed,
@@ -710,8 +724,14 @@ fn instrument_track_area(
                             }),
                             f32::from_bits(dependency.gain_bits),
                             f32::from_bits(dependency.pan_bits),
-                            dependency.meter.snapshot(),
-                            dependency.colors.colors(),
+                            meter_stack(
+                                meter_dependency,
+                                Some(if controls_enabled {
+                                    Message::Mixer(MixerMessage::ResetTrackMeter(track_index))
+                                } else {
+                                    noop_message()
+                                }),
+                            ),
                             StripActions {
                                 solo: Some((
                                     dependency.soloed,
@@ -750,13 +770,7 @@ fn instrument_track_area(
                                     }
                                 })),
                             },
-                            Some(if controls_enabled {
-                                Message::Mixer(MixerMessage::ResetTrackMeter(track_index))
-                            } else {
-                                noop_message()
-                            }),
                             strip_height,
-                            meter_scale_visible(gain_mode),
                             gain_mode,
                         ),
                         STRIP_WIDTH,
@@ -821,16 +835,21 @@ fn bus_track_area(
             .height(Length::Fixed(strip_height))
             .push(horizontal_spacer(left_spacer)),
         |row, (local_index, bus)| {
+            let meter_dependency = MeterStackDependency {
+                meter: MeterDependency::from_snapshot(
+                    meters.buses.get(local_index).copied().unwrap_or_default(),
+                ),
+                colors: MeterColorsDependency::from_colors(colors),
+                compact_gain: matches!(gain_mode, GainControlMode::Knob),
+                strip_height_bits: strip_height.to_bits(),
+            };
             row.push(lazy(
                 BusStripDependency {
                     id: bus.id.0,
                     name: bus.name.clone(),
                     gain_bits: bus.state.gain_db.to_bits(),
                     pan_bits: bus.state.pan.to_bits(),
-                    meter: MeterDependency::from_snapshot(
-                        meters.buses.get(local_index).copied().unwrap_or_default(),
-                    ),
-                    colors: MeterColorsDependency::from_colors(colors),
+                    meter: meter_dependency.meter,
                     compact_gain: matches!(gain_mode, GainControlMode::Knob),
                     strip_height_bits: strip_height.to_bits(),
                     soloed: bus.state.soloed,
@@ -855,8 +874,14 @@ fn bus_track_area(
                             None,
                             gain_db,
                             pan,
-                            dependency.meter.snapshot(),
-                            dependency.colors.colors(),
+                            meter_stack(
+                                meter_dependency,
+                                Some(if controls_enabled {
+                                    Message::Mixer(MixerMessage::ResetBusMeter(bus_id))
+                                } else {
+                                    noop_message()
+                                }),
+                            ),
                             StripActions {
                                 solo: Some((
                                     soloed,
@@ -889,13 +914,7 @@ fn bus_track_area(
                                     }
                                 })),
                             },
-                            Some(if controls_enabled {
-                                Message::Mixer(MixerMessage::ResetBusMeter(bus_id))
-                            } else {
-                                noop_message()
-                            }),
                             strip_height,
-                            meter_scale_visible(gain_mode),
                             gain_mode,
                         ),
                         STRIP_WIDTH,
@@ -1046,12 +1065,9 @@ fn strip_shell<'a>(
     instrument_picker: Option<Element<'a, Message>>,
     gain_db: f32,
     pan: f32,
-    meter_snapshot: StripMeterSnapshot,
-    meter_colors: MeterColors,
+    meter_stack: Element<'a, Message>,
     actions: StripActions<'a>,
-    meter_reset: Option<Message>,
     strip_height: f32,
-    show_meter_scale: bool,
     gain_mode: GainControlMode,
 ) -> Element<'a, Message> {
     let title = title.into();
@@ -1081,18 +1097,8 @@ fn strip_shell<'a>(
 
     if let Some(on_gain) = actions.on_gain {
         let control_height = gain_control_height(strip_height, gain_mode);
-        let meter_height = meter_control_height(strip_height, gain_mode);
         let gain_width = gain_control_width(matches!(gain_mode, GainControlMode::Knob));
-        let meter_width = stereo_meter_width(show_meter_scale);
-        let meter_bar_width = stereo_meter_bar_width();
-        let meter_scale_width = (meter_width - meter_bar_width).max(0.0);
         let stack_height = control_stack_height(control_height);
-        let meter_label = meter_peak_label(meter_snapshot);
-        let meter_label_color = if meter_snapshot.clip_latched {
-            meter_colors.clip
-        } else {
-            meter_colors.scale_text
-        };
 
         let gain_control = match gain_mode {
             GainControlMode::Fader => container(gain_fader(gain_db, on_gain))
@@ -1102,55 +1108,26 @@ fn strip_shell<'a>(
                 .into(),
             GainControlMode::Knob => gain_knob(gain_db, on_gain),
         };
-        let meter = if show_meter_scale {
-            stereo_meter_with_scale(meter_snapshot, meter_colors, meter_height)
-        } else {
-            stereo_meter(meter_snapshot, meter_colors, meter_height)
-        };
-        let meter = if let Some(message) = meter_reset {
-            mouse_area(meter).on_press(message).into()
-        } else {
-            meter
-        };
-
-        let top_label_row = row![
-            value_label_slot(gain_width, format!("{gain_db:.1}"), None),
-            row![
-                value_label_slot(meter_bar_width, meter_label, Some(meter_label_color),),
-                container(text("")).width(Length::Fixed(meter_scale_width)),
-            ]
-            .width(Length::Fixed(meter_width))
-            .height(Length::Fixed(VALUE_LABEL_HEIGHT))
-            .align_y(alignment::Vertical::Bottom),
-        ]
-        .spacing(METER_STACK_SPACING)
-        .height(Length::Fixed(VALUE_LABEL_HEIGHT))
-        .align_y(alignment::Vertical::Bottom)
-        .width(Length::Shrink);
-
-        let control_row = row![
-            container(gain_control)
-                .width(Length::Fixed(gain_width))
-                .height(Length::Fixed(control_height))
-                .center_x(Length::Fixed(gain_width))
-                .align_y(alignment::Vertical::Bottom),
-            container(meter)
-                .width(Length::Fixed(meter_width))
-                .height(Length::Fixed(meter_height))
-                .center_x(Length::Fixed(meter_width))
-                .align_y(alignment::Vertical::Bottom),
-        ]
-        .spacing(METER_STACK_SPACING)
-        .height(Length::Fixed(control_height))
-        .align_y(alignment::Vertical::Bottom)
-        .width(Length::Shrink);
 
         content = content.push(
-            column![top_label_row, control_row]
+            row![
+                column![
+                    value_label_slot(gain_width, format!("{gain_db:.1}"), None),
+                    container(gain_control)
+                        .width(Length::Fixed(gain_width))
+                        .height(Length::Fixed(control_height))
+                        .center_x(Length::Fixed(gain_width))
+                        .align_y(alignment::Vertical::Bottom),
+                ]
                 .spacing(LABEL_CONTROL_SPACING)
                 .height(Length::Fixed(stack_height))
                 .align_x(alignment::Horizontal::Center)
                 .width(Length::Shrink),
+                meter_stack
+            ]
+            .spacing(METER_STACK_SPACING)
+            .height(Length::Fixed(stack_height))
+            .width(Length::Shrink),
         );
     }
 
@@ -1183,6 +1160,63 @@ fn strip_shell<'a>(
         .height(Length::Fixed(strip_height))
         .style(ui_style::pane_main_surface)
         .into()
+}
+
+fn meter_stack<'a>(
+    dependency: MeterStackDependency,
+    meter_reset: Option<Message>,
+) -> Element<'a, Message> {
+    lazy(dependency, move |dependency| -> Element<'static, Message> {
+        let gain_mode = if dependency.compact_gain {
+            GainControlMode::Knob
+        } else {
+            GainControlMode::Fader
+        };
+        let strip_height = f32::from_bits(dependency.strip_height_bits);
+        let meter_snapshot = dependency.meter.snapshot();
+        let meter_colors = dependency.colors.colors();
+        let meter_height = meter_control_height(strip_height, gain_mode);
+        let meter_width = stereo_meter_width(meter_scale_visible(gain_mode));
+        let meter_bar_width = stereo_meter_bar_width();
+        let meter_scale_width = (meter_width - meter_bar_width).max(0.0);
+        let meter_label = meter_peak_label(meter_snapshot);
+        let meter_label_color = if meter_snapshot.clip_latched {
+            meter_colors.clip
+        } else {
+            meter_colors.scale_text
+        };
+        let meter = if meter_scale_visible(gain_mode) {
+            stereo_meter_with_scale(meter_snapshot, meter_colors, meter_height)
+        } else {
+            stereo_meter(meter_snapshot, meter_colors, meter_height)
+        };
+        let meter = if let Some(message) = meter_reset.clone() {
+            mouse_area(meter).on_press(message).into()
+        } else {
+            meter
+        };
+
+        column![
+            row![
+                value_label_slot(meter_bar_width, meter_label, Some(meter_label_color)),
+                container(text("")).width(Length::Fixed(meter_scale_width)),
+            ]
+            .width(Length::Fixed(meter_width))
+            .height(Length::Fixed(VALUE_LABEL_HEIGHT))
+            .align_y(alignment::Vertical::Bottom),
+            container(meter)
+                .width(Length::Fixed(meter_width))
+                .height(Length::Fixed(meter_height))
+                .center_x(Length::Fixed(meter_width))
+                .align_y(alignment::Vertical::Bottom),
+        ]
+        .spacing(LABEL_CONTROL_SPACING)
+        .height(Length::Fixed(control_stack_height(meter_height)))
+        .align_x(alignment::Horizontal::Center)
+        .width(Length::Shrink)
+        .into()
+    })
+    .into()
 }
 
 fn gain_control_height(strip_height: f32, gain_mode: GainControlMode) -> f32 {
