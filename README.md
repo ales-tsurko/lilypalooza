@@ -2,17 +2,19 @@
 
 **Lilypalooza** is a desktop LilyPond IDE.
 
-It is built for editing LilyPond projects in one place: text editing, score
-preview, MIDI playback, piano roll, project persistence.
+It is built for editing, previewing, and auditioning LilyPond projects in one
+place.
 
 ![Screenshot 1](assets/screenshots/screenshot_1.png)
 ![Screenshot 2](assets/screenshots/screenshot_2.png)
 
-## What It Does
+## Major Features
 
-- multi-tab text editor for LilyPond and related project files
+- multi-tab editor for LilyPond projects
+- tree-sitter-based syntax highlighting
 - rendered score preview with point-and-click back to source
-- piano roll and MIDI playback
+- MIDI playback with transport, mixer, and SoundFont-based instruments
+- piano roll for MIDI inspection
 - dockable multi-pane workspace
 - project persistence and workspace restore
 - integrated compile status and logs
