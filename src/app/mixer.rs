@@ -1087,8 +1087,8 @@ fn strip_shell<'a>(
     if let Some(on_pan) = actions.on_pan {
         content = content.push(
             column![
-                value_label_slot(INSTRUMENT_PICKER_HEIGHT, format!("{:+.2}", -pan), None),
-                pan_knob(-pan, move |value| on_pan(-value)),
+                value_label_slot(INSTRUMENT_PICKER_HEIGHT, format!("{:+.2}", pan), None),
+                pan_knob(pan, move |value| on_pan(value)),
             ]
             .spacing(LABEL_CONTROL_SPACING)
             .align_x(alignment::Horizontal::Center),
