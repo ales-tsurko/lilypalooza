@@ -230,6 +230,7 @@ struct TrackStripDependency {
     strip_height_bits: u32,
     soloed: bool,
     muted: bool,
+    tint_enabled: bool,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -354,6 +355,11 @@ enum GainControlMode {
 
 pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
     let colors = meter_colors(&app.theme);
+    let existing_track_count = app
+        .piano_roll
+        .current_file()
+        .map(|file| file.data.tracks.len())
+        .unwrap_or(0);
 
     if let Some(playback) = app.playback.as_ref() {
         let mixer = playback.mixer_state();
@@ -395,6 +401,7 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                     strip_height,
                     gain_mode,
                     instrument_visible,
+                    existing_track_count,
                     true,
                 ))
                 .width(FillPortion(5))
@@ -459,6 +466,7 @@ fn mixer_layout_without_audio(
     bus_scroll_x: f32,
     bus_viewport_width: f32,
 ) -> Element<'static, Message> {
+    let existing_track_count = 0;
     let gain_mode = gain_control_mode(size.height);
     let strip_height = (size.height - (ui_style::PADDING_SM as f32 * 2.0) - SECTION_HEADER_HEIGHT)
         .max(STRIP_MIN_HEIGHT);
@@ -500,6 +508,7 @@ fn mixer_layout_without_audio(
             strip_height,
             gain_mode,
             instrument_visible,
+            existing_track_count,
             false,
         ))
         .width(FillPortion(5))
@@ -654,6 +663,7 @@ fn instrument_track_area(
     strip_height: f32,
     gain_mode: GainControlMode,
     visible: std::ops::Range<usize>,
+    existing_track_count: usize,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
     let options: Arc<[InstrumentChoice]> = if controls_enabled {
@@ -693,6 +703,7 @@ fn instrument_track_area(
                     strip_height_bits: strip_height.to_bits(),
                     soloed: track.state.soloed,
                     muted: track.state.muted,
+                    tint_enabled: track_should_use_roll_tint(track_index, existing_track_count),
                 },
                 move |dependency| {
                     let name = dependency.name.clone();
@@ -703,79 +714,75 @@ fn instrument_track_area(
                     } else {
                         GainControlMode::Fader
                     };
-                    strip_panel(
-                        strip_shell(
-                            name,
-                            Some({
-                                pick_list(options.clone(), selected, move |choice| {
-                                    if controls_enabled {
-                                        Message::Mixer(MixerMessage::SelectTrackInstrument(
-                                            track_index,
-                                            choice,
-                                        ))
-                                    } else {
-                                        noop_message()
-                                    }
-                                })
-                                .placeholder("Instrument")
-                                .text_size(ui_style::FONT_SIZE_UI_XS.saturating_sub(3))
-                                .width(Fill)
-                                .into()
-                            }),
-                            f32::from_bits(dependency.gain_bits),
-                            f32::from_bits(dependency.pan_bits),
-                            meter_stack(
-                                meter_dependency,
-                                Some(if controls_enabled {
-                                    Message::Mixer(MixerMessage::ResetTrackMeter(track_index))
+                    let shell = strip_shell(
+                        name,
+                        Some({
+                            pick_list(options.clone(), selected, move |choice| {
+                                if controls_enabled {
+                                    Message::Mixer(MixerMessage::SelectTrackInstrument(
+                                        track_index,
+                                        choice,
+                                    ))
                                 } else {
                                     noop_message()
-                                }),
-                            ),
-                            StripActions {
-                                solo: Some((
-                                    dependency.soloed,
-                                    if controls_enabled {
-                                        Message::Mixer(MixerMessage::ToggleTrackSolo(track_index))
-                                    } else {
-                                        noop_message()
-                                    },
-                                )),
-                                mute: Some((
-                                    dependency.muted,
-                                    if controls_enabled {
-                                        Message::Mixer(MixerMessage::ToggleTrackMute(track_index))
-                                    } else {
-                                        noop_message()
-                                    },
-                                )),
-                                on_gain: Some(Box::new(move |value| {
-                                    if controls_enabled {
-                                        Message::Mixer(MixerMessage::SetTrackGain(
-                                            track_index,
-                                            value,
-                                        ))
-                                    } else {
-                                        noop_message()
-                                    }
-                                })),
-                                on_pan: Some(Box::new(move |value| {
-                                    if controls_enabled {
-                                        Message::Mixer(MixerMessage::SetTrackPan(
-                                            track_index,
-                                            value,
-                                        ))
-                                    } else {
-                                        noop_message()
-                                    }
-                                })),
-                            },
-                            strip_height,
-                            gain_mode,
+                                }
+                            })
+                            .placeholder("Instrument")
+                            .text_size(ui_style::FONT_SIZE_UI_XS.saturating_sub(3))
+                            .width(Fill)
+                            .into()
+                        }),
+                        f32::from_bits(dependency.gain_bits),
+                        f32::from_bits(dependency.pan_bits),
+                        meter_stack(
+                            meter_dependency,
+                            Some(if controls_enabled {
+                                Message::Mixer(MixerMessage::ResetTrackMeter(track_index))
+                            } else {
+                                noop_message()
+                            }),
                         ),
-                        STRIP_WIDTH,
+                        StripActions {
+                            solo: Some((
+                                dependency.soloed,
+                                if controls_enabled {
+                                    Message::Mixer(MixerMessage::ToggleTrackSolo(track_index))
+                                } else {
+                                    noop_message()
+                                },
+                            )),
+                            mute: Some((
+                                dependency.muted,
+                                if controls_enabled {
+                                    Message::Mixer(MixerMessage::ToggleTrackMute(track_index))
+                                } else {
+                                    noop_message()
+                                },
+                            )),
+                            on_gain: Some(Box::new(move |value| {
+                                if controls_enabled {
+                                    Message::Mixer(MixerMessage::SetTrackGain(track_index, value))
+                                } else {
+                                    noop_message()
+                                }
+                            })),
+                            on_pan: Some(Box::new(move |value| {
+                                if controls_enabled {
+                                    Message::Mixer(MixerMessage::SetTrackPan(track_index, value))
+                                } else {
+                                    noop_message()
+                                }
+                            })),
+                        },
                         strip_height,
-                    )
+                        gain_mode,
+                    );
+
+                    if dependency.tint_enabled {
+                        tinted_track_strip_panel(shell, STRIP_WIDTH, strip_height, track_index)
+                    } else {
+                        strip_panel(shell, STRIP_WIDTH, strip_height)
+                    }
                 },
             ))
         },
@@ -1158,7 +1165,7 @@ fn strip_shell<'a>(
         .padding(ui_style::PADDING_SM)
         .width(Fill)
         .height(Length::Fixed(strip_height))
-        .style(ui_style::pane_main_surface)
+        .style(ui_style::transparent_surface)
         .into()
 }
 
@@ -1272,6 +1279,23 @@ fn strip_panel<'a>(content: Element<'a, Message>, width: f32, height: f32) -> El
         .into()
 }
 
+fn tinted_track_strip_panel<'a>(
+    content: Element<'a, Message>,
+    width: f32,
+    height: f32,
+    track_index: usize,
+) -> Element<'a, Message> {
+    container(content)
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(height))
+        .style(move |theme| ui_style::mixer_track_strip_surface(theme, track_index))
+        .into()
+}
+
+fn track_should_use_roll_tint(track_index: usize, existing_track_count: usize) -> bool {
+    track_index < existing_track_count
+}
+
 fn strip_toggle_button(
     label: &'static str,
     active: bool,
@@ -1359,10 +1383,11 @@ mod tests {
     use super::{
         COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
         INSTRUMENT_PICKER_HEIGHT, InstrumentChoice, MAIN_SECTION_WIDTH, MAIN_STRIP_WIDTH,
-        MIXER_MIN_HEIGHT, STRIP_TOGGLE_SIZE, STRIP_VIRTUALIZATION_OVERSCAN, STRIP_WIDTH,
-        StripMeterSnapshot, VALUE_LABEL_HEIGHT, control_stack_height, gain_control_height,
-        gain_control_mode, meter_control_height, meter_peak_label, meter_scale_visible,
-        selected_instrument_choice, visible_strip_window,
+        MIXER_MIN_HEIGHT, MeterDependency, STRIP_TOGGLE_SIZE, STRIP_VIRTUALIZATION_OVERSCAN,
+        STRIP_WIDTH, StripMeterSnapshot, TrackStripDependency, VALUE_LABEL_HEIGHT,
+        control_stack_height, gain_control_height, gain_control_mode, meter_control_height,
+        meter_peak_label, meter_scale_visible, selected_instrument_choice,
+        track_should_use_roll_tint, visible_strip_window,
     };
     use lilypalooza_audio::mixer::ChannelMeterSnapshot;
 
@@ -1481,5 +1506,36 @@ mod tests {
         let scrolled = visible_strip_window(128, STRIP_WIDTH * 40.0, STRIP_WIDTH * 4.0);
         assert!(scrolled.start >= 38);
         assert!(scrolled.end <= 46);
+    }
+
+    #[test]
+    fn only_existing_roll_tracks_use_tint() {
+        assert!(track_should_use_roll_tint(0, 4));
+        assert!(track_should_use_roll_tint(3, 4));
+        assert!(!track_should_use_roll_tint(4, 4));
+        assert!(!track_should_use_roll_tint(127, 4));
+    }
+
+    #[test]
+    fn track_strip_dependency_includes_tint_state() {
+        let base = TrackStripDependency {
+            index: 0,
+            name: "Track".to_string(),
+            selected: Some(InstrumentChoice::None),
+            gain_bits: 0.0f32.to_bits(),
+            pan_bits: 0.0f32.to_bits(),
+            meter: MeterDependency::from_snapshot(StripMeterSnapshot::default()),
+            compact_gain: false,
+            strip_height_bits: 140.0f32.to_bits(),
+            soloed: false,
+            muted: false,
+            tint_enabled: false,
+        };
+        let tinted = TrackStripDependency {
+            tint_enabled: true,
+            ..base.clone()
+        };
+
+        assert_ne!(base, tinted);
     }
 }

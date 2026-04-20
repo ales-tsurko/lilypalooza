@@ -119,6 +119,15 @@ pub(crate) fn pane_main_surface_focused(theme: &Theme, _focused: bool) -> contai
     }
 }
 
+pub(crate) fn transparent_surface(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: None,
+        text_color: None,
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        ..container::Style::default()
+    }
+}
+
 pub(crate) fn pane_logger_surface(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
 
@@ -141,6 +150,59 @@ pub(crate) fn piano_roll_surface(theme: &Theme) -> container::Style {
         border: border::rounded(0)
             .width(1)
             .color(palette.background.strong.color),
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn track_accent_color(track_index: usize) -> Color {
+    const COLORS: [Color; 12] = [
+        Color::from_rgb(0.90, 0.35, 0.35),
+        Color::from_rgb(0.90, 0.62, 0.31),
+        Color::from_rgb(0.88, 0.82, 0.30),
+        Color::from_rgb(0.50, 0.82, 0.33),
+        Color::from_rgb(0.29, 0.76, 0.49),
+        Color::from_rgb(0.28, 0.75, 0.70),
+        Color::from_rgb(0.29, 0.63, 0.90),
+        Color::from_rgb(0.44, 0.53, 0.92),
+        Color::from_rgb(0.65, 0.47, 0.92),
+        Color::from_rgb(0.83, 0.41, 0.82),
+        Color::from_rgb(0.86, 0.38, 0.63),
+        Color::from_rgb(0.77, 0.43, 0.48),
+    ];
+
+    COLORS[track_index % COLORS.len()]
+}
+
+pub(crate) fn mixer_track_strip_surface(theme: &Theme, track_index: usize) -> container::Style {
+    let palette = theme.extended_palette();
+    let accent = track_accent_color(track_index);
+
+    container::Style {
+        background: Some(mix_color(palette.background.base.color, accent, 0.06).into()),
+        text_color: Some(palette.background.base.text),
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn piano_roll_track_surface(theme: &Theme, track_index: usize) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(
+            mix_color(
+                palette.background.weakest.color,
+                track_accent_color(track_index),
+                0.10,
+            )
+            .into(),
+        ),
+        text_color: Some(palette.background.weakest.text),
+        border: border::rounded(4).width(1).color(mix_color(
+            palette.background.strong.color,
+            track_accent_color(track_index),
+            0.18,
+        )),
         ..container::Style::default()
     }
 }
@@ -226,6 +288,24 @@ fn mix_color(a: Color, b: Color, amount: f32) -> Color {
         g: a.g + (b.g - a.g) * t,
         b: a.b + (b.b - a.b) * t,
         a: a.a + (b.a - a.a) * t,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transparent_surface_has_no_background() {
+        let style = transparent_surface(&Theme::Dark);
+        assert!(style.background.is_none());
+    }
+
+    #[test]
+    fn mixer_track_strip_surface_differs_from_plain_pane_surface() {
+        let plain = pane_main_surface(&Theme::Dark);
+        let tinted = mixer_track_strip_surface(&Theme::Dark, 0);
+        assert_ne!(plain.background, tinted.background);
     }
 }
 

@@ -14,7 +14,7 @@ use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
 use crate::settings::PianoRollViewSettings;
 use crate::{fonts, icons, ui_style};
 
-const TRACK_PANEL_DEFAULT_WIDTH: f32 = 96.0;
+const TRACK_PANEL_DEFAULT_WIDTH: f32 = 120.0;
 const TRACK_PANEL_MIN_WIDTH: f32 = 92.0;
 const TRACK_PANEL_MAX_WIDTH: f32 = 160.0;
 const TRACK_RESIZE_HANDLE_WIDTH: f32 = 6.0;
@@ -873,19 +873,23 @@ fn track_list<'a>(
         )));
 
         tracks_column = tracks_column.push(
-            row![
-                text(track_label)
-                    .size(ui_style::FONT_SIZE_UI_XS)
-                    .wrapping(iced::widget::text::Wrapping::None)
-                    .width(Fill),
-                container(text("")).width(Length::Fixed(TRACK_LABEL_BUTTON_GAP)),
-                solo_button,
-                container(text("")).width(Length::Fixed(TRACK_BUTTONS_GAP)),
-                mute_button,
-            ]
-            .align_y(alignment::Vertical::Center)
-            .spacing(0)
-            .width(Fill),
+            container(
+                row![
+                    text(track_label)
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .wrapping(iced::widget::text::Wrapping::None)
+                        .width(Fill),
+                    container(text("")).width(Length::Fixed(TRACK_LABEL_BUTTON_GAP)),
+                    solo_button,
+                    container(text("")).width(Length::Fixed(TRACK_BUTTONS_GAP)),
+                    mute_button,
+                ]
+                .align_y(alignment::Vertical::Center)
+                .spacing(0)
+                .width(Fill),
+            )
+            .padding([4, 6])
+            .style(move |theme| ui_style::piano_roll_track_surface(theme, track.index)),
         );
     }
 
@@ -2338,22 +2342,7 @@ fn track_visibility_alpha(
 }
 
 fn track_color(track_index: usize) -> Color {
-    const COLORS: [Color; 12] = [
-        Color::from_rgb(0.90, 0.35, 0.35),
-        Color::from_rgb(0.90, 0.62, 0.31),
-        Color::from_rgb(0.88, 0.82, 0.30),
-        Color::from_rgb(0.50, 0.82, 0.33),
-        Color::from_rgb(0.29, 0.76, 0.49),
-        Color::from_rgb(0.28, 0.75, 0.70),
-        Color::from_rgb(0.29, 0.63, 0.90),
-        Color::from_rgb(0.44, 0.53, 0.92),
-        Color::from_rgb(0.65, 0.47, 0.92),
-        Color::from_rgb(0.83, 0.41, 0.82),
-        Color::from_rgb(0.86, 0.38, 0.63),
-        Color::from_rgb(0.77, 0.43, 0.48),
-    ];
-
-    COLORS[track_index % COLORS.len()]
+    ui_style::track_accent_color(track_index)
 }
 
 fn shorten_label(label: &str, max_len: usize) -> String {
