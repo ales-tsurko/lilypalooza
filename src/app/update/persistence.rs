@@ -203,6 +203,7 @@ impl Lilypalooza {
                 editor_view: self.editor.view_settings(),
                 editor_theme: self.editor.theme_settings(),
                 editor_recent_files_limit: self.editor_recent_files_limit,
+                playback: self.playback_settings.clone(),
                 shortcuts: self.shortcut_settings.clone(),
             })?;
         }

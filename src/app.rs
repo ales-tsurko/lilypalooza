@@ -72,6 +72,16 @@ const ACTIVE_PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(33);
 const PASSIVE_PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(120);
 pub(super) const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
+fn audio_engine_options(playback: &settings::PlaybackSettings) -> AudioEngineOptions {
+    AudioEngineOptions {
+        device: playback.device.clone(),
+        chase_notes_on_seek: playback.chase_notes_on_seek,
+        sample_rate: playback.sample_rate,
+        block_size: playback.block_size,
+        ..AudioEngineOptions::default()
+    }
+}
+
 pub(super) fn editor_file_browser_column_scroll_id(index: usize) -> Id {
     Id::new(Box::leak(
         format!("editor-file-browser-column-{index}").into_boxed_str(),
@@ -128,6 +138,7 @@ struct Lilypalooza {
     compile_session: Option<lilypond::CompileSession>,
     playback: Option<AudioEngine>,
     soundfont_status: SoundfontStatus,
+    playback_settings: settings::PlaybackSettings,
     workspace_panes: pane_grid::State<DockGroupId>,
     dock_layout: Option<DockNode>,
     dock_groups: HashMap<DockGroupId, DockGroup>,
@@ -356,7 +367,7 @@ enum LilypondStatus {
 enum SoundfontStatus {
     NotSelected,
     Ready(PathBuf),
-    Error(String),
+    Error,
 }
 
 #[derive(Debug, Clone)]
@@ -498,6 +509,8 @@ fn new(
         Ok(settings) => (settings, None),
         Err(error) => (default_settings.clone(), Some(error)),
     };
+    let startup_soundfont =
+        startup_soundfont.or_else(|| stored_settings.playback.soundfont.clone());
     let (mut stored_state, state_error) = match state::load_global() {
         Ok(state) => (state, None),
         Err(error) => (default_global_state.clone(), Some(error)),
@@ -554,7 +567,10 @@ fn new(
         .or_else(|| dock_groups.values().next().map(|group| group.active));
 
     let (playback, playback_init_error) = if audio_enabled {
-        match AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default()) {
+        match AudioEngine::start_cpal(
+            MixerState::new(),
+            audio_engine_options(&stored_settings.playback),
+        ) {
             Ok(engine) => (Some(engine), None),
             Err(error) => (None, Some(error.to_string())),
         }
@@ -590,6 +606,7 @@ fn new(
         compile_session: None,
         playback,
         soundfont_status: SoundfontStatus::NotSelected,
+        playback_settings: stored_settings.playback.clone(),
         workspace_panes,
         dock_layout,
         dock_groups,
@@ -730,9 +747,7 @@ fn new(
     ));
 
     if audio_enabled && let Some(path) = startup_soundfont {
-        startup_tasks.push(Task::done(Message::File(FileMessage::SoundfontPicked(
-            Some(path),
-        ))));
+        app.initialize_playback(path);
     }
     if let Some(path) = startup_score.or(stored_state.main_score.clone()) {
         startup_tasks.push(Task::done(Message::File(FileMessage::Picked(Some(path)))));
@@ -1354,8 +1369,11 @@ mod tests {
     fn playback_poll_interval_is_visibility_aware() {
         let (mut app, _task) = new(None, None, false);
         app.playback = Some(
-            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
-                .expect("test audio engine should start"),
+            AudioEngine::start_cpal(
+                MixerState::new(),
+                audio_engine_options(&app.playback_settings),
+            )
+            .expect("test audio engine should start"),
         );
         app.piano_roll.set_playback_position(0, 1, true);
 

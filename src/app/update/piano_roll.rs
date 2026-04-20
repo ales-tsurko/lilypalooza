@@ -160,7 +160,7 @@ impl Lilypalooza {
                     self.show_prompt(
                         ErrorPrompt::new(
                             "Playback Error",
-                            "No soundfont selected. Choose a SoundFont file first",
+                            "No SoundFont configured. Set playback.soundfont in settings.toml or use --soundfont",
                             ErrorFatality::Recoverable,
                             PromptButtons::Ok,
                         ),

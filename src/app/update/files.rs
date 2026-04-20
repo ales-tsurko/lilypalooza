@@ -148,24 +148,6 @@ impl Lilypalooza {
             FileMessage::OpenRecentProject(project_root) => {
                 self.load_project_from_root(project_root)
             }
-            FileMessage::RequestSoundfont => Task::perform(
-                async {
-                    rfd::AsyncFileDialog::new()
-                        .add_filter("SoundFont", &["sf2", "sf3"])
-                        .pick_file()
-                        .await
-                        .map(|file| file.path().to_path_buf())
-                },
-                |picked| Message::File(FileMessage::SoundfontPicked(picked)),
-            ),
-            FileMessage::SoundfontPicked(Some(path)) => {
-                self.logger
-                    .push(format!("Selected soundfont {}", path.display()));
-                self.soundfont_status = SoundfontStatus::Ready(path.clone());
-                self.initialize_playback(path);
-                Task::none()
-            }
-            FileMessage::SoundfontPicked(None) => Task::none(),
         }
     }
 

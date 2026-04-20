@@ -44,6 +44,7 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn initialize_playback(&mut self, soundfont_path: PathBuf) {
+        self.playback_settings.soundfont = Some(soundfont_path.clone());
         self.soundfont_status = SoundfontStatus::Ready(soundfont_path.clone());
         self.logger.push(format!(
             "Selected playback soundfont {}",
@@ -59,11 +60,48 @@ impl Lilypalooza {
         if let Some(playback) = self.playback.as_mut()
             && let Err(error) = load_soundfont_resource(playback, &soundfont_path)
         {
-            self.soundfont_status = SoundfontStatus::Error(error.clone());
+            self.soundfont_status = SoundfontStatus::Error;
             self.logger.push(error.clone());
         }
 
         self.sync_playback_file();
+    }
+
+    pub(in crate::app) fn restart_playback_engine(&mut self) {
+        let Some(previous_engine) = self.playback.take() else {
+            return;
+        };
+
+        match AudioEngine::start_cpal(
+            MixerState::new(),
+            audio_engine_options(&self.playback_settings),
+        ) {
+            Ok(engine) => {
+                drop(previous_engine);
+                self.playback = Some(engine);
+                if let Some(soundfont_path) = self.playback_settings.soundfont.clone() {
+                    self.initialize_playback(soundfont_path);
+                } else {
+                    self.soundfont_status = SoundfontStatus::NotSelected;
+                    self.unload_playback_file();
+                }
+            }
+            Err(error) => {
+                self.playback = Some(previous_engine);
+                self.logger.push(format!(
+                    "Failed to restart audio engine with updated playback settings: {error}"
+                ));
+                self.show_prompt(
+                    ErrorPrompt::new(
+                        "Audio Engine Error",
+                        error.to_string(),
+                        ErrorFatality::Recoverable,
+                        PromptButtons::Ok,
+                    ),
+                    None,
+                );
+            }
+        }
     }
 
     pub(in crate::app) fn unload_playback_file(&mut self) {
@@ -123,7 +161,7 @@ impl Lilypalooza {
         }
 
         if let Some(error) = load_error {
-            self.soundfont_status = SoundfontStatus::Error(error.clone());
+            self.soundfont_status = SoundfontStatus::Error;
             self.logger.push(error.clone());
             self.show_prompt(
                 ErrorPrompt::new(

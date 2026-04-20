@@ -92,8 +92,6 @@ pub(super) enum FileMessage {
     CreateProjectPicked(Option<PathBuf>),
     LoadProjectPicked(Option<PathBuf>),
     OpenRecentProject(PathBuf),
-    RequestSoundfont,
-    SoundfontPicked(Option<PathBuf>),
 }
 
 #[derive(Debug, Clone)]

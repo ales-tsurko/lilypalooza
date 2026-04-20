@@ -196,6 +196,25 @@ impl Default for EditorViewSettings {
     }
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct PlaybackSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) soundfont: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) device: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sample_rate: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) block_size: Option<usize>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(crate) chase_notes_on_seek: bool,
+}
+
 fn default_editor_recent_files_limit() -> usize {
     7
 }
@@ -485,6 +504,7 @@ pub(crate) struct AppSettings {
         skip_serializing_if = "is_default_editor_recent_files_limit"
     )]
     pub(crate) editor_recent_files_limit: usize,
+    pub(crate) playback: PlaybackSettings,
     #[serde(skip_serializing_if = "ShortcutSettings::is_empty")]
     pub(crate) shortcuts: ShortcutSettings,
 }
@@ -495,6 +515,7 @@ impl Default for AppSettings {
             editor_view: EditorViewSettings::default(),
             editor_theme: EditorThemeSettings::default(),
             editor_recent_files_limit: default_editor_recent_files_limit(),
+            playback: PlaybackSettings::default(),
             shortcuts: ShortcutSettings::default(),
         }
     }
@@ -614,6 +635,46 @@ fn render_settings_file(settings: &AppSettings) -> Result<String, toml::ser::Err
         "editor_recent_files_limit",
         &settings.editor_recent_files_limit.to_string(),
         &defaults.editor_recent_files_limit.to_string(),
+    );
+
+    out.push_str("\n[playback]\n");
+    out.push_str("# Default startup SoundFont file.\n");
+    out.push_str("# Example:\n");
+    if let Some(soundfont) = &settings.playback.soundfont {
+        out.push_str("soundfont = ");
+        out.push_str(&format!("{:?}", soundfont.display().to_string()));
+        out.push('\n');
+    } else {
+        out.push_str("# soundfont = \"/absolute/path/to/file.sf2\"\n");
+    }
+    out.push('\n');
+    out.push_str(
+        "# Preferred output device name. Use \"default\" to follow the system default device.\n",
+    );
+    if let Some(device) = &settings.playback.device {
+        out.push_str("device = ");
+        out.push_str(&format!("{device:?}\n\n"));
+    } else {
+        out.push_str("# device = \"default\"\n\n");
+    }
+    out.push_str("# Preferred output sample rate in Hz.\n");
+    if let Some(sample_rate) = settings.playback.sample_rate {
+        out.push_str(&format!("sample_rate = {sample_rate}\n\n"));
+    } else {
+        out.push_str("# sample_rate = 48000\n\n");
+    }
+    out.push_str("# Preferred backend block size in frames.\n");
+    if let Some(block_size) = settings.playback.block_size {
+        out.push_str(&format!("block_size = {block_size}\n\n"));
+    } else {
+        out.push_str("# block_size = 64\n\n");
+    }
+    push_documented_value(
+        &mut out,
+        "Chase already-held notes into the new position after seeking.",
+        "chase_notes_on_seek",
+        &settings.playback.chase_notes_on_seek.to_string(),
+        &defaults.playback.chase_notes_on_seek.to_string(),
     );
 
     out.push_str("\n[shortcuts]\n");
@@ -921,5 +982,52 @@ fn shortcut_named_key_string(named: ShortcutNamedKey) -> &'static str {
     match named {
         ShortcutNamedKey::Space => "Space",
         ShortcutNamedKey::Enter => "Enter",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppSettings, PlaybackSettings, render_settings_file};
+    use std::path::PathBuf;
+
+    #[test]
+    fn settings_template_contains_playback_section() {
+        let contents =
+            render_settings_file(&AppSettings::default()).expect("default settings should render");
+
+        assert!(contents.contains("[playback]"));
+        assert!(contents.contains("# soundfont = \"/absolute/path/to/file.sf2\""));
+        assert!(contents.contains("# device = \"default\""));
+        assert!(contents.contains("# sample_rate = 48000"));
+        assert!(contents.contains("# block_size = 64"));
+        assert!(contents.contains("# chase_notes_on_seek = false"));
+    }
+
+    #[test]
+    fn settings_roundtrip_parses_playback_settings() {
+        let settings = AppSettings {
+            playback: PlaybackSettings {
+                soundfont: Some(PathBuf::from("/tmp/test.sf2")),
+                device: Some("Built-in Output".into()),
+                sample_rate: Some(48_000),
+                block_size: Some(128),
+                chase_notes_on_seek: true,
+            },
+            ..AppSettings::default()
+        };
+
+        let contents = render_settings_file(&settings)
+            .expect("settings with playback soundfont should render");
+        let parsed: AppSettings =
+            toml::from_str(&contents).expect("rendered settings should parse back");
+
+        assert_eq!(
+            parsed.playback.soundfont,
+            Some(PathBuf::from("/tmp/test.sf2"))
+        );
+        assert_eq!(parsed.playback.device.as_deref(), Some("Built-in Output"));
+        assert_eq!(parsed.playback.sample_rate, Some(48_000));
+        assert_eq!(parsed.playback.block_size, Some(128));
+        assert!(parsed.playback.chase_notes_on_seek);
     }
 }

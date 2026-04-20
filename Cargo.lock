@@ -2587,7 +2587,6 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 [[package]]
 name = "knyst"
 version = "0.5.1"
-source = "git+https://github.com/ales-tsurko/knyst?rev=be8df5331539c922ab362b57621563186e789c89#be8df5331539c922ab362b57621563186e789c89"
 dependencies = [
  "audio_thread_priority",
  "cpal",

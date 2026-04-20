@@ -1018,6 +1018,7 @@ impl Lilypalooza {
                 editor_view: self.editor.view_settings(),
                 editor_theme: self.editor.theme_settings(),
                 editor_recent_files_limit: self.editor_recent_files_limit,
+                playback: self.playback_settings.clone(),
                 shortcuts: self.shortcut_settings.clone(),
             };
 
@@ -1035,8 +1036,15 @@ impl Lilypalooza {
             }
         }
 
+        let _ = self.unfold_workspace_pane(WorkspacePaneKind::Editor);
+        let task = self.open_editor_file_in_editor(&path);
+        if let Some(tab_id) = self.editor.find_tab_by_path(&path) {
+            self.editor.activate_tab(tab_id);
+            self.pending_reveal_editor_tab = Some(tab_id);
+        }
         self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
-        self.open_editor_file_in_editor(&path)
+        self.focus_editor_text_area();
+        task
     }
 
     pub(in crate::app) fn is_settings_file_path(&self, path: &Path) -> bool {
@@ -1049,11 +1057,26 @@ impl Lilypalooza {
 
     pub(in crate::app) fn reload_settings_from_disk(&mut self, path: &Path) -> Result<(), String> {
         let loaded = settings::load_from_path(path)?;
+        let previous_playback = self.playback_settings.clone();
         self.editor.apply_view_settings(loaded.editor_view);
         self.editor.apply_theme_settings(loaded.editor_theme);
         self.editor_recent_files_limit = loaded.editor_recent_files_limit.max(1);
         self.editor_recent_files
             .truncate(self.editor_recent_files_limit);
+        self.playback_settings = loaded.playback.clone();
+
+        let restart_playback = loaded.playback.sample_rate != previous_playback.sample_rate
+            || loaded.playback.device != previous_playback.device
+            || loaded.playback.block_size != previous_playback.block_size
+            || loaded.playback.chase_notes_on_seek != previous_playback.chase_notes_on_seek;
+        if restart_playback {
+            self.restart_playback_engine();
+        } else if let Some(path) = loaded.playback.soundfont {
+            self.initialize_playback(path);
+        } else {
+            self.soundfont_status = SoundfontStatus::NotSelected;
+            self.unload_playback_file();
+        }
         self.shortcut_settings = loaded.shortcuts;
         self.sync_editor_viewport_from_layout();
         self.sync_editor_widget_focus();

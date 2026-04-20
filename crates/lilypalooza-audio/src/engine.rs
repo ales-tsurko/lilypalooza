@@ -26,8 +26,14 @@ const SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct AudioEngineOptions {
     /// Knyst sphere settings.
     pub sphere_settings: SphereSettings,
+    /// Preferred output device name.
+    pub device: Option<String>,
     /// Whether seeking should chase already-held notes into the new position.
     pub chase_notes_on_seek: bool,
+    /// Preferred backend sample rate in Hz.
+    pub sample_rate: Option<usize>,
+    /// Preferred backend block size in frames.
+    pub block_size: Option<usize>,
 }
 
 /// Shared runtime settings for the audio engine and mixer.
@@ -86,7 +92,12 @@ impl AudioEngine {
         mixer: MixerState,
         options: AudioEngineOptions,
     ) -> Result<Self, AudioEngineError> {
-        let backend = CpalBackend::new(CpalBackendOptions::default())?;
+        let backend = CpalBackend::new(CpalBackendOptions {
+            device: options.device.clone().unwrap_or_else(|| "default".into()),
+            sample_rate: options.sample_rate.map(|value| value as u32),
+            block_size: options.block_size.map(|value| value as u32),
+            ..CpalBackendOptions::default()
+        })?;
         Self::start(mixer, backend, options)
     }
 

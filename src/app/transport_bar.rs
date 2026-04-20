@@ -3,7 +3,7 @@ use std::time::Duration;
 use iced::widget::{button, container, row, slider, svg, text, tooltip};
 use iced::{ContentFit, Element, Fill, Length, alignment};
 
-use super::{FileMessage, Lilypalooza, Message, PianoRollMessage, SoundfontStatus};
+use super::{Lilypalooza, Message, PianoRollMessage};
 use crate::fonts;
 use crate::icons;
 use crate::midi::{MidiRollData, TimeSignatureChange};
@@ -139,33 +139,6 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     .step(0.001)
     .width(Fill);
 
-    let soundfont_label = match &app.soundfont_status {
-        SoundfontStatus::NotSelected => "Set soundfont".to_string(),
-        SoundfontStatus::Ready(path) => path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| "Soundfont".to_string()),
-        SoundfontStatus::Error(error) => format!("Soundfont error: {error}"),
-    };
-
-    let soundfont_button = button(
-        row![
-            text("♬").size(ui_style::FONT_SIZE_UI_SM),
-            text(soundfont_label)
-                .size(ui_style::FONT_SIZE_UI_XS)
-                .font(fonts::MONO),
-        ]
-        .spacing(ui_style::SPACE_XS)
-        .align_y(alignment::Vertical::Center),
-    )
-    .style(ui_style::button_neutral)
-    .padding([
-        ui_style::PADDING_BUTTON_COMPACT_V,
-        ui_style::PADDING_BUTTON_COMPACT_H,
-    ])
-    .on_press(Message::File(FileMessage::RequestSoundfont));
-
     container(
         iced::widget::column![
             container(text(""))
@@ -195,7 +168,6 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
                     text(meter_label)
                         .size(ui_style::FONT_SIZE_UI_XS)
                         .font(fonts::MONO),
-                    soundfont_button,
                 ]
                 .width(Fill)
                 .align_y(alignment::Vertical::Center)
