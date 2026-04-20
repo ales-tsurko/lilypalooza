@@ -8,16 +8,19 @@ use iced::{
     Color, ContentFit, Element, Fill, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
     alignment, mouse,
 };
+use iced_aw::helpers::color_picker_with_change;
 
 use super::{Lilypalooza, Message, PianoRollMessage, dock_view::HeaderControlGroup};
 use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
 use crate::settings::PianoRollViewSettings;
 use crate::{fonts, icons, ui_style};
 
-const TRACK_PANEL_DEFAULT_WIDTH: f32 = 120.0;
-const TRACK_PANEL_MIN_WIDTH: f32 = 92.0;
-const TRACK_PANEL_MAX_WIDTH: f32 = 160.0;
+const TRACK_PANEL_DEFAULT_WIDTH: f32 = 144.0;
+const TRACK_PANEL_MIN_WIDTH: f32 = 116.0;
+const TRACK_PANEL_MAX_WIDTH: f32 = 184.0;
 const TRACK_RESIZE_HANDLE_WIDTH: f32 = 6.0;
+const TRACK_COLOR_BUTTON_SIZE: f32 = 18.0;
+const TRACK_COLOR_BUTTON_GAP: f32 = 6.0;
 const TRACK_BUTTON_WIDTH: f32 = 18.0;
 const TRACK_BUTTON_HEIGHT: f32 = 16.0;
 const TRACK_BUTTONS_GAP: f32 = 4.0;
@@ -691,6 +694,12 @@ fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
     let pixels_per_tick = BASE_PIXELS_PER_QUARTER * zoom_x / f32::from(file.data.ppq.max(1));
     let timeline_width =
         (file.data.total_ticks as f32 * pixels_per_tick + CONTENT_RIGHT_PADDING).max(1.0);
+    let track_colors: Vec<_> = file
+        .data
+        .tracks
+        .iter()
+        .map(|track| app.effective_track_color(track.index))
+        .collect();
 
     let track_panel_width = track_panel_width.clamp(TRACK_PANEL_MIN_WIDTH, TRACK_PANEL_MAX_WIDTH);
     let track_stub_canvas = canvas(TempoStubCanvas)
@@ -726,6 +735,7 @@ fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
         beat_subdivision,
         playback_tick,
         track_mix,
+        track_colors,
         global_solo_active,
     })
     .width(Length::Fixed(timeline_width))
@@ -827,19 +837,88 @@ fn track_list<'a>(
     for track in &file.data.tracks {
         let state = track_mix.get(track.index).copied().unwrap_or_default();
         let track_label = app.effective_track_name(track.index);
-        let title: Element<'_, Message> =
-            if app.renaming_target == Some(super::RenameTarget::Track(track.index)) {
-                text_input::<Message, Theme, Renderer>("", &app.track_rename_value)
-                    .id(iced::widget::Id::new(super::TRACK_RENAME_INPUT_ID))
-                    .on_input(|value| {
-                        Message::PianoRoll(PianoRollMessage::TrackRenameInputChanged(value))
-                    })
-                    .on_submit(Message::PianoRoll(PianoRollMessage::CommitTrackRename))
-                    .size(ui_style::FONT_SIZE_UI_XS)
-                    .padding([2, 4])
-                    .width(Fill)
-                    .into()
-            } else {
+        let track_color = app.effective_track_color(track.index);
+        let visibility_alpha =
+            track_visibility_alpha(track_mix, track.index, app.piano_roll.global_solo_active);
+        let swatch_color = Color {
+            a: track_color.a * visibility_alpha,
+            ..track_color
+        };
+        let title: Element<'_, Message> = if app
+            .is_renaming_track_in(track.index, super::WorkspacePaneKind::PianoRoll)
+        {
+            let swatch = button(container(text("")).width(18).height(18))
+                .padding(0)
+                .width(18)
+                .height(18)
+                .style(move |theme, status| {
+                    ui_style::track_color_swatch_button(theme, status, app.track_rename_color_value)
+                })
+                .on_press(Message::PianoRoll(PianoRollMessage::OpenTrackColorPicker));
+            let input = text_input::<Message, Theme, Renderer>("", &app.track_rename_value)
+                .id(iced::widget::Id::new(super::TRACK_RENAME_INPUT_ID))
+                .on_input(|value| {
+                    Message::PianoRoll(PianoRollMessage::TrackRenameInputChanged(value))
+                })
+                .on_submit(Message::PianoRoll(PianoRollMessage::CommitTrackRename))
+                .style(ui_style::track_name_input)
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .padding([2, 4])
+                .width(Fill);
+            let focused = app.track_rename_color_picker_open || app.track_rename_was_focused;
+            let editor_row = container(
+                row![
+                    swatch,
+                    container(text("")).width(1).height(18).style(move |theme| {
+                        ui_style::track_name_editor_divider(theme, focused)
+                    }),
+                    input
+                ]
+                .spacing(0)
+                .align_y(alignment::Vertical::Center)
+                .width(Fill),
+            )
+            .padding(0)
+            .style(move |theme| ui_style::track_name_editor_shell(theme, focused))
+            .width(Fill);
+            color_picker_with_change(
+                app.track_rename_color_picker_open,
+                app.track_rename_color_value,
+                editor_row,
+                Message::PianoRoll(PianoRollMessage::CancelTrackRename),
+                |color| Message::PianoRoll(PianoRollMessage::SubmitTrackColor(color)),
+                |color| Message::PianoRoll(PianoRollMessage::PreviewTrackColor(color)),
+            )
+            .style(ui_style::color_picker_widget_style)
+            .into()
+        } else {
+            let swatch_button = button(
+                container(text(""))
+                    .width(TRACK_COLOR_BUTTON_SIZE)
+                    .height(TRACK_COLOR_BUTTON_SIZE),
+            )
+            .padding(0)
+            .width(TRACK_COLOR_BUTTON_SIZE)
+            .height(TRACK_COLOR_BUTTON_SIZE)
+            .style(move |theme, status| {
+                ui_style::track_color_swatch_button(theme, status, swatch_color)
+            })
+            .on_press(Message::PianoRoll(
+                PianoRollMessage::OpenTrackColorPickerForTrack(track.index),
+            ));
+            let swatch: Element<'_, Message> = color_picker_with_change(
+                app.is_picking_track_color_in(track.index, super::WorkspacePaneKind::PianoRoll),
+                app.track_rename_color_value,
+                swatch_button,
+                Message::PianoRoll(PianoRollMessage::CancelTrackRename),
+                |color| Message::PianoRoll(PianoRollMessage::SubmitTrackColor(color)),
+                |color| Message::PianoRoll(PianoRollMessage::PreviewTrackColor(color)),
+            )
+            .style(ui_style::color_picker_widget_style)
+            .into();
+            row![
+                swatch,
+                container(text("")).width(Length::Fixed(TRACK_COLOR_BUTTON_GAP)),
                 mouse_area(
                     container(
                         text(shorten_label(&track_label, label_max_chars))
@@ -852,8 +931,11 @@ fn track_list<'a>(
                 .on_press(Message::PianoRoll(PianoRollMessage::StartTrackRename(
                     track.index,
                 )))
-                .into()
-            };
+            ]
+            .align_y(alignment::Vertical::Center)
+            .width(Fill)
+            .into()
+        };
 
         let solo_button = button(
             container(
@@ -908,16 +990,16 @@ fn track_list<'a>(
                 row![
                     title,
                     container(text("")).width(Length::Fixed(TRACK_LABEL_BUTTON_GAP)),
-                    solo_button,
-                    container(text("")).width(Length::Fixed(TRACK_BUTTONS_GAP)),
                     mute_button,
+                    container(text("")).width(Length::Fixed(TRACK_BUTTONS_GAP)),
+                    solo_button,
                 ]
                 .align_y(alignment::Vertical::Center)
                 .spacing(0)
                 .width(Fill),
             )
             .padding([4, 6])
-            .style(move |theme| ui_style::piano_roll_track_surface(theme, track.index)),
+            .style(move |theme| ui_style::piano_roll_track_surface(theme, track_color)),
         );
     }
 
@@ -1383,6 +1465,7 @@ struct RollNotesCanvas<'a> {
     beat_subdivision: u8,
     playback_tick: u64,
     track_mix: &'a [TrackMixState],
+    track_colors: Vec<Color>,
     global_solo_active: bool,
 }
 
@@ -1405,6 +1488,7 @@ struct RollNotesCacheKey {
     zoom_x_bits: u32,
     beat_subdivision: u8,
     track_mix_hash: u64,
+    track_colors_hash: u64,
     global_solo_active: bool,
 }
 
@@ -1427,6 +1511,7 @@ struct NoteGeometry {
 #[derive(Clone, Copy)]
 struct VisibilityState<'a> {
     track_mix: &'a [TrackMixState],
+    track_colors: &'a [Color],
     global_solo_active: bool,
 }
 
@@ -1464,6 +1549,7 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
             zoom_x_bits: self.zoom_x.to_bits(),
             beat_subdivision: self.beat_subdivision,
             track_mix_hash: track_mix_hash(self.track_mix),
+            track_colors_hash: crate::track_colors::color_hash(&self.track_colors),
             global_solo_active: self.global_solo_active,
         };
         if self.state_needs_cache_clear(state, cache_key) {
@@ -1586,6 +1672,7 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
                     self.data,
                     VisibilityState {
                         track_mix: self.track_mix,
+                        track_colors: &self.track_colors,
                         global_solo_active: self.global_solo_active,
                     },
                     note,
@@ -1639,7 +1726,11 @@ fn draw_note(
     stack_badge: Option<StackBadge>,
     show_label: bool,
 ) {
-    let mut color = track_color(note.track_index);
+    let mut color = visibility
+        .track_colors
+        .get(note.track_index)
+        .copied()
+        .unwrap_or_else(|| crate::track_colors::default_track_color(note.track_index));
     let visibility_alpha = track_visibility_alpha(
         visibility.track_mix,
         note.track_index,
@@ -2308,8 +2399,12 @@ fn estimate_monospace_text_width(text: &str) -> f32 {
 
 fn max_track_label_chars(track_panel_width: f32) -> usize {
     let horizontal_padding = f32::from(ui_style::PADDING_XS) * 2.0;
-    let reserved_width =
-        TRACK_LABEL_BUTTON_GAP + TRACK_BUTTON_WIDTH + TRACK_BUTTONS_GAP + TRACK_BUTTON_WIDTH;
+    let reserved_width = TRACK_COLOR_BUTTON_SIZE
+        + TRACK_COLOR_BUTTON_GAP
+        + TRACK_LABEL_BUTTON_GAP
+        + TRACK_BUTTON_WIDTH
+        + TRACK_BUTTONS_GAP
+        + TRACK_BUTTON_WIDTH;
     let available_width = (track_panel_width - horizontal_padding - reserved_width).max(0.0);
     let approx_char_width = ui_style::FONT_SIZE_UI_XS as f32 * 0.60;
     let estimated = (available_width / approx_char_width).floor() as usize;
@@ -2367,10 +2462,6 @@ fn track_visibility_alpha(
     }
 
     1.0
-}
-
-fn track_color(track_index: usize) -> Color {
-    ui_style::track_accent_color(track_index)
 }
 
 fn shorten_label(label: &str, max_len: usize) -> String {

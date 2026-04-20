@@ -8,10 +8,10 @@ impl Lilypalooza {
         self.primary_mouse_pressed = pressed;
         if !pressed {
             self.commit_pending_mixer_history();
-        }
-        if pressed && self.renaming_target.is_some() {
-            return iced::widget::operation::is_focused(super::super::TRACK_RENAME_INPUT_ID)
-                .map(Message::TrackRenameFocusChanged);
+            if self.renaming_target.is_some() {
+                return iced::widget::operation::is_focused(super::super::TRACK_RENAME_INPUT_ID)
+                    .map(Message::TrackRenameFocusChanged);
+            }
         }
         Task::none()
     }
@@ -85,7 +85,7 @@ impl Lilypalooza {
 
         match message {
             MixerMessage::StartTrackRename(track_index) => {
-                return self.start_track_rename(track_index);
+                return self.start_track_rename(track_index, WorkspacePaneKind::Mixer);
             }
             MixerMessage::StartBusRename(bus_id) => {
                 let Some(name) = self
@@ -96,13 +96,29 @@ impl Lilypalooza {
                 else {
                     return Task::none();
                 };
-                return self.start_bus_rename(bus_id, name);
+                return self.start_bus_rename(bus_id, WorkspacePaneKind::Mixer, name);
             }
             MixerMessage::TrackRenameInputChanged(value) => {
                 self.update_track_rename_value(value);
                 return Task::none();
             }
+            MixerMessage::OpenTrackColorPicker => {
+                self.open_track_color_picker();
+                return Task::none();
+            }
+            MixerMessage::SubmitTrackColor(color) => {
+                self.submit_track_color(color);
+                return Task::none();
+            }
+            MixerMessage::PreviewTrackColor(color) => {
+                self.preview_track_color(color);
+                return Task::none();
+            }
             MixerMessage::CommitTrackRename => return self.commit_track_rename(),
+            MixerMessage::CancelTrackRename => {
+                self.cancel_track_rename();
+                return Task::none();
+            }
             _ => {}
         }
 
@@ -193,7 +209,11 @@ impl Lilypalooza {
             MixerMessage::StartTrackRename(_)
             | MixerMessage::StartBusRename(_)
             | MixerMessage::TrackRenameInputChanged(_)
+            | MixerMessage::OpenTrackColorPicker
+            | MixerMessage::SubmitTrackColor(_)
+            | MixerMessage::PreviewTrackColor(_)
             | MixerMessage::CommitTrackRename => {}
+            MixerMessage::CancelTrackRename => {}
         }
 
         Task::none()
@@ -230,7 +250,9 @@ fn mixer_message_history_mode(
         | MixerMessage::ResetTrackMeter(_)
         | MixerMessage::ResetBusMeter(_)
         | MixerMessage::InstrumentViewportScrolled(_)
-        | MixerMessage::BusViewportScrolled(_) => MixerHistoryMode::None,
+        | MixerMessage::BusViewportScrolled(_)
+        | MixerMessage::OpenTrackColorPicker
+        | MixerMessage::PreviewTrackColor(_) => MixerHistoryMode::None,
         MixerMessage::SetMasterGain(_)
         | MixerMessage::SetMasterPan(_)
         | MixerMessage::SetTrackGain(_, _)
@@ -247,7 +269,9 @@ fn mixer_message_history_mode(
         | MixerMessage::StartTrackRename(_)
         | MixerMessage::StartBusRename(_)
         | MixerMessage::TrackRenameInputChanged(_)
+        | MixerMessage::CancelTrackRename
         | MixerMessage::CommitTrackRename
+        | MixerMessage::SubmitTrackColor(_)
         | MixerMessage::ToggleTrackMute(_)
         | MixerMessage::ToggleTrackSolo(_)
         | MixerMessage::SelectTrackInstrument(_, _)
@@ -273,8 +297,14 @@ fn sync_piano_roll_mix_from_mixer_state(
 
 #[cfg(test)]
 mod tests {
-    use super::{MixerHistoryMode, mixer_message_history_mode};
+    use super::{Lilypalooza, MixerHistoryMode, mixer_message_history_mode};
+    use crate::app::RenameTarget;
     use crate::app::messages::MixerMessage;
+
+    fn test_app() -> Lilypalooza {
+        let (app, _task) = super::super::super::new(None, None, false);
+        app
+    }
 
     #[test]
     fn mixer_drag_value_changes_use_gesture_history() {
@@ -309,5 +339,19 @@ mod tests {
             mixer_message_history_mode(&MixerMessage::ResetTrackMeter(0), false),
             MixerHistoryMode::None
         );
+    }
+
+    #[test]
+    fn track_rename_commits_on_focus_loss() {
+        let mut app = test_app();
+        app.renaming_target = Some(RenameTarget::Track(0));
+        app.track_rename_was_focused = true;
+        app.track_rename_value = "Lead".into();
+
+        let _ = app.handle_track_rename_focus_changed(false);
+
+        assert_eq!(app.track_name_override(0), Some("Lead"));
+        assert!(app.renaming_target.is_none());
+        assert!(app.track_rename_value.is_empty());
     }
 }

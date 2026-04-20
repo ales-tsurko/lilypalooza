@@ -9,6 +9,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::settings::{PianoRollViewSettings, ScoreViewSettings, WorkspaceLayoutSettings};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub(crate) struct TrackColorOverride {
+    pub(crate) r: f32,
+    pub(crate) g: f32,
+    pub(crate) b: f32,
+    pub(crate) a: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct GlobalState {
@@ -40,6 +48,8 @@ pub(crate) struct ProjectState {
     pub(crate) has_clean_untitled_editor_tab: bool,
     #[serde(skip_serializing_if = "track_name_overrides_is_empty")]
     pub(crate) track_name_overrides: Vec<Option<String>>,
+    #[serde(skip_serializing_if = "track_color_overrides_is_empty")]
+    pub(crate) track_color_overrides: Vec<Option<TrackColorOverride>>,
 }
 
 pub(crate) fn load_global() -> Result<GlobalState, String> {
@@ -173,6 +183,10 @@ fn track_name_overrides_is_empty(overrides: &[Option<String>]) -> bool {
     overrides.iter().all(Option::is_none)
 }
 
+fn track_color_overrides_is_empty(overrides: &[Option<TrackColorOverride>]) -> bool {
+    overrides.iter().all(Option::is_none)
+}
+
 fn global_state_path() -> Result<PathBuf, String> {
     let project_dirs = ProjectDirs::from("", "", "lilypalooza")
         .ok_or_else(|| "Failed to resolve user config directory".to_string())?;
@@ -203,7 +217,7 @@ fn global_state_load_path() -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ProjectState;
+    use super::{ProjectState, TrackColorOverride};
 
     #[test]
     fn project_state_roundtrip_preserves_track_name_overrides() {
@@ -216,5 +230,26 @@ mod tests {
         let parsed: ProjectState = ron::from_str(&serialized).expect("state should parse");
 
         assert_eq!(parsed.track_name_overrides, state.track_name_overrides);
+    }
+
+    #[test]
+    fn project_state_roundtrip_preserves_track_color_overrides() {
+        let state = ProjectState {
+            track_color_overrides: vec![
+                Some(TrackColorOverride {
+                    r: 0.25,
+                    g: 0.5,
+                    b: 0.75,
+                    a: 1.0,
+                }),
+                None,
+            ],
+            ..ProjectState::default()
+        };
+
+        let serialized = ron::to_string(&state).expect("state should serialize");
+        let parsed: ProjectState = ron::from_str(&serialized).expect("state should parse");
+
+        assert_eq!(parsed.track_color_overrides, state.track_color_overrides);
     }
 }

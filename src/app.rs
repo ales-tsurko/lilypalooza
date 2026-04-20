@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use iced::event;
 use iced::keyboard;
 use iced::widget::{Id, pane_grid, svg};
-use iced::{Point, Rectangle, Size, Subscription, Task, mouse, window};
+use iced::{Color, Point, Rectangle, Size, Subscription, Task, mouse, window};
 use iced_core::{Bytes, image};
 use lilypalooza_audio::MixerState;
 use lilypalooza_audio::{AudioEngine, AudioEngineOptions};
@@ -201,9 +201,14 @@ struct Lilypalooza {
     editor_tab_rename_value: String,
     editor_tab_rename_input_id: Id,
     renaming_target: Option<RenameTarget>,
+    renaming_origin: Option<WorkspacePaneKind>,
+    track_color_picker_target: Option<(usize, WorkspacePaneKind)>,
     track_rename_was_focused: bool,
     track_rename_value: String,
+    track_rename_color_picker_open: bool,
+    track_rename_color_value: Color,
     track_name_overrides: Vec<Option<String>>,
+    track_color_overrides: Vec<Option<Color>>,
     editor_recent_files: Vec<PathBuf>,
     recent_projects: Vec<PathBuf>,
     editor_recent_files_limit: usize,
@@ -673,9 +678,14 @@ fn new(
         editor_tab_rename_value: String::new(),
         editor_tab_rename_input_id: Id::unique(),
         renaming_target: None,
+        renaming_origin: None,
+        track_color_picker_target: None,
         track_rename_was_focused: false,
         track_rename_value: String::new(),
+        track_rename_color_picker_open: false,
+        track_rename_color_value: crate::track_colors::default_track_color(0),
         track_name_overrides: Vec::new(),
+        track_color_overrides: Vec::new(),
         editor_recent_files: stored_state.editor_recent_files.clone(),
         recent_projects: stored_state.recent_projects.clone(),
         editor_recent_files_limit: stored_settings.editor_recent_files_limit.max(1),

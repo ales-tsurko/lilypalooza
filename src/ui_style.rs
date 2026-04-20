@@ -1,5 +1,7 @@
-use iced::widget::{button, container, scrollable, svg, text_editor};
+use iced::widget::{button, container, scrollable, svg, text_editor, text_input};
 use iced::{Color, Shadow, Theme, Vector, border};
+use iced_aw::style::Status as AwStatus;
+use iced_aw::style::color_picker::Style as AwColorPickerStyle;
 
 pub(crate) const FONT_SIZE_BODY_MD: u32 = 15;
 pub(crate) const FONT_SIZE_UI_SM: u32 = 12;
@@ -154,28 +156,8 @@ pub(crate) fn piano_roll_surface(theme: &Theme) -> container::Style {
     }
 }
 
-pub(crate) fn track_accent_color(track_index: usize) -> Color {
-    const COLORS: [Color; 12] = [
-        Color::from_rgb(0.90, 0.35, 0.35),
-        Color::from_rgb(0.90, 0.62, 0.31),
-        Color::from_rgb(0.88, 0.82, 0.30),
-        Color::from_rgb(0.50, 0.82, 0.33),
-        Color::from_rgb(0.29, 0.76, 0.49),
-        Color::from_rgb(0.28, 0.75, 0.70),
-        Color::from_rgb(0.29, 0.63, 0.90),
-        Color::from_rgb(0.44, 0.53, 0.92),
-        Color::from_rgb(0.65, 0.47, 0.92),
-        Color::from_rgb(0.83, 0.41, 0.82),
-        Color::from_rgb(0.86, 0.38, 0.63),
-        Color::from_rgb(0.77, 0.43, 0.48),
-    ];
-
-    COLORS[track_index % COLORS.len()]
-}
-
-pub(crate) fn mixer_track_strip_surface(theme: &Theme, track_index: usize) -> container::Style {
+pub(crate) fn mixer_track_strip_surface(theme: &Theme, accent: Color) -> container::Style {
     let palette = theme.extended_palette();
-    let accent = track_accent_color(track_index);
 
     container::Style {
         background: Some(mix_color(palette.background.base.color, accent, 0.06).into()),
@@ -185,25 +167,126 @@ pub(crate) fn mixer_track_strip_surface(theme: &Theme, track_index: usize) -> co
     }
 }
 
-pub(crate) fn piano_roll_track_surface(theme: &Theme, track_index: usize) -> container::Style {
+pub(crate) fn piano_roll_track_surface(theme: &Theme, accent: Color) -> container::Style {
     let palette = theme.extended_palette();
 
     container::Style {
-        background: Some(
-            mix_color(
-                palette.background.weakest.color,
-                track_accent_color(track_index),
-                0.10,
-            )
-            .into(),
-        ),
+        background: Some(mix_color(palette.background.weakest.color, accent, 0.10).into()),
         text_color: Some(palette.background.weakest.text),
         border: border::rounded(4).width(1).color(mix_color(
             palette.background.strong.color,
-            track_accent_color(track_index),
+            accent,
             0.18,
         )),
         ..container::Style::default()
+    }
+}
+
+pub(crate) fn track_color_swatch_button(
+    theme: &Theme,
+    status: button::Status,
+    color: Color,
+) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let background = match status {
+        button::Status::Pressed => mix_color(color, palette.primary.base.color, 0.18),
+        button::Status::Hovered => mix_color(color, palette.background.weakest.color, 0.08),
+        button::Status::Active | button::Status::Disabled => color,
+    };
+
+    button::Style {
+        background: Some(background.into()),
+        text_color: palette.background.base.text,
+        border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+        ..button::Style::default()
+    }
+}
+
+pub(crate) fn track_name_input(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let palette = theme.extended_palette();
+    let background = palette.background.weak.color;
+    let strong_border = mix_color(
+        palette.background.base.color,
+        palette.background.strong.color,
+        0.72,
+    );
+    let border_color = match status {
+        text_input::Status::Focused { .. } => palette.primary.base.color,
+        text_input::Status::Hovered => mix_color(strong_border, palette.primary.base.color, 0.18),
+        text_input::Status::Active | text_input::Status::Disabled => strong_border,
+    };
+
+    text_input::Style {
+        background: background.into(),
+        border: border::rounded(0).width(0).color(border_color),
+        icon: palette.background.weak.text,
+        placeholder: palette.background.strong.text,
+        value: palette.background.weak.text,
+        selection: palette.primary.weak.color,
+    }
+}
+
+pub(crate) fn track_name_editor_shell(theme: &Theme, focused: bool) -> container::Style {
+    let palette = theme.extended_palette();
+    let strong_border = mix_color(
+        palette.background.base.color,
+        palette.background.strong.color,
+        0.72,
+    );
+    let border_color = if focused {
+        palette.primary.base.color
+    } else {
+        strong_border
+    };
+
+    container::Style {
+        background: Some(palette.background.weak.color.into()),
+        text_color: Some(palette.background.weak.text),
+        border: border::rounded(0).width(1).color(border_color),
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn track_name_editor_divider(theme: &Theme, focused: bool) -> container::Style {
+    let palette = theme.extended_palette();
+    let strong_border = mix_color(
+        palette.background.base.color,
+        palette.background.strong.color,
+        0.72,
+    );
+    let divider_color = if focused {
+        palette.primary.base.color
+    } else {
+        strong_border
+    };
+
+    container::Style {
+        background: Some(divider_color.into()),
+        ..container::Style::default()
+    }
+}
+
+pub(crate) fn color_picker_widget_style(theme: &Theme, status: AwStatus) -> AwColorPickerStyle {
+    let palette = theme.extended_palette();
+    let strong_border = mix_color(
+        palette.background.base.color,
+        palette.background.strong.color,
+        0.72,
+    );
+    let border_color = match status {
+        AwStatus::Focused => palette.primary.base.color,
+        _ => strong_border,
+    };
+
+    AwColorPickerStyle {
+        background: palette.background.weak.color.into(),
+        border_radius: 0.0,
+        border_width: 1.0,
+        border_color,
+        bar_border_radius: 0.0,
+        bar_border_width: 1.0,
+        bar_border_color: border_color,
     }
 }
 
@@ -1071,7 +1154,7 @@ mod tests {
     #[test]
     fn mixer_track_strip_surface_differs_from_plain_pane_surface() {
         let plain = pane_main_surface(&Theme::Dark);
-        let tinted = mixer_track_strip_surface(&Theme::Dark, 0);
+        let tinted = mixer_track_strip_surface(&Theme::Dark, Color::from_rgb(0.3, 0.4, 0.5));
         assert_ne!(plain.background, tinted.background);
     }
 }

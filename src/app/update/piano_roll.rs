@@ -22,7 +22,12 @@ impl Lilypalooza {
             | PianoRollMessage::FilePrevious
             | PianoRollMessage::FileNext
             | PianoRollMessage::StartTrackRename(_)
+            | PianoRollMessage::OpenTrackColorPickerForTrack(_)
             | PianoRollMessage::TrackRenameInputChanged(_)
+            | PianoRollMessage::OpenTrackColorPicker
+            | PianoRollMessage::SubmitTrackColor(_)
+            | PianoRollMessage::PreviewTrackColor(_)
+            | PianoRollMessage::CancelTrackRename
             | PianoRollMessage::CommitTrackRename
             | PianoRollMessage::TrackPanelToggle
             | PianoRollMessage::TrackPanelResizedBy(_)
@@ -102,13 +107,28 @@ impl Lilypalooza {
                 self.sync_playback_file();
             }
             PianoRollMessage::StartTrackRename(track_index) => {
-                return self.start_track_rename(track_index);
+                return self.start_track_rename(track_index, WorkspacePaneKind::PianoRoll);
+            }
+            PianoRollMessage::OpenTrackColorPickerForTrack(track_index) => {
+                self.open_track_color_picker_for_track(track_index, WorkspacePaneKind::PianoRoll);
             }
             PianoRollMessage::TrackRenameInputChanged(value) => {
                 self.update_track_rename_value(value);
             }
+            PianoRollMessage::OpenTrackColorPicker => {
+                self.open_track_color_picker();
+            }
+            PianoRollMessage::SubmitTrackColor(color) => {
+                self.submit_track_color(color);
+            }
+            PianoRollMessage::PreviewTrackColor(color) => {
+                self.preview_track_color(color);
+            }
             PianoRollMessage::CommitTrackRename => {
                 return self.commit_track_rename();
+            }
+            PianoRollMessage::CancelTrackRename => {
+                self.cancel_track_rename();
             }
             PianoRollMessage::TrackPanelToggle => {
                 self.piano_roll.toggle_track_panel();

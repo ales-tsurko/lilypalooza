@@ -101,8 +101,13 @@ fn should_commit_track_rename_before_message(message: &Message) -> bool {
             | Message::WindowCloseRequested
             | Message::PianoRoll(
                 PianoRollMessage::StartTrackRename(_)
+                    | PianoRollMessage::OpenTrackColorPickerForTrack(_)
                     | PianoRollMessage::TrackRenameInputChanged(_)
+                    | PianoRollMessage::OpenTrackColorPicker
+                    | PianoRollMessage::SubmitTrackColor(_)
+                    | PianoRollMessage::PreviewTrackColor(_)
                     | PianoRollMessage::CommitTrackRename
+                    | PianoRollMessage::CancelTrackRename
                     | PianoRollMessage::ViewportCursorMoved(_)
                     | PianoRollMessage::ViewportCursorLeft
                     | PianoRollMessage::RollScrolled { .. }
@@ -111,7 +116,11 @@ fn should_commit_track_rename_before_message(message: &Message) -> bool {
                 MixerMessage::StartTrackRename(_)
                     | MixerMessage::StartBusRename(_)
                     | MixerMessage::TrackRenameInputChanged(_)
+                    | MixerMessage::OpenTrackColorPicker
+                    | MixerMessage::SubmitTrackColor(_)
+                    | MixerMessage::PreviewTrackColor(_)
                     | MixerMessage::CommitTrackRename
+                    | MixerMessage::CancelTrackRename
                     | MixerMessage::InstrumentViewportScrolled(_)
                     | MixerMessage::BusViewportScrolled(_)
             )

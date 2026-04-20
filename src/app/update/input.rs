@@ -95,7 +95,32 @@ impl Lilypalooza {
         {
             return Task::none();
         }
+        if (self.renaming_target.is_some() || self.track_color_picker_target.is_some())
+            && matches!(
+                key_press.key,
+                keyboard::Key::Named(keyboard::key::Named::Escape)
+            )
+        {
+            return match self.renaming_origin {
+                Some(WorkspacePaneKind::PianoRoll) => update(
+                    self,
+                    Message::PianoRoll(PianoRollMessage::CancelTrackRename),
+                ),
+                Some(WorkspacePaneKind::Mixer) => {
+                    update(self, Message::Mixer(MixerMessage::CancelTrackRename))
+                }
+                _ => {
+                    self.cancel_track_rename();
+                    Task::none()
+                }
+            };
+        }
         if self.browser_inline_edit.is_some()
+            && matches!(key_press.status, iced::event::Status::Captured)
+        {
+            return Task::none();
+        }
+        if self.renaming_target.is_some()
             && matches!(key_press.status, iced::event::Status::Captured)
         {
             return Task::none();

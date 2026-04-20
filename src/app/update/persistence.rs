@@ -66,6 +66,7 @@ impl Lilypalooza {
         self.sync_browser_file_watcher();
         self.project_name = None;
         self.track_name_overrides.clear();
+        self.track_color_overrides.clear();
         self.cancel_track_rename();
         self.editor_recent_files = state.editor_recent_files;
         self.recent_projects = state.recent_projects;
@@ -94,6 +95,11 @@ impl Lilypalooza {
             .project_name
             .or_else(|| self.project_root.as_deref().map(default_project_name));
         self.track_name_overrides = state.track_name_overrides;
+        self.track_color_overrides = state
+            .track_color_overrides
+            .into_iter()
+            .map(|color| color.map(crate::track_colors::from_override))
+            .collect();
         self.cancel_track_rename();
         self.restore_editor_session(
             &state.editor_tabs,
@@ -245,6 +251,14 @@ impl Lilypalooza {
                     active_editor_tab: self.editor.active_file_backed_tab_path(),
                     has_clean_untitled_editor_tab: self.editor.has_clean_untitled_tab(),
                     track_name_overrides: self.track_name_overrides.clone(),
+                    track_color_overrides: self
+                        .track_color_overrides
+                        .iter()
+                        .copied()
+                        .map(|color: Option<iced::Color>| {
+                            color.map(crate::track_colors::to_override)
+                        })
+                        .collect(),
                 },
             )?;
 

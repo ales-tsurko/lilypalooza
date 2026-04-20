@@ -6,7 +6,8 @@ use iced::widget::{
     button, column, container, lazy, mouse_area, pick_list, responsive, row, scrollable, text,
     text_input,
 };
-use iced::{Element, Fill, FillPortion, Length, alignment};
+use iced::{Color, Element, Fill, FillPortion, Length, alignment};
+use iced_aw::helpers::color_picker_with_change;
 use lilypalooza_audio::mixer::{
     ChannelMeterSnapshot, MixerMeterSnapshot, MixerMeterSnapshotWindow, STRIP_METER_MAX_DB,
     STRIP_METER_MIN_DB, StripMeterSnapshot,
@@ -225,6 +226,7 @@ struct TrackStripDependency {
     index: usize,
     name: String,
     selected: Option<InstrumentChoice>,
+    color_bits: [u32; 4],
     gain_bits: u32,
     pan_bits: u32,
     meter: MeterDependency,
@@ -235,6 +237,7 @@ struct TrackStripDependency {
     tint_enabled: bool,
     renaming: bool,
     rename_value: String,
+    color_picker_open: bool,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -366,8 +369,14 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
         .current_file()
         .map(|file| file.data.tracks.len())
         .unwrap_or(0);
+    let track_colors: Vec<_> = (0..existing_track_count)
+        .map(|track_index| app.effective_track_color(track_index))
+        .collect();
     let renaming_target = app.renaming_target;
+    let renaming_origin = app.renaming_origin;
     let track_rename_value = app.track_rename_value.clone();
+    let track_rename_color_value = app.track_rename_color_value;
+    let track_rename_color_picker_open = app.track_rename_color_picker_open;
 
     if let Some(playback) = app.playback.as_ref() {
         let mixer = playback.mixer_state();
@@ -410,8 +419,12 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                     gain_mode,
                     instrument_visible,
                     existing_track_count,
+                    &track_colors,
                     renaming_target,
+                    renaming_origin,
                     &track_rename_value,
+                    track_rename_color_value,
+                    track_rename_color_picker_open,
                     true,
                 ))
                 .width(FillPortion(5))
@@ -425,6 +438,7 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                     gain_mode,
                     bus_visible,
                     renaming_target,
+                    renaming_origin,
                     &track_rename_value,
                     true,
                 ))
@@ -515,8 +529,12 @@ fn mixer_layout_without_audio<'a>(
             gain_mode,
             instrument_visible,
             existing_track_count,
+            &[],
             renaming_target,
+            None,
             &track_rename_value,
+            Color::TRANSPARENT,
+            false,
             false,
         ))
         .width(FillPortion(5))
@@ -530,6 +548,7 @@ fn mixer_layout_without_audio<'a>(
             gain_mode,
             bus_visible,
             renaming_target,
+            None,
             &track_rename_value,
             false,
         ))
@@ -674,8 +693,12 @@ fn instrument_track_area(
     gain_mode: GainControlMode,
     visible: std::ops::Range<usize>,
     existing_track_count: usize,
+    track_colors: &[Color],
     renaming_target: Option<super::RenameTarget>,
+    renaming_origin: Option<super::WorkspacePaneKind>,
     track_rename_value: &str,
+    track_rename_color_value: Color,
+    track_rename_color_picker_open: bool,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
     let options: Arc<[InstrumentChoice]> = if controls_enabled {
@@ -694,6 +717,10 @@ fn instrument_track_area(
         move |row, (local_index, track)| {
             let track_index = track.id.index();
             let selected = selected_instrument_choice(&track.instrument, mixer);
+            let track_color = track_colors
+                .get(track_index)
+                .copied()
+                .unwrap_or_else(|| crate::track_colors::default_track_color(track_index));
             let options = options.clone();
             let meter_dependency = MeterStackDependency {
                 meter: MeterDependency::from_snapshot(
@@ -708,6 +735,7 @@ fn instrument_track_area(
                     index: track_index,
                     name: track.name.clone(),
                     selected,
+                    color_bits: color_bits(track_color),
                     gain_bits: track.state.gain_db.to_bits(),
                     pan_bits: track.state.pan.to_bits(),
                     meter: meter_dependency.meter,
@@ -716,12 +744,22 @@ fn instrument_track_area(
                     soloed: track.state.soloed,
                     muted: track.state.muted,
                     tint_enabled: track_should_use_roll_tint(track_index, existing_track_count),
-                    renaming: renaming_target == Some(super::RenameTarget::Track(track_index)),
+                    renaming: renaming_target == Some(super::RenameTarget::Track(track_index))
+                        && renaming_origin == Some(super::WorkspacePaneKind::Mixer),
                     rename_value: track_rename_value.to_string(),
+                    color_picker_open: renaming_target
+                        == Some(super::RenameTarget::Track(track_index))
+                        && renaming_origin == Some(super::WorkspacePaneKind::Mixer)
+                        && track_rename_color_picker_open,
                 },
                 move |dependency| {
                     let name = dependency.name.clone();
                     let selected = dependency.selected.clone();
+                    let track_color = if dependency.renaming {
+                        track_rename_color_value
+                    } else {
+                        color_from_bits(dependency.color_bits)
+                    };
                     let strip_height = f32::from_bits(dependency.strip_height_bits);
                     let gain_mode = if dependency.compact_gain {
                         GainControlMode::Knob
@@ -734,6 +772,8 @@ fn instrument_track_area(
                             &name,
                             dependency.renaming,
                             &dependency.rename_value,
+                            track_color,
+                            dependency.color_picker_open,
                         ),
                         Some({
                             pick_list(options.clone(), selected, move |choice| {
@@ -798,7 +838,7 @@ fn instrument_track_area(
                     );
 
                     if dependency.tint_enabled {
-                        tinted_track_strip_panel(shell, STRIP_WIDTH, strip_height, track_index)
+                        tinted_track_strip_panel(shell, STRIP_WIDTH, strip_height, track_color)
                     } else {
                         strip_panel(shell, STRIP_WIDTH, strip_height)
                     }
@@ -851,6 +891,7 @@ fn bus_track_area(
     gain_mode: GainControlMode,
     visible: std::ops::Range<usize>,
     renaming_target: Option<super::RenameTarget>,
+    renaming_origin: Option<super::WorkspacePaneKind>,
     track_rename_value: &str,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
@@ -882,7 +923,8 @@ fn bus_track_area(
                     strip_height_bits: strip_height.to_bits(),
                     soloed: bus.state.soloed,
                     muted: bus.state.muted,
-                    renaming: renaming_target == Some(super::RenameTarget::Bus(bus.id.0)),
+                    renaming: renaming_target == Some(super::RenameTarget::Bus(bus.id.0))
+                        && renaming_origin == Some(super::WorkspacePaneKind::Mixer),
                     rename_value: track_rename_value.to_string(),
                 },
                 move |dependency| {
@@ -1200,16 +1242,51 @@ fn track_title_content<'a>(
     title: &str,
     renaming: bool,
     rename_value: &str,
+    color: Color,
+    color_picker_open: bool,
 ) -> Element<'a, Message> {
     if renaming {
-        return text_input::<Message, iced::Theme, iced::Renderer>("", rename_value)
+        let swatch = button(container(text("")).width(16).height(16))
+            .padding(0)
+            .width(18)
+            .height(18)
+            .style(move |theme, status| ui_style::track_color_swatch_button(theme, status, color))
+            .on_press(Message::Mixer(MixerMessage::OpenTrackColorPicker));
+        let input = text_input::<Message, iced::Theme, iced::Renderer>("", rename_value)
             .id(Id::new(super::TRACK_RENAME_INPUT_ID))
             .on_input(|value| Message::Mixer(MixerMessage::TrackRenameInputChanged(value)))
             .on_submit(Message::Mixer(MixerMessage::CommitTrackRename))
+            .style(ui_style::track_name_input)
             .size(ui_style::FONT_SIZE_UI_SM)
             .padding([2, 4])
-            .width(Fill)
-            .into();
+            .width(Fill);
+        let focused = color_picker_open;
+        let editor_row = container(
+            row![
+                swatch,
+                container(text(""))
+                    .width(1)
+                    .height(18)
+                    .style(move |theme| { ui_style::track_name_editor_divider(theme, focused) }),
+                input
+            ]
+            .spacing(0)
+            .align_y(alignment::Vertical::Center)
+            .width(Fill),
+        )
+        .padding(0)
+        .style(move |theme| ui_style::track_name_editor_shell(theme, focused))
+        .width(Fill);
+        return color_picker_with_change(
+            color_picker_open,
+            color,
+            editor_row,
+            Message::Mixer(MixerMessage::CancelTrackRename),
+            |color| Message::Mixer(MixerMessage::SubmitTrackColor(color)),
+            |color| Message::Mixer(MixerMessage::PreviewTrackColor(color)),
+        )
+        .style(ui_style::color_picker_widget_style)
+        .into();
     }
 
     mouse_area(
@@ -1377,12 +1454,12 @@ fn tinted_track_strip_panel<'a>(
     content: Element<'a, Message>,
     width: f32,
     height: f32,
-    track_index: usize,
+    track_color: Color,
 ) -> Element<'a, Message> {
     container(content)
         .width(Length::Fixed(width))
         .height(Length::Fixed(height))
-        .style(move |theme| ui_style::mixer_track_strip_surface(theme, track_index))
+        .style(move |theme| ui_style::mixer_track_strip_surface(theme, track_color))
         .into()
 }
 
@@ -1478,7 +1555,7 @@ mod tests {
         COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
         INSTRUMENT_PICKER_HEIGHT, InstrumentChoice, MAIN_SECTION_WIDTH, MAIN_STRIP_WIDTH,
         MIXER_MIN_HEIGHT, MeterDependency, STRIP_TOGGLE_SIZE, STRIP_VIRTUALIZATION_OVERSCAN,
-        STRIP_WIDTH, StripMeterSnapshot, TrackStripDependency, VALUE_LABEL_HEIGHT,
+        STRIP_WIDTH, StripMeterSnapshot, TrackStripDependency, VALUE_LABEL_HEIGHT, color_bits,
         control_stack_height, gain_control_height, gain_control_mode, meter_control_height,
         meter_peak_label, meter_scale_visible, selected_instrument_choice,
         track_should_use_roll_tint, visible_strip_window,
@@ -1616,6 +1693,7 @@ mod tests {
             index: 0,
             name: "Track".to_string(),
             selected: Some(InstrumentChoice::None),
+            color_bits: color_bits(iced::Color::from_rgb(0.1, 0.2, 0.3)),
             gain_bits: 0.0f32.to_bits(),
             pan_bits: 0.0f32.to_bits(),
             meter: MeterDependency::from_snapshot(StripMeterSnapshot::default()),
@@ -1626,6 +1704,7 @@ mod tests {
             tint_enabled: false,
             renaming: false,
             rename_value: String::new(),
+            color_picker_open: false,
         };
         let tinted = TrackStripDependency {
             tint_enabled: true,

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use iced::event;
 use iced::time::Instant;
 use iced::widget::{pane_grid, text_editor};
-use iced::{Size, keyboard, mouse};
+use iced::{Color, Size, keyboard, mouse};
 use iced_code_editor::Message as EditorWidgetMessage;
 use iced_core::image;
 
@@ -220,8 +220,13 @@ pub(super) enum PianoRollMessage {
     FilePrevious,
     FileNext,
     StartTrackRename(usize),
+    OpenTrackColorPickerForTrack(usize),
     TrackRenameInputChanged(String),
+    OpenTrackColorPicker,
+    SubmitTrackColor(Color),
+    PreviewTrackColor(Color),
     CommitTrackRename,
+    CancelTrackRename,
     TrackPanelToggle,
     TrackPanelResizedBy(f32),
     TrackMuteToggled(usize),
@@ -246,7 +251,11 @@ pub(super) enum MixerMessage {
     StartTrackRename(usize),
     StartBusRename(u16),
     TrackRenameInputChanged(String),
+    OpenTrackColorPicker,
+    SubmitTrackColor(Color),
+    PreviewTrackColor(Color),
     CommitTrackRename,
+    CancelTrackRename,
     ToggleTrackMute(usize),
     ToggleTrackSolo(usize),
     SelectTrackInstrument(usize, super::mixer::InstrumentChoice),
