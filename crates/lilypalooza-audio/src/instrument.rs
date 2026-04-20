@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use knyst::r#gen::{Gen, GenContext};
-use knyst::graph::{EventChange, EventPayload};
+use knyst::graph::{EventChange, EventPayload, ResolvedNodeEventInput, SchedulerChange};
 use knyst::handles::{GenericHandle, Handle, HandleData};
 use knyst::modal_interface::knyst_commands;
 use knyst::prelude::{
@@ -401,6 +401,7 @@ impl EffectProcessorNode {
 pub struct InstrumentRuntimeHandle {
     handle: Handle<GenericHandle>,
     reset_state: SharedInstrumentResetState,
+    scheduler_event_target: Option<ResolvedNodeEventInput>,
 }
 
 impl InstrumentRuntimeHandle {
@@ -408,6 +409,7 @@ impl InstrumentRuntimeHandle {
     #[cfg(test)]
     const IMMEDIATE_EVENT_STEP: Duration = Duration::from_millis(2);
     const LIVE_EVENT_DELAY: Duration = Duration::from_millis(2);
+    const SCHEDULER_TARGET_TIMEOUT: Duration = Duration::from_millis(250);
 
     pub(crate) fn new(
         handle: Handle<GenericHandle>,
@@ -416,6 +418,7 @@ impl InstrumentRuntimeHandle {
         Self {
             handle,
             reset_state,
+            scheduler_event_target: None,
         }
     }
 
@@ -433,6 +436,45 @@ impl InstrumentRuntimeHandle {
 
     pub(crate) fn request_reset_now(&self, generation: u32) {
         self.reset_state.request(generation);
+    }
+
+    pub(crate) fn resolve_scheduler_event_target(
+        &mut self,
+        commands: &mut MultiThreadedKnystCommands,
+    ) {
+        let _ = commands
+            .request_graph_settled()
+            .recv_timeout(Self::SCHEDULER_TARGET_TIMEOUT);
+        self.scheduler_event_target = commands
+            .resolve_scheduler_event_input(self.node_id().event_input("event"))
+            .recv_timeout(Self::SCHEDULER_TARGET_TIMEOUT)
+            .ok()
+            .flatten();
+    }
+
+    pub(crate) fn scheduler_midi_change(
+        &self,
+        sample_offset: usize,
+        generation: u32,
+        event: MidiEvent,
+    ) -> Option<SchedulerChange> {
+        Some(SchedulerChange::Event {
+            target: self.scheduler_event_target?,
+            sample_offset,
+            payload: encode_instrument_event(ScheduledInstrumentEvent::Midi { generation, event }),
+        })
+    }
+
+    pub(crate) fn scheduler_reset_change(
+        &self,
+        sample_offset: usize,
+        generation: u32,
+    ) -> Option<SchedulerChange> {
+        Some(SchedulerChange::Event {
+            target: self.scheduler_event_target?,
+            sample_offset,
+            payload: encode_instrument_event(ScheduledInstrumentEvent::Reset { generation }),
+        })
     }
 
     pub(crate) fn schedule_midi_at_with_offset(

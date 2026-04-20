@@ -56,11 +56,11 @@ impl Lilypalooza {
             return;
         }
 
-        if let Some(playback) = self.playback.as_mut() {
-            if let Err(error) = load_soundfont_resource(playback, &soundfont_path) {
-                self.soundfont_status = SoundfontStatus::Error(error.clone());
-                self.logger.push(error.clone());
-            }
+        if let Some(playback) = self.playback.as_mut()
+            && let Err(error) = load_soundfont_resource(playback, &soundfont_path)
+        {
+            self.soundfont_status = SoundfontStatus::Error(error.clone());
+            self.logger.push(error.clone());
         }
 
         self.sync_playback_file();

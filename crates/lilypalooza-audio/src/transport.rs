@@ -113,13 +113,11 @@ impl<'a> Transport<'a> {
         if let Some(sequencer) = self.sequencer {
             sequencer.prepare_for_play(self.commands, start_beat);
         }
-        wait_for_controller_barrier(self.commands);
         self.commands.transport_play();
         wait_for_transport_settled(self.commands);
         wait_for_transport_state(self.commands, TransportState::Playing);
         if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(true);
-            sequencer.process_tick(self.commands);
         }
     }
 
@@ -144,7 +142,6 @@ impl<'a> Transport<'a> {
         self.commands.transport_play();
         if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(true);
-            sequencer.process_tick(self.commands);
         }
     }
 
@@ -170,9 +167,7 @@ impl<'a> Transport<'a> {
         self.commands.clear_scheduled_changes();
         wait_for_controller_barrier(self.commands);
         if has_loaded_score && let Some(sequencer) = self.sequencer {
-            sequencer.prepare_for_pause(self.commands, current_beat);
-            wait_for_controller_barrier(self.commands);
-            wait_for_transport_advance(self.commands, Duration::from_millis(250));
+            sequencer.prepare_for_pause_immediate(self.commands);
         }
         self.commands.transport_pause();
         wait_for_transport_settled(self.commands);
@@ -279,13 +274,7 @@ impl<'a> Transport<'a> {
             && has_loaded_score
             && let Some(sequencer) = self.sequencer
         {
-            let current_beat = self
-                .snapshot()
-                .map(|snapshot| snapshot.beats_position)
-                .unwrap_or(Beats::ZERO);
-            sequencer.prepare_for_pause(self.commands, current_beat);
-            wait_for_controller_barrier(self.commands);
-            wait_for_transport_advance(self.commands, Duration::from_millis(80));
+            sequencer.prepare_for_pause_immediate(self.commands);
         }
         self.commands.transport_pause();
         wait_for_transport_settled(self.commands);
@@ -300,19 +289,14 @@ impl<'a> Transport<'a> {
             .unwrap_or(Beats::ZERO);
         if has_loaded_score && let Some(sequencer) = self.sequencer {
             sequencer.mark_dirty_for_seek(target_beat, was_playing);
-            if was_playing {
-                sequencer.prepare_for_play(self.commands, target_beat);
-            }
             sequencer.set_playing(false);
         }
         if was_playing {
-            wait_for_controller_barrier(self.commands);
             self.commands.transport_play();
             wait_for_transport_settled(self.commands);
             wait_for_transport_state(self.commands, TransportState::Playing);
             if has_loaded_score && let Some(sequencer) = self.sequencer {
                 sequencer.set_playing(true);
-                sequencer.process_tick(self.commands);
             }
         }
     }
@@ -348,13 +332,7 @@ impl<'a> Transport<'a> {
             && has_loaded_score
             && let Some(sequencer) = self.sequencer
         {
-            let current_beat = self
-                .snapshot()
-                .map(|snapshot| snapshot.beats_position)
-                .unwrap_or(Beats::ZERO);
-            sequencer.prepare_for_pause(self.commands, current_beat);
-            wait_for_controller_barrier(self.commands);
-            wait_for_transport_advance(self.commands, Duration::from_millis(80));
+            sequencer.prepare_for_pause_immediate(self.commands);
         }
         self.commands.transport_pause();
         wait_for_transport_settled(self.commands);
@@ -364,19 +342,14 @@ impl<'a> Transport<'a> {
         wait_for_transport_beats(self.commands, position);
         if has_loaded_score && let Some(sequencer) = self.sequencer {
             sequencer.mark_dirty_for_seek(position, was_playing);
-            if was_playing {
-                sequencer.prepare_for_play(self.commands, position);
-            }
             sequencer.set_playing(false);
         }
         if was_playing {
-            wait_for_controller_barrier(self.commands);
             self.commands.transport_play();
             wait_for_transport_settled(self.commands);
             wait_for_transport_state(self.commands, TransportState::Playing);
             if has_loaded_score && let Some(sequencer) = self.sequencer {
                 sequencer.set_playing(true);
-                sequencer.process_tick(self.commands);
             }
         }
     }
@@ -406,16 +379,10 @@ impl<'a> Transport<'a> {
         self.commands.transport_seek_to_beats(position);
         if has_loaded_score && let Some(sequencer) = self.sequencer {
             sequencer.mark_dirty_for_seek(position, was_playing);
-            if was_playing {
-                sequencer.prepare_for_play(self.commands, position);
-                sequencer.set_playing(true);
-            }
+            sequencer.set_playing(was_playing);
         }
         if was_playing {
             self.commands.transport_play();
-            if has_loaded_score && let Some(sequencer) = self.sequencer {
-                sequencer.process_tick(self.commands);
-            }
         }
     }
 
@@ -480,26 +447,6 @@ fn wait_for_transport_seconds(commands: &mut MultiThreadedKnystCommands, expecte
             .current_transport_snapshot()
             .is_some_and(|snapshot| snapshot.seconds == expected)
         {
-            return;
-        }
-        std::thread::sleep(TRANSPORT_POLL_INTERVAL);
-    }
-}
-
-fn wait_for_transport_advance(commands: &mut MultiThreadedKnystCommands, duration: Duration) {
-    let Some(start) = commands.current_transport_snapshot() else {
-        std::thread::sleep(duration);
-        return;
-    };
-    let start_seconds = start.seconds.to_seconds_f64();
-    let target_seconds = start_seconds + duration.as_secs_f64();
-    let start = std::time::Instant::now();
-    while start.elapsed() < SETTLE_TIMEOUT {
-        let Some(snapshot) = commands.current_transport_snapshot() else {
-            std::thread::sleep(TRANSPORT_POLL_INTERVAL);
-            continue;
-        };
-        if snapshot.seconds.to_seconds_f64() >= target_seconds {
             return;
         }
         std::thread::sleep(TRANSPORT_POLL_INTERVAL);

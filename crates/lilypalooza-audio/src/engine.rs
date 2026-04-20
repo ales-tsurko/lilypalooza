@@ -2,13 +2,9 @@
 #![allow(missing_docs)]
 
 use std::ops::Range;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::thread::JoinHandle;
 use std::time::Duration;
 
-use audio_thread_priority::promote_current_thread_to_real_time;
 use knyst::audio_backend::{AudioBackend, AudioBackendError};
 use knyst::audio_backend::{CpalBackend, CpalBackendOptions};
 use knyst::modal_interface::{KnystContext, SphereError};
@@ -24,10 +20,6 @@ use crate::transport::Transport;
 
 const CONTROLLER_BARRIER_TIMEOUT: Duration = Duration::from_millis(250);
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
-const SCHEDULER_PLAYING_POLL_MIN: Duration = Duration::from_millis(4);
-const SCHEDULER_PLAYING_POLL_MAX: Duration = Duration::from_millis(12);
-const SCHEDULER_PAUSED_POLL_INTERVAL: Duration = Duration::from_millis(24);
-const SCHEDULER_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(48);
 
 /// Startup options for the audio engine.
 #[derive(Debug, Clone, Default)]
@@ -51,8 +43,6 @@ pub struct AudioEngineSettings {
 pub struct AudioEngine {
     mixer: Mixer,
     sequencer: Sequencer,
-    scheduler_shutdown: Arc<AtomicBool>,
-    scheduler_thread: Option<JoinHandle<()>>,
     backend: Box<dyn AudioBackend>,
     settings: AudioEngineSettings,
     // Keeps the Knyst runtime alive; context and commands do not own it.
@@ -77,9 +67,6 @@ pub enum AudioEngineError {
     /// Failed to access or update mixer state.
     #[error(transparent)]
     Mixer(#[from] MixerError),
-    /// Failed to start the scheduler thread.
-    #[error(transparent)]
-    Thread(#[from] std::io::Error),
 }
 
 /// Runtime observability snapshot for the engine callback path.
@@ -124,20 +111,12 @@ impl AudioEngine {
         let sequencer = Sequencer::new(options.chase_notes_on_seek);
         sequencer.configure_schedule_lead(settings.block_size, settings.sample_rate);
         for track in mixer.state.tracks() {
-            sequencer.sync_track_handle(track.id, mixer.instrument_handle(track.id));
+            sequencer.sync_track_handle(&mut commands, track.id, mixer.instrument_handle(track.id));
         }
-        let scheduler_shutdown = Arc::new(AtomicBool::new(false));
-        let scheduler_thread = Some(start_scheduler_thread(
-            context.commands(),
-            sequencer.clone(),
-            scheduler_shutdown.clone(),
-            settings,
-        )?);
+        commands.set_scheduler_extension(Box::new(sequencer.scheduler_extension()));
         Ok(Self {
             mixer,
             sequencer,
-            scheduler_shutdown,
-            scheduler_thread,
             backend: Box::new(backend),
             settings,
             sphere,
@@ -328,58 +307,9 @@ impl From<crate::mixer::runtime::MixerRuntimeError> for AudioEngineError {
 
 impl Drop for AudioEngine {
     fn drop(&mut self) {
-        self.scheduler_shutdown.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.scheduler_thread.take() {
-            let _ = thread.join();
-        }
+        self.commands.clear_scheduler_extension();
         let _ = self.backend.stop();
     }
-}
-
-fn start_scheduler_thread(
-    mut commands: MultiThreadedKnystCommands,
-    sequencer: Sequencer,
-    shutdown: Arc<AtomicBool>,
-    settings: AudioEngineSettings,
-) -> Result<JoinHandle<()>, std::io::Error> {
-    let mut runner = sequencer.scheduler_runner();
-    thread::Builder::new()
-        .name("lilypalooza-sequencer".to_string())
-        .spawn(move || {
-            set_scheduler_thread_priority(settings);
-            while !shutdown.load(Ordering::Relaxed) {
-                runner.process_tick(&mut commands);
-                thread::sleep(scheduler_poll_interval_for_state(
-                    runner.sequencer.has_loaded_score(),
-                    runner.sequencer.is_playing(),
-                    settings,
-                ));
-            }
-        })
-}
-
-fn scheduler_poll_interval_for_state(
-    has_loaded_score: bool,
-    is_playing: bool,
-    settings: AudioEngineSettings,
-) -> Duration {
-    if !has_loaded_score {
-        return SCHEDULER_IDLE_POLL_INTERVAL;
-    }
-    if !is_playing {
-        return SCHEDULER_PAUSED_POLL_INTERVAL;
-    }
-
-    let block_seconds = settings.block_size.max(1) as f64 / settings.sample_rate.max(1) as f64;
-    Duration::from_secs_f64(block_seconds / 2.0)
-        .clamp(SCHEDULER_PLAYING_POLL_MIN, SCHEDULER_PLAYING_POLL_MAX)
-}
-
-fn set_scheduler_thread_priority(settings: AudioEngineSettings) {
-    let _ = promote_current_thread_to_real_time(
-        settings.block_size.max(1) as u32,
-        settings.sample_rate.max(1) as u32,
-    );
 }
 
 #[cfg(test)]
@@ -392,9 +322,7 @@ mod tests {
     use knyst::handles::HandleData;
     use knyst::prelude::{Beats, BlockSize, GenState, Sample, graph_output, handle, impl_gen};
 
-    use super::{
-        AudioEngine, AudioEngineOptions, AudioEngineSettings, wait_for_transport_reset_to,
-    };
+    use super::{AudioEngine, AudioEngineOptions, wait_for_transport_reset_to};
     use crate::instrument::InstrumentSlotState;
     use crate::instrument::{
         InstrumentProcessor, InstrumentProcessorNode, MidiEvent, ParamValue, Processor,
@@ -411,27 +339,6 @@ mod tests {
     struct ScheduledValueGen;
     struct TestNoteProcessor {
         active: bool,
-    }
-
-    #[test]
-    fn scheduler_poll_interval_slows_down_when_idle_or_paused() {
-        let settings = AudioEngineSettings {
-            sample_rate: 44_100,
-            block_size: 64,
-        };
-
-        assert_eq!(
-            super::scheduler_poll_interval_for_state(false, false, settings),
-            super::SCHEDULER_IDLE_POLL_INTERVAL
-        );
-        assert_eq!(
-            super::scheduler_poll_interval_for_state(true, false, settings),
-            super::SCHEDULER_PAUSED_POLL_INTERVAL
-        );
-        assert_eq!(
-            super::scheduler_poll_interval_for_state(true, true, settings),
-            super::SCHEDULER_PLAYING_POLL_MIN
-        );
     }
 
     fn settle_backend(backend: &SharedTestBackendHandle) {

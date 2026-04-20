@@ -1259,7 +1259,7 @@ mod tests {
     use std::fs;
 
     fn test_app() -> Lilypalooza {
-        let (mut app, _task) = new(None, None, false, false);
+        let (mut app, _task) = new(None, None, false);
         let _ = update(
             &mut app,
             Message::Shortcuts(messages::ShortcutsMessage::OpenDialog),
@@ -1268,7 +1268,7 @@ mod tests {
     }
 
     fn test_editor_app() -> Lilypalooza {
-        let (app, _task) = new(None, None, false, false);
+        let (app, _task) = new(None, None, false);
         app
     }
 
@@ -1352,7 +1352,7 @@ mod tests {
 
     #[test]
     fn playback_poll_interval_is_visibility_aware() {
-        let (mut app, _task) = new(None, None, false, false);
+        let (mut app, _task) = new(None, None, false);
         app.playback = Some(
             AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
                 .expect("test audio engine should start"),

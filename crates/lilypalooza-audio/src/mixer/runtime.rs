@@ -1486,7 +1486,7 @@ fn create_track_instrument(
                 state,
                 Some(shared_program.clone()),
             )?;
-            let instrument = context.with_activation(|| {
+            let (node, kind) = context.with_activation(|| {
                 let reset_state = SharedInstrumentResetState::default();
                 let node = if let Some((level, meter)) = inline_strip {
                     handle(TrackInstrumentStripNode::new(
@@ -1501,15 +1501,15 @@ fn create_track_instrument(
                         reset_state.clone(),
                     ))
                 };
-                TrackInstrumentRuntime {
-                    handle: InstrumentRuntimeHandle::new(node, reset_state),
-                    kind: TrackInstrumentRuntimeKind::Soundfont {
+                (
+                    InstrumentRuntimeHandle::new(node, reset_state),
+                    TrackInstrumentRuntimeKind::Soundfont {
                         soundfont_id,
                         program: shared_program,
                     },
-                }
+                )
             });
-            Ok(Some(instrument))
+            Ok(Some(TrackInstrumentRuntime { handle: node, kind }))
         }
         InstrumentKind::Plugin { .. } => Ok(None),
     }

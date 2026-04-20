@@ -520,8 +520,11 @@ impl MixerHandle<'_> {
         old_runtime.free();
         settle_graph_mutation(self.commands);
         for track in self.mixer.state.tracks() {
-            self.sequencer
-                .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
+            self.sequencer.sync_track_handle(
+                self.commands,
+                track.id,
+                self.mixer.instrument_handle(track.id),
+            );
         }
         Ok(())
     }
@@ -538,8 +541,11 @@ impl MixerHandle<'_> {
         )?;
         settle_graph_mutation(self.commands);
         for track in self.mixer.state.tracks() {
-            self.sequencer
-                .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
+            self.sequencer.sync_track_handle(
+                self.commands,
+                track.id,
+                self.mixer.instrument_handle(track.id),
+            );
         }
         Ok(())
     }
@@ -555,8 +561,11 @@ impl MixerHandle<'_> {
         )?;
         settle_graph_mutation(self.commands);
         for track in self.mixer.state.tracks() {
-            self.sequencer
-                .sync_track_handle(track.id, self.mixer.instrument_handle(track.id));
+            self.sequencer.sync_track_handle(
+                self.commands,
+                track.id,
+                self.mixer.instrument_handle(track.id),
+            );
         }
         Ok(removed)
     }
@@ -600,13 +609,10 @@ impl MixerHandle<'_> {
             )?;
             settle_graph_mutation(self.commands);
             self.sequencer
-                .sync_track_handle(id, self.mixer.instrument_handle(id));
+                .sync_track_handle(self.commands, id, self.mixer.instrument_handle(id));
             if self.sequencer.is_playing() {
-                if let Some(current_beat) = current_playing_beat(self.commands) {
-                    self.sequencer.process_tick_at(self.commands, current_beat);
-                } else {
-                    self.sequencer.process_tick(self.commands);
-                }
+                let current_beat = current_playing_beat(self.commands).unwrap_or(Beats::ZERO);
+                self.sequencer.mark_dirty_for_seek(current_beat, true);
             }
         }
         Ok(())
