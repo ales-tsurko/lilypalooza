@@ -649,6 +649,15 @@ impl MixerHandle<'_> {
         Ok(())
     }
 
+    pub fn set_bus_name(
+        &mut self,
+        id: BusId,
+        name: impl Into<String>,
+    ) -> Result<(), AudioEngineError> {
+        self.mixer.state.bus_mut(id)?.name = name.into();
+        Ok(())
+    }
+
     pub fn set_track_gain_db(&mut self, id: TrackId, gain_db: f32) -> Result<(), AudioEngineError> {
         self.mixer.state.track_mut(id)?.state.gain_db = gain_db;
         self.mixer

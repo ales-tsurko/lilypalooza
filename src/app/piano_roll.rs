@@ -21,7 +21,7 @@ const TRACK_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 const TRACK_BUTTON_WIDTH: f32 = 18.0;
 const TRACK_BUTTON_HEIGHT: f32 = 16.0;
 const TRACK_BUTTONS_GAP: f32 = 4.0;
-const TRACK_LABEL_BUTTON_GAP: f32 = 6.0;
+const TRACK_LABEL_BUTTON_GAP: f32 = 10.0;
 const DRAG_START_THRESHOLD: f32 = 8.0;
 const KEYBOARD_WIDTH: f32 = 30.0;
 const TEMPO_LANE_HEIGHT: f32 = 28.0;
@@ -648,10 +648,12 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
         track_panel_visible: show_track_panel,
         track_panel_width: app.piano_roll.track_panel_width(),
         zoom_modifier_active: app.zoom_modifier_active(),
+        app,
     })
 }
 
 struct PianoRollBody<'a> {
+    app: &'a Lilypalooza,
     file: &'a MidiRollFile,
     zoom_x: f32,
     beat_subdivision: u8,
@@ -668,6 +670,7 @@ struct PianoRollBody<'a> {
 
 fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
     let PianoRollBody {
+        app,
         file,
         zoom_x,
         beat_subdivision,
@@ -786,7 +789,7 @@ fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
 
         let track_panel = column![
             track_stub_canvas,
-            container(track_list(file, track_mix, track_panel_width))
+            container(track_list(app, file, track_mix, track_panel_width))
                 .width(Length::Fixed(track_panel_width))
                 .height(Fill),
         ]
@@ -810,6 +813,7 @@ fn piano_roll_body<'a>(body: PianoRollBody<'a>) -> Element<'a, Message> {
 }
 
 fn track_list<'a>(
+    app: &'a Lilypalooza,
     file: &'a MidiRollFile,
     track_mix: &'a [TrackMixState],
     track_panel_width: f32,
@@ -822,7 +826,34 @@ fn track_list<'a>(
 
     for track in &file.data.tracks {
         let state = track_mix.get(track.index).copied().unwrap_or_default();
-        let track_label = shorten_label(&track.label, label_max_chars);
+        let track_label = app.effective_track_name(track.index);
+        let title: Element<'_, Message> =
+            if app.renaming_target == Some(super::RenameTarget::Track(track.index)) {
+                text_input::<Message, Theme, Renderer>("", &app.track_rename_value)
+                    .id(iced::widget::Id::new(super::TRACK_RENAME_INPUT_ID))
+                    .on_input(|value| {
+                        Message::PianoRoll(PianoRollMessage::TrackRenameInputChanged(value))
+                    })
+                    .on_submit(Message::PianoRoll(PianoRollMessage::CommitTrackRename))
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .padding([2, 4])
+                    .width(Fill)
+                    .into()
+            } else {
+                mouse_area(
+                    container(
+                        text(shorten_label(&track_label, label_max_chars))
+                            .size(ui_style::FONT_SIZE_UI_XS)
+                            .wrapping(iced::widget::text::Wrapping::None)
+                            .width(Fill),
+                    )
+                    .width(Fill),
+                )
+                .on_press(Message::PianoRoll(PianoRollMessage::StartTrackRename(
+                    track.index,
+                )))
+                .into()
+            };
 
         let solo_button = button(
             container(
@@ -875,10 +906,7 @@ fn track_list<'a>(
         tracks_column = tracks_column.push(
             container(
                 row![
-                    text(track_label)
-                        .size(ui_style::FONT_SIZE_UI_XS)
-                        .wrapping(iced::widget::text::Wrapping::None)
-                        .width(Fill),
+                    title,
                     container(text("")).width(Length::Fixed(TRACK_LABEL_BUTTON_GAP)),
                     solo_button,
                     container(text("")).width(Length::Fixed(TRACK_BUTTONS_GAP)),
@@ -2346,13 +2374,7 @@ fn track_color(track_index: usize) -> Color {
 }
 
 fn shorten_label(label: &str, max_len: usize) -> String {
-    if label.chars().count() <= max_len {
-        return label.to_string();
-    }
-
-    let mut shortened: String = label.chars().take(max_len.saturating_sub(1)).collect();
-    shortened.push('~');
-    shortened
+    crate::track_names::ellipsize_middle(label, max_len)
 }
 
 #[cfg(test)]

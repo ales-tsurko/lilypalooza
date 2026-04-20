@@ -58,6 +58,13 @@ pub(super) const EDITOR_FILE_BROWSER_HEIGHT: f32 = 176.0;
 pub(super) const EDITOR_FILE_BROWSER_COLUMN_WIDTH: f32 = 220.0;
 pub(super) const EDITOR_FILE_BROWSER_ENTRY_HEIGHT: f32 = 26.0;
 pub(super) const SHORTCUTS_SCROLLABLE_ID: &str = "shortcuts-scrollable";
+pub(super) const TRACK_RENAME_INPUT_ID: &str = "track-rename-input";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RenameTarget {
+    Track(usize),
+    Bus(u16),
+}
 pub(super) const KEYBOARD_SCROLL_STEP: f32 = 84.0;
 pub(super) const SHORTCUTS_ACTION_ROW_HEIGHT: f32 = 48.0;
 const MIN_SVG_ZOOM: f32 = 0.4;
@@ -193,6 +200,10 @@ struct Lilypalooza {
     renaming_editor_tab: Option<u64>,
     editor_tab_rename_value: String,
     editor_tab_rename_input_id: Id,
+    renaming_target: Option<RenameTarget>,
+    track_rename_was_focused: bool,
+    track_rename_value: String,
+    track_name_overrides: Vec<Option<String>>,
     editor_recent_files: Vec<PathBuf>,
     recent_projects: Vec<PathBuf>,
     editor_recent_files_limit: usize,
@@ -661,6 +672,10 @@ fn new(
         renaming_editor_tab: None,
         editor_tab_rename_value: String::new(),
         editor_tab_rename_input_id: Id::unique(),
+        renaming_target: None,
+        track_rename_was_focused: false,
+        track_rename_value: String::new(),
+        track_name_overrides: Vec::new(),
         editor_recent_files: stored_state.editor_recent_files.clone(),
         recent_projects: stored_state.recent_projects.clone(),
         editor_recent_files_limit: stored_settings.editor_recent_files_limit.max(1),

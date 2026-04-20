@@ -65,6 +65,8 @@ impl Lilypalooza {
         self.editor.set_project_root(None);
         self.sync_browser_file_watcher();
         self.project_name = None;
+        self.track_name_overrides.clear();
+        self.cancel_track_rename();
         self.editor_recent_files = state.editor_recent_files;
         self.recent_projects = state.recent_projects;
         self.restore_editor_session(
@@ -91,6 +93,8 @@ impl Lilypalooza {
         self.project_name = state
             .project_name
             .or_else(|| self.project_root.as_deref().map(default_project_name));
+        self.track_name_overrides = state.track_name_overrides;
+        self.cancel_track_rename();
         self.restore_editor_session(
             &state.editor_tabs,
             state.active_editor_tab.as_deref(),
@@ -240,6 +244,7 @@ impl Lilypalooza {
                     editor_tabs: self.editor.file_backed_tab_paths(),
                     active_editor_tab: self.editor.active_file_backed_tab_path(),
                     has_clean_untitled_editor_tab: self.editor.has_clean_untitled_tab(),
+                    track_name_overrides: self.track_name_overrides.clone(),
                 },
             )?;
 

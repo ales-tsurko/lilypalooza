@@ -1,8 +1,10 @@
 use std::fmt;
 use std::sync::Arc;
 
+use iced::widget::Id;
 use iced::widget::{
     button, column, container, lazy, mouse_area, pick_list, responsive, row, scrollable, text,
+    text_input,
 };
 use iced::{Element, Fill, FillPortion, Length, alignment};
 use lilypalooza_audio::mixer::{
@@ -231,6 +233,8 @@ struct TrackStripDependency {
     soloed: bool,
     muted: bool,
     tint_enabled: bool,
+    renaming: bool,
+    rename_value: String,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -244,6 +248,8 @@ struct BusStripDependency {
     strip_height_bits: u32,
     soloed: bool,
     muted: bool,
+    renaming: bool,
+    rename_value: String,
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -360,6 +366,8 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
         .current_file()
         .map(|file| file.data.tracks.len())
         .unwrap_or(0);
+    let renaming_target = app.renaming_target;
+    let track_rename_value = app.track_rename_value.clone();
 
     if let Some(playback) = app.playback.as_ref() {
         let mixer = playback.mixer_state();
@@ -402,6 +410,8 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                     gain_mode,
                     instrument_visible,
                     existing_track_count,
+                    renaming_target,
+                    &track_rename_value,
                     true,
                 ))
                 .width(FillPortion(5))
@@ -414,6 +424,8 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                     strip_height,
                     gain_mode,
                     bus_visible,
+                    renaming_target,
+                    &track_rename_value,
                     true,
                 ))
                 .width(FillPortion(2))
@@ -432,40 +444,34 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
     content_without_audio(app, colors)
 }
 
-fn content_without_audio(app: &Lilypalooza, colors: MeterColors) -> Element<'static, Message> {
-    let mixer = MixerState::new();
-    let meter_snapshot = MixerMeterSnapshot::default();
-    let instrument_scroll_x = app.mixer_instrument_scroll_x;
-    let instrument_viewport_width = app.mixer_instrument_viewport_width;
-    let bus_scroll_x = app.mixer_bus_scroll_x;
-    let bus_viewport_width = app.mixer_bus_viewport_width;
-
-    responsive(move |size| {
-        mixer_layout_without_audio(
-            &mixer,
-            &meter_snapshot,
-            colors,
-            size,
-            instrument_scroll_x,
-            instrument_viewport_width,
-            bus_scroll_x,
-            bus_viewport_width,
-        )
-    })
+fn content_without_audio(_app: &Lilypalooza, _colors: MeterColors) -> Element<'_, Message> {
+    container(
+        text("Audio engine disabled")
+            .size(ui_style::FONT_SIZE_UI_SM)
+            .font(fonts::MONO),
+    )
+    .width(Fill)
+    .height(Fill)
+    .center_x(Fill)
+    .center_y(Fill)
+    .style(ui_style::mixer_instrument_group_surface)
     .into()
 }
 
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
-fn mixer_layout_without_audio(
-    mixer: &MixerState,
-    meter_snapshot: &MixerMeterSnapshot,
+fn mixer_layout_without_audio<'a>(
+    mixer: &'a MixerState,
+    meter_snapshot: &'a MixerMeterSnapshot,
     colors: MeterColors,
     size: iced::Size,
     instrument_scroll_x: f32,
     instrument_viewport_width: f32,
     bus_scroll_x: f32,
     bus_viewport_width: f32,
-) -> Element<'static, Message> {
+    renaming_target: Option<super::RenameTarget>,
+    track_rename_value: String,
+) -> Element<'a, Message> {
     let existing_track_count = 0;
     let gain_mode = gain_control_mode(size.height);
     let strip_height = (size.height - (ui_style::PADDING_SM as f32 * 2.0) - SECTION_HEADER_HEIGHT)
@@ -509,6 +515,8 @@ fn mixer_layout_without_audio(
             gain_mode,
             instrument_visible,
             existing_track_count,
+            renaming_target,
+            &track_rename_value,
             false,
         ))
         .width(FillPortion(5))
@@ -521,6 +529,8 @@ fn mixer_layout_without_audio(
             strip_height,
             gain_mode,
             bus_visible,
+            renaming_target,
+            &track_rename_value,
             false,
         ))
         .width(FillPortion(2))
@@ -541,7 +551,7 @@ fn master_track_area(
     strip_height: f32,
     gain_mode: GainControlMode,
     controls_enabled: bool,
-) -> Element<'static, Message> {
+) -> Element<'_, Message> {
     let master_row = row![sticky_master_strip(
         mixer,
         meter_snapshot,
@@ -609,7 +619,7 @@ fn sticky_master_strip(
             };
             strip_panel(
                 strip_shell(
-                    "Main",
+                    section_title("Main"),
                     None,
                     f32::from_bits(dependency.gain_bits),
                     f32::from_bits(dependency.pan_bits),
@@ -664,6 +674,8 @@ fn instrument_track_area(
     gain_mode: GainControlMode,
     visible: std::ops::Range<usize>,
     existing_track_count: usize,
+    renaming_target: Option<super::RenameTarget>,
+    track_rename_value: &str,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
     let options: Arc<[InstrumentChoice]> = if controls_enabled {
@@ -704,6 +716,8 @@ fn instrument_track_area(
                     soloed: track.state.soloed,
                     muted: track.state.muted,
                     tint_enabled: track_should_use_roll_tint(track_index, existing_track_count),
+                    renaming: renaming_target == Some(super::RenameTarget::Track(track_index)),
+                    rename_value: track_rename_value.to_string(),
                 },
                 move |dependency| {
                     let name = dependency.name.clone();
@@ -715,7 +729,12 @@ fn instrument_track_area(
                         GainControlMode::Fader
                     };
                     let shell = strip_shell(
-                        name,
+                        track_title_content(
+                            track_index,
+                            &name,
+                            dependency.renaming,
+                            &dependency.rename_value,
+                        ),
                         Some({
                             pick_list(options.clone(), selected, move |choice| {
                                 if controls_enabled {
@@ -831,6 +850,8 @@ fn bus_track_area(
     strip_height: f32,
     gain_mode: GainControlMode,
     visible: std::ops::Range<usize>,
+    renaming_target: Option<super::RenameTarget>,
+    track_rename_value: &str,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
     let left_spacer = strip_span_width(visible.start);
@@ -861,6 +882,8 @@ fn bus_track_area(
                     strip_height_bits: strip_height.to_bits(),
                     soloed: bus.state.soloed,
                     muted: bus.state.muted,
+                    renaming: renaming_target == Some(super::RenameTarget::Bus(bus.id.0)),
+                    rename_value: track_rename_value.to_string(),
                 },
                 move |dependency| {
                     let name = dependency.name.clone();
@@ -877,7 +900,12 @@ fn bus_track_area(
                     };
                     strip_panel(
                         strip_shell(
-                            name,
+                            bus_title_content(
+                                bus_id,
+                                &name,
+                                dependency.renaming,
+                                &dependency.rename_value,
+                            ),
                             None,
                             gain_db,
                             pan,
@@ -1068,7 +1096,7 @@ fn value_label_slot<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn strip_shell<'a>(
-    title: impl Into<String>,
+    title: Element<'a, Message>,
     instrument_picker: Option<Element<'a, Message>>,
     gain_db: f32,
     pan: f32,
@@ -1077,8 +1105,6 @@ fn strip_shell<'a>(
     strip_height: f32,
     gain_mode: GainControlMode,
 ) -> Element<'a, Message> {
-    let title = title.into();
-    let title = section_title(title);
     let mut content = column![]
         .spacing(STRIP_STACK_SPACING)
         .align_x(alignment::Horizontal::Center)
@@ -1095,7 +1121,7 @@ fn strip_shell<'a>(
         content = content.push(
             column![
                 value_label_slot(INSTRUMENT_PICKER_HEIGHT, format!("{:+.2}", pan), None),
-                pan_knob(pan, move |value| on_pan(value)),
+                pan_knob(pan, on_pan),
             ]
             .spacing(LABEL_CONTROL_SPACING)
             .align_x(alignment::Horizontal::Center),
@@ -1167,6 +1193,74 @@ fn strip_shell<'a>(
         .height(Length::Fixed(strip_height))
         .style(ui_style::transparent_surface)
         .into()
+}
+
+fn track_title_content<'a>(
+    track_index: usize,
+    title: &str,
+    renaming: bool,
+    rename_value: &str,
+) -> Element<'a, Message> {
+    if renaming {
+        return text_input::<Message, iced::Theme, iced::Renderer>("", rename_value)
+            .id(Id::new(super::TRACK_RENAME_INPUT_ID))
+            .on_input(|value| Message::Mixer(MixerMessage::TrackRenameInputChanged(value)))
+            .on_submit(Message::Mixer(MixerMessage::CommitTrackRename))
+            .size(ui_style::FONT_SIZE_UI_SM)
+            .padding([2, 4])
+            .width(Fill)
+            .into();
+    }
+
+    mouse_area(
+        container(
+            text(crate::track_names::ellipsize_middle(title, 18))
+                .size(ui_style::FONT_SIZE_UI_SM)
+                .font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..fonts::UI
+                })
+                .wrapping(iced::widget::text::Wrapping::None),
+        )
+        .width(Fill)
+        .center_x(Fill),
+    )
+    .on_press(Message::Mixer(MixerMessage::StartTrackRename(track_index)))
+    .into()
+}
+
+fn bus_title_content<'a>(
+    bus_id: u16,
+    title: &str,
+    renaming: bool,
+    rename_value: &str,
+) -> Element<'a, Message> {
+    if renaming {
+        return text_input::<Message, iced::Theme, iced::Renderer>("", rename_value)
+            .id(Id::new(super::TRACK_RENAME_INPUT_ID))
+            .on_input(|value| Message::Mixer(MixerMessage::TrackRenameInputChanged(value)))
+            .on_submit(Message::Mixer(MixerMessage::CommitTrackRename))
+            .size(ui_style::FONT_SIZE_UI_SM)
+            .padding([2, 4])
+            .width(Fill)
+            .into();
+    }
+
+    mouse_area(
+        container(
+            text(crate::track_names::ellipsize_middle(title, 18))
+                .size(ui_style::FONT_SIZE_UI_SM)
+                .font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..fonts::UI
+                })
+                .wrapping(iced::widget::text::Wrapping::None),
+        )
+        .width(Fill)
+        .center_x(Fill),
+    )
+    .on_press(Message::Mixer(MixerMessage::StartBusRename(bus_id)))
+    .into()
 }
 
 fn meter_stack<'a>(
@@ -1530,6 +1624,8 @@ mod tests {
             soloed: false,
             muted: false,
             tint_enabled: false,
+            renaming: false,
+            rename_value: String::new(),
         };
         let tinted = TrackStripDependency {
             tint_enabled: true,

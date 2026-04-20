@@ -38,6 +38,8 @@ pub(crate) struct ProjectState {
     pub(crate) editor_tabs: Vec<PathBuf>,
     pub(crate) active_editor_tab: Option<PathBuf>,
     pub(crate) has_clean_untitled_editor_tab: bool,
+    #[serde(skip_serializing_if = "track_name_overrides_is_empty")]
+    pub(crate) track_name_overrides: Vec<Option<String>>,
 }
 
 pub(crate) fn load_global() -> Result<GlobalState, String> {
@@ -167,6 +169,10 @@ fn normalize_unique_paths(paths: &mut Vec<PathBuf>) {
     *paths = normalized;
 }
 
+fn track_name_overrides_is_empty(overrides: &[Option<String>]) -> bool {
+    overrides.iter().all(Option::is_none)
+}
+
 fn global_state_path() -> Result<PathBuf, String> {
     let project_dirs = ProjectDirs::from("", "", "lilypalooza")
         .ok_or_else(|| "Failed to resolve user config directory".to_string())?;
@@ -193,4 +199,22 @@ fn global_state_load_path() -> Result<PathBuf, String> {
     }
 
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProjectState;
+
+    #[test]
+    fn project_state_roundtrip_preserves_track_name_overrides() {
+        let state = ProjectState {
+            track_name_overrides: vec![Some("Lead".to_string()), None, Some("Bass".to_string())],
+            ..ProjectState::default()
+        };
+
+        let serialized = ron::to_string(&state).expect("state should serialize");
+        let parsed: ProjectState = ron::from_str(&serialized).expect("state should parse");
+
+        assert_eq!(parsed.track_name_overrides, state.track_name_overrides);
+    }
 }

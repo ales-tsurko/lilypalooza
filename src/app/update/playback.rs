@@ -122,12 +122,6 @@ impl Lilypalooza {
             }
             return;
         };
-        let Some(playback) = self.playback.as_mut() else {
-            self.logger
-                .push("Skipping playback sync because audio engine is disabled");
-            return;
-        };
-
         let mut load_error = None;
 
         match fs::read(&selected_file) {
@@ -136,8 +130,13 @@ impl Lilypalooza {
                     .data
                     .tracks
                     .iter()
-                    .map(|track| track.label.clone())
+                    .map(|track| self.effective_track_name(track.index))
                     .collect::<Vec<_>>();
+                let Some(playback) = self.playback.as_mut() else {
+                    self.logger
+                        .push("Skipping playback sync because audio engine is disabled");
+                    return;
+                };
                 if let Err(error) = sync_playback_engine(playback, &bytes, &track_labels) {
                     load_error = Some(error);
                 } else {

@@ -291,24 +291,6 @@ fn mix_color(a: Color, b: Color, amount: f32) -> Color {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transparent_surface_has_no_background() {
-        let style = transparent_surface(&Theme::Dark);
-        assert!(style.background.is_none());
-    }
-
-    #[test]
-    fn mixer_track_strip_surface_differs_from_plain_pane_surface() {
-        let plain = pane_main_surface(&Theme::Dark);
-        let tinted = mixer_track_strip_surface(&Theme::Dark, 0);
-        assert_ne!(plain.background, tinted.background);
-    }
-}
-
 pub(crate) fn workspace_toolbar_surface(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
 
@@ -1073,5 +1055,23 @@ pub(crate) fn svg_window_control(theme: &Theme, status: svg::Status) -> svg::Sty
             svg::Status::Idle => palette.background.strong.text,
             svg::Status::Hovered => palette.background.base.text,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transparent_surface_has_no_background() {
+        let style = transparent_surface(&Theme::Dark);
+        assert!(style.background.is_none());
+    }
+
+    #[test]
+    fn mixer_track_strip_surface_differs_from_plain_pane_surface() {
+        let plain = pane_main_surface(&Theme::Dark);
+        let tinted = mixer_track_strip_surface(&Theme::Dark, 0);
+        assert_ne!(plain.background, tinted.background);
     }
 }

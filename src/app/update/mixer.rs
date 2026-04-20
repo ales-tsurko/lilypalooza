@@ -9,6 +9,10 @@ impl Lilypalooza {
         if !pressed {
             self.commit_pending_mixer_history();
         }
+        if pressed && self.renaming_target.is_some() {
+            return iced::widget::operation::is_focused(super::super::TRACK_RENAME_INPUT_ID)
+                .map(Message::TrackRenameFocusChanged);
+        }
         Task::none()
     }
 
@@ -77,6 +81,29 @@ impl Lilypalooza {
                     self.pending_mixer_undo_snapshot = Some(snapshot);
                 }
             }
+        }
+
+        match message {
+            MixerMessage::StartTrackRename(track_index) => {
+                return self.start_track_rename(track_index);
+            }
+            MixerMessage::StartBusRename(bus_id) => {
+                let Some(name) = self
+                    .playback
+                    .as_ref()
+                    .and_then(|playback| playback.mixer_state().bus(BusId(bus_id)).ok())
+                    .map(|bus| bus.name.clone())
+                else {
+                    return Task::none();
+                };
+                return self.start_bus_rename(bus_id, name);
+            }
+            MixerMessage::TrackRenameInputChanged(value) => {
+                self.update_track_rename_value(value);
+                return Task::none();
+            }
+            MixerMessage::CommitTrackRename => return self.commit_track_rename(),
+            _ => {}
         }
 
         let Some(playback) = self.playback.as_mut() else {
@@ -163,6 +190,10 @@ impl Lilypalooza {
                 self.piano_roll
                     .set_global_solo_active(mixer_has_any_solo(&mixer));
             }
+            MixerMessage::StartTrackRename(_)
+            | MixerMessage::StartBusRename(_)
+            | MixerMessage::TrackRenameInputChanged(_)
+            | MixerMessage::CommitTrackRename => {}
         }
 
         Task::none()
@@ -213,6 +244,10 @@ fn mixer_message_history_mode(
             }
         }
         MixerMessage::AddBus
+        | MixerMessage::StartTrackRename(_)
+        | MixerMessage::StartBusRename(_)
+        | MixerMessage::TrackRenameInputChanged(_)
+        | MixerMessage::CommitTrackRename
         | MixerMessage::ToggleTrackMute(_)
         | MixerMessage::ToggleTrackSolo(_)
         | MixerMessage::SelectTrackInstrument(_, _)

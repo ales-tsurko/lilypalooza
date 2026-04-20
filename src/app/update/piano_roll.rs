@@ -21,6 +21,9 @@ impl Lilypalooza {
             | PianoRollMessage::BeatSubdivisionInputChanged(_)
             | PianoRollMessage::FilePrevious
             | PianoRollMessage::FileNext
+            | PianoRollMessage::StartTrackRename(_)
+            | PianoRollMessage::TrackRenameInputChanged(_)
+            | PianoRollMessage::CommitTrackRename
             | PianoRollMessage::TrackPanelToggle
             | PianoRollMessage::TrackPanelResizedBy(_)
             | PianoRollMessage::TrackMuteToggled(_)
@@ -97,6 +100,15 @@ impl Lilypalooza {
             PianoRollMessage::FileNext => {
                 self.piano_roll.select_next_file();
                 self.sync_playback_file();
+            }
+            PianoRollMessage::StartTrackRename(track_index) => {
+                return self.start_track_rename(track_index);
+            }
+            PianoRollMessage::TrackRenameInputChanged(value) => {
+                self.update_track_rename_value(value);
+            }
+            PianoRollMessage::CommitTrackRename => {
+                return self.commit_track_rename();
             }
             PianoRollMessage::TrackPanelToggle => {
                 self.piano_roll.toggle_track_panel();

@@ -8,7 +8,7 @@ use notify::event::EventKind;
 use resvg::tiny_skia;
 use resvg::usvg;
 
-use super::messages::KeyPress;
+use super::messages::{KeyPress, MixerMessage};
 use super::score_cursor;
 use super::*;
 use crate::error_prompt::{ErrorFatality, ErrorPrompt, PromptButtons};
@@ -44,8 +44,13 @@ mod persistence;
 mod piano_roll;
 mod playback;
 mod score;
+mod track_names;
 
 pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
+    if app.renaming_target.is_some() && should_commit_track_rename_before_message(&message) {
+        app.apply_pending_track_rename();
+    }
+
     match message {
         Message::Noop => Task::none(),
         Message::StartupChecked(result) => app.handle_startup_checked(result),
@@ -62,12 +67,92 @@ pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
         Message::Shortcuts(message) => app.handle_shortcuts_message(message),
         Message::Prompt(message) => app.handle_prompt_message(message),
         Message::KeyPressed(key_press) => app.handle_key_pressed(key_press),
+        Message::TrackRenameFocusChanged(focused) => app.handle_track_rename_focus_changed(focused),
         Message::ModifiersChanged(modifiers) => app.handle_modifiers_changed(modifiers),
         Message::PrimaryMousePressed(pressed) => app.handle_primary_mouse_pressed(pressed),
         Message::Tick => app.handle_tick(),
         Message::Frame(_now) => app.handle_frame(),
         Message::WindowResized(size) => app.handle_window_resized(size),
         Message::WindowCloseRequested => app.handle_window_close_requested(),
+    }
+}
+
+fn should_commit_track_rename_before_message(message: &Message) -> bool {
+    !matches!(
+        message,
+        Message::Noop
+            | Message::StartupChecked(_)
+            | Message::BrowserHistoryCleanupFinished(_)
+            | Message::ScorePreviewReady(_)
+            | Message::CompileOutputsReady(_)
+            | Message::Pane(_)
+            | Message::Viewer(
+                ViewerMessage::ScrollPositionChanged { .. }
+                    | ViewerMessage::ViewportCursorMoved(_)
+                    | ViewerMessage::ViewportCursorLeft
+            )
+            | Message::KeyPressed(_)
+            | Message::TrackRenameFocusChanged(_)
+            | Message::ModifiersChanged(_)
+            | Message::PrimaryMousePressed(_)
+            | Message::Tick
+            | Message::Frame(_)
+            | Message::WindowResized(_)
+            | Message::WindowCloseRequested
+            | Message::PianoRoll(
+                PianoRollMessage::StartTrackRename(_)
+                    | PianoRollMessage::TrackRenameInputChanged(_)
+                    | PianoRollMessage::CommitTrackRename
+                    | PianoRollMessage::ViewportCursorMoved(_)
+                    | PianoRollMessage::ViewportCursorLeft
+                    | PianoRollMessage::RollScrolled { .. }
+            )
+            | Message::Mixer(
+                MixerMessage::StartTrackRename(_)
+                    | MixerMessage::StartBusRename(_)
+                    | MixerMessage::TrackRenameInputChanged(_)
+                    | MixerMessage::CommitTrackRename
+                    | MixerMessage::InstrumentViewportScrolled(_)
+                    | MixerMessage::BusViewportScrolled(_)
+            )
+    )
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::should_commit_track_rename_before_message;
+    use crate::app::WorkspacePaneKind;
+    use crate::app::messages::{Message, MixerMessage, PaneMessage, PianoRollMessage};
+
+    #[test]
+    fn track_rename_commit_filter_keeps_editing_messages() {
+        assert!(!should_commit_track_rename_before_message(
+            &Message::PianoRoll(PianoRollMessage::TrackRenameInputChanged("x".into()),)
+        ));
+        assert!(!should_commit_track_rename_before_message(&Message::Mixer(
+            MixerMessage::CommitTrackRename,
+        )));
+    }
+
+    #[test]
+    fn track_rename_commit_filter_commits_on_unrelated_actions() {
+        assert!(should_commit_track_rename_before_message(
+            &Message::PianoRoll(PianoRollMessage::TrackMuteToggled(0),)
+        ));
+        assert!(should_commit_track_rename_before_message(&Message::Mixer(
+            MixerMessage::ToggleTrackSolo(0),
+        )));
+    }
+
+    #[test]
+    fn track_rename_commit_filter_ignores_passive_messages() {
+        assert!(!should_commit_track_rename_before_message(&Message::Pane(
+            PaneMessage::FocusWorkspacePane(WorkspacePaneKind::Mixer),
+        )));
+        assert!(!should_commit_track_rename_before_message(
+            &Message::PianoRoll(PianoRollMessage::ViewportCursorMoved(iced::Point::ORIGIN),)
+        ));
     }
 }
 

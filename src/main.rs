@@ -20,6 +20,7 @@ mod settings;
 mod shortcuts;
 mod state;
 mod status_bar;
+mod track_names;
 mod ui_style;
 
 fn main() -> iced::Result {
