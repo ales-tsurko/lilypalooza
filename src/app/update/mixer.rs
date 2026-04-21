@@ -310,19 +310,24 @@ fn mixer_message_history_mode(
 
 impl Lilypalooza {
     fn open_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
-        let Some((title, descriptor, session_result)) =
-            self.playback.as_ref().and_then(|playback| {
-                let strip = playback.mixer_state().strip_by_index(target.strip_index)?;
-                let slot = strip.slot(target.slot_index)?;
-                Some((
-                    slot.title(&strip.name, target.slot_index),
-                    slot.editor_descriptor(),
-                    slot.create_editor_session(),
-                ))
-            })
-        else {
+        let Some(playback) = self.playback.as_ref() else {
             return Task::none();
         };
+        let Some(strip) = playback.mixer_state().strip_by_index(target.strip_index) else {
+            return Task::none();
+        };
+        let Some(slot) = strip.slot(target.slot_index) else {
+            return Task::none();
+        };
+        let Ok(Some(controller)) = playback.controller(lilypalooza_audio::SlotAddress {
+            strip_index: target.strip_index,
+            slot_index: target.slot_index,
+        }) else {
+            return Task::none();
+        };
+        let title = slot.title(&strip.name, target.slot_index);
+        let descriptor = controller.descriptor().editor;
+        let session_result = controller.create_editor_session();
 
         self.open_editor(target, title, descriptor, session_result)
     }

@@ -11,7 +11,7 @@ use crate::instrument::{
     ProcessorState, ProcessorStateError,
 };
 
-const MIDI_14BIT_MAX: u16 = 16_383;
+pub(crate) const MIDI_14BIT_MAX: u16 = 16_383;
 const MIDI_PROGRAM_MAX: u8 = 127;
 
 /// Shared SoundFont resource configured in the mixer.
@@ -152,7 +152,7 @@ impl SharedSoundfontProgramState {
         self.inner.revision.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn snapshot(&self) -> (u16, u8, u32) {
+    pub(crate) fn snapshot(&self) -> (u16, u8, u32) {
         (
             self.inner.bank.load(Ordering::Relaxed),
             self.inner.program.load(Ordering::Relaxed) as u8,

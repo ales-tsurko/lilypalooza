@@ -8,6 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+pub(crate) use gain_effect::{
+    GAIN_RANGE_DB, GainEffectProcessor, MIN_GAIN_DB, SharedGainState, descriptor as gain_descriptor,
+};
 use knyst::r#gen::{Gen, GenContext};
 use knyst::graph::{EventChange, EventPayload, ResolvedNodeEventInput, SchedulerChange};
 use knyst::handles::{GenericHandle, Handle, HandleData};
@@ -17,6 +20,7 @@ use knyst::prelude::{
 };
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use serde::{Deserialize, Serialize};
+pub(crate) use soundfont_synth::{MIDI_14BIT_MAX, encode_soundfont_state};
 pub use soundfont_synth::{SoundfontProcessorState, SoundfontResource};
 
 /// Built-in empty instrument id.
@@ -116,6 +120,10 @@ pub trait Controller: Send {
     /// Notifies the end of an edit gesture.
     fn end_edit(&self, _id: &str) -> Result<(), ControllerError> {
         Ok(())
+    }
+    /// Creates a live editor session for the processor, when supported.
+    fn create_editor_session(&self) -> Result<Option<Box<dyn EditorSession>>, EditorError> {
+        Ok(None)
     }
 }
 
@@ -314,23 +322,6 @@ impl SlotState {
     #[must_use]
     pub fn descriptor(&self) -> Option<&'static ProcessorDescriptor> {
         descriptor(&self.kind)
-    }
-
-    /// Returns the static editor descriptor for this slot, when supported.
-    #[must_use]
-    pub fn editor_descriptor(&self) -> Option<EditorDescriptor> {
-        self.descriptor().and_then(|descriptor| descriptor.editor)
-    }
-
-    /// Returns whether this slot supports opening an editor.
-    #[must_use]
-    pub fn supports_editor(&self) -> bool {
-        self.editor_descriptor().is_some()
-    }
-
-    /// Creates a live editor session for this slot, when supported.
-    pub fn create_editor_session(&self) -> Result<Option<Box<dyn EditorSession>>, EditorError> {
-        Ok(None)
     }
 
     /// Returns a display title for this slot.
@@ -728,9 +719,19 @@ impl EffectRuntimeHandle {
 pub(crate) fn create_effect_processor(
     effect: &SlotState,
 ) -> Result<Option<Box<dyn EffectProcessor>>, ProcessorStateError> {
+    create_effect_processor_with_shared(effect, None)
+}
+
+pub(crate) fn create_effect_processor_with_shared(
+    effect: &SlotState,
+    gain_shared: Option<gain_effect::SharedGainState>,
+) -> Result<Option<Box<dyn EffectProcessor>>, ProcessorStateError> {
     match &effect.kind {
         ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_GAIN_ID => Ok(Some(
-            Box::new(gain_effect::GainEffectProcessor::from_state(&effect.state)?),
+            Box::new(gain_effect::GainEffectProcessor::from_state_with_shared(
+                &effect.state,
+                gain_shared,
+            )?),
         )),
         ProcessorKind::BuiltIn { .. } | ProcessorKind::Plugin { .. } => Ok(None),
     }
@@ -1270,8 +1271,7 @@ mod tests {
             .expect("soundfont slot should expose processor descriptor");
 
         assert_eq!(descriptor.name, "SoundFont");
-        assert!(slot.editor_descriptor().is_none());
-        assert!(!slot.supports_editor());
+        assert!(descriptor.editor.is_none());
     }
 
     #[test]
@@ -1288,13 +1288,12 @@ mod tests {
             .expect("gain slot should expose processor descriptor");
 
         assert_eq!(descriptor.name, "Gain");
-        assert!(slot.editor_descriptor().is_none());
-        assert!(!slot.supports_editor());
+        assert!(descriptor.editor.is_none());
     }
 
     #[test]
     fn gain_descriptor_normalizes_zero_db_consistently() {
-        let mut processor = crate::instrument::gain_effect::GainEffectProcessor::from_state(
+        let mut processor = crate::instrument::GainEffectProcessor::from_state(
             &crate::instrument::ProcessorState::default(),
         )
         .expect("gain processor should exist");

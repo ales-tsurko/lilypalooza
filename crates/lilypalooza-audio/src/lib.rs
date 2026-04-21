@@ -26,7 +26,8 @@ pub use instrument::{
     ProcessorStateError, SlotState, SoundfontProcessorState, SoundfontResource,
 };
 pub use mixer::{
-    BusId, BusSend, INSTRUMENT_TRACK_COUNT, Track, TrackId, TrackRoute, TrackRouting, TrackState,
+    BusId, BusSend, INSTRUMENT_TRACK_COUNT, SlotAddress, Track, TrackId, TrackRoute, TrackRouting,
+    TrackState,
 };
 pub use mixer::{MixerError, MixerHandle, MixerState};
 pub use sequencer::{Sequencer, SequencerError, SequencerHandle};

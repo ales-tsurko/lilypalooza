@@ -13,7 +13,7 @@ use knyst::prelude::{Beats, MultiThreadedKnystCommands, TransportState};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{AudioEngineError, AudioEngineSettings};
-use crate::instrument::{InstrumentRuntimeHandle, SlotState, SoundfontResource};
+use crate::instrument::{Controller, InstrumentRuntimeHandle, SlotState, SoundfontResource};
 use crate::sequencer::Sequencer;
 use runtime::{MixerRuntime, MixerRuntimeError, TrackInstrumentSync};
 pub use track::{
@@ -107,6 +107,19 @@ pub struct MixerMeterSnapshotWindow {
     pub buses: Vec<StripMeterSnapshot>,
 }
 
+/// One processor slot address in visible mixer order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SlotAddress {
+    /// Visible strip index.
+    pub strip_index: usize,
+    /// Unified slot index.
+    ///
+    /// Convention:
+    /// - `0` is the instrument slot
+    /// - `1..` are effect slots
+    pub slot_index: usize,
+}
+
 /// Serializable mixer state with fixed instrument tracks, dynamic buses, and a dedicated master.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MixerState {
@@ -159,6 +172,13 @@ impl MixerState {
     #[must_use]
     pub fn strip_by_index(&self, strip_index: usize) -> Option<&Track> {
         self.strips.get(strip_index)
+    }
+
+    /// Returns one slot by visible strip and unified slot indices.
+    #[must_use]
+    pub fn slot(&self, address: SlotAddress) -> Option<&SlotState> {
+        self.strip_by_index(address.strip_index)
+            .and_then(|strip| strip.slot(address.slot_index))
     }
 
     /// Returns immutable access to one instrument track.
@@ -477,6 +497,15 @@ impl Mixer {
 
     pub(crate) fn instrument_handle(&self, track_id: TrackId) -> Option<InstrumentRuntimeHandle> {
         self.runtime.instrument_handle(track_id)
+    }
+
+    pub(crate) fn controller(
+        &self,
+        address: SlotAddress,
+    ) -> Result<Option<Box<dyn Controller>>, AudioEngineError> {
+        self.runtime
+            .controller(&self.state, address)
+            .map_err(Into::into)
     }
 
     pub(crate) fn metronome_handle(&self) -> InstrumentRuntimeHandle {

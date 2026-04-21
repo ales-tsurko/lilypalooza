@@ -12,8 +12,10 @@ use knyst::prelude::{
     Beats, KnystCommands, KnystSphere, MultiThreadedKnystCommands, SphereSettings,
 };
 
+use crate::instrument::Controller;
 use crate::mixer::{
     Mixer, MixerError, MixerHandle, MixerMeterSnapshot, MixerMeterSnapshotWindow, MixerState,
+    SlotAddress,
 };
 use crate::sequencer::{Sequencer, SequencerError, SequencerHandle};
 use crate::transport::Transport;
@@ -94,8 +96,6 @@ impl AudioEngine {
     ) -> Result<Self, AudioEngineError> {
         let backend = CpalBackend::new(CpalBackendOptions {
             device: options.device.clone().unwrap_or_else(|| "default".into()),
-            sample_rate: options.sample_rate.map(|value| value as u32),
-            block_size: options.block_size.map(|value| value as u32),
             ..CpalBackendOptions::default()
         })?;
         Self::start(mixer, backend, options)
@@ -163,6 +163,13 @@ impl AudioEngine {
 
     pub fn mixer_state(&self) -> &MixerState {
         &self.mixer.state
+    }
+
+    pub fn controller(
+        &self,
+        address: SlotAddress,
+    ) -> Result<Option<Box<dyn Controller>>, AudioEngineError> {
+        self.mixer.controller(address)
     }
 
     /// Returns the sequencer control handle.
@@ -352,7 +359,7 @@ mod tests {
         InstrumentProcessor, InstrumentProcessorNode, MidiEvent, Processor, ProcessorDescriptor,
         ProcessorState, ProcessorStateError,
     };
-    use crate::mixer::{INSTRUMENT_TRACK_COUNT, MixerState, TrackId};
+    use crate::mixer::{INSTRUMENT_TRACK_COUNT, MixerState, SlotAddress, TrackId};
     use crate::test_utils::{
         SharedTestBackend, SharedTestBackendHandle, TestBackend, delayed_note_midi_bytes,
         four_track_midi_bytes, simple_midi_bytes, sustained_note_midi_bytes,
@@ -428,6 +435,75 @@ mod tests {
         }
 
         panic!("engine end-to-end path produced silence");
+    }
+
+    #[test]
+    fn controller_resolves_track_instrument_slot() {
+        let (backend, _backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_soundfont(test_soundfont_resource())
+                .expect("soundfont should load");
+            mixer
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 12))
+                .expect("track should accept soundfont instrument");
+        }
+
+        let controller = engine
+            .controller(SlotAddress {
+                strip_index: 1,
+                slot_index: 0,
+            })
+            .expect("controller lookup should succeed")
+            .expect("soundfont controller should exist");
+
+        assert_eq!(controller.descriptor().name, "SoundFont");
+        assert!(
+            (controller.get_param("program").expect("program param") - (12.0 / 127.0)).abs()
+                < 1.0e-6
+        );
+    }
+
+    #[test]
+    fn controller_resolves_track_gain_effect_slot() {
+        let (backend, _backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+        let mut engine =
+            AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
+                .expect("engine should start");
+
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_track_effects(
+                    TrackId(0),
+                    vec![SlotState {
+                        kind: crate::instrument::ProcessorKind::BuiltIn {
+                            processor_id: crate::instrument::BUILTIN_GAIN_ID.to_string(),
+                        },
+                        state: ProcessorState::default(),
+                    }],
+                )
+                .expect("track should accept gain effect");
+        }
+
+        let controller = engine
+            .controller(SlotAddress {
+                strip_index: 1,
+                slot_index: 1,
+            })
+            .expect("controller lookup should succeed")
+            .expect("gain controller should exist");
+
+        assert_eq!(controller.descriptor().name, "Gain");
+        controller
+            .set_param("gain_db", 0.25)
+            .expect("gain set should succeed");
+        assert!((controller.get_param("gain_db").expect("gain param") - 0.25).abs() < 1.0e-6);
     }
 
     #[test]
