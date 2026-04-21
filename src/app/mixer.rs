@@ -14,7 +14,7 @@ use lilypalooza_audio::mixer::{
 };
 use lilypalooza_audio::{InstrumentSlotState, MixerState, SoundfontProcessorState};
 
-use super::controls::{gain_control_width, gain_fader, gain_knob, pan_knob};
+use super::controls::{GAIN_MIN_DB, gain_control_width, gain_fader, gain_knob, pan_knob};
 use super::messages::MixerMessage;
 use super::meters::{
     MeterColors, meter_colors, stereo_meter, stereo_meter_bar_width, stereo_meter_width,
@@ -1142,6 +1142,14 @@ fn value_label_slot<'a>(
         .into()
 }
 
+fn gain_label(gain_db: f32) -> String {
+    if gain_db <= GAIN_MIN_DB {
+        "-inf".to_string()
+    } else {
+        format!("{gain_db:.1}")
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn strip_shell<'a>(
     title: Element<'a, Message>,
@@ -1193,7 +1201,7 @@ fn strip_shell<'a>(
         content = content.push(
             row![
                 column![
-                    value_label_slot(gain_width, format!("{gain_db:.1}"), None),
+                    value_label_slot(gain_width, gain_label(gain_db), None),
                     container(gain_control)
                         .width(Length::Fixed(gain_width))
                         .height(Length::Fixed(control_height))
@@ -1561,8 +1569,8 @@ mod tests {
         INSTRUMENT_PICKER_HEIGHT, InstrumentChoice, MAIN_SECTION_WIDTH, MAIN_STRIP_WIDTH,
         MIXER_MIN_HEIGHT, MeterDependency, STRIP_TOGGLE_SIZE, STRIP_VIRTUALIZATION_OVERSCAN,
         STRIP_WIDTH, StripMeterSnapshot, TrackStripDependency, VALUE_LABEL_HEIGHT, color_bits,
-        control_stack_height, gain_control_height, gain_control_mode, meter_control_height,
-        meter_peak_label, meter_scale_visible, selected_instrument_choice,
+        control_stack_height, gain_control_height, gain_control_mode, gain_label,
+        meter_control_height, meter_peak_label, meter_scale_visible, selected_instrument_choice,
         track_should_use_roll_tint, visible_strip_window,
     };
     use lilypalooza_audio::mixer::ChannelMeterSnapshot;
@@ -1646,6 +1654,12 @@ mod tests {
             clip_latched: false,
         };
         assert_eq!(meter_peak_label(snapshot), "3.2");
+    }
+
+    #[test]
+    fn gain_label_uses_negative_infinity_at_floor() {
+        assert_eq!(gain_label(-60.0), "-inf");
+        assert_eq!(gain_label(-24.0), "-24.0");
     }
 
     #[test]

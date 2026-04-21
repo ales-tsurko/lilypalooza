@@ -1685,7 +1685,11 @@ fn track_needs_runtime(track: &MixerTrack) -> bool {
 }
 
 fn db_to_amplitude(db: f32) -> f32 {
-    knyst::db_to_amplitude(db)
+    if db <= -60.0 {
+        0.0
+    } else {
+        knyst::db_to_amplitude(db)
+    }
 }
 
 fn process_stereo_balance_meter_scalar(
@@ -2022,7 +2026,7 @@ mod tests {
     use super::{
         InstrumentProcessorNode, InstrumentRuntimeHandle, LoadedSoundfont, MasterRuntime, MeterTap,
         MixerRuntimeError, SharedInstrumentResetState, SharedStripMeter, SoundfontProcessor,
-        SoundfontSynthSettings, connect_stereo, node_id_of, normalize_meter_level,
+        SoundfontSynthSettings, connect_stereo, db_to_amplitude, node_id_of, normalize_meter_level,
     };
     use crate::instrument::{
         InstrumentKind, InstrumentSlotState, MidiEvent, ProcessorState, soundfont_synth,
@@ -2101,6 +2105,12 @@ mod tests {
         assert!(falling.left.level > normalize_meter_level(0.05));
         assert!(falling.right.level < hot.right.level);
         assert!(falling.right.level > normalize_meter_level(0.025));
+    }
+
+    #[test]
+    fn mixer_gain_floor_is_silence() {
+        assert_eq!(db_to_amplitude(-60.0), 0.0);
+        assert!(db_to_amplitude(-59.5) > 0.0);
     }
 
     #[test]

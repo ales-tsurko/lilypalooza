@@ -20,7 +20,7 @@ const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(350);
 const PAN_ZERO_EPSILON: f32 = 0.025;
 const DEFAULT_DRAG_SCALAR: f32 = 0.008;
 const DEFAULT_WHEEL_SCALAR: f32 = 0.05;
-const GAIN_MIN_DB: f32 = -60.0;
+pub(super) const GAIN_MIN_DB: f32 = -60.0;
 const GAIN_MAX_DB: f32 = 12.0;
 
 pub(super) fn fader_rail_layout(total_height: f32) -> (f32, f32) {
@@ -67,13 +67,10 @@ pub(super) fn gain_knob<'a, Message: Clone + 'a>(
     container(
         canvas(Knob {
             value: clamp_gain(value),
-            mode: KnobMode::Unipolar {
-                min: GAIN_MIN_DB,
-                max: GAIN_MAX_DB,
-            },
+            mode: KnobMode::Gain,
             default_value: 0.0,
-            drag_scalar: 0.35,
-            wheel_scalar: 1.0,
+            drag_scalar: 0.02,
+            wheel_scalar: 0.04,
             on_change: Box::new(on_change),
         })
         .width(Length::Fixed(GAIN_KNOB_SIZE))
@@ -92,7 +89,6 @@ pub(super) fn gain_fader<'a, Message: Clone + 'a>(
         canvas(GainFader {
             value: clamp_gain(value),
             default_value: 0.0,
-            drag_scalar: 0.35,
             wheel_scalar: 1.0,
             on_change: Box::new(on_change),
         })
@@ -138,7 +134,6 @@ struct Knob<'a, Message> {
 struct GainFader<'a, Message> {
     value: f32,
     default_value: f32,
-    drag_scalar: f32,
     wheel_scalar: f32,
     on_change: Box<dyn Fn(f32) -> Message + 'a>,
 }
@@ -155,7 +150,7 @@ struct HorizontalSlider<'a, Message> {
 #[derive(Clone, Copy)]
 enum KnobMode {
     Bipolar { zero_epsilon: f32 },
-    Unipolar { min: f32, max: f32 },
+    Gain,
 }
 
 #[derive(Default)]
@@ -168,7 +163,6 @@ struct KnobState {
 #[derive(Default)]
 struct GainFaderState {
     dragging: bool,
-    last_cursor_y: Option<f32>,
     last_press_at: Option<Instant>,
 }
 
@@ -357,7 +351,6 @@ impl<Message: Clone> canvas_widget::Program<Message> for GainFader<'_, Message> 
                     let now = Instant::now();
                     if is_double_click(state.last_press_at, now) {
                         state.dragging = false;
-                        state.last_cursor_y = None;
                         state.last_press_at = None;
                         return Some(
                             canvas_widget::Action::publish((self.on_change)(self.default_value))
@@ -366,16 +359,17 @@ impl<Message: Clone> canvas_widget::Program<Message> for GainFader<'_, Message> 
                     }
                     state.last_press_at = Some(now);
                     state.dragging = true;
-                    state.last_cursor_y = Some(position.y);
-                    return Some(canvas_widget::Action::capture());
+                    let next =
+                        y_to_gain_value(position.y - bounds.y, gain_fader_rail_bounds(bounds));
+                    return Some(
+                        canvas_widget::Action::publish((self.on_change)(next)).and_capture(),
+                    );
                 }
             }
             canvas_widget::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                if state.dragging
-                    && let Some(last_y) = state.last_cursor_y
-                {
-                    state.last_cursor_y = Some(position.y);
-                    let next = self.apply_drag_delta(position.y - last_y);
+                if state.dragging {
+                    let next =
+                        y_to_gain_value(position.y - bounds.y, gain_fader_rail_bounds(bounds));
                     return Some(
                         canvas_widget::Action::publish((self.on_change)(next)).and_capture(),
                     );
@@ -391,7 +385,6 @@ impl<Message: Clone> canvas_widget::Program<Message> for GainFader<'_, Message> 
             }
             canvas_widget::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.dragging = false;
-                state.last_cursor_y = None;
             }
             _ => {}
         }
@@ -431,15 +424,7 @@ impl<Message: Clone> canvas_widget::Program<Message> for GainFader<'_, Message> 
             palette.primary.base.color
         };
 
-        let rail_width = FADER_RAIL_WIDTH;
-        let rail_x = (bounds.width - rail_width) * 0.5;
-        let (rail_y, rail_height) = fader_rail_layout(bounds.height);
-        let rail_bounds = Rectangle {
-            x: rail_x,
-            y: rail_y,
-            width: rail_width,
-            height: rail_height,
-        };
+        let rail_bounds = gain_fader_rail_bounds(bounds);
         let handle_center_y = gain_value_to_y(self.value, rail_bounds);
         let fill_bounds = Rectangle {
             x: rail_bounds.x,
@@ -669,7 +654,8 @@ impl<Message: Clone> canvas_widget::Program<Message> for HorizontalSlider<'_, Me
 
 impl<Message> Knob<'_, Message> {
     fn apply_drag_delta(&self, delta_y: f32) -> f32 {
-        self.normalize(self.value - delta_y * self.drag_scalar)
+        let normalized = (self.normalized_value() - delta_y * self.drag_scalar).clamp(0.0, 1.0);
+        self.value_from_normalized(normalized)
     }
 
     fn apply_scroll_delta(&self, delta: mouse::ScrollDelta) -> f32 {
@@ -677,7 +663,8 @@ impl<Message> Knob<'_, Message> {
             mouse::ScrollDelta::Lines { y, .. } => y * self.wheel_scalar,
             mouse::ScrollDelta::Pixels { y, .. } => y / 120.0 * self.wheel_scalar,
         };
-        self.normalize(self.value + amount)
+        let normalized = (self.normalized_value() + amount).clamp(0.0, 1.0);
+        self.value_from_normalized(normalized)
     }
 
     fn normalize(&self, value: f32) -> f32 {
@@ -690,14 +677,21 @@ impl<Message> Knob<'_, Message> {
                     clamped
                 }
             }
-            KnobMode::Unipolar { min, max } => value.clamp(min, max),
+            KnobMode::Gain => clamp_gain(value),
         }
     }
 
     fn normalized_value(&self) -> f32 {
         match self.mode {
             KnobMode::Bipolar { .. } => (self.value + 1.0) * 0.5,
-            KnobMode::Unipolar { min, max } => ((self.value - min) / (max - min)).clamp(0.0, 1.0),
+            KnobMode::Gain => gain_db_to_normalized(self.value),
+        }
+    }
+
+    fn value_from_normalized(&self, normalized: f32) -> f32 {
+        match self.mode {
+            KnobMode::Bipolar { .. } => self.normalize(normalized * 2.0 - 1.0),
+            KnobMode::Gain => gain_normalized_to_db(normalized),
         }
     }
 
@@ -710,7 +704,7 @@ impl<Message> Knob<'_, Message> {
     fn is_neutral(&self) -> bool {
         match self.mode {
             KnobMode::Bipolar { .. } => self.value == 0.0,
-            KnobMode::Unipolar { min, .. } => self.value == min,
+            KnobMode::Gain => self.value <= GAIN_MIN_DB,
         }
     }
 
@@ -723,7 +717,7 @@ impl<Message> Knob<'_, Message> {
                     KNOB_CENTER_ANGLE.to_radians()
                 }
             }
-            KnobMode::Unipolar { .. } => KNOB_ANGLE_START.to_radians(),
+            KnobMode::Gain => KNOB_ANGLE_START.to_radians(),
         }
     }
 
@@ -736,22 +730,19 @@ impl<Message> Knob<'_, Message> {
                     self.value_angle()
                 }
             }
-            KnobMode::Unipolar { .. } => self.value_angle(),
+            KnobMode::Gain => self.value_angle(),
         }
     }
 }
 
 impl<Message> GainFader<'_, Message> {
-    fn apply_drag_delta(&self, delta_y: f32) -> f32 {
-        clamp_gain(self.value - delta_y * self.drag_scalar)
-    }
-
     fn apply_scroll_delta(&self, delta: mouse::ScrollDelta) -> f32 {
         let amount = match delta {
             mouse::ScrollDelta::Lines { y, .. } => y * self.wheel_scalar,
             mouse::ScrollDelta::Pixels { y, .. } => y / 120.0 * self.wheel_scalar,
         };
-        clamp_gain(self.value + amount)
+        let normalized = (gain_db_to_normalized(self.value) + amount).clamp(0.0, 1.0);
+        gain_normalized_to_db(normalized)
     }
 }
 
@@ -794,10 +785,35 @@ fn clamp_gain(value: f32) -> f32 {
     value.clamp(GAIN_MIN_DB, GAIN_MAX_DB)
 }
 
+fn gain_fader_rail_bounds(bounds: Rectangle) -> Rectangle {
+    let rail_width = FADER_RAIL_WIDTH;
+    let rail_x = (bounds.width - rail_width) * 0.5;
+    let (rail_y, rail_height) = fader_rail_layout(bounds.height);
+    Rectangle {
+        x: rail_x,
+        y: rail_y,
+        width: rail_width,
+        height: rail_height,
+    }
+}
+
+fn gain_normalized_to_db(normalized: f32) -> f32 {
+    let normalized = normalized.clamp(0.0, 1.0);
+    GAIN_MIN_DB + normalized * (GAIN_MAX_DB - GAIN_MIN_DB)
+}
+
+fn gain_db_to_normalized(value: f32) -> f32 {
+    let value = clamp_gain(value);
+    ((value - GAIN_MIN_DB) / (GAIN_MAX_DB - GAIN_MIN_DB)).clamp(0.0, 1.0)
+}
+
 fn gain_value_to_y(value: f32, rail_bounds: Rectangle) -> f32 {
-    let normalized =
-        ((clamp_gain(value) - GAIN_MIN_DB) / (GAIN_MAX_DB - GAIN_MIN_DB)).clamp(0.0, 1.0);
-    rail_bounds.y + rail_bounds.height * (1.0 - normalized)
+    rail_bounds.y + rail_bounds.height * (1.0 - gain_db_to_normalized(value))
+}
+
+fn y_to_gain_value(y: f32, rail_bounds: Rectangle) -> f32 {
+    let normalized = (1.0 - ((y - rail_bounds.y) / rail_bounds.height.max(1.0))).clamp(0.0, 1.0);
+    gain_normalized_to_db(normalized)
 }
 
 #[cfg(test)]
@@ -809,8 +825,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        GainFader, HorizontalSlider, HorizontalSliderState, Knob, KnobMode, gain_value_to_y,
-        is_double_click,
+        GAIN_MIN_DB, GainFader, HorizontalSlider, HorizontalSliderState, Knob, KnobMode,
+        gain_db_to_normalized, gain_normalized_to_db, gain_value_to_y, is_double_click,
+        y_to_gain_value,
     };
 
     #[test]
@@ -890,13 +907,10 @@ mod tests {
     fn gain_knob_clamps_to_gain_range() {
         let knob = Knob {
             value: -12.0,
-            mode: KnobMode::Unipolar {
-                min: -60.0,
-                max: 12.0,
-            },
+            mode: KnobMode::Gain,
             default_value: 0.0,
-            drag_scalar: 0.35,
-            wheel_scalar: 1.0,
+            drag_scalar: 0.02,
+            wheel_scalar: 0.04,
             on_change: Box::new(|_| ()),
         };
 
@@ -909,13 +923,12 @@ mod tests {
         let fader = GainFader {
             value: -12.0,
             default_value: 0.0,
-            drag_scalar: 0.35,
             wheel_scalar: 1.0,
             on_change: Box::new(|_| ()),
         };
 
-        assert_eq!(fader.apply_drag_delta(500.0), -60.0);
-        assert_eq!(fader.apply_drag_delta(-500.0), 12.0);
+        assert!(fader.apply_scroll_delta(mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 }) < -12.0);
+        assert!(fader.apply_scroll_delta(mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 }) > -12.0);
     }
 
     #[test]
@@ -933,6 +946,42 @@ mod tests {
 
         assert!(high < mid);
         assert!(mid < low);
+    }
+
+    #[test]
+    fn gain_fader_bottom_maps_smoothly_without_dead_zone() {
+        let rail = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 8.0,
+            height: 200.0,
+        };
+
+        assert_eq!(y_to_gain_value(rail.y + rail.height, rail), GAIN_MIN_DB);
+        assert!(y_to_gain_value(rail.y + rail.height - 4.0, rail) > GAIN_MIN_DB);
+    }
+
+    #[test]
+    fn gain_mapping_keeps_zero_db_near_top() {
+        let rail = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 8.0,
+            height: 200.0,
+        };
+
+        let zero_y = gain_value_to_y(0.0, rail);
+        let normalized = 1.0 - ((zero_y - rail.y) / rail.height);
+        assert!(normalized > 0.8);
+    }
+
+    #[test]
+    fn gain_mapping_roundtrips_between_normalized_and_db() {
+        for value in [0.0, 0.1, 0.35, 0.5, 0.8, 1.0] {
+            let db = gain_normalized_to_db(value);
+            let back = gain_db_to_normalized(db);
+            assert!((back - value).abs() < 1.0e-5 || (value == 0.0 && back == 0.0));
+        }
     }
 
     #[test]
