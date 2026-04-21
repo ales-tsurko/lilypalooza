@@ -363,12 +363,7 @@ pub(crate) fn mixer_side_group_surface(theme: &Theme) -> container::Style {
 pub(crate) fn pane_title_bar_surface_focused(theme: &Theme, focused: bool) -> container::Style {
     let palette = theme.extended_palette();
     let background = if focused {
-        mix_color(
-            palette.background.weak.color,
-            palette.primary.base.color,
-            0.12,
-        )
-        .into()
+        mix_color(palette.background.weak.color, Color::WHITE, 0.04).into()
     } else {
         palette.background.weak.color.into()
     };

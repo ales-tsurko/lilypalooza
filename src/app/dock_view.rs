@@ -1509,16 +1509,22 @@ fn group_tabs<'a>(app: &'a Lilypalooza, group: &'a super::DockGroup) -> row::Row
 }
 
 fn workspace_tab(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'_, Message> {
-    let (is_active, is_stacked) = app
+    let (is_active, is_stacked, is_focused) = app
         .group_for_pane(pane)
-        .and_then(|group_id| app.workspace_group(group_id))
-        .map(|group| (group.active == pane, group.tabs.len() > 1))
-        .unwrap_or((false, false));
+        .and_then(|group_id| app.workspace_group(group_id).map(|group| (group_id, group)))
+        .map(|(group_id, group)| {
+            (
+                group.active == pane,
+                group.tabs.len() > 1,
+                app.is_workspace_group_focused(group_id),
+            )
+        })
+        .unwrap_or((false, false, false));
     let is_hovered = app.hovered_workspace_pane == Some(pane);
     let is_dragging = app.dragged_workspace_pane == Some(pane);
     let title = workspace_pane_title(pane);
     let icon = workspace_pane_icon(pane);
-    let icon_color = workspace_tab_foreground_color(is_active, is_hovered, is_dragging);
+    let icon_color = workspace_tab_foreground_color(is_active, is_focused, is_hovered, is_dragging);
 
     let tab_body: Element<'_, Message> = container(
         row![
@@ -1602,19 +1608,36 @@ fn workspace_tab(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'_, Mess
 
 fn workspace_tab_foreground_color(
     is_active: bool,
+    is_focused: bool,
     is_hovered: bool,
     is_dragging: bool,
 ) -> impl Fn(&Theme) -> Color + Copy {
     move |theme: &Theme| {
         let palette = theme.extended_palette();
+        let mix = |a: Color, b: Color, amount: f32| Color {
+            r: a.r + (b.r - a.r) * amount,
+            g: a.g + (b.g - a.g) * amount,
+            b: a.b + (b.b - a.b) * amount,
+            a: a.a + (b.a - a.a) * amount,
+        };
         if is_dragging {
             palette.primary.weak.text
+        } else if is_active && is_focused {
+            palette.background.base.text
         } else if is_active {
-            palette.background.weakest.text
+            mix(
+                palette.background.base.text,
+                palette.background.strong.color,
+                0.38,
+            )
         } else if is_hovered {
             palette.background.base.text
         } else {
-            palette.background.strong.text
+            mix(
+                palette.background.base.text,
+                palette.background.strong.color,
+                0.52,
+            )
         }
     }
 }
