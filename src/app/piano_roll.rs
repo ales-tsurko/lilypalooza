@@ -15,17 +15,19 @@ use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
 use crate::settings::PianoRollViewSettings;
 use crate::{fonts, icons, ui_style};
 
-const TRACK_PANEL_DEFAULT_WIDTH: f32 = 144.0;
+const TRACK_PANEL_DEFAULT_WIDTH: f32 = 168.0;
 const TRACK_PANEL_MIN_WIDTH: f32 = 116.0;
-const TRACK_PANEL_MAX_WIDTH: f32 = 184.0;
+const TRACK_PANEL_MAX_WIDTH: f32 = 220.0;
 const TRACK_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 const TRACK_COLOR_BUTTON_SIZE: f32 = 18.0;
 const TRACK_COLOR_BUTTON_GAP: f32 = 6.0;
 const TRACK_BUTTON_WIDTH: f32 = 22.0;
 const TRACK_BUTTON_HEIGHT: f32 = 18.0;
 const TRACK_ROW_HEIGHT: f32 = 26.0;
+const TRACK_LIST_SCROLLBAR_GUTTER: u16 = 12;
 const TRACK_BUTTONS_GAP: f32 = 4.0;
 const TRACK_LABEL_BUTTON_GAP: f32 = 10.0;
+const TRACK_BUTTONS_GROUP_WIDTH: f32 = TRACK_BUTTON_WIDTH * 2.0 + TRACK_BUTTONS_GAP;
 const DRAG_START_THRESHOLD: f32 = 8.0;
 const KEYBOARD_WIDTH: f32 = 30.0;
 const TEMPO_LANE_HEIGHT: f32 = 28.0;
@@ -1001,11 +1003,15 @@ fn track_list<'a>(
         tracks_column = tracks_column.push(
             container(
                 row![
-                    title,
+                    container(title).width(Fill).clip(true),
                     container(text("")).width(Length::Fixed(TRACK_LABEL_BUTTON_GAP)),
-                    mute_button,
-                    container(text("")).width(Length::Fixed(TRACK_BUTTONS_GAP)),
-                    solo_button,
+                    row![
+                        mute_button,
+                        container(text("")).width(Length::Fixed(TRACK_BUTTONS_GAP)),
+                        solo_button,
+                    ]
+                    .width(Length::Fixed(TRACK_BUTTONS_GROUP_WIDTH))
+                    .align_y(alignment::Vertical::Center),
                 ]
                 .align_y(alignment::Vertical::Center)
                 .spacing(0)
@@ -1030,11 +1036,14 @@ fn track_list<'a>(
         );
     }
 
-    scrollable(tracks_column)
-        .id(track_list_scroll_id())
-        .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::new()))
-        .style(ui_style::workspace_scrollable)
-        .into()
+    scrollable(row![
+        container(tracks_column).width(Fill),
+        container(text("")).width(TRACK_LIST_SCROLLBAR_GUTTER as f32)
+    ])
+    .id(track_list_scroll_id())
+    .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::new()))
+    .style(ui_style::workspace_scrollable)
+    .into()
 }
 
 struct TempoStubCanvas;
