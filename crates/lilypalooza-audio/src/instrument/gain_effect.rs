@@ -1,19 +1,31 @@
 use serde::{Deserialize, Serialize};
 
 use crate::instrument::{
-    EffectProcessor, ParamValue, ParameterDescriptor, Processor, ProcessorDescriptor,
-    ProcessorState, ProcessorStateError,
+    EffectProcessor, ParameterDescriptor, Processor, ProcessorDescriptor, ProcessorState,
+    ProcessorStateError,
 };
+
+const MIN_GAIN_DB: f32 = -60.0;
+const MAX_GAIN_DB: f32 = 12.0;
+const GAIN_RANGE_DB: f32 = MAX_GAIN_DB - MIN_GAIN_DB;
+const DEFAULT_GAIN_DB: f32 = 0.0;
+const DEFAULT_GAIN_NORMALIZED: f32 = (DEFAULT_GAIN_DB - MIN_GAIN_DB) / GAIN_RANGE_DB;
 
 const GAIN_EFFECT_PARAMS: &[ParameterDescriptor] = &[ParameterDescriptor {
     id: "gain_db",
     name: "Gain",
+    default: DEFAULT_GAIN_NORMALIZED,
 }];
 
 const GAIN_EFFECT_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
     name: "Gain",
     params: GAIN_EFFECT_PARAMS,
+    editor: None,
 };
+
+pub(crate) fn descriptor() -> &'static ProcessorDescriptor {
+    &GAIN_EFFECT_DESCRIPTOR
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 struct GainEffectState {
@@ -22,7 +34,9 @@ struct GainEffectState {
 
 impl Default for GainEffectState {
     fn default() -> Self {
-        Self { gain_db: 0.0 }
+        Self {
+            gain_db: DEFAULT_GAIN_DB,
+        }
     }
 }
 
@@ -44,18 +58,20 @@ impl GainEffectProcessor {
 
 impl Processor for GainEffectProcessor {
     fn descriptor(&self) -> &'static ProcessorDescriptor {
-        &GAIN_EFFECT_DESCRIPTOR
+        descriptor()
     }
 
-    fn set_param(&mut self, id: &str, value: ParamValue) {
-        if id == "gain_db" {
-            match value {
-                ParamValue::Float(value) => self.state.gain_db = value,
-                ParamValue::Int(value) => self.state.gain_db = value as f32,
-                ParamValue::Bool(value) => self.state.gain_db = if value { 0.0 } else { -96.0 },
-                ParamValue::Enum(_) | ParamValue::Text(_) => {}
-            }
+    fn set_param(&mut self, id: &str, normalized: f32) -> bool {
+        if id != "gain_db" {
+            return false;
         }
+        self.state.gain_db = MIN_GAIN_DB + normalized.clamp(0.0, 1.0) * GAIN_RANGE_DB;
+        true
+    }
+
+    fn get_param(&self, id: &str) -> Option<f32> {
+        (id == "gain_db")
+            .then_some(((self.state.gain_db - MIN_GAIN_DB) / GAIN_RANGE_DB).clamp(0.0, 1.0))
     }
 
     fn save_state(&self) -> ProcessorState {
@@ -91,14 +107,14 @@ impl EffectProcessor for GainEffectProcessor {
 
 #[cfg(test)]
 mod tests {
-    use super::GainEffectProcessor;
+    use super::{GAIN_RANGE_DB, GainEffectProcessor, MIN_GAIN_DB};
     use crate::instrument::{EffectProcessor, Processor, ProcessorState};
 
     #[test]
     fn gain_effect_scales_expected_signal() {
         let mut processor =
             GainEffectProcessor::from_state(&ProcessorState::default()).expect("processor");
-        processor.set_param("gain_db", crate::instrument::ParamValue::Float(-6.0));
+        processor.set_param("gain_db", (-6.0 - MIN_GAIN_DB) / GAIN_RANGE_DB);
 
         let left_in = [0.0, 0.25, -0.5, 1.0];
         let right_in = [1.0, -0.5, 0.25, 0.0];

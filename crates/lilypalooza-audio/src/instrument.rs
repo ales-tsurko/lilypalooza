@@ -15,27 +15,22 @@ use knyst::modal_interface::knyst_commands;
 use knyst::prelude::{
     BlockSize, GenState, KnystCommands, MultiThreadedKnystCommands, Resources, Sample, impl_gen,
 };
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use serde::{Deserialize, Serialize};
 pub use soundfont_synth::{SoundfontProcessorState, SoundfontResource};
+
+/// Built-in empty instrument id.
+pub const BUILTIN_NONE_ID: &str = "org.lilypalooza.none";
+/// Built-in SoundFont instrument id.
+pub const BUILTIN_SOUNDFONT_ID: &str = "org.lilypalooza.soundfont";
+/// Built-in gain effect id.
+pub const BUILTIN_GAIN_ID: &str = "org.lilypalooza.gain";
+/// Built-in metronome instrument id.
+pub const BUILTIN_METRONOME_ID: &str = "org.lilypalooza.metronome";
 
 /// Opaque persisted processor state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessorState(pub Vec<u8>);
-
-/// Shared processor parameter value.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ParamValue {
-    /// Boolean parameter.
-    Bool(bool),
-    /// Integer parameter.
-    Int(i64),
-    /// Floating-point parameter.
-    Float(f32),
-    /// Enumerated parameter stored as index.
-    Enum(u32),
-    /// Text parameter.
-    Text(String),
-}
 
 /// Static processor parameter description.
 #[derive(Debug, Clone, Copy)]
@@ -44,6 +39,96 @@ pub struct ParameterDescriptor {
     pub id: &'static str,
     /// User-visible parameter name.
     pub name: &'static str,
+    /// Default parameter value in normalized `[0, 1]`.
+    pub default: f32,
+}
+
+/// Default editor size in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditorSize {
+    /// Width in logical pixels.
+    pub width: u32,
+    /// Height in logical pixels.
+    pub height: u32,
+}
+
+/// Static processor editor description.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditorDescriptor {
+    /// Preferred initial editor size.
+    pub default_size: EditorSize,
+    /// Minimum editor size, when constrained.
+    pub min_size: Option<EditorSize>,
+    /// Whether the editor should be resizable.
+    pub resizable: bool,
+}
+
+/// Native host window handles passed to processor editors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditorParent {
+    /// Parent content/window handle.
+    pub window: RawWindowHandle,
+    /// Parent display handle when required by the backend.
+    pub display: Option<RawDisplayHandle>,
+}
+
+/// Processor editor session lifecycle errors.
+#[derive(thiserror::Error, Debug)]
+pub enum EditorError {
+    /// Processor has no editor.
+    #[error("processor has no editor")]
+    Unsupported,
+    /// Host could not provide a valid window.
+    #[error("editor host is unavailable: {0}")]
+    HostUnavailable(String),
+    /// Backend-specific editor failure.
+    #[error("editor backend failed: {0}")]
+    Backend(String),
+}
+
+/// Live processor controller errors.
+#[derive(thiserror::Error, Debug)]
+pub enum ControllerError {
+    /// Requested parameter id is unknown.
+    #[error("unknown parameter `{0}`")]
+    UnknownParameter(String),
+    /// Backend-specific controller failure.
+    #[error("controller backend failed: {0}")]
+    Backend(String),
+}
+
+/// Live controller API for a running processor instance.
+pub trait Controller: Send {
+    /// Returns the static processor descriptor.
+    fn descriptor(&self) -> &'static ProcessorDescriptor;
+    /// Reads one parameter as normalized `[0, 1]`.
+    fn get_param(&self, id: &str) -> Result<f32, ControllerError>;
+    /// Sets one parameter from normalized `[0, 1]`.
+    fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError>;
+    /// Saves the current processor state.
+    fn save_state(&self) -> Result<ProcessorState, ControllerError>;
+    /// Loads a full processor state.
+    fn load_state(&self, state: &ProcessorState) -> Result<(), ControllerError>;
+    /// Notifies the start of an edit gesture.
+    fn begin_edit(&self, _id: &str) -> Result<(), ControllerError> {
+        Ok(())
+    }
+    /// Notifies the end of an edit gesture.
+    fn end_edit(&self, _id: &str) -> Result<(), ControllerError> {
+        Ok(())
+    }
+}
+
+/// Live processor editor session.
+pub trait EditorSession: Send {
+    /// Attaches the editor view to the host parent.
+    fn attach(&mut self, parent: EditorParent) -> Result<(), EditorError>;
+    /// Detaches the editor view from the host parent.
+    fn detach(&mut self) -> Result<(), EditorError>;
+    /// Updates editor visibility.
+    fn set_visible(&mut self, visible: bool) -> Result<(), EditorError>;
+    /// Resizes the editor content area.
+    fn resize(&mut self, size: EditorSize) -> Result<(), EditorError>;
 }
 
 /// Static processor description.
@@ -53,6 +138,16 @@ pub struct ProcessorDescriptor {
     pub name: &'static str,
     /// Processor parameters.
     pub params: &'static [ParameterDescriptor],
+    /// Optional processor editor support.
+    pub editor: Option<EditorDescriptor>,
+}
+
+impl ProcessorDescriptor {
+    /// Returns one parameter descriptor by id.
+    #[must_use]
+    pub fn param(&self, id: &str) -> Option<&'static ParameterDescriptor> {
+        self.params.iter().find(|param| param.id == id)
+    }
 }
 
 /// Full MIDI event stream passed to instruments.
@@ -97,14 +192,20 @@ pub enum ProcessorStateError {
 pub trait Processor: Send {
     /// Returns the static processor descriptor.
     fn descriptor(&self) -> &'static ProcessorDescriptor;
-    /// Sets one parameter.
-    fn set_param(&mut self, id: &str, value: ParamValue);
+    /// Sets one parameter from normalized `[0, 1]`.
+    fn set_param(&mut self, id: &str, normalized: f32) -> bool;
+    /// Reads one parameter as normalized `[0, 1]`.
+    fn get_param(&self, id: &str) -> Option<f32>;
     /// Saves the full processor state.
     fn save_state(&self) -> ProcessorState;
     /// Loads the full processor state.
     fn load_state(&mut self, state: &ProcessorState) -> Result<(), ProcessorStateError>;
     /// Resets transient runtime state.
     fn reset(&mut self);
+    /// Creates a live editor session for the processor, when supported.
+    fn create_editor_session(&self) -> Result<Option<Box<dyn EditorSession>>, EditorError> {
+        Ok(None)
+    }
 }
 
 /// Processor role for instruments.
@@ -159,7 +260,7 @@ impl Default for InstrumentSlotState {
     fn default() -> Self {
         Self {
             kind: InstrumentKind::BuiltIn {
-                instrument_id: "none".to_string(),
+                instrument_id: BUILTIN_NONE_ID.to_string(),
             },
             state: ProcessorState::default(),
         }
@@ -178,7 +279,7 @@ impl InstrumentSlotState {
     pub fn soundfont(soundfont_id: impl Into<String>, bank: u16, program: u8) -> Self {
         Self {
             kind: InstrumentKind::BuiltIn {
-                instrument_id: "soundfont".to_string(),
+                instrument_id: BUILTIN_SOUNDFONT_ID.to_string(),
             },
             state: soundfont_synth::encode_soundfont_state(&SoundfontProcessorState {
                 soundfont_id: soundfont_id.into(),
@@ -195,18 +296,43 @@ impl InstrumentSlotState {
             self.kind,
             InstrumentKind::BuiltIn {
                 ref instrument_id
-            } if instrument_id == "none"
+            } if instrument_id == BUILTIN_NONE_ID
         )
     }
 
     /// Decodes the typed SoundFont state when this slot contains a SoundFont instrument.
     pub fn soundfont_state(&self) -> Result<Option<SoundfontProcessorState>, ProcessorStateError> {
         match self.kind {
-            InstrumentKind::BuiltIn { ref instrument_id } if instrument_id == "soundfont" => {
+            InstrumentKind::BuiltIn { ref instrument_id }
+                if instrument_id == BUILTIN_SOUNDFONT_ID =>
+            {
                 soundfont_synth::SoundfontProcessor::decode_state(&self.state).map(Some)
             }
             _ => Ok(None),
         }
+    }
+
+    /// Returns the static processor descriptor for this slot, when known.
+    #[must_use]
+    pub fn descriptor(&self) -> Option<&'static ProcessorDescriptor> {
+        instrument_descriptor(&self.kind)
+    }
+
+    /// Returns the static editor descriptor for this slot, when supported.
+    #[must_use]
+    pub fn editor_descriptor(&self) -> Option<EditorDescriptor> {
+        self.descriptor().and_then(|descriptor| descriptor.editor)
+    }
+
+    /// Returns whether this slot supports opening an editor.
+    #[must_use]
+    pub fn supports_editor(&self) -> bool {
+        self.editor_descriptor().is_some()
+    }
+
+    /// Creates a live editor session for this slot, when supported.
+    pub fn create_editor_session(&self) -> Result<Option<Box<dyn EditorSession>>, EditorError> {
+        Ok(None)
     }
 }
 
@@ -232,6 +358,54 @@ pub struct EffectSlotState {
     pub kind: EffectKind,
     /// Opaque persisted processor state.
     pub state: ProcessorState,
+}
+
+impl EffectSlotState {
+    /// Returns the static processor descriptor for this slot, when known.
+    #[must_use]
+    pub fn descriptor(&self) -> Option<&'static ProcessorDescriptor> {
+        effect_descriptor(&self.kind)
+    }
+
+    /// Returns the static editor descriptor for this slot, when supported.
+    #[must_use]
+    pub fn editor_descriptor(&self) -> Option<EditorDescriptor> {
+        self.descriptor().and_then(|descriptor| descriptor.editor)
+    }
+
+    /// Returns whether this slot supports opening an editor.
+    #[must_use]
+    pub fn supports_editor(&self) -> bool {
+        self.editor_descriptor().is_some()
+    }
+
+    /// Creates a live editor session for this slot, when supported.
+    pub fn create_editor_session(&self) -> Result<Option<Box<dyn EditorSession>>, EditorError> {
+        Ok(None)
+    }
+}
+
+/// Returns the static descriptor for one instrument backend, when known.
+#[must_use]
+pub fn instrument_descriptor(kind: &InstrumentKind) -> Option<&'static ProcessorDescriptor> {
+    match kind {
+        InstrumentKind::BuiltIn { instrument_id } if instrument_id == BUILTIN_SOUNDFONT_ID => {
+            Some(soundfont_synth::descriptor())
+        }
+        InstrumentKind::BuiltIn { instrument_id } if instrument_id == BUILTIN_NONE_ID => None,
+        InstrumentKind::BuiltIn { .. } | InstrumentKind::Plugin { .. } => None,
+    }
+}
+
+/// Returns the static descriptor for one effect backend, when known.
+#[must_use]
+pub fn effect_descriptor(kind: &EffectKind) -> Option<&'static ProcessorDescriptor> {
+    match kind {
+        EffectKind::BuiltIn { effect_id } if effect_id == BUILTIN_GAIN_ID => {
+            Some(gain_effect::descriptor())
+        }
+        EffectKind::BuiltIn { .. } | EffectKind::Plugin { .. } => None,
+    }
 }
 
 /// Knyst node wrapper for any instrument processor.
@@ -595,7 +769,7 @@ pub(crate) fn create_effect_processor(
     effect: &EffectSlotState,
 ) -> Result<Option<Box<dyn EffectProcessor>>, ProcessorStateError> {
     match &effect.kind {
-        EffectKind::BuiltIn { effect_id } if effect_id == "gain" => Ok(Some(Box::new(
+        EffectKind::BuiltIn { effect_id } if effect_id == BUILTIN_GAIN_ID => Ok(Some(Box::new(
             gain_effect::GainEffectProcessor::from_state(&effect.state)?,
         ))),
         EffectKind::BuiltIn { .. } | EffectKind::Plugin { .. } => Ok(None),
@@ -749,8 +923,8 @@ mod tests {
     use knyst::prelude::{Beats, graph_output, handle};
 
     use super::{
-        InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle, MidiEvent,
-        ParamValue, Processor, ProcessorDescriptor, ProcessorState, ProcessorStateError,
+        EffectProcessor, InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle,
+        MidiEvent, Processor, ProcessorDescriptor, ProcessorState, ProcessorStateError,
         SharedInstrumentResetState,
         soundfont_synth::{
             LoadedSoundfont, SoundfontProcessor, SoundfontProcessorState, SoundfontSynthSettings,
@@ -767,11 +941,18 @@ mod tests {
             static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
                 name: "Gate",
                 params: &[],
+                editor: None,
             };
             &DESCRIPTOR
         }
 
-        fn set_param(&mut self, _id: &str, _value: ParamValue) {}
+        fn set_param(&mut self, _id: &str, _normalized: f32) -> bool {
+            false
+        }
+
+        fn get_param(&self, _id: &str) -> Option<f32> {
+            None
+        }
 
         fn save_state(&self) -> ProcessorState {
             ProcessorState::default()
@@ -1118,5 +1299,78 @@ mod tests {
         assert!(super::generation_is_current_or_newer(2, 1));
         assert!(super::generation_is_current_or_newer(2, 2));
         assert!(!super::generation_is_current_or_newer(1, 2));
+    }
+
+    #[test]
+    fn soundfont_slot_reports_processor_descriptor_and_no_editor_yet() {
+        let slot = crate::instrument::InstrumentSlotState::soundfont("test", 0, 0);
+
+        let descriptor = slot
+            .descriptor()
+            .expect("soundfont slot should expose processor descriptor");
+
+        assert_eq!(descriptor.name, "SoundFont");
+        assert!(slot.editor_descriptor().is_none());
+        assert!(!slot.supports_editor());
+    }
+
+    #[test]
+    fn gain_effect_slot_reports_processor_descriptor_and_no_editor_yet() {
+        let slot = crate::instrument::EffectSlotState {
+            kind: crate::instrument::EffectKind::BuiltIn {
+                effect_id: crate::instrument::BUILTIN_GAIN_ID.to_string(),
+            },
+            state: crate::instrument::ProcessorState::default(),
+        };
+
+        let descriptor = slot
+            .descriptor()
+            .expect("gain slot should expose processor descriptor");
+
+        assert_eq!(descriptor.name, "Gain");
+        assert!(slot.editor_descriptor().is_none());
+        assert!(!slot.supports_editor());
+    }
+
+    #[test]
+    fn gain_descriptor_normalizes_zero_db_consistently() {
+        let mut processor = crate::instrument::gain_effect::GainEffectProcessor::from_state(
+            &crate::instrument::ProcessorState::default(),
+        )
+        .expect("gain processor should exist");
+        let normalized = processor
+            .get_param("gain_db")
+            .expect("gain should normalize");
+
+        processor.set_param("gain_db", normalized);
+        let mut left_out = [0.0; 1];
+        let mut right_out = [0.0; 1];
+        processor.process(&[1.0], &[1.0], &mut left_out, &mut right_out);
+        assert!((left_out[0] - 1.0).abs() < 1.0e-4);
+        assert!((right_out[0] - 1.0).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn soundfont_program_descriptor_roundtrips_normalized_value() {
+        let resource = test_soundfont_resource();
+        let loaded = LoadedSoundfont::load(&resource).expect("soundfont should load");
+        let mut processor = SoundfontProcessor::new(
+            &loaded.soundfont,
+            SoundfontSynthSettings::new(48_000, 64),
+            SoundfontProcessorState {
+                soundfont_id: resource.id,
+                bank: 0,
+                program: 64,
+            },
+        )
+        .expect("soundfont processor should initialize");
+        let normalized = processor
+            .get_param("program")
+            .expect("program should normalize");
+
+        processor.set_param("program", normalized);
+        let decoded = SoundfontProcessor::decode_state(&processor.save_state())
+            .expect("saved state should decode");
+        assert_eq!(decoded.program, 64);
     }
 }

@@ -3,9 +3,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::instrument::{
-    InstrumentProcessor, MidiEvent, ParamValue, ParameterDescriptor, Processor,
-    ProcessorDescriptor, ProcessorState, ProcessorStateError,
+    InstrumentProcessor, MidiEvent, ParameterDescriptor, Processor, ProcessorDescriptor,
+    ProcessorState, ProcessorStateError,
 };
+
+const MIN_GAIN_DB: f32 = -36.0;
+const MAX_GAIN_DB: f32 = 6.0;
+const GAIN_RANGE_DB: f32 = MAX_GAIN_DB - MIN_GAIN_DB;
+const DEFAULT_GAIN_DB: f32 = -12.0;
+const DEFAULT_GAIN_NORMALIZED: f32 = (DEFAULT_GAIN_DB - MIN_GAIN_DB) / GAIN_RANGE_DB;
+const DEFAULT_PITCH: f32 = 0.5;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SharedMetronomeState {
@@ -15,7 +22,7 @@ pub(crate) struct SharedMetronomeState {
 
 impl Default for SharedMetronomeState {
     fn default() -> Self {
-        Self::new(-12.0, 0.5)
+        Self::new(DEFAULT_GAIN_DB, DEFAULT_PITCH)
     }
 }
 
@@ -49,16 +56,19 @@ const PARAMS: &[ParameterDescriptor] = &[
     ParameterDescriptor {
         id: "gain_db",
         name: "Gain",
+        default: DEFAULT_GAIN_NORMALIZED,
     },
     ParameterDescriptor {
         id: "pitch",
         name: "Pitch",
+        default: DEFAULT_PITCH,
     },
 ];
 
 const DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
     name: "Metronome",
     params: PARAMS,
+    editor: None,
 };
 
 pub(crate) struct MetronomeProcessor {
@@ -116,11 +126,28 @@ impl Processor for MetronomeProcessor {
         &DESCRIPTOR
     }
 
-    fn set_param(&mut self, id: &str, value: ParamValue) {
-        match (id, value) {
-            ("gain_db", ParamValue::Float(value)) => self.shared.set_gain_db(value),
-            ("pitch", ParamValue::Float(value)) => self.shared.set_pitch(value),
-            _ => {}
+    fn set_param(&mut self, id: &str, normalized: f32) -> bool {
+        match id {
+            "gain_db" => {
+                self.shared
+                    .set_gain_db(MIN_GAIN_DB + normalized.clamp(0.0, 1.0) * GAIN_RANGE_DB);
+                true
+            }
+            "pitch" => {
+                self.shared.set_pitch(normalized.clamp(0.0, 1.0));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn get_param(&self, id: &str) -> Option<f32> {
+        match id {
+            "gain_db" => {
+                Some(((self.shared.gain_db() - MIN_GAIN_DB) / GAIN_RANGE_DB).clamp(0.0, 1.0))
+            }
+            "pitch" => Some(self.shared.pitch().clamp(0.0, 1.0)),
+            _ => None,
         }
     }
 

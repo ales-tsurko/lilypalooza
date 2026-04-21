@@ -28,6 +28,7 @@ use messages::{
     PromptMessage, ViewerMessage,
 };
 use piano_roll::PianoRollState;
+use processor_editor_windows::EditorWindowManager;
 use score_cursor::{ScoreCursorMaps, ScoreCursorPlacement};
 use update::update;
 use view::view;
@@ -39,6 +40,7 @@ mod messages;
 mod meters;
 mod mixer;
 mod piano_roll;
+mod processor_editor_windows;
 mod score_cursor;
 mod score_view;
 mod transport_bar;
@@ -167,6 +169,7 @@ struct Lilypalooza {
     open_project_menu_section: Option<ProjectMenuSection>,
     open_project_recent: bool,
     open_shortcuts_dialog: bool,
+    processor_editor_windows: EditorWindowManager,
     shortcuts_search_query: String,
     shortcuts_search_input_id: Id,
     shortcuts_selected_action: Option<settings::ShortcutActionId>,
@@ -652,6 +655,7 @@ fn new(
         open_project_menu_section: None,
         open_project_recent: false,
         open_shortcuts_dialog: false,
+        processor_editor_windows: EditorWindowManager::default(),
         shortcuts_search_query: String::new(),
         shortcuts_search_input_id: Id::unique(),
         shortcuts_selected_action: None,

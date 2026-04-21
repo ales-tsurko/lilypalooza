@@ -2,6 +2,7 @@ use lilypalooza_audio::{BusId, InstrumentSlotState, TrackId};
 
 use super::super::messages::MixerMessage;
 use super::*;
+use crate::app::processor_editor_windows::{EditorOpenOutcome, EditorTarget};
 
 impl Lilypalooza {
     pub(in crate::app) fn handle_primary_mouse_pressed(&mut self, pressed: bool) -> Task<Message> {
@@ -110,6 +111,9 @@ impl Lilypalooza {
                     return Task::none();
                 };
                 return self.start_bus_rename(bus_id, WorkspacePaneKind::Mixer, name);
+            }
+            MixerMessage::OpenEditor(target) => {
+                return self.open_editor_target(target);
             }
             MixerMessage::TrackRenameInputChanged(value) => {
                 self.update_track_rename_value(value);
@@ -227,6 +231,7 @@ impl Lilypalooza {
             MixerMessage::SelectTrack(_) => {}
             MixerMessage::StartTrackRename(_)
             | MixerMessage::StartBusRename(_)
+            | MixerMessage::OpenEditor(_)
             | MixerMessage::TrackRenameInputChanged(_)
             | MixerMessage::OpenTrackColorPicker
             | MixerMessage::SubmitTrackColor(_)
@@ -272,6 +277,7 @@ fn mixer_message_history_mode(
         | MixerMessage::InstrumentViewportScrolled(_)
         | MixerMessage::BusViewportScrolled(_)
         | MixerMessage::OpenTrackColorPicker
+        | MixerMessage::OpenEditor(_)
         | MixerMessage::PreviewTrackColor(_) => MixerHistoryMode::None,
         MixerMessage::SetMasterGain(_)
         | MixerMessage::SetMasterPan(_)
@@ -302,6 +308,95 @@ fn mixer_message_history_mode(
     }
 }
 
+impl Lilypalooza {
+    fn open_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
+        let Some((title, descriptor, session_result)) =
+            self.playback.as_ref().and_then(|playback| {
+                let mixer = playback.mixer_state();
+                if target.strip_index == 0 {
+                    let effect_index = target.processor_index.checked_sub(1)?;
+                    return mixer
+                        .master()
+                        .effects
+                        .get(effect_index)
+                        .cloned()
+                        .map(|slot| {
+                            (
+                                format!("Master Effect {}", effect_index + 1),
+                                slot.editor_descriptor(),
+                                slot.create_editor_session(),
+                            )
+                        });
+                }
+
+                let track_base = 1;
+                let bus_base = track_base + mixer.track_count();
+                if target.strip_index < bus_base {
+                    let track_index = target.strip_index - track_base;
+                    return mixer.tracks().get(track_index).and_then(|track| {
+                        if target.processor_index == 0 {
+                            return Some((
+                                format!("{} Instrument", track.name),
+                                track.instrument.editor_descriptor(),
+                                track.instrument.create_editor_session(),
+                            ));
+                        }
+
+                        let effect_index = target.processor_index - 1;
+                        track.effects.get(effect_index).cloned().map(|slot| {
+                            (
+                                format!("{} Effect {}", track.name, effect_index + 1),
+                                slot.editor_descriptor(),
+                                slot.create_editor_session(),
+                            )
+                        })
+                    });
+                }
+
+                let bus_index = target.strip_index - bus_base;
+                let effect_index = target.processor_index.checked_sub(1)?;
+                mixer.buses().get(bus_index).and_then(|bus| {
+                    bus.effects.get(effect_index).cloned().map(|slot| {
+                        (
+                            format!("{} Effect {}", bus.name, effect_index + 1),
+                            slot.editor_descriptor(),
+                            slot.create_editor_session(),
+                        )
+                    })
+                })
+            })
+        else {
+            return Task::none();
+        };
+
+        self.open_editor(target, title, descriptor, session_result)
+    }
+
+    fn open_editor(
+        &mut self,
+        target: EditorTarget,
+        title: String,
+        descriptor: Option<lilypalooza_audio::EditorDescriptor>,
+        session_result: Result<
+            Option<Box<dyn lilypalooza_audio::EditorSession>>,
+            lilypalooza_audio::EditorError,
+        >,
+    ) -> Task<Message> {
+        let Some(descriptor) = descriptor else {
+            return Task::none();
+        };
+        let Ok(Some(session)) = session_result else {
+            return Task::none();
+        };
+        match self
+            .processor_editor_windows
+            .open_or_focus(target, title, descriptor, session)
+        {
+            EditorOpenOutcome::Opened(_) | EditorOpenOutcome::Focused(_) => Task::none(),
+        }
+    }
+}
+
 fn sync_piano_roll_mix_from_mixer_state(
     piano_roll: &mut super::super::piano_roll::PianoRollState,
     mixer: &lilypalooza_audio::MixerState,
@@ -322,6 +417,7 @@ mod tests {
     use super::{Lilypalooza, MixerHistoryMode, mixer_message_history_mode};
     use crate::app::RenameTarget;
     use crate::app::messages::MixerMessage;
+    use crate::app::processor_editor_windows::EditorTarget;
     use crate::state::ProjectState;
     use lilypalooza_audio::{AudioEngine, AudioEngineOptions, BusId, MixerState};
 
@@ -408,6 +504,23 @@ mod tests {
                 .bus(BusId(bus_id.0))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn track_instrument_without_editor_does_not_open_processor_window() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+
+        let target = EditorTarget {
+            strip_index: 1,
+            processor_index: 0,
+        };
+        let _ = app.handle_mixer_message(MixerMessage::OpenEditor(target));
+
+        assert!(!app.processor_editor_windows.is_open(target));
     }
 
     #[test]

@@ -7,9 +7,12 @@ use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 use serde::{Deserialize, Serialize};
 
 use crate::instrument::{
-    InstrumentProcessor, MidiEvent, ParamValue, ParameterDescriptor, Processor,
-    ProcessorDescriptor, ProcessorState, ProcessorStateError,
+    InstrumentProcessor, MidiEvent, ParameterDescriptor, Processor, ProcessorDescriptor,
+    ProcessorState, ProcessorStateError,
 };
+
+const MIDI_14BIT_MAX: u16 = 16_383;
+const MIDI_PROGRAM_MAX: u8 = 127;
 
 /// Shared SoundFont resource configured in the mixer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,23 +163,26 @@ impl SharedSoundfontProgramState {
 
 const SOUNDFONT_PARAMS: &[ParameterDescriptor] = &[
     ParameterDescriptor {
-        id: "soundfont_id",
-        name: "SoundFont",
-    },
-    ParameterDescriptor {
         id: "bank",
         name: "Bank",
+        default: 0.0,
     },
     ParameterDescriptor {
         id: "program",
         name: "Program",
+        default: 0.0,
     },
 ];
 
 const SOUNDFONT_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
     name: "SoundFont",
     params: SOUNDFONT_PARAMS,
+    editor: None,
 };
+
+pub(crate) fn descriptor() -> &'static ProcessorDescriptor {
+    &SOUNDFONT_DESCRIPTOR
+}
 
 impl SoundfontProcessor {
     const TRACK_CHANNEL: i32 = 0;
@@ -264,23 +270,31 @@ impl SoundfontProcessor {
 
 impl Processor for SoundfontProcessor {
     fn descriptor(&self) -> &'static ProcessorDescriptor {
-        &SOUNDFONT_DESCRIPTOR
+        descriptor()
     }
 
-    fn set_param(&mut self, id: &str, value: ParamValue) {
-        match (id, value) {
-            ("soundfont_id", ParamValue::Text(soundfont_id)) => {
-                self.state.soundfont_id = soundfont_id;
-            }
-            ("bank", ParamValue::Int(bank)) => {
-                self.state.bank = bank.clamp(0, 16_383) as u16;
+    fn set_param(&mut self, id: &str, normalized: f32) -> bool {
+        let normalized = normalized.clamp(0.0, 1.0);
+        match id {
+            "bank" => {
+                self.state.bank = (normalized * f32::from(MIDI_14BIT_MAX)).round() as u16;
                 self.apply_program();
+                true
             }
-            ("program", ParamValue::Int(program)) => {
-                self.state.program = program.clamp(0, 127) as u8;
+            "program" => {
+                self.state.program = (normalized * f32::from(MIDI_PROGRAM_MAX)).round() as u8;
                 self.apply_program();
+                true
             }
-            _ => {}
+            _ => false,
+        }
+    }
+
+    fn get_param(&self, id: &str) -> Option<f32> {
+        match id {
+            "bank" => Some(f32::from(self.state.bank) / f32::from(MIDI_14BIT_MAX)),
+            "program" => Some(f32::from(self.state.program) / f32::from(MIDI_PROGRAM_MAX)),
+            _ => None,
         }
     }
 
@@ -345,7 +359,7 @@ impl InstrumentProcessor for SoundfontProcessor {
                 )
             }
             MidiEvent::PitchBend { value, .. } => {
-                let midi_value = (i32::from(value) + 8192).clamp(0, 16_383);
+                let midi_value = (i32::from(value) + 8192).clamp(0, i32::from(MIDI_14BIT_MAX));
                 self.synthesizer.process_midi_message(
                     Self::TRACK_CHANNEL,
                     0xE0,

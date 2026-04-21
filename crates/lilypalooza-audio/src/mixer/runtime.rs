@@ -9,10 +9,10 @@ use crate::instrument::soundfont_synth::{
     SoundfontSynthSettings,
 };
 use crate::instrument::{
-    EffectProcessorNode, EffectRuntimeHandle, InstrumentKind, InstrumentProcessor,
-    InstrumentProcessorNode, InstrumentRuntimeHandle, ProcessorStateError,
-    ScheduledInstrumentEvent, SharedInstrumentResetState, create_effect_processor,
-    decode_instrument_event, generation_is_current_or_newer,
+    BUILTIN_NONE_ID, BUILTIN_SOUNDFONT_ID, EffectProcessorNode, EffectRuntimeHandle,
+    InstrumentKind, InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle,
+    ProcessorStateError, ScheduledInstrumentEvent, SharedInstrumentResetState,
+    create_effect_processor, decode_instrument_event, generation_is_current_or_newer,
 };
 use crate::mixer::{
     BusId, BusSend, BusTrack, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot,
@@ -445,7 +445,7 @@ impl MixerRuntime {
             let InstrumentKind::BuiltIn { instrument_id } = &track.instrument.kind else {
                 continue;
             };
-            if instrument_id != "soundfont" {
+            if instrument_id != BUILTIN_SOUNDFONT_ID {
                 continue;
             }
             let Ok(state) = SoundfontProcessor::decode_state(&track.instrument.state) else {
@@ -1271,7 +1271,7 @@ impl TrackInstrumentRuntime {
         let InstrumentKind::BuiltIn { instrument_id } = &track.instrument.kind else {
             return Ok(false);
         };
-        if instrument_id != "soundfont" {
+        if instrument_id != BUILTIN_SOUNDFONT_ID {
             return Ok(false);
         }
         let state = SoundfontProcessor::decode_state(&track.instrument.state)?;
@@ -1520,7 +1520,7 @@ fn create_track_instrument(
 ) -> Result<Option<TrackInstrumentRuntime>, MixerRuntimeError> {
     match &track.instrument.kind {
         InstrumentKind::BuiltIn { instrument_id } => {
-            if instrument_id != "soundfont" {
+            if instrument_id != BUILTIN_SOUNDFONT_ID {
                 return Ok(None);
             }
             let state = SoundfontProcessor::decode_state(&track.instrument.state)?;
@@ -1680,7 +1680,8 @@ fn route_bus_id(route: TrackRoute) -> Option<BusId> {
 fn track_needs_runtime(track: &MixerTrack) -> bool {
     !matches!(
         track.instrument.kind,
-        InstrumentKind::BuiltIn { ref instrument_id } if instrument_id == "none"
+        InstrumentKind::BuiltIn { ref instrument_id }
+            if instrument_id == BUILTIN_NONE_ID
     ) || !track.effects.is_empty()
 }
 

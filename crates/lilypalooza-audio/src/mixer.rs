@@ -1078,7 +1078,7 @@ mod tests {
             .effects
             .push(EffectSlotState {
                 kind: EffectKind::BuiltIn {
-                    effect_id: "gain".to_string(),
+                    effect_id: crate::instrument::BUILTIN_GAIN_ID.to_string(),
                 },
                 state: ProcessorState::default(),
             });

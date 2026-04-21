@@ -349,8 +349,8 @@ mod tests {
     use super::{AudioEngine, AudioEngineOptions, wait_for_transport_reset_to};
     use crate::instrument::InstrumentSlotState;
     use crate::instrument::{
-        InstrumentProcessor, InstrumentProcessorNode, MidiEvent, ParamValue, Processor,
-        ProcessorDescriptor, ProcessorState, ProcessorStateError,
+        InstrumentProcessor, InstrumentProcessorNode, MidiEvent, Processor, ProcessorDescriptor,
+        ProcessorState, ProcessorStateError,
     };
     use crate::mixer::{INSTRUMENT_TRACK_COUNT, MixerState, TrackId};
     use crate::test_utils::{
@@ -521,11 +521,18 @@ mod tests {
             static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
                 name: "Test Note Processor",
                 params: &[],
+                editor: None,
             };
             &DESCRIPTOR
         }
 
-        fn set_param(&mut self, _id: &str, _value: ParamValue) {}
+        fn set_param(&mut self, _id: &str, _normalized: f32) -> bool {
+            false
+        }
+
+        fn get_param(&self, _id: &str) -> Option<f32> {
+            None
+        }
 
         fn save_state(&self) -> ProcessorState {
             ProcessorState::default()

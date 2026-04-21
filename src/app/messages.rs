@@ -267,6 +267,8 @@ pub(super) enum MixerMessage {
     ToggleTrackMute(usize),
     ToggleTrackSolo(usize),
     SelectTrackInstrument(usize, super::mixer::InstrumentChoice),
+    #[allow(dead_code)]
+    OpenEditor(super::processor_editor_windows::EditorTarget),
     ResetBusMeter(u16),
     SetBusGain(u16, f32),
     SetBusPan(u16, f32),

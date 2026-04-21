@@ -17,8 +17,10 @@ pub use engine::{
     EngineObservabilitySnapshot,
 };
 pub use instrument::{
+    BUILTIN_GAIN_ID, BUILTIN_METRONOME_ID, BUILTIN_NONE_ID, BUILTIN_SOUNDFONT_ID, Controller,
+    ControllerError, EditorDescriptor, EditorError, EditorParent, EditorSession, EditorSize,
     EffectKind, EffectProcessor, EffectRuntimeHandle, EffectSlotState, InstrumentKind,
-    InstrumentProcessor, InstrumentRuntimeHandle, InstrumentSlotState, MidiEvent, ParamValue,
+    InstrumentProcessor, InstrumentRuntimeHandle, InstrumentSlotState, MidiEvent,
     ParameterDescriptor, Processor, ProcessorDescriptor, ProcessorState, ProcessorStateError,
     SoundfontProcessorState, SoundfontResource,
 };
