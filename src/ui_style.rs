@@ -664,6 +664,43 @@ pub(crate) fn button_danger(theme: &Theme, status: button::Status) -> button::St
     }
 }
 
+pub(crate) fn button_ghost_subtle(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let base = button::Style {
+        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.0).into()),
+        text_color: palette.background.weak.text,
+        border: border::rounded(RADIUS_UI).width(1).color(Color::from_rgba(
+            palette.background.strong.color.r,
+            palette.background.strong.color.g,
+            palette.background.strong.color.b,
+            0.55,
+        )),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.background.strong.color.into()),
+            text_color: palette.background.strong.text,
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.background.base.color.into()),
+            text_color: palette.background.base.text,
+            border: border::rounded(RADIUS_UI)
+                .width(1)
+                .color(palette.background.base.color),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.weakest.text,
+            ..base
+        },
+    }
+}
+
 pub(crate) fn button_compact_solid(theme: &Theme, status: button::Status) -> button::Style {
     let palette = theme.extended_palette();
 

@@ -131,6 +131,11 @@ impl Lilypalooza {
             MixerMessage::AddBus => {
                 let _ = mixer.add_bus(format!("Bus {}", mixer.bus_count() + 1));
             }
+            MixerMessage::RemoveBus(id) => {
+                let _ = mixer.remove_bus(BusId(id));
+                self.piano_roll
+                    .set_global_solo_active(mixer_has_any_solo(&mixer));
+            }
             MixerMessage::InstrumentViewportScrolled(viewport) => {
                 self.mixer_instrument_scroll_x = viewport.absolute_offset().x;
                 self.mixer_instrument_viewport_width = viewport.bounds().width;
@@ -266,6 +271,7 @@ fn mixer_message_history_mode(
             }
         }
         MixerMessage::AddBus
+        | MixerMessage::RemoveBus(_)
         | MixerMessage::StartTrackRename(_)
         | MixerMessage::StartBusRename(_)
         | MixerMessage::TrackRenameInputChanged(_)
@@ -300,6 +306,7 @@ mod tests {
     use super::{Lilypalooza, MixerHistoryMode, mixer_message_history_mode};
     use crate::app::RenameTarget;
     use crate::app::messages::MixerMessage;
+    use lilypalooza_audio::{AudioEngine, AudioEngineOptions, BusId, MixerState};
 
     fn test_app() -> Lilypalooza {
         let (app, _task) = super::super::super::new(None, None, false);
@@ -353,5 +360,36 @@ mod tests {
         assert_eq!(app.track_name_override(0), Some("Lead"));
         assert!(app.renaming_target.is_none());
         assert!(app.track_rename_value.is_empty());
+    }
+
+    #[test]
+    fn remove_bus_message_removes_bus() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+        let bus_id = app
+            .playback
+            .as_ref()
+            .expect("playback should exist")
+            .mixer_state()
+            .buses()
+            .first()
+            .map(|bus| bus.id)
+            .expect("bus should be added");
+
+        let _ = app.handle_mixer_message(MixerMessage::RemoveBus(bus_id.0));
+
+        assert!(
+            app.playback
+                .as_ref()
+                .expect("playback should exist")
+                .mixer_state()
+                .bus(BusId(bus_id.0))
+                .is_err()
+        );
     }
 }

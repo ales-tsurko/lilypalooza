@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use iced::widget::Id;
 use iced::widget::{
-    button, column, container, lazy, mouse_area, pick_list, responsive, row, scrollable, text,
-    text_input,
+    button, column, container, lazy, mouse_area, pick_list, responsive, row, scrollable, stack,
+    svg, text, text_input,
 };
 use iced::{Color, Element, Fill, FillPortion, Length, alignment};
 use iced_aw::helpers::color_picker_with_change;
@@ -21,7 +21,7 @@ use super::meters::{
     stereo_meter_with_scale,
 };
 use super::{Lilypalooza, Message};
-use crate::{fonts, ui_style};
+use crate::{fonts, icons, ui_style};
 
 pub(super) const MIXER_MIN_HEIGHT: f32 = 340.0;
 pub(super) const MIXER_MIN_WIDTH: f32 = 520.0;
@@ -946,7 +946,7 @@ fn bus_track_area(
                     } else {
                         GainControlMode::Fader
                     };
-                    strip_panel(
+                    let base_strip = strip_panel(
                         strip_shell(
                             bus_title_content(
                                 bus_id,
@@ -1002,7 +1002,39 @@ fn bus_track_area(
                         ),
                         STRIP_WIDTH,
                         strip_height,
+                    );
+                    let remove_button: Element<'static, Message> = container(
+                        button(
+                            container(
+                                svg(icons::x())
+                                    .width(Length::Fixed(10.0))
+                                    .height(Length::Fixed(10.0))
+                                    .content_fit(iced::ContentFit::Contain)
+                                    .style(move |theme: &iced::Theme, _status| {
+                                        let palette = theme.extended_palette();
+                                        svg::Style {
+                                            color: Some(palette.background.weak.text),
+                                        }
+                                    }),
+                            )
+                            .width(Length::Fixed(16.0))
+                            .height(Length::Fixed(16.0))
+                            .center_x(Length::Fixed(16.0))
+                            .center_y(Length::Fixed(16.0)),
+                        )
+                        .style(ui_style::button_ghost_subtle)
+                        .padding(0)
+                        .on_press(Message::Mixer(MixerMessage::RemoveBus(bus_id))),
                     )
+                    .width(Fill)
+                    .height(Fill)
+                    .align_x(alignment::Horizontal::Right)
+                    .align_y(alignment::Vertical::Top)
+                    .padding([6, 6])
+                    .into();
+                    let layered: Element<'static, Message> =
+                        stack([base_strip, remove_button]).into();
+                    layered
                 },
             ))
         },

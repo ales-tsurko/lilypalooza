@@ -245,6 +245,7 @@ pub(super) enum PianoRollMessage {
 #[derive(Debug, Clone)]
 pub(super) enum MixerMessage {
     AddBus,
+    RemoveBus(u16),
     InstrumentViewportScrolled(iced::widget::scrollable::Viewport),
     BusViewportScrolled(iced::widget::scrollable::Viewport),
     ResetMasterMeter,
