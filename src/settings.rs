@@ -399,6 +399,7 @@ pub(crate) enum ShortcutActionId {
     PianoRollZoomReset,
     TransportPlayPause,
     TransportRewind,
+    ToggleMetronome,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

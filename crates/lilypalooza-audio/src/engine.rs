@@ -124,6 +124,7 @@ impl AudioEngine {
         for track in mixer.state.tracks() {
             sequencer.sync_track_handle(&mut commands, track.id, mixer.instrument_handle(track.id));
         }
+        sequencer.sync_metronome_handle(&mut commands, Some(mixer.metronome_handle()));
         commands.set_scheduler_extension(Box::new(sequencer.scheduler_extension()));
         Ok(Self {
             mixer,
@@ -197,6 +198,18 @@ impl AudioEngine {
     pub fn clear_score(&mut self) {
         self.prepare_for_score_reload();
         self.sequencer().clear();
+    }
+
+    pub fn set_metronome_enabled(&mut self, enabled: bool) {
+        self.sequencer.set_metronome_enabled(enabled);
+    }
+
+    pub fn set_metronome_gain_db(&mut self, gain_db: f32) {
+        self.mixer.runtime.set_metronome_gain_db(gain_db);
+    }
+
+    pub fn set_metronome_pitch(&mut self, pitch: f32) {
+        self.mixer.runtime.set_metronome_pitch(pitch);
     }
 
     pub fn replace_score_from_midi_bytes(&mut self, bytes: &[u8]) -> Result<(), SequencerError> {

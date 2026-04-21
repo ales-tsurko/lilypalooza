@@ -17,6 +17,23 @@ pub(crate) struct TrackColorOverride {
     pub(crate) a: f32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub(crate) struct MetronomeState {
+    pub(crate) enabled: bool,
+    pub(crate) gain_db: f32,
+    pub(crate) pitch: f32,
+}
+
+impl Default for MetronomeState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            gain_db: -12.0,
+            pitch: 0.5,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct GlobalState {
@@ -50,6 +67,7 @@ pub(crate) struct ProjectState {
     pub(crate) track_name_overrides: Vec<Option<String>>,
     #[serde(skip_serializing_if = "track_color_overrides_is_empty")]
     pub(crate) track_color_overrides: Vec<Option<TrackColorOverride>>,
+    pub(crate) metronome: MetronomeState,
 }
 
 pub(crate) fn load_global() -> Result<GlobalState, String> {
@@ -217,7 +235,7 @@ fn global_state_load_path() -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProjectState, TrackColorOverride};
+    use super::{MetronomeState, ProjectState, TrackColorOverride};
 
     #[test]
     fn project_state_roundtrip_preserves_track_name_overrides() {
@@ -251,5 +269,22 @@ mod tests {
         let parsed: ProjectState = ron::from_str(&serialized).expect("state should parse");
 
         assert_eq!(parsed.track_color_overrides, state.track_color_overrides);
+    }
+
+    #[test]
+    fn project_state_roundtrip_preserves_metronome_state() {
+        let state = ProjectState {
+            metronome: MetronomeState {
+                enabled: true,
+                gain_db: -9.5,
+                pitch: 0.73,
+            },
+            ..ProjectState::default()
+        };
+
+        let serialized = ron::to_string(&state).expect("state should serialize");
+        let parsed: ProjectState = ron::from_str(&serialized).expect("state should parse");
+
+        assert_eq!(parsed.metronome, state.metronome);
     }
 }

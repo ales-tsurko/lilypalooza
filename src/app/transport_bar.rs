@@ -1,9 +1,10 @@
 use std::time::Duration;
 
-use iced::widget::{button, container, row, slider, svg, text, tooltip};
+use iced::widget::{button, container, mouse_area, row, slider, svg, text, tooltip};
 use iced::{ContentFit, Element, Fill, Length, alignment};
+use iced_aw::{DropDown, drop_down};
 
-use super::{Lilypalooza, Message, PianoRollMessage};
+use super::{Lilypalooza, Message, PianoRollMessage, controls};
 use crate::fonts;
 use crate::icons;
 use crate::midi::{MidiRollData, TimeSignatureChange};
@@ -139,6 +140,72 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     .step(0.001)
     .width(Fill);
 
+    let metronome_button = button(
+        container(transport_icon(icons::metronome()))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill),
+    )
+    .style(if app.metronome.enabled {
+        ui_style::button_active
+    } else {
+        ui_style::button_window_control
+    })
+    .padding(0)
+    .width(Length::Fixed(ICON_BUTTON_WIDTH))
+    .height(Length::Fixed(ICON_BUTTON_HEIGHT))
+    .on_press(Message::PianoRoll(
+        PianoRollMessage::TransportToggleMetronome,
+    ));
+    let metronome_button = mouse_area(metronome_button).on_right_press(Message::PianoRoll(
+        PianoRollMessage::TransportOpenMetronomeMenu,
+    ));
+    let metronome_popup = container(
+        iced::widget::column![
+            metronome_setting_row("Gain", app.metronome.gain_db, "", "dB"),
+            controls::horizontal_slider(app.metronome.gain_db, -36.0, 6.0, 0.5, -12.0, |value| {
+                Message::PianoRoll(PianoRollMessage::TransportMetronomeGainChanged(value))
+            }),
+            metronome_setting_row("Pitch", app.metronome.pitch * 100.0, "", "%"),
+            controls::horizontal_slider(app.metronome.pitch, 0.0, 1.0, 0.01, 0.5, |value| {
+                Message::PianoRoll(PianoRollMessage::TransportMetronomePitchChanged(value))
+            }),
+        ]
+        .spacing(ui_style::SPACE_XS),
+    )
+    .width(Length::Fixed(220.0))
+    .padding(ui_style::PADDING_SM)
+    .style(ui_style::popup_surface);
+    let metronome_control: Element<'_, Message> =
+        DropDown::new(metronome_button, metronome_popup, app.metronome_menu_open)
+            .width(Length::Shrink)
+            .on_dismiss(Message::PianoRoll(
+                PianoRollMessage::TransportCloseMetronomeMenu,
+            ))
+            .alignment(drop_down::Alignment::Top)
+            .into();
+    let metronome_control = if app.metronome_menu_open {
+        metronome_control
+    } else {
+        super::dock_view::delayed_tooltip(
+            app,
+            "transport-metronome",
+            metronome_control,
+            text(
+                shortcuts::label_for_action(
+                    &app.shortcut_settings,
+                    ShortcutAction::ToggleMetronome,
+                )
+                .map(|shortcut| format!("Metronome ({shortcut})\nRight-click for settings"))
+                .unwrap_or_else(|| "Metronome\nRight-click for settings".to_string()),
+            )
+            .size(ui_style::FONT_SIZE_UI_XS)
+            .into(),
+            tooltip::Position::Top,
+        )
+    };
+
     container(
         iced::widget::column![
             container(text(""))
@@ -158,7 +225,7 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
                         .font(fonts::MONO),
                     seek_slider,
                     row![
-                        transport_icon(icons::metronome()),
+                        metronome_control,
                         text(tempo_label)
                             .size(ui_style::FONT_SIZE_UI_XS)
                             .font(fonts::MONO),
@@ -199,6 +266,33 @@ fn transport_icon(icon: svg::Handle) -> Element<'static, Message> {
         .content_fit(ContentFit::Contain)
         .style(ui_style::svg_window_control)
         .into()
+}
+
+fn metronome_setting_row<'a>(
+    label: &'a str,
+    value: f32,
+    zero_label: &'a str,
+    suffix: &'a str,
+) -> Element<'a, Message> {
+    let value_label = if !zero_label.is_empty() && value <= -35.5 {
+        zero_label.to_string()
+    } else if suffix.is_empty() {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.0}{suffix}")
+    };
+    row![
+        text(label).size(ui_style::FONT_SIZE_UI_XS),
+        container(
+            text(value_label)
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .font(fonts::MONO)
+        )
+        .width(Fill)
+        .align_x(alignment::Horizontal::Right),
+    ]
+    .align_y(alignment::Vertical::Center)
+    .into()
 }
 
 fn tempo_bpm_at_tick(data: &MidiRollData, tick: u64) -> f32 {

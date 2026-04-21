@@ -26,6 +26,7 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn focus_editor_file_browser(&mut self) {
+        self.focused_workspace_pane = Some(WorkspacePaneKind::Editor);
         self.editor_file_browser_focused = true;
         self.editor.lose_focus();
     }
@@ -120,6 +121,17 @@ impl Lilypalooza {
         {
             return Task::none();
         }
+        if self.metronome_menu_open
+            && matches!(
+                key_press.key,
+                keyboard::Key::Named(keyboard::key::Named::Escape)
+            )
+        {
+            return update(
+                self,
+                Message::PianoRoll(PianoRollMessage::TransportCloseMetronomeMenu),
+            );
+        }
         if self.renaming_target.is_some()
             && matches!(key_press.status, iced::event::Status::Captured)
         {
@@ -153,12 +165,35 @@ impl Lilypalooza {
             ShortcutInput::new(&key_press.key, key_press.physical_key, key_press.modifiers);
 
         if let Some(action) = shortcuts::resolve_global(&self.shortcut_settings, shortcut_input) {
+            if action == ShortcutAction::ToggleMetronome
+                && self.focused_workspace_pane() == Some(WorkspacePaneKind::Editor)
+            {
+                return Task::none();
+            }
             return self.handle_shortcut_action(action);
         }
 
         if let Some(action) = shortcuts::resolve_navigation(&self.shortcut_settings, shortcut_input)
         {
             return self.handle_shortcut_action(action);
+        }
+
+        if self.editor_file_browser_focused {
+            match key_press.key {
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                    return self.handle_editor_file_browser_move(-1);
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                    return self.handle_editor_file_browser_move(1);
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                    return self.handle_editor_file_browser_column(false);
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                    return self.handle_editor_file_browser_column(true);
+                }
+                _ => {}
+            }
         }
 
         let Some(focused_pane) = self.focused_workspace_pane() else {
@@ -192,24 +227,6 @@ impl Lilypalooza {
             shortcuts::resolve_contextual(&self.shortcut_settings, focused_pane, shortcut_input)
         {
             return self.handle_shortcut_action(action);
-        }
-
-        if focused_pane == WorkspacePaneKind::Editor && self.editor_file_browser_focused {
-            return match key_press.key {
-                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                    self.handle_editor_file_browser_move(-1)
-                }
-                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                    self.handle_editor_file_browser_move(1)
-                }
-                keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
-                    self.handle_editor_file_browser_column(false)
-                }
-                keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
-                    self.handle_editor_file_browser_column(true)
-                }
-                _ => Task::none(),
-            };
         }
 
         Task::none()
@@ -702,6 +719,16 @@ impl Lilypalooza {
             ),
             ShortcutAction::TransportRewind => {
                 update(self, Message::PianoRoll(PianoRollMessage::TransportRewind))
+            }
+            ShortcutAction::ToggleMetronome => {
+                if self.focused_workspace_pane() == Some(WorkspacePaneKind::Editor) {
+                    Task::none()
+                } else {
+                    update(
+                        self,
+                        Message::PianoRoll(PianoRollMessage::TransportToggleMetronome),
+                    )
+                }
             }
             ShortcutAction::ScoreScrollUp => update(self, Message::Viewer(ViewerMessage::ScrollUp)),
             ShortcutAction::ScoreScrollDown => {

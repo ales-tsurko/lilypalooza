@@ -38,7 +38,12 @@ impl Lilypalooza {
             PianoRollMessage::TransportSeekNormalized(_)
             | PianoRollMessage::TransportSeekReleased
             | PianoRollMessage::TransportPlayPause
-            | PianoRollMessage::TransportRewind => {}
+            | PianoRollMessage::TransportRewind
+            | PianoRollMessage::TransportToggleMetronome
+            | PianoRollMessage::TransportOpenMetronomeMenu
+            | PianoRollMessage::TransportCloseMetronomeMenu
+            | PianoRollMessage::TransportMetronomeGainChanged(_)
+            | PianoRollMessage::TransportMetronomePitchChanged(_) => {}
             PianoRollMessage::ViewportCursorMoved(_)
             | PianoRollMessage::ViewportCursorLeft
             | PianoRollMessage::RollScrolled { .. } => {}
@@ -205,6 +210,27 @@ impl Lilypalooza {
                 let target_tick = self.rewind_target_tick();
 
                 self.seek_playback_ticks(target_tick);
+            }
+            PianoRollMessage::TransportToggleMetronome => {
+                self.metronome.enabled = !self.metronome.enabled;
+                self.apply_metronome_state_to_playback();
+                self.persist_settings();
+            }
+            PianoRollMessage::TransportOpenMetronomeMenu => {
+                self.metronome_menu_open = true;
+            }
+            PianoRollMessage::TransportCloseMetronomeMenu => {
+                self.metronome_menu_open = false;
+            }
+            PianoRollMessage::TransportMetronomeGainChanged(gain_db) => {
+                self.metronome.gain_db = gain_db.clamp(-36.0, 6.0);
+                self.apply_metronome_state_to_playback();
+                self.persist_settings();
+            }
+            PianoRollMessage::TransportMetronomePitchChanged(pitch) => {
+                self.metronome.pitch = pitch.clamp(0.0, 1.0);
+                self.apply_metronome_state_to_playback();
+                self.persist_settings();
             }
         }
 

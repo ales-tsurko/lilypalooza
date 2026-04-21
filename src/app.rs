@@ -209,6 +209,8 @@ struct Lilypalooza {
     track_rename_color_value: Color,
     track_name_overrides: Vec<Option<String>>,
     track_color_overrides: Vec<Option<Color>>,
+    metronome: crate::state::MetronomeState,
+    metronome_menu_open: bool,
     editor_recent_files: Vec<PathBuf>,
     recent_projects: Vec<PathBuf>,
     editor_recent_files_limit: usize,
@@ -686,6 +688,8 @@ fn new(
         track_rename_color_value: crate::track_colors::default_track_color(0),
         track_name_overrides: Vec::new(),
         track_color_overrides: Vec::new(),
+        metronome: crate::state::MetronomeState::default(),
+        metronome_menu_open: false,
         editor_recent_files: stored_state.editor_recent_files.clone(),
         recent_projects: stored_state.recent_projects.clone(),
         editor_recent_files_limit: stored_settings.editor_recent_files_limit.max(1),
@@ -1345,6 +1349,21 @@ mod tests {
         })
     }
 
+    fn primary_char_key_press(value: &str, code: keyboard::key::Code) -> Message {
+        let mut modifiers = keyboard::Modifiers::default();
+        if cfg!(target_os = "macos") {
+            modifiers.insert(keyboard::Modifiers::COMMAND);
+        } else {
+            modifiers.insert(keyboard::Modifiers::CTRL);
+        }
+        Message::KeyPressed(KeyPress {
+            status: event::Status::Ignored,
+            key: keyboard::Key::Character(value.into()),
+            physical_key: keyboard::key::Physical::Code(code),
+            modifiers,
+        })
+    }
+
     fn active_browser_column_index(app: &Lilypalooza) -> Option<usize> {
         Some(app.editor.file_browser_active_column_index())
     }
@@ -1467,6 +1486,70 @@ mod tests {
                 settings::ShortcutActionId::OpenSettingsFile
             ))
         )));
+    }
+
+    #[test]
+    fn metronome_shortcut_toggles_outside_editor() {
+        let mut app = test_editor_app();
+        app.metronome.enabled = false;
+        app.focused_workspace_pane = Some(WorkspacePaneKind::PianoRoll);
+
+        let _ = update(
+            &mut app,
+            primary_char_key_press("k", keyboard::key::Code::KeyK),
+        );
+
+        assert!(app.metronome.enabled);
+    }
+
+    #[test]
+    fn metronome_shortcut_is_suppressed_in_editor() {
+        let mut app = test_editor_app();
+        app.metronome.enabled = false;
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::OpenSettingsFile);
+
+        let _ = update(
+            &mut app,
+            primary_char_key_press("k", keyboard::key::Code::KeyK),
+        );
+
+        assert!(!app.metronome.enabled);
+    }
+
+    #[test]
+    fn metronome_popup_escape_closes_menu() {
+        let mut app = test_editor_app();
+        app.metronome_menu_open = true;
+
+        let _ = update(
+            &mut app,
+            named_key_press(keyboard::key::Named::Escape, keyboard::key::Code::Escape),
+        );
+
+        assert!(!app.metronome_menu_open);
+    }
+
+    #[test]
+    fn metronome_transport_messages_toggle_and_close_menu() {
+        let mut app = test_editor_app();
+
+        let _ = update(
+            &mut app,
+            Message::PianoRoll(PianoRollMessage::TransportOpenMetronomeMenu),
+        );
+        assert!(app.metronome_menu_open);
+
+        let _ = update(
+            &mut app,
+            Message::PianoRoll(PianoRollMessage::TransportToggleMetronome),
+        );
+        assert!(app.metronome.enabled);
+
+        let _ = update(
+            &mut app,
+            Message::PianoRoll(PianoRollMessage::TransportCloseMetronomeMenu),
+        );
+        assert!(!app.metronome_menu_open);
     }
 
     #[test]

@@ -366,15 +366,14 @@ where
         };
 
         if new_position.x + node.bounds().width > self.viewport.width {
-            new_position.x -= node.bounds().width;
+            new_position.x = (self.viewport.width - node.bounds().width).max(0.0);
         }
-
         if new_position.x < 0.0 {
             new_position.x = 0.0;
         }
 
         if new_position.y + node.bounds().height > self.viewport.height {
-            new_position.y -= node.bounds().height;
+            new_position.y = (self.viewport.height - node.bounds().height).max(0.0);
         }
         if new_position.y < 0.0 {
             new_position.y = 0.0;

@@ -8,6 +8,7 @@ use knyst::prelude::{
 };
 use knyst::scheduling::{MusicalTimeMap, TempoChange};
 use knyst::time::SUBBEAT_TESIMALS_PER_BEAT;
+use knyst::time::Seconds;
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -178,6 +179,35 @@ impl Sequencer {
         self.hot.dirty.store(true, Ordering::Release);
     }
 
+    pub(crate) fn sync_metronome_handle(
+        &self,
+        commands: &mut MultiThreadedKnystCommands,
+        mut handle: Option<InstrumentRuntimeHandle>,
+    ) {
+        if let Some(handle_ref) = handle.as_mut() {
+            handle_ref.resolve_scheduler_event_target(commands);
+        }
+        let current = self.config.load_full();
+        let mut next = (*current).clone();
+        next.metronome_handle = handle;
+        let next = Arc::new(next);
+        self.config.store(next.clone());
+        let _ = self
+            .scheduler_updates_tx
+            .send(SequencerSchedulerUpdate::Config(next));
+    }
+
+    pub(crate) fn set_metronome_enabled(&self, enabled: bool) {
+        let current = self.config.load_full();
+        let mut next = (*current).clone();
+        next.metronome_enabled = enabled;
+        let next = Arc::new(next);
+        self.config.store(next.clone());
+        let _ = self
+            .scheduler_updates_tx
+            .send(SequencerSchedulerUpdate::Config(next));
+    }
+
     pub(crate) fn configure_schedule_lead(&self, block_size: usize, sample_rate: usize) {
         let current = self.config.load_full();
         let mut next = (*current).clone();
@@ -277,6 +307,7 @@ impl<'a> SequencerHandle<'a> {
 
         let mut sequences = Vec::new();
         let mut tempo_points = Vec::new();
+        let mut time_signatures = Vec::new();
         let mut total_ticks = 0_u64;
 
         for track in &smf.tracks {
@@ -288,18 +319,35 @@ impl<'a> SequencerHandle<'a> {
             for event in track {
                 absolute_ticks = absolute_ticks.saturating_add(u64::from(event.delta.as_int()));
                 total_ticks = total_ticks.max(absolute_ticks);
-                let TrackEventKind::Meta(MetaMessage::Tempo(micros_per_quarter)) = event.kind
-                else {
-                    continue;
-                };
-                let micros_per_quarter = micros_per_quarter.as_int();
-                if micros_per_quarter == 0 {
-                    continue;
+                match event.kind {
+                    TrackEventKind::Meta(MetaMessage::Tempo(micros_per_quarter)) => {
+                        let micros_per_quarter = micros_per_quarter.as_int();
+                        if micros_per_quarter == 0 {
+                            continue;
+                        }
+                        tempo_points.push(TempoPoint {
+                            at: ticks_to_beats(absolute_ticks, ppq),
+                            bpm: 60_000_000.0 / f64::from(micros_per_quarter),
+                        });
+                    }
+                    TrackEventKind::Meta(MetaMessage::TimeSignature(
+                        numerator,
+                        denominator_power,
+                        _,
+                        _,
+                    )) => {
+                        let denominator =
+                            1_u16.checked_shl(u32::from(denominator_power)).unwrap_or(0);
+                        if denominator != 0 {
+                            time_signatures.push(TimeSignaturePoint {
+                                at: ticks_to_beats(absolute_ticks, ppq),
+                                numerator,
+                                denominator: denominator.min(u16::from(u8::MAX)) as u8,
+                            });
+                        }
+                    }
+                    _ => {}
                 }
-                tempo_points.push(TempoPoint {
-                    at: ticks_to_beats(absolute_ticks, ppq),
-                    bpm: 60_000_000.0 / f64::from(micros_per_quarter),
-                });
             }
         }
 
@@ -308,6 +356,7 @@ impl<'a> SequencerHandle<'a> {
         let current = self.sequencer.config.load_full();
         let mut next = (*current).clone();
         next.tempo_map = build_tempo_map(&tempo_points);
+        next.time_signatures = normalized_time_signatures(&time_signatures);
         next.sequences = sequences;
         next.ppq = ppq;
         next.total_ticks = total_ticks;
@@ -373,6 +422,7 @@ impl<'a> SequencerHandle<'a> {
         next.tempo_map = MusicalTimeMap::new();
         next.ppq = 0;
         next.total_ticks = 0;
+        next.time_signatures = vec![TimeSignaturePoint::default()];
         let next = Arc::new(next);
         let runtime = Arc::new(SequencerRuntime::new(0));
         self.sequencer.config.store(next.clone());
@@ -480,6 +530,14 @@ impl SchedulerExtension for SequencerSchedulerExtension {
             ctx.sample_rate as f64,
             out,
         );
+        collect_metronome_block_window(
+            &self.config,
+            block_start_beat,
+            block_start_seconds,
+            ctx.block_size,
+            ctx.sample_rate as f64,
+            out,
+        );
     }
 }
 
@@ -494,10 +552,13 @@ struct SequencerConfig {
     tempo_map: MusicalTimeMap,
     ppq: u16,
     total_ticks: u64,
+    time_signatures: Vec<TimeSignaturePoint>,
     sample_rate: f64,
     reset_frame_offset: i32,
     chase_frame_offset: i32,
     instrument_handles: Vec<Option<InstrumentRuntimeHandle>>,
+    metronome_handle: Option<InstrumentRuntimeHandle>,
+    metronome_enabled: bool,
     chase_notes_on_seek: bool,
 }
 
@@ -519,10 +580,13 @@ impl SequencerConfig {
             tempo_map: MusicalTimeMap::new(),
             ppq: 0,
             total_ticks: 0,
+            time_signatures: vec![TimeSignaturePoint::default()],
             sample_rate: 44_100.0,
             reset_frame_offset: 256,
             chase_frame_offset: 384,
             instrument_handles: vec![None; INSTRUMENT_TRACK_COUNT],
+            metronome_handle: None,
+            metronome_enabled: false,
             chase_notes_on_seek,
         }
     }
@@ -533,6 +597,29 @@ impl SequencerConfig {
         self.reset_frame_offset = block * 64;
         self.chase_frame_offset = block * 72;
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TimeSignaturePoint {
+    at: Beats,
+    numerator: u8,
+    denominator: u8,
+}
+
+impl Default for TimeSignaturePoint {
+    fn default() -> Self {
+        Self {
+            at: Beats::ZERO,
+            numerator: 4,
+            denominator: 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MetronomeClick {
+    at: Beats,
+    accented: bool,
 }
 
 impl SequencerRuntime {
@@ -622,6 +709,111 @@ fn collect_block_window(
 
         next_index.store(next, Ordering::Relaxed);
     }
+}
+
+fn collect_metronome_block_window(
+    config: &SequencerConfig,
+    block_start_beat: Beats,
+    block_start_seconds: f64,
+    block_size: usize,
+    sample_rate: f64,
+    out: &mut Vec<SchedulerChange>,
+) {
+    if !config.metronome_enabled {
+        return;
+    }
+    let Some(handle) = config.metronome_handle.as_ref() else {
+        return;
+    };
+    let block_end_seconds = block_start_seconds + block_size as f64 / sample_rate.max(1.0);
+    let block_end_beat = config
+        .tempo_map
+        .seconds_to_beats(Seconds::from_seconds_f64(block_end_seconds));
+
+    for click in metronome_clicks_between(&config.time_signatures, block_start_beat, block_end_beat)
+    {
+        let click_seconds = config.tempo_map.musical_time_to_secs_f64(click.at);
+        let sample_offset =
+            block_sample_offset(block_start_seconds, click_seconds, sample_rate, block_size);
+        let velocity = if click.accented { 127 } else { 100 };
+        if let Some(change) = handle.scheduler_midi_change(
+            sample_offset,
+            0,
+            EngineMidiEvent::NoteOn {
+                channel: 0,
+                note: 60,
+                velocity,
+            },
+        ) {
+            out.push(change);
+        }
+    }
+}
+
+fn metronome_clicks_between(
+    time_signatures: &[TimeSignaturePoint],
+    start_beat: Beats,
+    end_beat: Beats,
+) -> Vec<MetronomeClick> {
+    let start = start_beat.as_beats_f64();
+    let end = end_beat.as_beats_f64();
+    if end <= start {
+        return Vec::new();
+    }
+
+    let mut clicks = Vec::new();
+    for (index, signature) in time_signatures.iter().enumerate() {
+        let segment_start = signature.at.as_beats_f64();
+        let segment_end = time_signatures
+            .get(index + 1)
+            .map(|next| next.at.as_beats_f64())
+            .unwrap_or(f64::INFINITY);
+        let window_start = start.max(segment_start);
+        let window_end = end.min(segment_end);
+        if window_end <= window_start {
+            continue;
+        }
+
+        let beat_unit = 4.0 / f64::from(signature.denominator.max(1));
+        let beats_from_segment = (window_start - segment_start) / beat_unit;
+        let mut step_index = beats_from_segment.ceil() as i64;
+        if step_index < 0 {
+            step_index = 0;
+        }
+        loop {
+            let click_beat = segment_start + step_index as f64 * beat_unit;
+            if click_beat >= window_end {
+                break;
+            }
+            if click_beat + 1.0e-9 >= window_start {
+                clicks.push(MetronomeClick {
+                    at: Beats::from_beats_f64(click_beat),
+                    accented: step_index % i64::from(signature.numerator.max(1)) == 0,
+                });
+            }
+            step_index += 1;
+        }
+    }
+    clicks
+}
+
+fn normalized_time_signatures(points: &[TimeSignaturePoint]) -> Vec<TimeSignaturePoint> {
+    let mut points = points.to_vec();
+    if !points.iter().any(|point| point.at == Beats::ZERO) {
+        points.push(TimeSignaturePoint::default());
+    }
+    points.sort_by_key(|point| point.at);
+    let mut normalized = Vec::with_capacity(points.len());
+    for point in points {
+        if normalized
+            .last()
+            .is_some_and(|last: &TimeSignaturePoint| last.at == point.at)
+        {
+            normalized.pop();
+        }
+        normalized.push(point);
+    }
+    normalized
 }
 
 fn reset_schedule_state_at(config: &SequencerConfig, runtime: &SequencerRuntime, at: Beats) {
@@ -1067,7 +1259,9 @@ mod tests {
     use knyst::prelude::Beats;
 
     use super::{
-        Sequencer, TimedMidiEvent, beats_to_ticks, ordered_events_at_same_time, ticks_to_beats,
+        MetronomeClick, Sequencer, TimeSignaturePoint, TimedMidiEvent, beats_to_ticks,
+        metronome_clicks_between, normalized_time_signatures, ordered_events_at_same_time,
+        ticks_to_beats,
     };
     use crate::instrument::{InstrumentSlotState, MidiEvent};
     use crate::mixer::{Mixer, MixerState, TrackId};
@@ -1211,6 +1405,85 @@ mod tests {
                     channel: 0,
                     note: 60,
                     velocity: 100,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn metronome_clicks_accent_first_beat_of_bar() {
+        let clicks = metronome_clicks_between(
+            &[TimeSignaturePoint::default()],
+            Beats::ZERO,
+            Beats::from_beats(5),
+        );
+        assert_eq!(
+            clicks,
+            vec![
+                MetronomeClick {
+                    at: Beats::ZERO,
+                    accented: true,
+                },
+                MetronomeClick {
+                    at: Beats::from_beats(1),
+                    accented: false,
+                },
+                MetronomeClick {
+                    at: Beats::from_beats(2),
+                    accented: false,
+                },
+                MetronomeClick {
+                    at: Beats::from_beats(3),
+                    accented: false,
+                },
+                MetronomeClick {
+                    at: Beats::from_beats(4),
+                    accented: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn metronome_clicks_respect_time_signature_changes() {
+        let clicks = metronome_clicks_between(
+            &normalized_time_signatures(&[
+                TimeSignaturePoint::default(),
+                TimeSignaturePoint {
+                    at: Beats::from_beats(4),
+                    numerator: 3,
+                    denominator: 8,
+                },
+            ]),
+            Beats::from_beats(3),
+            Beats::from_beats_f64(6.5),
+        );
+        assert_eq!(
+            clicks,
+            vec![
+                MetronomeClick {
+                    at: Beats::from_beats(3),
+                    accented: false,
+                },
+                MetronomeClick {
+                    at: Beats::from_beats(4),
+                    accented: true,
+                },
+                MetronomeClick {
+                    at: Beats::from_beats_f64(4.5),
+                    accented: false,
+                },
+                MetronomeClick {
+                    at: Beats::from_beats(5),
+                    accented: false,
+                },
+                MetronomeClick {
+                    at: Beats::from_beats_f64(5.5),
+                    accented: true,
+                },
+                MetronomeClick {
+                    at: Beats::from_beats(6),
+                    accented: false,
                 },
             ]
         );

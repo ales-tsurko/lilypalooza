@@ -121,6 +121,22 @@ pub(crate) fn pane_main_surface_focused(theme: &Theme, _focused: bool) -> contai
     }
 }
 
+pub(crate) fn popup_surface(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    let border_color = mix_color(
+        palette.background.base.color,
+        palette.background.strong.color,
+        0.38,
+    );
+
+    container::Style {
+        background: Some(palette.background.base.color.into()),
+        text_color: Some(palette.background.base.text),
+        border: border::rounded(4).width(1).color(border_color),
+        ..container::Style::default()
+    }
+}
+
 pub(crate) fn transparent_surface(_theme: &Theme) -> container::Style {
     container::Style {
         background: None,

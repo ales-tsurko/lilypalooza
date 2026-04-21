@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::engine::AudioEngineSettings;
+use crate::instrument::metronome_synth::{MetronomeProcessor, SharedMetronomeState};
 use crate::instrument::soundfont_synth::{
     LoadedSoundfont, SharedSoundfontProgramState, SoundfontProcessor, SoundfontSynthError,
     SoundfontSynthSettings,
@@ -195,6 +196,7 @@ fn apply_meter_release(current: f32, observed: f32, sample_rate: f32, block_size
 
 pub(crate) struct MixerRuntime {
     master: MasterRuntime,
+    metronome: MetronomeRuntime,
     tracks: Vec<Option<TrackRuntime>>,
     buses: HashMap<BusId, BusRuntime>,
     soundfonts: HashMap<String, LoadedSoundfont>,
@@ -205,6 +207,7 @@ pub(crate) struct MixerRuntime {
 impl MixerRuntime {
     pub(crate) fn free(self) {
         self.master.free();
+        self.metronome.free();
         for runtime in self.tracks.into_iter().flatten() {
             runtime.free();
         }
@@ -229,6 +232,18 @@ impl MixerRuntime {
                 .handle
                 .clone(),
         )
+    }
+
+    pub(crate) fn metronome_handle(&self) -> InstrumentRuntimeHandle {
+        self.metronome.handle.clone()
+    }
+
+    pub(crate) fn set_metronome_gain_db(&self, gain_db: f32) {
+        self.metronome.shared.set_gain_db(gain_db);
+    }
+
+    pub(crate) fn set_metronome_pitch(&self, pitch: f32) {
+        self.metronome.shared.set_pitch(pitch);
     }
 
     pub(crate) fn meter_snapshot(&self, mixer: &MixerState) -> MixerMeterSnapshot {
@@ -343,6 +358,7 @@ impl MixerRuntime {
     ) -> Result<Self, MixerRuntimeError> {
         context.with_activation(|| {
             let master = MasterRuntime::new(context, commands, settings, mixer);
+            let metronome = MetronomeRuntime::new(context, master.input_node(), settings);
             let soundfont_settings =
                 SoundfontSynthSettings::new(settings.sample_rate as i32, settings.block_size);
 
@@ -356,6 +372,7 @@ impl MixerRuntime {
 
             let mut runtime = Self {
                 master,
+                metronome,
                 tracks: Vec::with_capacity(mixer.tracks.len()),
                 buses,
                 soundfonts: HashMap::new(),
@@ -792,6 +809,36 @@ struct MasterRuntime {
     strip: Handle<GenericHandle>,
     meter: SharedStripMeter,
     level: SharedStripLevel,
+}
+
+struct MetronomeRuntime {
+    handle: InstrumentRuntimeHandle,
+    shared: SharedMetronomeState,
+}
+
+impl MetronomeRuntime {
+    fn new(context: &KnystContext, master_input: NodeId, settings: &AudioEngineSettings) -> Self {
+        context.with_activation(|| {
+            let reset_state = SharedInstrumentResetState::default();
+            let shared = SharedMetronomeState::default();
+            let processor = MetronomeProcessor::new(settings.sample_rate as f32, shared.clone());
+            let handle = handle(InstrumentProcessorNode::new(
+                Box::new(processor),
+                reset_state.clone(),
+            ));
+            connect_stereo(node_id_of(handle), master_input);
+            Self {
+                handle: InstrumentRuntimeHandle::new(handle, reset_state),
+                shared,
+            }
+        })
+    }
+
+    fn free(self) {
+        knyst_commands().disconnect(Connection::clear_from_nodes(self.handle.node_id()));
+        knyst_commands().disconnect(Connection::clear_to_nodes(self.handle.node_id()));
+        knyst_commands().free_node(self.handle.node_id());
+    }
 }
 
 impl MasterRuntime {

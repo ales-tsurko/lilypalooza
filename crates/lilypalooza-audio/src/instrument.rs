@@ -1,6 +1,7 @@
 //! Instrument and effect processor abstractions.
 
 mod gain_effect;
+pub(crate) mod metronome_synth;
 pub(crate) mod soundfont_synth;
 
 use std::sync::Arc;

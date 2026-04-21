@@ -7,6 +7,15 @@ use super::*;
 
 const DEFAULT_SOUNDFONT_ID: &str = "default";
 impl Lilypalooza {
+    pub(in crate::app) fn apply_metronome_state_to_playback(&mut self) {
+        let Some(playback) = self.playback.as_mut() else {
+            return;
+        };
+        playback.set_metronome_enabled(self.metronome.enabled);
+        playback.set_metronome_gain_db(self.metronome.gain_db);
+        playback.set_metronome_pitch(self.metronome.pitch);
+    }
+
     pub(in crate::app) fn refresh_score_cursor_overlay(&mut self) {
         self.score_cursor_overlay = None;
 
@@ -64,6 +73,7 @@ impl Lilypalooza {
             self.logger.push(error.clone());
         }
 
+        self.apply_metronome_state_to_playback();
         self.sync_playback_file();
     }
 
@@ -79,6 +89,7 @@ impl Lilypalooza {
             Ok(engine) => {
                 drop(previous_engine);
                 self.playback = Some(engine);
+                self.apply_metronome_state_to_playback();
                 if let Some(soundfont_path) = self.playback_settings.soundfont.clone() {
                     self.initialize_playback(soundfont_path);
                 } else {

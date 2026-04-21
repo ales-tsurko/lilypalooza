@@ -7,6 +7,10 @@ use iced::{Color, Element, Length, Point, Radians, Rectangle, Renderer, Theme, a
 const FADER_WIDTH: f32 = 30.0;
 const FADER_HANDLE_HEIGHT: f32 = 18.0;
 const FADER_RAIL_WIDTH: f32 = 6.0;
+const HORIZONTAL_SLIDER_HEIGHT: f32 = 24.0;
+const HORIZONTAL_SLIDER_RAIL_HEIGHT: f32 = 6.0;
+const HORIZONTAL_SLIDER_HANDLE_WIDTH: f32 = 18.0;
+const HORIZONTAL_SLIDER_HANDLE_HEIGHT: f32 = 18.0;
 const GAIN_KNOB_SIZE: f32 = 48.0;
 const PAN_KNOB_SIZE: f32 = 42.0;
 const KNOB_ANGLE_START: f32 = 135.0;
@@ -101,6 +105,27 @@ pub(super) fn gain_fader<'a, Message: Clone + 'a>(
     .into()
 }
 
+pub(super) fn horizontal_slider<'a, Message: Clone + 'a>(
+    value: f32,
+    min: f32,
+    max: f32,
+    step: f32,
+    default_value: f32,
+    on_change: impl Fn(f32) -> Message + 'a,
+) -> Element<'a, Message> {
+    canvas(HorizontalSlider {
+        value,
+        min,
+        max,
+        step,
+        default_value,
+        on_change: Box::new(on_change),
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(HORIZONTAL_SLIDER_HEIGHT))
+    .into()
+}
+
 struct Knob<'a, Message> {
     value: f32,
     mode: KnobMode,
@@ -115,6 +140,15 @@ struct GainFader<'a, Message> {
     default_value: f32,
     drag_scalar: f32,
     wheel_scalar: f32,
+    on_change: Box<dyn Fn(f32) -> Message + 'a>,
+}
+
+struct HorizontalSlider<'a, Message> {
+    value: f32,
+    min: f32,
+    max: f32,
+    step: f32,
+    default_value: f32,
     on_change: Box<dyn Fn(f32) -> Message + 'a>,
 }
 
@@ -135,6 +169,12 @@ struct KnobState {
 struct GainFaderState {
     dragging: bool,
     last_cursor_y: Option<f32>,
+    last_press_at: Option<Instant>,
+}
+
+#[derive(Default)]
+struct HorizontalSliderState {
+    dragging: bool,
     last_press_at: Option<Instant>,
 }
 
@@ -470,6 +510,163 @@ impl<Message: Clone> canvas_widget::Program<Message> for GainFader<'_, Message> 
     }
 }
 
+impl<Message: Clone> canvas_widget::Program<Message> for HorizontalSlider<'_, Message> {
+    type State = HorizontalSliderState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &canvas_widget::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas_widget::Action<Message>> {
+        match event {
+            canvas_widget::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                if let Some(position) = cursor.position_in(bounds) {
+                    let now = Instant::now();
+                    if is_double_click(state.last_press_at, now) {
+                        state.dragging = false;
+                        state.last_press_at = None;
+                        return Some(
+                            canvas_widget::Action::publish((self.on_change)(
+                                self.normalize(self.default_value),
+                            ))
+                            .and_capture(),
+                        );
+                    }
+                    state.last_press_at = Some(now);
+                    state.dragging = true;
+                    return Some(
+                        canvas_widget::Action::publish((self.on_change)(
+                            self.value_for_cursor_x(position.x, bounds),
+                        ))
+                        .and_capture(),
+                    );
+                }
+            }
+            canvas_widget::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                if state.dragging {
+                    return Some(
+                        canvas_widget::Action::publish((self.on_change)(
+                            self.value_for_cursor_x(position.x - bounds.x, bounds),
+                        ))
+                        .and_capture(),
+                    );
+                }
+            }
+            canvas_widget::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                if cursor.position_in(bounds).is_some() {
+                    let amount = match delta {
+                        mouse::ScrollDelta::Lines { y, .. } => y * self.step.max(0.01),
+                        mouse::ScrollDelta::Pixels { y, .. } => y / 120.0 * self.step.max(0.01),
+                    };
+                    return Some(
+                        canvas_widget::Action::publish((self.on_change)(
+                            self.normalize(self.value + amount),
+                        ))
+                        .and_capture(),
+                    );
+                }
+            }
+            canvas_widget::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                state.dragging = false;
+            }
+            _ => {}
+        }
+
+        None
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if state.dragging {
+            mouse::Interaction::Grabbing
+        } else if cursor.position_in(bounds).is_some() {
+            mouse::Interaction::Grab
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+
+    fn draw(
+        &self,
+        state: &Self::State,
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Vec<canvas_widget::Geometry> {
+        let palette = theme.extended_palette();
+        let mut frame = canvas_widget::Frame::new(renderer, bounds.size());
+        let hover = state.dragging || cursor.position_in(bounds).is_some();
+        let accent = if hover {
+            palette.primary.strong.color
+        } else {
+            palette.primary.base.color
+        };
+        let rail_x = HORIZONTAL_SLIDER_HANDLE_WIDTH * 0.5;
+        let rail_width = (bounds.width - HORIZONTAL_SLIDER_HANDLE_WIDTH).max(1.0);
+        let rail_y = (bounds.height - HORIZONTAL_SLIDER_RAIL_HEIGHT) * 0.5;
+        let handle_center_x = self.handle_center_x(bounds.width, self.normalize(self.value));
+        let fill_width = (handle_center_x - rail_x).clamp(0.0, rail_width);
+        let handle_bounds = Rectangle {
+            x: (handle_center_x - HORIZONTAL_SLIDER_HANDLE_WIDTH * 0.5)
+                .clamp(0.0, bounds.width - HORIZONTAL_SLIDER_HANDLE_WIDTH),
+            y: (bounds.height - HORIZONTAL_SLIDER_HANDLE_HEIGHT) * 0.5,
+            width: HORIZONTAL_SLIDER_HANDLE_WIDTH,
+            height: HORIZONTAL_SLIDER_HANDLE_HEIGHT,
+        };
+
+        frame.fill(
+            &Path::rounded_rectangle(
+                Point::new(rail_x, rail_y),
+                iced::Size::new(rail_width, HORIZONTAL_SLIDER_RAIL_HEIGHT),
+                2.0.into(),
+            ),
+            palette.background.strong.color,
+        );
+        frame.fill(
+            &Path::rounded_rectangle(
+                Point::new(rail_x, rail_y),
+                iced::Size::new(fill_width, HORIZONTAL_SLIDER_RAIL_HEIGHT),
+                2.0.into(),
+            ),
+            accent,
+        );
+
+        frame.fill(
+            &Path::rectangle(
+                Point::new(handle_bounds.x, handle_bounds.y),
+                iced::Size::new(handle_bounds.width, handle_bounds.height),
+            ),
+            palette.background.base.color,
+        );
+        frame.stroke(
+            &Path::rectangle(
+                Point::new(handle_bounds.x, handle_bounds.y),
+                iced::Size::new(handle_bounds.width, handle_bounds.height),
+            ),
+            Stroke::default()
+                .with_width(1.0)
+                .with_color(palette.background.strong.color),
+        );
+        let notch_x = handle_bounds.x + handle_bounds.width * 0.5;
+        frame.stroke(
+            &Path::line(
+                Point::new(notch_x, handle_bounds.y + 4.0),
+                Point::new(notch_x, handle_bounds.y + handle_bounds.height - 4.0),
+            ),
+            Stroke::default().with_width(2.0).with_color(accent),
+        );
+
+        vec![frame.into_geometry()]
+    }
+}
+
 impl<Message> Knob<'_, Message> {
     fn apply_drag_delta(&self, delta_y: f32) -> f32 {
         self.normalize(self.value - delta_y * self.drag_scalar)
@@ -558,6 +755,31 @@ impl<Message> GainFader<'_, Message> {
     }
 }
 
+impl<Message> HorizontalSlider<'_, Message> {
+    fn normalize(&self, value: f32) -> f32 {
+        let clamped = value.clamp(self.min, self.max);
+        if self.step <= 0.0 {
+            clamped
+        } else {
+            let steps = ((clamped - self.min) / self.step).round();
+            (self.min + steps * self.step).clamp(self.min, self.max)
+        }
+    }
+
+    fn value_for_cursor_x(&self, x: f32, bounds: Rectangle) -> f32 {
+        let usable_width = (bounds.width - HORIZONTAL_SLIDER_HANDLE_WIDTH).max(1.0);
+        let normalized =
+            ((x - HORIZONTAL_SLIDER_HANDLE_WIDTH * 0.5) / usable_width).clamp(0.0, 1.0);
+        self.normalize(self.min + normalized * (self.max - self.min))
+    }
+
+    fn handle_center_x(&self, width: f32, value: f32) -> f32 {
+        let usable_width = (width - HORIZONTAL_SLIDER_HANDLE_WIDTH).max(1.0);
+        let normalized = ((value - self.min) / (self.max - self.min)).clamp(0.0, 1.0);
+        HORIZONTAL_SLIDER_HANDLE_WIDTH * 0.5 + usable_width * normalized
+    }
+}
+
 fn is_double_click(previous: Option<Instant>, now: Instant) -> bool {
     previous
         .map(|last| now.saturating_duration_since(last) <= DOUBLE_CLICK_THRESHOLD)
@@ -580,12 +802,16 @@ fn gain_value_to_y(value: f32, rail_bounds: Rectangle) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use iced::Rectangle;
     use iced::mouse;
+    use iced::widget::canvas::{self as canvas_widget, Program};
+    use iced::{Point, Rectangle};
 
     use std::time::{Duration, Instant};
 
-    use super::{GainFader, Knob, KnobMode, gain_value_to_y, is_double_click};
+    use super::{
+        GainFader, HorizontalSlider, HorizontalSliderState, Knob, KnobMode, gain_value_to_y,
+        is_double_click,
+    };
 
     #[test]
     fn drag_delta_moves_pan_and_clamps() {
@@ -718,5 +944,68 @@ mod tests {
             now
         ));
         assert!(!is_double_click(None, now));
+    }
+
+    #[test]
+    fn horizontal_slider_value_for_cursor_snaps_and_clamps() {
+        let slider = HorizontalSlider {
+            value: -12.0,
+            min: -36.0,
+            max: 6.0,
+            step: 0.5,
+            default_value: -12.0,
+            on_change: Box::new(|_| ()),
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 24.0,
+        };
+
+        assert_eq!(slider.value_for_cursor_x(-10.0, bounds), -36.0);
+        assert_eq!(slider.value_for_cursor_x(400.0, bounds), 6.0);
+        assert_eq!(slider.normalize(-12.24), -12.0);
+        assert_eq!(slider.normalize(-12.26), -12.5);
+    }
+
+    #[test]
+    fn horizontal_slider_double_click_publishes_default_value() {
+        let slider = HorizontalSlider {
+            value: -3.0,
+            min: -36.0,
+            max: 6.0,
+            step: 0.5,
+            default_value: -12.0,
+            on_change: Box::new(|value| value),
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 24.0,
+        };
+        let cursor = mouse::Cursor::Available(Point::new(80.0, 12.0));
+        let mut state = HorizontalSliderState::default();
+
+        let _ = Program::update(
+            &slider,
+            &mut state,
+            &canvas_widget::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            bounds,
+            cursor,
+        );
+        let action = Program::update(
+            &slider,
+            &mut state,
+            &canvas_widget::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            bounds,
+            cursor,
+        )
+        .expect("double click action");
+
+        let (message, _, status) = action.into_inner();
+        assert_eq!(message, Some(-12.0));
+        assert_eq!(status, iced::event::Status::Captured);
     }
 }

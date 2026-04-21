@@ -89,6 +89,7 @@ pub(crate) enum ShortcutAction {
     PianoRollZoomReset,
     TransportPlayPause,
     TransportRewind,
+    ToggleMetronome,
     PianoRollCursorSubdivisionPrevious,
     PianoRollCursorSubdivisionNext,
     PianoRollScrollUp,
@@ -120,7 +121,7 @@ impl<'a> ShortcutInput<'a> {
     }
 }
 
-const GLOBAL_ACTIONS: [ShortcutAction; 9] = [
+const GLOBAL_ACTIONS: [ShortcutAction; 10] = [
     ShortcutAction::QuitApp,
     ShortcutAction::OpenActions,
     ShortcutAction::OpenSettingsFile,
@@ -130,6 +131,7 @@ const GLOBAL_ACTIONS: [ShortcutAction; 9] = [
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::PianoRoll),
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Mixer),
     ShortcutAction::ToggleWorkspacePane(WorkspacePane::Logger),
+    ShortcutAction::ToggleMetronome,
 ];
 
 const NAVIGATION_ACTIONS: [ShortcutAction; 4] = [
@@ -418,6 +420,7 @@ shortcut_metadata! {
     PianoRollZoomReset => ("Reset Piano Roll Zoom", "Piano Roll: reset piano roll zoom."),
     TransportPlayPause => ("Play or Pause", "Transport: start or pause playback."),
     TransportRewind => ("Rewind", "Transport: return playback to the start."),
+    ToggleMetronome => ("Toggle Metronome", "Transport: enable or disable the metronome."),
 }
 
 fn fixed_contextual_action(
@@ -566,6 +569,7 @@ fn action_from_id(action_id: ShortcutActionId) -> ShortcutAction {
         ShortcutActionId::PianoRollZoomReset => ShortcutAction::PianoRollZoomReset,
         ShortcutActionId::TransportPlayPause => ShortcutAction::TransportPlayPause,
         ShortcutActionId::TransportRewind => ShortcutAction::TransportRewind,
+        ShortcutActionId::ToggleMetronome => ShortcutAction::ToggleMetronome,
     }
 }
 
@@ -957,6 +961,9 @@ fn default_bindings(action: ShortcutAction) -> Vec<ShortcutBinding> {
             binding_named(ShortcutNamedKey::Enter, false, false, false),
             binding_code(ShortcutKeyCode::NumpadEnter, false, false, false),
         ],
+        ShortcutAction::ToggleMetronome => {
+            vec![binding_code(ShortcutKeyCode::KeyK, true, false, false)]
+        }
         ShortcutAction::PianoRollCursorSubdivisionPrevious
         | ShortcutAction::PianoRollCursorSubdivisionNext
         | ShortcutAction::PianoRollScrollUp
@@ -1302,6 +1309,7 @@ fn action_id(action: ShortcutAction) -> Option<ShortcutActionId> {
         ShortcutAction::PianoRollZoomReset => Some(ShortcutActionId::PianoRollZoomReset),
         ShortcutAction::TransportPlayPause => Some(ShortcutActionId::TransportPlayPause),
         ShortcutAction::TransportRewind => Some(ShortcutActionId::TransportRewind),
+        ShortcutAction::ToggleMetronome => Some(ShortcutActionId::ToggleMetronome),
         ShortcutAction::PianoRollCursorSubdivisionPrevious
         | ShortcutAction::PianoRollCursorSubdivisionNext
         | ShortcutAction::PianoRollScrollUp
@@ -1387,6 +1395,15 @@ mod tests {
         assert_eq!(
             resolve_contextual(&ShortcutSettings::default(), WorkspacePane::Mixer, input),
             Some(ShortcutAction::TransportRewind)
+        );
+    }
+
+    #[test]
+    fn resolves_global_toggle_metronome_binding() {
+        let input = code_input(keyboard::key::Code::KeyK, true, false, false);
+        assert_eq!(
+            resolve_global(&ShortcutSettings::default(), input),
+            Some(ShortcutAction::ToggleMetronome)
         );
     }
 

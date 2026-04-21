@@ -445,6 +445,10 @@ impl Mixer {
         self.runtime.instrument_handle(track_id)
     }
 
+    pub(crate) fn metronome_handle(&self) -> InstrumentRuntimeHandle {
+        self.runtime.metronome_handle()
+    }
+
     pub(crate) fn meter_snapshot(&self) -> MixerMeterSnapshot {
         self.runtime.meter_snapshot(&self.state)
     }
@@ -526,6 +530,8 @@ impl MixerHandle<'_> {
                 self.mixer.instrument_handle(track.id),
             );
         }
+        self.sequencer
+            .sync_metronome_handle(self.commands, Some(self.mixer.metronome_handle()));
         Ok(())
     }
 

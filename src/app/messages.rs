@@ -235,6 +235,11 @@ pub(super) enum PianoRollMessage {
     TransportSeekReleased,
     TransportPlayPause,
     TransportRewind,
+    TransportToggleMetronome,
+    TransportOpenMetronomeMenu,
+    TransportCloseMetronomeMenu,
+    TransportMetronomeGainChanged(f32),
+    TransportMetronomePitchChanged(f32),
 }
 
 #[derive(Debug, Clone)]

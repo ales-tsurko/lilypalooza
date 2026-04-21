@@ -67,7 +67,10 @@ impl Lilypalooza {
         self.project_name = None;
         self.track_name_overrides.clear();
         self.track_color_overrides.clear();
+        self.metronome = state::MetronomeState::default();
+        self.metronome_menu_open = false;
         self.cancel_track_rename();
+        self.apply_metronome_state_to_playback();
         self.editor_recent_files = state.editor_recent_files;
         self.recent_projects = state.recent_projects;
         self.restore_editor_session(
@@ -100,7 +103,10 @@ impl Lilypalooza {
             .into_iter()
             .map(|color| color.map(crate::track_colors::from_override))
             .collect();
+        self.metronome = state.metronome;
+        self.metronome_menu_open = false;
         self.cancel_track_rename();
+        self.apply_metronome_state_to_playback();
         self.restore_editor_session(
             &state.editor_tabs,
             state.active_editor_tab.as_deref(),
@@ -259,6 +265,7 @@ impl Lilypalooza {
                             color.map(crate::track_colors::to_override)
                         })
                         .collect(),
+                    metronome: self.metronome,
                 },
             )?;
 
