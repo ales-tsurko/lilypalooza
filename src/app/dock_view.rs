@@ -555,7 +555,6 @@ fn workspace_panes(app: &Lilypalooza) -> Element<'_, Message> {
                 };
 
                 let body = workspace_pane_focus_body(active_pane, body);
-                let body = pane_body_with_header_menu(app, *group_id, group_width, body);
                 let is_focused = app.is_workspace_group_focused(*group_id);
 
                 pane_grid::Content::new(body)
@@ -574,9 +573,10 @@ fn workspace_panes(app: &Lilypalooza) -> Element<'_, Message> {
 
         let overlay = workspace_drag_overlay(app, size);
         let drag_capture = workspace_drag_capture_layer(app);
+        let header_menu_overlay = header_overflow_menu_overlay(app, size, &group_bounds);
 
         mouse_area(
-            stack([panes, overlay, drag_capture])
+            stack([panes, overlay, drag_capture, header_menu_overlay])
                 .width(Fill)
                 .height(Fill),
         )
@@ -1044,7 +1044,9 @@ fn editor_file_browser_inline_entry(app: &Lilypalooza, is_dir: bool) -> Element<
         container::Style {
             background: Some(selected_background.into()),
             text_color: Some(palette.background.base.text),
-            border: border::rounded(0).width(0).color(Color::TRANSPARENT),
+            border: border::rounded(ui_style::RADIUS_NONE)
+                .width(0)
+                .color(Color::TRANSPARENT),
             ..container::Style::default()
         }
     })
@@ -1418,51 +1420,83 @@ fn group_header<'a>(
     .into()
 }
 
-fn pane_body_with_header_menu<'a>(
+fn header_overflow_menu_overlay<'a>(
     app: &'a Lilypalooza,
-    group_id: super::DockGroupId,
-    group_width: f32,
-    body: Element<'a, Message>,
+    size: Size,
+    group_bounds: &HashMap<super::DockGroupId, Rectangle>,
 ) -> Element<'a, Message> {
+    let Some(group_id) = app.open_header_overflow_menu else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
     let Some(group) = app.workspace_group(group_id) else {
-        return body;
+        return container(text("")).width(Fill).height(Fill).into();
     };
 
     let active_pane = group.active;
-    let show_menu = app.open_header_overflow_menu == Some(group_id)
-        && (active_pane == WorkspacePaneKind::Editor || pane_header_has_controls(app, active_pane));
+    if active_pane != WorkspacePaneKind::Editor && !pane_header_has_controls(app, active_pane) {
+        return container(text("")).width(Fill).height(Fill).into();
+    }
 
-    let close_backdrop: Element<'a, Message> = if show_menu {
-        mouse_area(container(text("")).width(Fill).height(Fill))
-            .on_press(Message::Pane(PaneMessage::CloseHeaderOverflowMenu))
-            .into()
-    } else {
-        container(text("")).width(Fill).height(Fill).into()
+    let Some(bounds) = group_bounds.get(&group_id).copied() else {
+        return container(text("")).width(Fill).height(Fill).into();
     };
-    let menu: Element<'a, Message> = if show_menu {
-        let menu_content = if active_pane == WorkspacePaneKind::Editor {
-            editor_header_menu_panel(app)
-        } else {
-            let control_groups = pane_header_control_groups(app, group_id, active_pane);
-            let title_width = group_tabs_min_width(group);
-            let available_controls_width = (group_width - title_width).max(0.0);
-            let (_inline_controls, overflow_controls) =
-                split_header_control_groups(control_groups, available_controls_width);
-            header_overflow_menu_panel(overflow_controls)
-        };
-        let menu_panel = mouse_area(opaque(menu_content))
-            .on_exit(Message::Pane(PaneMessage::CloseHeaderOverflowMenu));
-        container(menu_panel)
-            .width(Fill)
-            .height(Fill)
-            .align_x(alignment::Horizontal::Right)
-            .align_y(alignment::Vertical::Top)
-            .padding([ui_style::SPACE_XS as u16, ui_style::SPACE_XS as u16])
-            .into()
+
+    let menu_content = if active_pane == WorkspacePaneKind::Editor {
+        editor_header_menu_panel(app)
     } else {
-        container(text("")).width(Fill).height(Fill).into()
+        let control_groups = pane_header_control_groups(app, group_id, active_pane);
+        let title_width = group_tabs_min_width(group);
+        let available_controls_width = (bounds.width - title_width).max(0.0);
+        let (_inline_controls, overflow_controls) =
+            split_header_control_groups(control_groups, available_controls_width);
+        header_overflow_menu_panel(overflow_controls)
     };
-    stack([body, close_backdrop, menu]).into()
+
+    let menu_width = header_overflow_menu_width(app, active_pane);
+    let x = header_overflow_menu_x(bounds, size.width, menu_width);
+    let y = bounds.y + ui_style::SPACE_XS as f32;
+
+    let backdrop: Element<'a, Message> = mouse_area(container(text("")).width(Fill).height(Fill))
+        .on_press(Message::Pane(PaneMessage::CloseHeaderOverflowMenu))
+        .into();
+    let menu_panel = mouse_area(opaque(menu_content))
+        .on_exit(Message::Pane(PaneMessage::CloseHeaderOverflowMenu));
+    let positioned = container(menu_panel)
+        .padding(Padding {
+            top: y,
+            right: 0.0,
+            bottom: 0.0,
+            left: x,
+        })
+        .width(Fill)
+        .height(Fill)
+        .align_x(alignment::Horizontal::Left)
+        .align_y(alignment::Vertical::Top);
+
+    stack([backdrop, positioned.into()]).into()
+}
+
+fn header_overflow_menu_width(app: &Lilypalooza, active_pane: WorkspacePaneKind) -> f32 {
+    if active_pane != WorkspacePaneKind::Editor {
+        return 320.0;
+    }
+
+    let submenu_width = match app.open_editor_menu_section {
+        Some(EditorHeaderMenuSection::File) => EDITOR_FILE_SUBMENU_WIDTH,
+        Some(EditorHeaderMenuSection::Edit) => EDITOR_EDIT_SUBMENU_WIDTH,
+        Some(EditorHeaderMenuSection::Appearance) => EDITOR_APPEARANCE_SUBMENU_WIDTH,
+        None => 0.0,
+    };
+
+    EDITOR_MENU_ROOT_WIDTH + submenu_width + ui_style::SPACE_XS as f32
+}
+
+fn header_overflow_menu_x(bounds: Rectangle, viewport_width: f32, menu_width: f32) -> f32 {
+    let desired = bounds.x + bounds.width - menu_width - ui_style::SPACE_XS as f32;
+    desired.clamp(
+        ui_style::SPACE_XS as f32,
+        (viewport_width - menu_width - ui_style::SPACE_XS as f32).max(ui_style::SPACE_XS as f32),
+    )
 }
 
 fn group_tabs<'a>(app: &'a Lilypalooza, group: &'a super::DockGroup) -> row::Row<'a, Message> {
@@ -1518,7 +1552,7 @@ fn workspace_tab(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'_, Mess
             container::Style {
                 background: Some(palette.primary.weak.color.into()),
                 text_color: Some(icon_color(theme)),
-                border: border::rounded(10)
+                border: border::rounded(ui_style::RADIUS_UI)
                     .width(1)
                     .color(palette.primary.base.color),
                 ..container::Style::default()
@@ -1527,7 +1561,7 @@ fn workspace_tab(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'_, Mess
             container::Style {
                 background: Some(Color::TRANSPARENT.into()),
                 text_color: Some(icon_color(theme)),
-                border: border::rounded(10)
+                border: border::rounded(ui_style::RADIUS_UI)
                     .width(1)
                     .color(palette.background.strong.color),
                 ..container::Style::default()
@@ -1536,14 +1570,18 @@ fn workspace_tab(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'_, Mess
             container::Style {
                 background: Some(palette.background.base.color.into()),
                 text_color: Some(icon_color(theme)),
-                border: border::rounded(10).width(0).color(Color::TRANSPARENT),
+                border: border::rounded(ui_style::RADIUS_UI)
+                    .width(0)
+                    .color(Color::TRANSPARENT),
                 ..container::Style::default()
             }
         } else {
             container::Style {
                 background: Some(Color::TRANSPARENT.into()),
                 text_color: Some(icon_color(theme)),
-                border: border::rounded(10).width(0).color(Color::TRANSPARENT),
+                border: border::rounded(ui_style::RADIUS_UI)
+                    .width(0)
+                    .color(Color::TRANSPARENT),
                 ..container::Style::default()
             }
         }
@@ -2074,7 +2112,9 @@ fn preview_bounds_for_region(bounds: Rectangle, region: DockDropRegion) -> Recta
 fn split_rearrange_style(theme: &Theme) -> pane_grid::Style {
     let mut style = pane_grid::default(theme);
     style.hovered_region.background = Color::TRANSPARENT.into();
-    style.hovered_region.border = border::rounded(0).width(0).color(Color::TRANSPARENT);
+    style.hovered_region.border = border::rounded(ui_style::RADIUS_NONE)
+        .width(0)
+        .color(Color::TRANSPARENT);
     style
 }
 
@@ -2969,5 +3009,19 @@ mod tests {
             message,
             Message::Editor(super::super::EditorMessage::FileBrowserFocused)
         )));
+    }
+
+    #[test]
+    fn header_overflow_menu_x_clamps_to_viewport() {
+        let bounds = Rectangle {
+            x: 40.0,
+            y: 0.0,
+            width: 220.0,
+            height: 300.0,
+        };
+
+        let x = header_overflow_menu_x(bounds, 600.0, 420.0);
+        assert!(x >= ui_style::SPACE_XS as f32);
+        assert!(x <= 600.0 - 420.0 - ui_style::SPACE_XS as f32);
     }
 }

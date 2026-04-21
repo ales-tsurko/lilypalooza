@@ -29,7 +29,7 @@ use iced_widget::{
 use std::collections::HashMap;
 
 /// The padding around the elements.
-const PADDING: Padding = Padding::new(5.0);
+const PADDING: Padding = Padding::new(8.0);
 /// The spacing between the element.
 const SPACING: Pixels = Pixels(5.0);
 /// The spacing between the buttons.

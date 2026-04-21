@@ -2,6 +2,8 @@ use iced::widget::{button, checkbox, container, text_input};
 use iced::{Background, Border, Color, Shadow, Theme, Vector};
 use palette::{FromColor, LinSrgb, OklabHue, Oklch, Srgb};
 
+const RADIUS_UI: f32 = 6.0;
+
 /// Global tuning parameters applied to editor syntax colors derived from an Iced theme.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ThemeTuning {
@@ -115,7 +117,10 @@ pub fn popup_surface(theme: &Theme) -> container::Style {
             .into(),
         ),
         text_color: Some(text_color),
-        border: Border::default().rounded(8).width(1).color(border_color),
+        border: Border::default()
+            .rounded(RADIUS_UI)
+            .width(1)
+            .color(border_color),
         shadow: Shadow {
             color: Color::from_rgba(0.0, 0.0, 0.0, 0.16),
             offset: Vector::new(0.0, 4.0),
@@ -146,7 +151,7 @@ pub fn popup_icon_button(theme: &Theme, status: button::Status) -> button::Style
     button::Style {
         background: None,
         text_color,
-        border: Border::default().rounded(6),
+        border: Border::default().rounded(RADIUS_UI),
         ..button::Style::default()
     }
 }
@@ -171,7 +176,10 @@ pub fn popup_text_input(theme: &Theme, status: text_input::Status) -> text_input
         background: surface
             .background
             .unwrap_or(Background::Color(palette.background.base.color)),
-        border: Border::default().rounded(8).width(1).color(border_color),
+        border: Border::default()
+            .rounded(RADIUS_UI)
+            .width(1)
+            .color(border_color),
         icon: value_color,
         placeholder: blend_colors(value_color, palette.background.strong.color, 0.42),
         value: value_color,
@@ -214,7 +222,7 @@ pub fn popup_checkbox(theme: &Theme, status: checkbox::Status) -> checkbox::Styl
             palette.background.weak.text
         },
         border: Border::default()
-            .rounded(4)
+            .rounded(RADIUS_UI)
             .width(1)
             .color(palette.background.strong.color),
         text_color: Some(surface.text_color.unwrap_or(palette.background.base.text)),
