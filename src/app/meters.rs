@@ -611,10 +611,12 @@ mod tests {
             left: ChannelMeterSnapshot {
                 level: 0.25,
                 hold: 0.5,
+                hold_db: -12.0,
             },
             right: ChannelMeterSnapshot {
                 level: 0.75,
                 hold: 0.9,
+                hold_db: -1.0,
             },
             clip_latched: true,
         };
@@ -724,10 +726,12 @@ mod tests {
             left: ChannelMeterSnapshot {
                 level: 0.1,
                 hold: 0.4,
+                hold_db: -18.0,
             },
             right: ChannelMeterSnapshot {
                 level: 0.2,
                 hold: 0.5,
+                hold_db: -12.0,
             },
             clip_latched: true,
         };

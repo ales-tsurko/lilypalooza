@@ -57,12 +57,24 @@ pub enum MixerError {
 }
 
 /// One channel meter snapshot.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChannelMeterSnapshot {
     /// Normalized level in `0..=1`.
     pub level: f32,
     /// Normalized hold marker in `0..=1`.
     pub hold: f32,
+    /// Unclamped held peak in dBFS.
+    pub hold_db: f32,
+}
+
+impl Default for ChannelMeterSnapshot {
+    fn default() -> Self {
+        Self {
+            level: 0.0,
+            hold: 0.0,
+            hold_db: STRIP_METER_MIN_DB,
+        }
+    }
 }
 
 /// One stereo strip meter snapshot.

@@ -120,10 +120,12 @@ impl SharedStripMeter {
             left: ChannelMeterSnapshot {
                 level: normalize_meter_level(peak_l),
                 hold: normalize_meter_level(hold_l),
+                hold_db: amplitude_to_db(hold_l).max(STRIP_METER_MIN_DB),
             },
             right: ChannelMeterSnapshot {
                 level: normalize_meter_level(peak_r),
                 hold: normalize_meter_level(hold_r),
+                hold_db: amplitude_to_db(hold_r).max(STRIP_METER_MIN_DB),
             },
             clip_latched: self.inner.clip_latched.load(Ordering::Relaxed),
         }

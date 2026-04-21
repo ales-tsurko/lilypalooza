@@ -9,8 +9,8 @@ use iced::widget::{
 use iced::{Color, Element, Fill, FillPortion, Length, alignment};
 use iced_aw::helpers::color_picker_with_change;
 use lilypalooza_audio::mixer::{
-    ChannelMeterSnapshot, MixerMeterSnapshot, MixerMeterSnapshotWindow, STRIP_METER_MAX_DB,
-    STRIP_METER_MIN_DB, StripMeterSnapshot,
+    ChannelMeterSnapshot, MixerMeterSnapshot, MixerMeterSnapshotWindow, STRIP_METER_MIN_DB,
+    StripMeterSnapshot,
 };
 use lilypalooza_audio::{InstrumentSlotState, MixerState, SoundfontProcessorState};
 
@@ -269,6 +269,8 @@ struct MeterDependency {
     right_level_bits: u32,
     left_hold_bits: u32,
     right_hold_bits: u32,
+    left_hold_db_bits: u32,
+    right_hold_db_bits: u32,
     clip_latched: bool,
 }
 
@@ -291,6 +293,8 @@ impl MeterDependency {
             right_level_bits: snapshot.right.level.to_bits(),
             left_hold_bits: snapshot.left.hold.to_bits(),
             right_hold_bits: snapshot.right.hold.to_bits(),
+            left_hold_db_bits: snapshot.left.hold_db.to_bits(),
+            right_hold_db_bits: snapshot.right.hold_db.to_bits(),
             clip_latched: snapshot.clip_latched,
         }
     }
@@ -300,10 +304,12 @@ impl MeterDependency {
             left: ChannelMeterSnapshot {
                 level: f32::from_bits(self.left_level_bits),
                 hold: f32::from_bits(self.left_hold_bits),
+                hold_db: f32::from_bits(self.left_hold_db_bits),
             },
             right: ChannelMeterSnapshot {
                 level: f32::from_bits(self.right_level_bits),
                 hold: f32::from_bits(self.right_hold_bits),
+                hold_db: f32::from_bits(self.right_hold_db_bits),
             },
             clip_latched: self.clip_latched,
         }
@@ -1421,12 +1427,11 @@ fn control_stack_height(control_height: f32) -> f32 {
 }
 
 fn meter_peak_label(snapshot: StripMeterSnapshot) -> String {
-    let peak = snapshot.left.hold.max(snapshot.right.hold);
-    if peak <= 0.0 {
+    let hold_db = snapshot.left.hold_db.max(snapshot.right.hold_db);
+    if hold_db <= STRIP_METER_MIN_DB {
         "-inf".to_string()
     } else {
-        let db = STRIP_METER_MIN_DB + (STRIP_METER_MAX_DB - STRIP_METER_MIN_DB) * peak;
-        format!("{db:.1}")
+        format!("{hold_db:.1}")
     }
 }
 
@@ -1631,14 +1636,16 @@ mod tests {
             left: ChannelMeterSnapshot {
                 level: 0.2,
                 hold: 1.0,
+                hold_db: 3.2,
             },
             right: ChannelMeterSnapshot {
                 level: 0.2,
                 hold: 0.5,
+                hold_db: -6.0,
             },
             clip_latched: false,
         };
-        assert_eq!(meter_peak_label(snapshot), "0.0");
+        assert_eq!(meter_peak_label(snapshot), "3.2");
     }
 
     #[test]
