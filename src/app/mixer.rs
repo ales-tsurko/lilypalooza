@@ -25,6 +25,11 @@ use crate::{fonts, icons, ui_style};
 
 pub(super) const MIXER_MIN_HEIGHT: f32 = 340.0;
 pub(super) const MIXER_MIN_WIDTH: f32 = 520.0;
+const INSTRUMENT_SCROLL_ID: &str = "mixer-instrument-scroll";
+
+pub(super) fn instrument_scroll_id() -> Id {
+    Id::new(INSTRUMENT_SCROLL_ID)
+}
 
 const GROUP_SIDE_BORDER_WIDTH: f32 = 1.0;
 const MAIN_STRIP_WIDTH: f32 = 141.0;
@@ -43,6 +48,10 @@ const STRIP_STACK_SPACING: f32 = 2.0;
 const LABEL_CONTROL_SPACING: f32 = ui_style::SPACE_XS as f32;
 const TITLE_TOP_SPACING: f32 = 6.0;
 const STRIP_VIRTUALIZATION_OVERSCAN: usize = 2;
+
+pub(super) fn instrument_track_scroll_x(track_index: usize) -> f32 {
+    strip_span_width(track_index)
+}
 
 struct StripActions<'a> {
     solo: Option<(bool, Message)>,
@@ -235,6 +244,7 @@ struct TrackStripDependency {
     soloed: bool,
     muted: bool,
     tint_enabled: bool,
+    highlighted: bool,
     renaming: bool,
     rename_value: String,
     color_picker_open: bool,
@@ -431,6 +441,7 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                     &track_rename_value,
                     track_rename_color_value,
                     track_rename_color_picker_open,
+                    app.selected_track_index,
                     true,
                 ))
                 .width(FillPortion(5))
@@ -491,6 +502,7 @@ fn mixer_layout_without_audio<'a>(
     bus_viewport_width: f32,
     renaming_target: Option<super::RenameTarget>,
     track_rename_value: String,
+    selected_track_index: Option<usize>,
 ) -> Element<'a, Message> {
     let existing_track_count = 0;
     let gain_mode = gain_control_mode(size.height);
@@ -541,6 +553,7 @@ fn mixer_layout_without_audio<'a>(
             &track_rename_value,
             Color::TRANSPARENT,
             false,
+            selected_track_index,
             false,
         ))
         .width(FillPortion(5))
@@ -684,6 +697,8 @@ fn sticky_master_strip(
                 ),
                 MAIN_STRIP_WIDTH,
                 f32::from_bits(dependency.strip_height_bits),
+                false,
+                None,
             )
         },
     )
@@ -705,6 +720,7 @@ fn instrument_track_area(
     track_rename_value: &str,
     track_rename_color_value: Color,
     track_rename_color_picker_open: bool,
+    selected_track_index: Option<usize>,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
     let options: Arc<[InstrumentChoice]> = if controls_enabled {
@@ -722,7 +738,7 @@ fn instrument_track_area(
             .push(horizontal_spacer(left_spacer)),
         move |row, (local_index, track)| {
             let track_index = track.id.index();
-            let selected = selected_instrument_choice(&track.instrument, mixer);
+            let selected_choice = selected_instrument_choice(&track.instrument, mixer);
             let track_color = track_colors
                 .get(track_index)
                 .copied()
@@ -740,7 +756,7 @@ fn instrument_track_area(
                 TrackStripDependency {
                     index: track_index,
                     name: track.name.clone(),
-                    selected,
+                    selected: selected_choice.clone(),
                     color_bits: color_bits(track_color),
                     gain_bits: track.state.gain_db.to_bits(),
                     pan_bits: track.state.pan.to_bits(),
@@ -750,6 +766,7 @@ fn instrument_track_area(
                     soloed: track.state.soloed,
                     muted: track.state.muted,
                     tint_enabled: track_should_use_roll_tint(track_index, existing_track_count),
+                    highlighted: selected_track_index == Some(track_index),
                     renaming: renaming_target == Some(super::RenameTarget::Track(track_index))
                         && renaming_origin == Some(super::WorkspacePaneKind::Mixer),
                     rename_value: track_rename_value.to_string(),
@@ -760,7 +777,7 @@ fn instrument_track_area(
                 },
                 move |dependency| {
                     let name = dependency.name.clone();
-                    let selected = dependency.selected.clone();
+                    let is_selected = dependency.highlighted;
                     let track_color = if dependency.renaming {
                         track_rename_color_value
                     } else {
@@ -782,16 +799,20 @@ fn instrument_track_area(
                             dependency.color_picker_open,
                         ),
                         Some({
-                            pick_list(options.clone(), selected, move |choice| {
-                                if controls_enabled {
-                                    Message::Mixer(MixerMessage::SelectTrackInstrument(
-                                        track_index,
-                                        choice,
-                                    ))
-                                } else {
-                                    noop_message()
-                                }
-                            })
+                            pick_list(
+                                options.clone(),
+                                dependency.selected.clone(),
+                                move |choice| {
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::SelectTrackInstrument(
+                                            track_index,
+                                            choice,
+                                        ))
+                                    } else {
+                                        noop_message()
+                                    }
+                                },
+                            )
                             .placeholder("Instrument")
                             .text_size(ui_style::FONT_SIZE_UI_XS.saturating_sub(3))
                             .width(Fill)
@@ -844,9 +865,22 @@ fn instrument_track_area(
                     );
 
                     if dependency.tint_enabled {
-                        tinted_track_strip_panel(shell, STRIP_WIDTH, strip_height, track_color)
+                        tinted_track_strip_panel(
+                            shell,
+                            STRIP_WIDTH,
+                            strip_height,
+                            track_color,
+                            is_selected,
+                            Some(Message::Mixer(MixerMessage::SelectTrack(track_index))),
+                        )
                     } else {
-                        strip_panel(shell, STRIP_WIDTH, strip_height)
+                        strip_panel(
+                            shell,
+                            STRIP_WIDTH,
+                            strip_height,
+                            is_selected,
+                            Some(Message::Mixer(MixerMessage::SelectTrack(track_index))),
+                        )
                     }
                 },
             ))
@@ -863,6 +897,7 @@ fn instrument_track_area(
                 .height(Fill)
                 .style(ui_style::chrome_separator),
             scrollable(track_row)
+                .id(instrument_scroll_id())
                 .direction(scrollable::Direction::Horizontal(
                     scrollable::Scrollbar::new()
                 ))
@@ -1002,6 +1037,8 @@ fn bus_track_area(
                         ),
                         STRIP_WIDTH,
                         strip_height,
+                        false,
+                        None,
                     );
                     let remove_button: Element<'static, Message> = container(
                         button(
@@ -1487,11 +1524,27 @@ fn meter_scale_visible(gain_mode: GainControlMode) -> bool {
     matches!(gain_mode, GainControlMode::Fader)
 }
 
-fn strip_panel<'a>(content: Element<'a, Message>, width: f32, height: f32) -> Element<'a, Message> {
+fn strip_panel<'a>(
+    content: Element<'a, Message>,
+    width: f32,
+    height: f32,
+    selected: bool,
+    on_select: Option<Message>,
+) -> Element<'a, Message> {
+    let content: Element<'a, Message> = if let Some(message) = on_select {
+        stack![
+            mouse_area(container(text("")).width(Fill).height(Fill)).on_press(message),
+            content
+        ]
+        .into()
+    } else {
+        content
+    };
+
     container(content)
         .width(Length::Fixed(width))
         .height(Length::Fixed(height))
-        .style(ui_style::pane_main_surface)
+        .style(move |theme| ui_style::mixer_track_strip_surface(theme, None, selected))
         .into()
 }
 
@@ -1500,11 +1553,23 @@ fn tinted_track_strip_panel<'a>(
     width: f32,
     height: f32,
     track_color: Color,
+    selected: bool,
+    on_select: Option<Message>,
 ) -> Element<'a, Message> {
+    let content: Element<'a, Message> = if let Some(message) = on_select {
+        stack![
+            mouse_area(container(text("")).width(Fill).height(Fill)).on_press(message),
+            content
+        ]
+        .into()
+    } else {
+        content
+    };
+
     container(content)
         .width(Length::Fixed(width))
         .height(Length::Fixed(height))
-        .style(move |theme| ui_style::mixer_track_strip_surface(theme, track_color))
+        .style(move |theme| ui_style::mixer_track_strip_surface(theme, Some(track_color), selected))
         .into()
 }
 
@@ -1755,6 +1820,7 @@ mod tests {
             soloed: false,
             muted: false,
             tint_enabled: false,
+            highlighted: false,
             renaming: false,
             rename_value: String::new(),
             color_picker_open: false,

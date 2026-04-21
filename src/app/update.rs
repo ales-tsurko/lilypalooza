@@ -45,6 +45,7 @@ mod piano_roll;
 mod playback;
 mod score;
 mod track_names;
+mod track_selection;
 
 pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
     if app.renaming_target.is_some() && should_commit_track_rename_before_message(&message) {

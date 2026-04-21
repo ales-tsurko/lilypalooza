@@ -182,29 +182,53 @@ pub(crate) fn piano_roll_surface(theme: &Theme) -> container::Style {
     }
 }
 
-pub(crate) fn mixer_track_strip_surface(theme: &Theme, accent: Color) -> container::Style {
+pub(crate) fn mixer_track_strip_surface(
+    theme: &Theme,
+    accent: Option<Color>,
+    selected: bool,
+) -> container::Style {
     let palette = theme.extended_palette();
+    let background = accent.map_or(palette.background.base.color, |accent| {
+        mix_color(palette.background.base.color, accent, 0.06)
+    });
+    let border_color = if selected {
+        mix_color(
+            palette.primary.base.color,
+            palette.background.weakest.color,
+            0.24,
+        )
+    } else {
+        Color::TRANSPARENT
+    };
 
     container::Style {
-        background: Some(mix_color(palette.background.base.color, accent, 0.06).into()),
+        background: Some(background.into()),
         text_color: Some(palette.background.base.text),
         border: border::rounded(RADIUS_NONE)
-            .width(0)
-            .color(Color::TRANSPARENT),
+            .width(if selected { 1 } else { 0 })
+            .color(border_color),
         ..container::Style::default()
     }
 }
 
-pub(crate) fn piano_roll_track_surface(theme: &Theme, accent: Color) -> container::Style {
+pub(crate) fn piano_roll_track_surface(
+    theme: &Theme,
+    accent: Color,
+    selected: bool,
+) -> container::Style {
     let palette = theme.extended_palette();
+    let background_mix = if selected { 0.18 } else { 0.10 };
+    let border_mix = if selected { 0.34 } else { 0.18 };
 
     container::Style {
-        background: Some(mix_color(palette.background.weakest.color, accent, 0.10).into()),
+        background: Some(
+            mix_color(palette.background.weakest.color, accent, background_mix).into(),
+        ),
         text_color: Some(palette.background.weakest.text),
         border: border::rounded(RADIUS_UI).width(1).color(mix_color(
             palette.background.strong.color,
             accent,
-            0.18,
+            border_mix,
         )),
         ..container::Style::default()
     }
@@ -1234,7 +1258,8 @@ mod tests {
     #[test]
     fn mixer_track_strip_surface_differs_from_plain_pane_surface() {
         let plain = pane_main_surface(&Theme::Dark);
-        let tinted = mixer_track_strip_surface(&Theme::Dark, Color::from_rgb(0.3, 0.4, 0.5));
+        let tinted =
+            mixer_track_strip_surface(&Theme::Dark, Some(Color::from_rgb(0.3, 0.4, 0.5)), false);
         assert_ne!(plain.background, tinted.background);
     }
 }

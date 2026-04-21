@@ -124,6 +124,7 @@ impl Lilypalooza {
         self.project_name = None;
         self.track_name_overrides.clear();
         self.track_color_overrides.clear();
+        self.selected_track_index = None;
         self.metronome = state::MetronomeState::default();
         self.project_mixer_state = lilypalooza_audio::MixerState::new();
         self.metronome_menu_open = false;
@@ -164,6 +165,7 @@ impl Lilypalooza {
             .into_iter()
             .map(|color| color.map(crate::track_colors::from_override))
             .collect();
+        self.selected_track_index = None;
         self.metronome = state.metronome;
         self.project_mixer_state = state.mixer_state;
         self.metronome_menu_open = false;

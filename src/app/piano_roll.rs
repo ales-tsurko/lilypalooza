@@ -23,6 +23,7 @@ const TRACK_COLOR_BUTTON_SIZE: f32 = 18.0;
 const TRACK_COLOR_BUTTON_GAP: f32 = 6.0;
 const TRACK_BUTTON_WIDTH: f32 = 22.0;
 const TRACK_BUTTON_HEIGHT: f32 = 18.0;
+const TRACK_ROW_HEIGHT: f32 = 26.0;
 const TRACK_BUTTONS_GAP: f32 = 4.0;
 const TRACK_LABEL_BUTTON_GAP: f32 = 10.0;
 const DRAG_START_THRESHOLD: f32 = 8.0;
@@ -46,6 +47,7 @@ const BASE_PIXELS_PER_QUARTER: f32 = 72.0;
 const BEAT_SUBDIVISION_MIN: u8 = 1;
 const BEAT_SUBDIVISION_MAX: u8 = 16;
 const ROLL_SCROLL_ID: &str = "piano-roll-scroll";
+const TRACK_LIST_SCROLL_ID: &str = "piano-roll-track-list-scroll";
 
 #[derive(Debug, Clone)]
 pub(super) struct PianoRollState {
@@ -421,6 +423,14 @@ fn drag_distance(a: Point, b: Point) -> f32 {
 
 pub(super) fn roll_scroll_id() -> iced::widget::Id {
     iced::widget::Id::new(ROLL_SCROLL_ID)
+}
+
+pub(super) fn track_list_scroll_id() -> iced::widget::Id {
+    iced::widget::Id::new(TRACK_LIST_SCROLL_ID)
+}
+
+pub(super) fn track_list_scroll_y(track_index: usize) -> f32 {
+    track_index as f32 * TRACK_ROW_HEIGHT
 }
 
 pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> {
@@ -928,9 +938,12 @@ fn track_list<'a>(
                     )
                     .width(Fill),
                 )
-                .on_press(Message::PianoRoll(PianoRollMessage::StartTrackRename(
-                    track.index,
+                .on_press(Message::PianoRoll(PianoRollMessage::SelectTrack(
+                    track.index
                 )))
+                .on_double_click(Message::PianoRoll(
+                    PianoRollMessage::StartTrackRename(track.index,)
+                ))
             ]
             .align_y(alignment::Vertical::Center)
             .width(Fill)
@@ -999,7 +1012,13 @@ fn track_list<'a>(
                 .width(Fill),
             )
             .padding([4, 6])
-            .style(move |theme| ui_style::piano_roll_track_surface(theme, track_color)),
+            .style(move |theme| {
+                ui_style::piano_roll_track_surface(
+                    theme,
+                    track_color,
+                    app.selected_track_index == Some(track.index),
+                )
+            }),
         );
     }
 
@@ -1012,6 +1031,7 @@ fn track_list<'a>(
     }
 
     scrollable(tracks_column)
+        .id(track_list_scroll_id())
         .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::new()))
         .style(ui_style::workspace_scrollable)
         .into()

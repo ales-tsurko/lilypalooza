@@ -35,6 +35,7 @@ impl Lilypalooza {
             | PianoRollMessage::TrackSoloToggled(_) => {
                 self.set_focused_workspace_pane(WorkspacePaneKind::PianoRoll);
             }
+            PianoRollMessage::SelectTrack(_) => {}
             PianoRollMessage::TransportSeekNormalized(_)
             | PianoRollMessage::TransportSeekReleased
             | PianoRollMessage::TransportPlayPause
@@ -110,6 +111,12 @@ impl Lilypalooza {
             PianoRollMessage::FileNext => {
                 self.piano_roll.select_next_file();
                 self.sync_playback_file();
+            }
+            PianoRollMessage::SelectTrack(track_index) => {
+                return self.select_track(
+                    track_index,
+                    super::track_selection::TrackSelectionOrigin::PianoRoll,
+                );
             }
             PianoRollMessage::StartTrackRename(track_index) => {
                 return self.start_track_rename(track_index, WorkspacePaneKind::PianoRoll);

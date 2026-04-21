@@ -55,7 +55,14 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn handle_mixer_message(&mut self, message: MixerMessage) -> Task<Message> {
-        self.set_focused_workspace_pane(WorkspacePaneKind::Mixer);
+        if !matches!(
+            message,
+            MixerMessage::SelectTrack(_)
+                | MixerMessage::InstrumentViewportScrolled(_)
+                | MixerMessage::BusViewportScrolled(_)
+        ) {
+            self.set_focused_workspace_pane(WorkspacePaneKind::Mixer);
+        }
 
         let history_mode = mixer_message_history_mode(&message, self.primary_mouse_pressed);
         match history_mode {
@@ -84,6 +91,12 @@ impl Lilypalooza {
         }
 
         match message {
+            MixerMessage::SelectTrack(track_index) => {
+                return self.select_track(
+                    track_index,
+                    super::track_selection::TrackSelectionOrigin::Mixer,
+                );
+            }
             MixerMessage::StartTrackRename(track_index) => {
                 return self.start_track_rename(track_index, WorkspacePaneKind::Mixer);
             }
@@ -211,6 +224,7 @@ impl Lilypalooza {
                 self.piano_roll
                     .set_global_solo_active(mixer_has_any_solo(&mixer));
             }
+            MixerMessage::SelectTrack(_) => {}
             MixerMessage::StartTrackRename(_)
             | MixerMessage::StartBusRename(_)
             | MixerMessage::TrackRenameInputChanged(_)
@@ -273,6 +287,7 @@ fn mixer_message_history_mode(
         }
         MixerMessage::AddBus
         | MixerMessage::RemoveBus(_)
+        | MixerMessage::SelectTrack(_)
         | MixerMessage::StartTrackRename(_)
         | MixerMessage::StartBusRename(_)
         | MixerMessage::TrackRenameInputChanged(_)
