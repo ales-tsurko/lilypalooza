@@ -1402,6 +1402,8 @@ fn group_header<'a>(
         );
     }
 
+    header = header.push(header_close_trigger(app, active_pane));
+
     if shows_menu_button {
         header = header.push(header_overflow_trigger(app, group_id, is_menu_open));
     }
@@ -1418,6 +1420,25 @@ fn group_header<'a>(
     ]
     .spacing(0)
     .into()
+}
+
+fn header_close_trigger(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'static, Message> {
+    delayed_tooltip(
+        app,
+        format!("header-close-{pane:?}"),
+        container(
+            button(header_icon(icons::x(), HEADER_MENU_ICON_SIZE))
+                .style(ui_style::button_window_control)
+                .padding([4, 7])
+                .width(Length::Fixed(HEADER_MENU_BUTTON_WIDTH))
+                .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
+                .on_press(Message::Pane(PaneMessage::ToggleWorkspacePane(pane))),
+        )
+        .padding([0, 2])
+        .into(),
+        text("Close pane").size(ui_style::FONT_SIZE_UI_XS).into(),
+        tooltip::Position::Top,
+    )
 }
 
 fn header_overflow_menu_overlay<'a>(
