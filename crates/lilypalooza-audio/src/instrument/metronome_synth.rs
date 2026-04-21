@@ -71,6 +71,10 @@ const DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
     editor: None,
 };
 
+pub(crate) fn descriptor() -> &'static ProcessorDescriptor {
+    &DESCRIPTOR
+}
+
 pub(crate) struct MetronomeProcessor {
     shared: SharedMetronomeState,
     sample_rate: f32,

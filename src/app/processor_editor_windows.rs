@@ -9,15 +9,13 @@ use lilypalooza_audio::{EditorDescriptor, EditorSession};
 /// - `1..=track_count` are instrument tracks
 /// - the remaining indices are bus strips
 ///
-/// `processor_index` follows one shared convention on every strip:
+/// `slot_index` follows one shared convention on every strip:
 /// - `0` is the instrument slot
 /// - `1..` are effect slots
-///
-/// For strips without an instrument slot, `processor_index == 0` is invalid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct EditorTarget {
     pub(super) strip_index: usize,
-    pub(super) processor_index: usize,
+    pub(super) slot_index: usize,
 }
 
 pub(super) struct EditorWindow {
@@ -141,7 +139,7 @@ mod tests {
         let mut manager = EditorWindowManager::default();
         let target = EditorTarget {
             strip_index: 3,
-            processor_index: 0,
+            slot_index: 0,
         };
 
         let first = manager.open_or_focus(

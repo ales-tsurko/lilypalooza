@@ -1,4 +1,4 @@
-use lilypalooza_audio::{BusId, InstrumentSlotState, TrackId};
+use lilypalooza_audio::{BusId, SlotState, TrackId};
 
 use super::super::messages::MixerMessage;
 use super::*;
@@ -193,13 +193,13 @@ impl Lilypalooza {
             }
             MixerMessage::SelectTrackInstrument(index, choice) => {
                 let slot = match choice {
-                    super::super::mixer::InstrumentChoice::None => InstrumentSlotState::empty(),
+                    super::super::mixer::InstrumentChoice::None => SlotState::empty(),
                     super::super::mixer::InstrumentChoice::SoundfontProgram {
                         soundfont_id,
                         bank,
                         program,
                         ..
-                    } => InstrumentSlotState::soundfont(soundfont_id, bank, program),
+                    } => SlotState::soundfont(soundfont_id, bank, program),
                 };
                 let _ = mixer.set_track_instrument(TrackId(index as u16), slot);
             }
@@ -312,58 +312,13 @@ impl Lilypalooza {
     fn open_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
         let Some((title, descriptor, session_result)) =
             self.playback.as_ref().and_then(|playback| {
-                let mixer = playback.mixer_state();
-                if target.strip_index == 0 {
-                    let effect_index = target.processor_index.checked_sub(1)?;
-                    return mixer
-                        .master()
-                        .effects
-                        .get(effect_index)
-                        .cloned()
-                        .map(|slot| {
-                            (
-                                format!("Master Effect {}", effect_index + 1),
-                                slot.editor_descriptor(),
-                                slot.create_editor_session(),
-                            )
-                        });
-                }
-
-                let track_base = 1;
-                let bus_base = track_base + mixer.track_count();
-                if target.strip_index < bus_base {
-                    let track_index = target.strip_index - track_base;
-                    return mixer.tracks().get(track_index).and_then(|track| {
-                        if target.processor_index == 0 {
-                            return Some((
-                                format!("{} Instrument", track.name),
-                                track.instrument.editor_descriptor(),
-                                track.instrument.create_editor_session(),
-                            ));
-                        }
-
-                        let effect_index = target.processor_index - 1;
-                        track.effects.get(effect_index).cloned().map(|slot| {
-                            (
-                                format!("{} Effect {}", track.name, effect_index + 1),
-                                slot.editor_descriptor(),
-                                slot.create_editor_session(),
-                            )
-                        })
-                    });
-                }
-
-                let bus_index = target.strip_index - bus_base;
-                let effect_index = target.processor_index.checked_sub(1)?;
-                mixer.buses().get(bus_index).and_then(|bus| {
-                    bus.effects.get(effect_index).cloned().map(|slot| {
-                        (
-                            format!("{} Effect {}", bus.name, effect_index + 1),
-                            slot.editor_descriptor(),
-                            slot.create_editor_session(),
-                        )
-                    })
-                })
+                let strip = playback.mixer_state().strip_by_index(target.strip_index)?;
+                let slot = strip.slot(target.slot_index)?;
+                Some((
+                    slot.title(&strip.name, target.slot_index),
+                    slot.editor_descriptor(),
+                    slot.create_editor_session(),
+                ))
             })
         else {
             return Task::none();
@@ -401,8 +356,8 @@ fn sync_piano_roll_mix_from_mixer_state(
     piano_roll: &mut super::super::piano_roll::PianoRollState,
     mixer: &lilypalooza_audio::MixerState,
 ) {
-    for track in mixer.tracks() {
-        let index = track.id.index();
+    for (track_id, track) in mixer.tracks_with_ids() {
+        let index = track_id.index();
         let _ = piano_roll.set_track_muted(index, track.state.muted);
         let _ = piano_roll.set_track_soloed(index, track.state.soloed);
     }
@@ -491,7 +446,7 @@ mod tests {
             .mixer_state()
             .buses()
             .first()
-            .map(|bus| bus.id)
+            .and_then(|bus| bus.bus_id)
             .expect("bus should be added");
 
         let _ = app.handle_mixer_message(MixerMessage::RemoveBus(bus_id.0));
@@ -516,7 +471,7 @@ mod tests {
 
         let target = EditorTarget {
             strip_index: 1,
-            processor_index: 0,
+            slot_index: 0,
         };
         let _ = app.handle_mixer_message(MixerMessage::OpenEditor(target));
 
@@ -542,7 +497,7 @@ mod tests {
             .mixer_state()
             .buses()
             .first()
-            .map(|bus| bus.id.0)
+            .and_then(|bus| bus.bus_id.map(|id| id.0))
             .expect("bus should be added");
         let _ = app.handle_mixer_message(MixerMessage::SetBusGain(bus_id, -6.0));
 

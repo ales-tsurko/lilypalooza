@@ -121,8 +121,8 @@ impl AudioEngine {
         let mixer = Mixer::new(&context, &mut commands, &settings, mixer)?;
         let sequencer = Sequencer::new(options.chase_notes_on_seek);
         sequencer.configure_schedule_lead(settings.block_size, settings.sample_rate);
-        for track in mixer.state.tracks() {
-            sequencer.sync_track_handle(&mut commands, track.id, mixer.instrument_handle(track.id));
+        for (track_id, _) in mixer.state.tracks_with_ids() {
+            sequencer.sync_track_handle(&mut commands, track_id, mixer.instrument_handle(track_id));
         }
         sequencer.sync_metronome_handle(&mut commands, Some(mixer.metronome_handle()));
         commands.set_scheduler_extension(Box::new(sequencer.scheduler_extension()));
@@ -347,7 +347,7 @@ mod tests {
     use knyst::prelude::{Beats, BlockSize, GenState, Sample, graph_output, handle, impl_gen};
 
     use super::{AudioEngine, AudioEngineOptions, wait_for_transport_reset_to};
-    use crate::instrument::InstrumentSlotState;
+    use crate::instrument::SlotState;
     use crate::instrument::{
         InstrumentProcessor, InstrumentProcessorNode, MidiEvent, Processor, ProcessorDescriptor,
         ProcessorState, ProcessorStateError,
@@ -397,10 +397,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(
-                    TrackId(0),
-                    InstrumentSlotState::soundfont("default", 0, program),
-                )
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, program))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -461,7 +458,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont");
         }
         settle_backend(&armed_handle);
@@ -483,7 +480,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont");
         }
         settle_backend(&play_handle);
@@ -597,7 +594,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -651,7 +648,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept pending soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -700,7 +697,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -745,7 +742,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -783,7 +780,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
 
@@ -830,7 +827,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -868,7 +865,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
 
@@ -934,7 +931,7 @@ mod tests {
                     .expect("track rename should work");
             }
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
 
@@ -993,7 +990,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
 
@@ -1030,7 +1027,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
 
@@ -1075,7 +1072,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
 
@@ -1111,7 +1108,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
 
@@ -1168,7 +1165,7 @@ mod tests {
         let handle = {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
             engine
                 .mixer
@@ -1222,7 +1219,7 @@ mod tests {
         let handle = {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
             engine
                 .mixer
@@ -1270,7 +1267,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
             mixer
                 .set_track_muted(TrackId(0), false)
@@ -1307,7 +1304,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -1354,7 +1351,7 @@ mod tests {
                 mixer
                     .set_track_instrument(
                         TrackId(track_index as u16),
-                        InstrumentSlotState::soundfont("default", 0, track_index as u8),
+                        SlotState::soundfont("default", 0, track_index as u8),
                     )
                     .expect("track should accept soundfont instrument");
             }
@@ -1406,7 +1403,7 @@ mod tests {
 
         let mut mixer = engine.mixer();
         mixer
-            .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+            .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
             .expect("track should accept soundfont instrument");
 
         let handle = engine
@@ -1452,7 +1449,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
 
@@ -1504,7 +1501,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -1566,7 +1563,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -1618,7 +1615,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -1673,7 +1670,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -1716,7 +1713,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -1765,7 +1762,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -1827,7 +1824,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -1892,7 +1889,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -1950,7 +1947,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -2012,7 +2009,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -2205,7 +2202,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -2256,7 +2253,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -2311,7 +2308,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
             engine
                 .mixer
@@ -2358,7 +2355,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
             engine
                 .mixer
@@ -2407,7 +2404,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -2462,7 +2459,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -2498,7 +2495,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -2534,7 +2531,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -2586,7 +2583,7 @@ mod tests {
                 .set_soundfont(test_soundfont_resource())
                 .expect("soundfont should load");
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         settle_backend(&backend_handle);
@@ -2657,7 +2654,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 0))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 0))
                 .expect("track should accept soundfont instrument");
         }
         let handle = engine
@@ -2725,7 +2722,7 @@ mod tests {
         {
             let mut mixer = engine.mixer();
             mixer
-                .set_track_instrument(TrackId(0), InstrumentSlotState::soundfont("default", 0, 40))
+                .set_track_instrument(TrackId(0), SlotState::soundfont("default", 0, 40))
                 .expect("track should accept soundfont instrument");
         }
         let handle = engine

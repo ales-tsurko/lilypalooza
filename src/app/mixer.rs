@@ -12,7 +12,7 @@ use lilypalooza_audio::mixer::{
     ChannelMeterSnapshot, MixerMeterSnapshot, MixerMeterSnapshotWindow, STRIP_METER_MIN_DB,
     StripMeterSnapshot,
 };
-use lilypalooza_audio::{InstrumentSlotState, MixerState, SoundfontProcessorState};
+use lilypalooza_audio::{MixerState, SlotState, SoundfontProcessorState};
 
 use super::controls::{GAIN_MIN_DB, gain_control_width, gain_fader, gain_knob, pan_knob};
 use super::messages::MixerMessage;
@@ -737,8 +737,8 @@ fn instrument_track_area(
             .height(Length::Fixed(strip_height))
             .push(horizontal_spacer(left_spacer)),
         move |row, (local_index, track)| {
-            let track_index = track.id.index();
-            let selected_choice = selected_instrument_choice(&track.instrument, mixer);
+            let track_index = visible.start + local_index;
+            let selected_choice = selected_instrument_choice(track.instrument_slot(), mixer);
             let track_color = track_colors
                 .get(track_index)
                 .copied()
@@ -945,6 +945,9 @@ fn bus_track_area(
             .height(Length::Fixed(strip_height))
             .push(horizontal_spacer(left_spacer)),
         |row, (local_index, bus)| {
+            let Some(bus_id) = bus.bus_id else {
+                return row;
+            };
             let meter_dependency = MeterStackDependency {
                 meter: MeterDependency::from_snapshot(
                     meters.buses.get(local_index).copied().unwrap_or_default(),
@@ -955,7 +958,7 @@ fn bus_track_area(
             };
             row.push(lazy(
                 BusStripDependency {
-                    id: bus.id.0,
+                    id: bus_id.0,
                     name: bus.name.clone(),
                     gain_bits: bus.state.gain_db.to_bits(),
                     pan_bits: bus.state.pan.to_bits(),
@@ -964,7 +967,7 @@ fn bus_track_area(
                     strip_height_bits: strip_height.to_bits(),
                     soloed: bus.state.soloed,
                     muted: bus.state.muted,
-                    renaming: renaming_target == Some(super::RenameTarget::Bus(bus.id.0))
+                    renaming: renaming_target == Some(super::RenameTarget::Bus(bus_id.0))
                         && renaming_origin == Some(super::WorkspacePaneKind::Mixer),
                     rename_value: track_rename_value.to_string(),
                 },
@@ -1625,9 +1628,10 @@ fn instrument_choices(mixer: &MixerState) -> Vec<InstrumentChoice> {
 }
 
 fn selected_instrument_choice(
-    slot: &InstrumentSlotState,
+    slot: Option<&SlotState>,
     mixer: &MixerState,
 ) -> Option<InstrumentChoice> {
+    let slot = slot?;
     if slot.is_empty() {
         return Some(InstrumentChoice::None);
     }
@@ -1659,7 +1663,7 @@ fn selected_instrument_choice(
 #[cfg(test)]
 mod tests {
     use crate::ui_style;
-    use lilypalooza_audio::{InstrumentSlotState, MixerState};
+    use lilypalooza_audio::{MixerState, SlotState};
 
     use super::{
         COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
@@ -1676,7 +1680,7 @@ mod tests {
     fn empty_slot_maps_to_none_choice() {
         let mixer = MixerState::new();
         assert_eq!(
-            selected_instrument_choice(&InstrumentSlotState::empty(), &mixer),
+            selected_instrument_choice(Some(&SlotState::empty()), &mixer),
             Some(InstrumentChoice::None)
         );
     }
@@ -1685,7 +1689,7 @@ mod tests {
     fn soundfont_slot_maps_to_soundfont_choice() {
         let mixer = MixerState::new();
         assert_eq!(
-            selected_instrument_choice(&InstrumentSlotState::soundfont("default", 0, 2), &mixer),
+            selected_instrument_choice(Some(&SlotState::soundfont("default", 0, 2)), &mixer),
             Some(InstrumentChoice::SoundfontProgram {
                 soundfont_id: "default".to_string(),
                 soundfont_name: "default".to_string(),

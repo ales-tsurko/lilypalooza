@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use lilypalooza_audio::{
-    AudioEngine, AudioEngineOptions, InstrumentSlotState, MixerState, SoundfontResource, TrackId,
+    AudioEngine, AudioEngineOptions, MixerState, SlotState, SoundfontResource, TrackId,
 };
 use midly::num::{u4, u7, u15, u24, u28};
 use midly::{
@@ -37,11 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for track_index in 0..options.assign_tracks {
             mixer.set_track_instrument(
                 TrackId(track_index as u16),
-                InstrumentSlotState::soundfont(
-                    "default",
-                    0,
-                    options.base_program + track_index as u8,
-                ),
+                SlotState::soundfont("default", 0, options.base_program + track_index as u8),
             )?;
         }
     }

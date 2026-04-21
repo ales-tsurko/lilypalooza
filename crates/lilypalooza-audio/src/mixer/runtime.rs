@@ -10,14 +10,14 @@ use crate::instrument::soundfont_synth::{
 };
 use crate::instrument::{
     BUILTIN_NONE_ID, BUILTIN_SOUNDFONT_ID, EffectProcessorNode, EffectRuntimeHandle,
-    InstrumentKind, InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle,
-    ProcessorStateError, ScheduledInstrumentEvent, SharedInstrumentResetState,
+    InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle, ProcessorKind,
+    ProcessorStateError, ScheduledInstrumentEvent, SharedInstrumentResetState, SlotState,
     create_effect_processor, decode_instrument_event, generation_is_current_or_newer,
 };
 use crate::mixer::{
-    BusId, BusSend, BusTrack, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot,
-    MixerMeterSnapshotWindow, MixerState, MixerTrack, STRIP_METER_MAX_DB, STRIP_METER_MIN_DB,
-    StripMeterSnapshot, TrackId, TrackRoute,
+    BusId, BusSend, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot, MixerMeterSnapshotWindow,
+    MixerState, STRIP_METER_MAX_DB, STRIP_METER_MIN_DB, StripMeterSnapshot, Track, TrackId,
+    TrackRoute,
 };
 use knyst::graph::GenOrGraph;
 use knyst::graph::connection::InputBundle;
@@ -267,15 +267,16 @@ impl MixerRuntime {
             buses: mixer
                 .buses()
                 .iter()
-                .map(|bus| {
-                    (
-                        bus.id,
+                .filter_map(|bus| {
+                    let bus_id = bus.bus_id?;
+                    Some((
+                        bus_id,
                         self.buses
-                            .get(&bus.id)
+                            .get(&bus_id)
                             .map_or_else(StripMeterSnapshot::default, |runtime| {
                                 runtime.meter.snapshot()
                             }),
-                    )
+                    ))
                 })
                 .collect(),
         }
@@ -308,14 +309,16 @@ impl MixerRuntime {
             buses: mixer.buses()[bus_range.start.min(bus_end)..bus_end]
                 .iter()
                 .enumerate()
-                .map(|(offset, _)| {
+                .filter_map(|(offset, _)| {
                     let index = bus_range.start + offset;
-                    let id = mixer.buses()[index].id;
-                    self.buses
-                        .get(&id)
-                        .map_or_else(StripMeterSnapshot::default, |runtime| {
-                            runtime.meter.snapshot()
-                        })
+                    let id = mixer.buses()[index].bus_id?;
+                    Some(
+                        self.buses
+                            .get(&id)
+                            .map_or_else(StripMeterSnapshot::default, |runtime| {
+                                runtime.meter.snapshot()
+                            }),
+                    )
                 })
                 .collect(),
         }
@@ -364,18 +367,20 @@ impl MixerRuntime {
             let soundfont_settings =
                 SoundfontSynthSettings::new(settings.sample_rate as i32, settings.block_size);
 
-            let mut buses = HashMap::with_capacity(mixer.buses.len());
-            for bus_track in &mixer.buses {
-                buses.insert(
-                    bus_track.id,
-                    BusRuntime::new(context, commands, settings, bus_track, mixer),
-                );
+            let mut buses = HashMap::with_capacity(mixer.buses().len());
+            for bus_track in mixer.buses() {
+                if let Some(bus_id) = bus_track.bus_id {
+                    buses.insert(
+                        bus_id,
+                        BusRuntime::new(context, commands, settings, bus_track, mixer),
+                    );
+                }
             }
 
             let mut runtime = Self {
                 master,
                 metronome,
-                tracks: Vec::with_capacity(mixer.tracks.len()),
+                tracks: Vec::with_capacity(mixer.tracks().len()),
                 buses,
                 soundfonts: HashMap::new(),
                 soundfont_settings,
@@ -383,8 +388,8 @@ impl MixerRuntime {
             };
             runtime.sync_soundfonts(mixer)?;
 
-            let mut tracks = Vec::with_capacity(mixer.tracks.len());
-            for track in &mixer.tracks {
+            let mut tracks = Vec::with_capacity(mixer.tracks().len());
+            for track in mixer.tracks() {
                 tracks.push(if track_needs_runtime(track) {
                     let bus_inputs = runtime.bus_input_nodes();
                     Some(TrackRuntime::new(
@@ -441,24 +446,27 @@ impl MixerRuntime {
         mixer: &MixerState,
         soundfont_id: &str,
     ) -> Result<(), MixerRuntimeError> {
-        for track in &mixer.tracks {
-            let InstrumentKind::BuiltIn { instrument_id } = &track.instrument.kind else {
+        for (track_id, track) in mixer.tracks_with_ids() {
+            let Some(slot) = track.instrument_slot() else {
                 continue;
             };
-            if instrument_id != BUILTIN_SOUNDFONT_ID {
+            let ProcessorKind::BuiltIn { processor_id } = &slot.kind else {
+                continue;
+            };
+            if processor_id != BUILTIN_SOUNDFONT_ID {
                 continue;
             }
-            let Ok(state) = SoundfontProcessor::decode_state(&track.instrument.state) else {
+            let Ok(state) = SoundfontProcessor::decode_state(&slot.state) else {
                 continue;
             };
             let track_soundfont_id = state.soundfont_id;
             if track_soundfont_id == soundfont_id
                 && matches!(
-                    self.sync_track_instrument(context, commands, mixer, track.id)?,
+                    self.sync_track_instrument(context, commands, mixer, track_id)?,
                     TrackInstrumentSync::GraphChanged
                 )
             {
-                self.sync_track_routing(context, commands, mixer, track.id)?;
+                self.sync_track_routing(context, commands, mixer, track_id)?;
             }
         }
         Ok(())
@@ -567,7 +575,7 @@ impl MixerRuntime {
         }
         if let Some(existing) = runtime.take() {
             let mut existing = existing;
-            if existing.rebuild_effects(context, commands, &track.effects) {
+            if existing.rebuild_effects(context, commands, track) {
                 *runtime = Some(existing);
             } else {
                 existing.free();
@@ -649,7 +657,7 @@ impl MixerRuntime {
             .buses
             .get_mut(&bus_id)
             .ok_or(MixerError::InvalidBusId(bus_id))?;
-        runtime.rebuild_effects(context, commands, &bus.effects);
+        runtime.rebuild_effects(context, commands, bus);
         Ok(())
     }
 
@@ -660,7 +668,7 @@ impl MixerRuntime {
         mixer: &MixerState,
     ) -> Result<(), MixerRuntimeError> {
         self.master
-            .rebuild_effects(context, commands, &mixer.master.effects);
+            .rebuild_effects(context, commands, mixer.master());
         Ok(())
     }
 
@@ -720,10 +728,10 @@ impl MixerRuntime {
         commands: &mut MultiThreadedKnystCommands,
         mixer: &MixerState,
     ) -> Result<(), MixerRuntimeError> {
-        for track in &mixer.tracks {
-            self.sync_track_routing(context, commands, mixer, track.id)?;
+        for (track_id, _) in mixer.tracks_with_ids() {
+            self.sync_track_routing(context, commands, mixer, track_id)?;
         }
-        let bus_ids: Vec<_> = mixer.buses.iter().map(|bus| bus.id).collect();
+        let bus_ids: Vec<_> = mixer.buses_with_ids().map(|(bus_id, _)| bus_id).collect();
         for bus_id in bus_ids {
             self.sync_bus_routing(context, commands, mixer, bus_id)?;
         }
@@ -737,11 +745,11 @@ impl MixerRuntime {
         mixer: &MixerState,
     ) -> Result<(), MixerRuntimeError> {
         let bus_inputs = self.bus_input_nodes();
-        for track in &mixer.tracks {
+        for (track_id, track) in mixer.tracks_with_ids() {
             let runtime = self
                 .tracks
-                .get_mut(track.id.index())
-                .ok_or(MixerError::InvalidTrackId(track.id))?;
+                .get_mut(track_id.index())
+                .ok_or(MixerError::InvalidTrackId(track_id))?;
             if let Some(runtime) = runtime.as_mut() {
                 runtime.sync_routing_existing(
                     commands,
@@ -752,8 +760,8 @@ impl MixerRuntime {
                 )?;
             }
         }
-        for bus in &mixer.buses {
-            if let Some(runtime) = self.buses.get_mut(&bus.id) {
+        for (bus_id, bus) in mixer.buses_with_ids() {
+            if let Some(runtime) = self.buses.get_mut(&bus_id) {
                 runtime.sync_routing_existing(
                     commands,
                     mixer,
@@ -773,25 +781,25 @@ impl MixerRuntime {
     ) {
         self.master.set_level(
             commands,
-            db_to_amplitude(mixer.master.state.gain_db),
-            mixer.master.state.pan,
+            db_to_amplitude(mixer.master().state.gain_db),
+            mixer.master().state.pan,
         );
         let track_amplitudes: Vec<_> = mixer
-            .tracks
+            .tracks()
             .iter()
             .map(|track| track_effective_amplitude(mixer, track))
             .collect();
         for (runtime, (track, amplitude)) in self
             .tracks
             .iter_mut()
-            .zip(mixer.tracks.iter().zip(track_amplitudes.into_iter()))
+            .zip(mixer.tracks().iter().zip(track_amplitudes.into_iter()))
         {
             if let Some(runtime) = runtime.as_mut() {
                 runtime.apply_strip(commands, track, amplitude);
             }
         }
-        for bus in &mixer.buses {
-            if let Some(runtime) = self.buses.get_mut(&bus.id) {
+        for (bus_id, bus) in mixer.buses_with_ids() {
+            if let Some(runtime) = self.buses.get_mut(&bus_id) {
                 runtime.apply_strip(commands, bus, bus_effective_amplitude(bus));
             }
         }
@@ -852,8 +860,8 @@ impl MasterRuntime {
     ) -> Self {
         let meter = SharedStripMeter::new(settings.sample_rate, settings.block_size);
         let level = SharedStripLevel::new(
-            db_to_amplitude(mixer.master.state.gain_db),
-            mixer.master.state.pan,
+            db_to_amplitude(mixer.master().state.gain_db),
+            mixer.master().state.pan,
         );
         let strip = handle_with_inputs(
             commands,
@@ -872,7 +880,7 @@ impl MasterRuntime {
             meter,
             level,
         };
-        runtime.rebuild_effects(context, commands, &mixer.master.effects);
+        runtime.rebuild_effects(context, commands, mixer.master());
         runtime
     }
 
@@ -889,7 +897,7 @@ impl MasterRuntime {
         &mut self,
         context: &KnystContext,
         _commands: &mut MultiThreadedKnystCommands,
-        effects: &[crate::instrument::EffectSlotState],
+        track: &Track,
     ) {
         context.with_activation(|| {
             knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.input)));
@@ -897,7 +905,7 @@ impl MasterRuntime {
                 free_effect(effect);
             }
             let mut previous = node_id_of(self.input);
-            for effect in effects {
+            for effect in track.effect_states() {
                 let Some(effect) = create_effect_runtime(effect) else {
                     continue;
                 };
@@ -949,9 +957,8 @@ impl TrackRuntime {
             TrackSignalPath::Combined => self
                 .instrument
                 .as_ref()
-                .expect("combined track runtime must have an instrument")
-                .handle
-                .node_id(),
+                .map(|instrument| instrument.handle.node_id())
+                .unwrap_or_else(|| node_id_of(self.route_bus)),
         }
     }
 
@@ -961,16 +968,15 @@ impl TrackRuntime {
             TrackSignalPath::Combined => self
                 .instrument
                 .as_ref()
-                .expect("combined track runtime must have an instrument")
-                .handle
-                .node_id(),
+                .map(|instrument| instrument.handle.node_id())
+                .unwrap_or_else(|| node_id_of(self.route_bus)),
         }
     }
 
     fn new(
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
-        track: &MixerTrack,
+        track: &Track,
         build: TrackRuntimeBuildContext<'_>,
     ) -> Result<Self, MixerRuntimeError> {
         let initial_gain = track_effective_amplitude(build.mixer, track);
@@ -979,7 +985,7 @@ impl TrackRuntime {
         let route_bus = context.with_activation(|| bus(2));
 
         let mut instrument = None;
-        let signal_path = if track.effects.is_empty() {
+        let signal_path = if track.effect_count() == 0 {
             if let Some(created_instrument) = create_track_instrument(
                 context,
                 track,
@@ -1015,7 +1021,7 @@ impl TrackRuntime {
             signal_path,
         };
         if !matches!(runtime.signal_path, TrackSignalPath::Combined) {
-            runtime.rebuild_effects(context, commands, &track.effects);
+            runtime.rebuild_effects(context, commands, track);
             runtime.sync_source(
                 context,
                 commands,
@@ -1039,7 +1045,7 @@ impl TrackRuntime {
         &mut self,
         context: &KnystContext,
         _commands: &mut MultiThreadedKnystCommands,
-        track: &MixerTrack,
+        track: &Track,
         soundfonts: &HashMap<String, LoadedSoundfont>,
         soundfont_settings: SoundfontSynthSettings,
     ) -> Result<bool, MixerRuntimeError> {
@@ -1099,10 +1105,10 @@ impl TrackRuntime {
         &mut self,
         context: &KnystContext,
         _commands: &mut MultiThreadedKnystCommands,
-        effects: &[crate::instrument::EffectSlotState],
+        track: &Track,
     ) -> bool {
         if matches!(self.signal_path, TrackSignalPath::Combined) {
-            return effects.is_empty();
+            return track.effect_count() == 0;
         }
         context.with_activation(|| {
             knyst_commands().disconnect(Connection::clear_to_nodes(self.pre_send_source_node()));
@@ -1110,7 +1116,7 @@ impl TrackRuntime {
                 free_effect(effect);
             }
             let mut previous = self.pre_send_source_node();
-            for effect in effects {
+            for effect in track.effect_states() {
                 let Some(effect) = create_effect_runtime(effect) else {
                     continue;
                 };
@@ -1124,12 +1130,7 @@ impl TrackRuntime {
         true
     }
 
-    fn apply_strip(
-        &mut self,
-        commands: &mut MultiThreadedKnystCommands,
-        track: &MixerTrack,
-        gain: f32,
-    ) {
+    fn apply_strip(&mut self, commands: &mut MultiThreadedKnystCommands, track: &Track, gain: f32) {
         let _ = commands;
         self.level.set(gain, track.state.pan);
     }
@@ -1141,7 +1142,7 @@ impl TrackRuntime {
         mixer: &MixerState,
         master_input: NodeId,
         bus_inputs: &HashMap<BusId, NodeId>,
-        track: &MixerTrack,
+        track: &Track,
     ) -> Result<(), MixerRuntimeError> {
         context.with_activation(|| {
             self.sync_routing_existing(commands, mixer, master_input, bus_inputs, track)
@@ -1163,7 +1164,7 @@ impl TrackRuntime {
         mixer: &MixerState,
         master_input: NodeId,
         bus_inputs: &HashMap<BusId, NodeId>,
-        track: &MixerTrack,
+        track: &Track,
     ) -> Result<(), MixerRuntimeError> {
         let destination = destination_node(track.routing.main, master_input, bus_inputs, mixer)?;
         knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.route_bus)));
@@ -1267,14 +1268,17 @@ enum TrackInstrumentRuntimeKind {
 }
 
 impl TrackInstrumentRuntime {
-    fn update_in_place(&mut self, track: &MixerTrack) -> Result<bool, MixerRuntimeError> {
-        let InstrumentKind::BuiltIn { instrument_id } = &track.instrument.kind else {
+    fn update_in_place(&mut self, track: &Track) -> Result<bool, MixerRuntimeError> {
+        let Some(slot) = track.instrument_slot() else {
             return Ok(false);
         };
-        if instrument_id != BUILTIN_SOUNDFONT_ID {
+        let ProcessorKind::BuiltIn { processor_id } = &slot.kind else {
+            return Ok(false);
+        };
+        if processor_id != BUILTIN_SOUNDFONT_ID {
             return Ok(false);
         }
-        let state = SoundfontProcessor::decode_state(&track.instrument.state)?;
+        let state = SoundfontProcessor::decode_state(&slot.state)?;
         let TrackInstrumentRuntimeKind::Soundfont {
             soundfont_id,
             program,
@@ -1298,9 +1302,7 @@ impl TrackInstrumentRuntime {
     }
 }
 
-fn create_effect_runtime(
-    effect: &crate::instrument::EffectSlotState,
-) -> Option<EffectRuntimeHandle> {
+fn create_effect_runtime(effect: &SlotState) -> Option<EffectRuntimeHandle> {
     let processor = create_effect_processor(effect).ok()??;
     let node = handle(EffectProcessorNode::new(processor));
     Some(EffectRuntimeHandle::new(node))
@@ -1328,7 +1330,7 @@ impl BusRuntime {
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
         settings: &AudioEngineSettings,
-        bus_track: &BusTrack,
+        bus_track: &Track,
         _mixer: &MixerState,
     ) -> Self {
         let initial_gain = bus_effective_amplitude(bus_track);
@@ -1354,7 +1356,7 @@ impl BusRuntime {
             route_bus,
             send_nodes: Vec::new(),
         };
-        runtime.rebuild_effects(context, commands, &bus_track.effects);
+        runtime.rebuild_effects(context, commands, bus_track);
         runtime
     }
 
@@ -1365,7 +1367,7 @@ impl BusRuntime {
     fn apply_strip(
         &mut self,
         commands: &mut MultiThreadedKnystCommands,
-        bus_track: &BusTrack,
+        bus_track: &Track,
         gain: f32,
     ) {
         let _ = commands;
@@ -1376,7 +1378,7 @@ impl BusRuntime {
         &mut self,
         context: &KnystContext,
         _commands: &mut MultiThreadedKnystCommands,
-        effects: &[crate::instrument::EffectSlotState],
+        bus_track: &Track,
     ) {
         context.with_activation(|| {
             knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.input)));
@@ -1384,7 +1386,7 @@ impl BusRuntime {
                 free_effect(effect);
             }
             let mut previous = node_id_of(self.input);
-            for effect in effects {
+            for effect in bus_track.effect_states() {
                 let Some(effect) = create_effect_runtime(effect) else {
                     continue;
                 };
@@ -1404,7 +1406,7 @@ impl BusRuntime {
         mixer: &MixerState,
         master_input: NodeId,
         bus_inputs: &HashMap<BusId, NodeId>,
-        bus_track: &BusTrack,
+        bus_track: &Track,
     ) -> Result<(), MixerRuntimeError> {
         context.with_activation(|| {
             self.sync_routing_existing(commands, mixer, master_input, bus_inputs, bus_track)
@@ -1426,7 +1428,7 @@ impl BusRuntime {
         mixer: &MixerState,
         master_input: NodeId,
         bus_inputs: &HashMap<BusId, NodeId>,
-        bus_track: &BusTrack,
+        bus_track: &Track,
     ) -> Result<(), MixerRuntimeError> {
         let destination =
             destination_node(bus_track.routing.main, master_input, bus_inputs, mixer)?;
@@ -1513,17 +1515,20 @@ fn create_track_strip(
 
 fn create_track_instrument(
     context: &KnystContext,
-    track: &MixerTrack,
+    track: &Track,
     soundfonts: &HashMap<String, LoadedSoundfont>,
     soundfont_settings: SoundfontSynthSettings,
     inline_strip: Option<(SharedStripLevel, SharedStripMeter)>,
 ) -> Result<Option<TrackInstrumentRuntime>, MixerRuntimeError> {
-    match &track.instrument.kind {
-        InstrumentKind::BuiltIn { instrument_id } => {
-            if instrument_id != BUILTIN_SOUNDFONT_ID {
+    let Some(slot) = track.instrument_slot() else {
+        return Ok(None);
+    };
+    match &slot.kind {
+        ProcessorKind::BuiltIn { processor_id } => {
+            if processor_id != BUILTIN_SOUNDFONT_ID {
                 return Ok(None);
             }
-            let state = SoundfontProcessor::decode_state(&track.instrument.state)?;
+            let state = SoundfontProcessor::decode_state(&slot.state)?;
             let Some(loaded) = soundfonts.get(&state.soundfont_id) else {
                 return Ok(None);
             };
@@ -1560,7 +1565,7 @@ fn create_track_instrument(
             });
             Ok(Some(TrackInstrumentRuntime { handle: node, kind }))
         }
-        InstrumentKind::Plugin { .. } => Ok(None),
+        ProcessorKind::Plugin { .. } => Ok(None),
     }
 }
 
@@ -1602,7 +1607,7 @@ fn node_id_of<H: HandleData + Copy>(handle: Handle<H>) -> NodeId {
     handle
         .node_ids()
         .next()
-        .expect("runtime handles should always own one node")
+        .unwrap_or_else(|| NodeId::new(u64::MAX))
 }
 
 #[cfg(test)]
@@ -1645,9 +1650,9 @@ impl MeterTap {
     }
 }
 
-fn track_effective_amplitude(mixer: &MixerState, track: &MixerTrack) -> f32 {
-    let any_solo = mixer.tracks.iter().any(|track| track.state.soloed)
-        || mixer.buses.iter().any(|bus| bus.state.soloed);
+fn track_effective_amplitude(mixer: &MixerState, track: &Track) -> f32 {
+    let any_solo = mixer.tracks().iter().any(|track| track.state.soloed)
+        || mixer.buses().iter().any(|bus| bus.state.soloed);
     let routed_to_soloed_bus = route_bus_id(track.routing.main)
         .is_some_and(|bus_id| mixer.bus(bus_id).is_ok_and(|bus| bus.state.soloed))
         || track
@@ -1662,7 +1667,7 @@ fn track_effective_amplitude(mixer: &MixerState, track: &MixerTrack) -> f32 {
     }
 }
 
-fn bus_effective_amplitude(bus: &BusTrack) -> f32 {
+fn bus_effective_amplitude(bus: &Track) -> f32 {
     if bus.state.muted {
         0.0
     } else {
@@ -1677,12 +1682,13 @@ fn route_bus_id(route: TrackRoute) -> Option<BusId> {
     }
 }
 
-fn track_needs_runtime(track: &MixerTrack) -> bool {
-    !matches!(
-        track.instrument.kind,
-        InstrumentKind::BuiltIn { ref instrument_id }
-            if instrument_id == BUILTIN_NONE_ID
-    ) || !track.effects.is_empty()
+fn track_needs_runtime(track: &Track) -> bool {
+    !track.instrument_slot().is_some_and(|slot| {
+        matches!(
+            slot.kind,
+            ProcessorKind::BuiltIn { ref processor_id } if processor_id == BUILTIN_NONE_ID
+        )
+    }) || track.effect_count() > 0
 }
 
 fn db_to_amplitude(db: f32) -> f32 {
@@ -1967,10 +1973,12 @@ impl knyst::r#gen::Gen for TrackInstrumentStripNode {
         let right_mul = gain * right_gain;
 
         let mut outputs = ctx.outputs.iter_mut();
-        let left_out = outputs.next().expect("track strip must expose left output");
-        let right_out = outputs
-            .next()
-            .expect("track strip must expose right output");
+        let Some(left_out) = outputs.next() else {
+            return GenState::Continue;
+        };
+        let Some(right_out) = outputs.next() else {
+            return GenState::Continue;
+        };
 
         let (peak_left, peak_right) = process_stereo_balance_meter_simd(
             &self.scratch_left[..frames],
@@ -2029,9 +2037,7 @@ mod tests {
         MixerRuntimeError, SharedInstrumentResetState, SharedStripMeter, SoundfontProcessor,
         SoundfontSynthSettings, connect_stereo, db_to_amplitude, node_id_of, normalize_meter_level,
     };
-    use crate::instrument::{
-        InstrumentKind, InstrumentSlotState, MidiEvent, ProcessorState, soundfont_synth,
-    };
+    use crate::instrument::{MidiEvent, ProcessorKind, ProcessorState, SlotState, soundfont_synth};
     use crate::mixer::{Mixer, MixerState, TrackId};
     use crate::test_utils::{OfflineHarness, test_soundfont_resource};
     use knyst::time::Beats;
@@ -2371,17 +2377,17 @@ mod tests {
             state
                 .track_mut(TrackId(track_id as u16))
                 .expect("track should exist")
-                .instrument = InstrumentSlotState {
-                kind: InstrumentKind::Plugin {
-                    plugin_id: "none".to_string(),
-                },
-                state: ProcessorState::default(),
-            };
+                .set_instrument_slot(SlotState {
+                    kind: ProcessorKind::Plugin {
+                        plugin_id: "none".to_string(),
+                    },
+                    state: ProcessorState::default(),
+                });
         }
         state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 0);
+            .set_instrument_slot(SlotState::soundfont("default", 0, 0));
         let context = harness.context().clone();
         let settings = harness.settings();
         let mixer = Mixer::new(&context, harness.commands(), &settings, state)?;
@@ -2509,7 +2515,7 @@ mod tests {
         let mut state = MixerState::new();
         state.set_soundfont(test_soundfont_resource());
         let track = state.track_mut(TrackId(0)).expect("track 0 should exist");
-        track.instrument = InstrumentSlotState::soundfont("default", 0, 0);
+        track.set_instrument_slot(SlotState::soundfont("default", 0, 0));
         track.state.muted = true;
         let context = harness.context().clone();
         let settings = harness.settings();
@@ -2545,7 +2551,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 40);
+            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -2592,7 +2598,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 40);
+            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -3055,7 +3061,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 40);
+            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -3104,7 +3110,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 40);
+            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -3149,7 +3155,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 40);
+            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -3190,7 +3196,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 40);
+            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -3217,7 +3223,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 40);
+            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
         let sync = mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))

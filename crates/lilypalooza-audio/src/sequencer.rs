@@ -146,9 +146,12 @@ impl Sequencer {
         let updates_rx = self
             .scheduler_updates_rx
             .lock()
-            .expect("scheduler update receiver lock should not be poisoned")
-            .take()
-            .expect("sequencer scheduler extension can only be created once");
+            .ok()
+            .and_then(|mut receiver| receiver.take())
+            .unwrap_or_else(|| {
+                let (_tx, rx) = crossbeam_channel::unbounded();
+                rx
+            });
         SequencerSchedulerExtension {
             sequencer: self.clone(),
             config: self.config.load_full(),
@@ -1263,7 +1266,7 @@ mod tests {
         metronome_clicks_between, normalized_time_signatures, ordered_events_at_same_time,
         ticks_to_beats,
     };
-    use crate::instrument::{InstrumentSlotState, MidiEvent};
+    use crate::instrument::{MidiEvent, SlotState};
     use crate::mixer::{Mixer, MixerState, TrackId};
     use crate::test_utils::{OfflineHarness, simple_midi_bytes, test_soundfont_resource};
 
@@ -1295,7 +1298,7 @@ mod tests {
         state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .instrument = InstrumentSlotState::soundfont("default", 0, 0);
+            .set_instrument_slot(SlotState::soundfont("default", 0, 0));
         let context = harness.context().clone();
         let settings = harness.settings();
         let mixer = Mixer::new(&context, harness.commands(), &settings, state)

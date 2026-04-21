@@ -232,43 +232,43 @@ pub trait EffectProcessor: Processor {
     );
 }
 
-/// Supported instrument backends.
+/// Supported processor backends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InstrumentKind {
-    /// Built-in sampler or synth instrument.
+pub enum ProcessorKind {
+    /// Built-in effect processor.
     BuiltIn {
-        /// Engine-defined instrument identifier.
-        instrument_id: String,
+        /// Engine-defined processor identifier.
+        processor_id: String,
     },
-    /// Hosted external plugin instrument.
+    /// Hosted external plugin processor.
     Plugin {
         /// Engine-defined plugin instance identifier.
         plugin_id: String,
     },
 }
 
-/// Persisted instrument slot state.
+/// Persisted processor slot state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InstrumentSlotState {
-    /// Which instrument backend this track uses.
-    pub kind: InstrumentKind,
+pub struct SlotState {
+    /// Which backend this slot uses.
+    pub kind: ProcessorKind,
     /// Opaque persisted processor state.
     pub state: ProcessorState,
 }
 
-impl Default for InstrumentSlotState {
+impl Default for SlotState {
     fn default() -> Self {
         Self {
-            kind: InstrumentKind::BuiltIn {
-                instrument_id: BUILTIN_NONE_ID.to_string(),
+            kind: ProcessorKind::BuiltIn {
+                processor_id: BUILTIN_NONE_ID.to_string(),
             },
             state: ProcessorState::default(),
         }
     }
 }
 
-impl InstrumentSlotState {
-    /// Creates an empty instrument slot state.
+impl SlotState {
+    /// Creates an empty slot state.
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
@@ -278,8 +278,8 @@ impl InstrumentSlotState {
     #[must_use]
     pub fn soundfont(soundfont_id: impl Into<String>, bank: u16, program: u8) -> Self {
         Self {
-            kind: InstrumentKind::BuiltIn {
-                instrument_id: BUILTIN_SOUNDFONT_ID.to_string(),
+            kind: ProcessorKind::BuiltIn {
+                processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
             },
             state: soundfont_synth::encode_soundfont_state(&SoundfontProcessorState {
                 soundfont_id: soundfont_id.into(),
@@ -289,23 +289,21 @@ impl InstrumentSlotState {
         }
     }
 
-    /// Returns whether this slot contains no instrument.
+    /// Returns whether this slot contains no processor.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         matches!(
             self.kind,
-            InstrumentKind::BuiltIn {
-                ref instrument_id
-            } if instrument_id == BUILTIN_NONE_ID
+            ProcessorKind::BuiltIn {
+                ref processor_id
+            } if processor_id == BUILTIN_NONE_ID
         )
     }
 
-    /// Decodes the typed SoundFont state when this slot contains a SoundFont instrument.
+    /// Decodes the typed SoundFont state when this slot contains a SoundFont processor.
     pub fn soundfont_state(&self) -> Result<Option<SoundfontProcessorState>, ProcessorStateError> {
         match self.kind {
-            InstrumentKind::BuiltIn { ref instrument_id }
-                if instrument_id == BUILTIN_SOUNDFONT_ID =>
-            {
+            ProcessorKind::BuiltIn { ref processor_id } if processor_id == BUILTIN_SOUNDFONT_ID => {
                 soundfont_synth::SoundfontProcessor::decode_state(&self.state).map(Some)
             }
             _ => Ok(None),
@@ -315,7 +313,7 @@ impl InstrumentSlotState {
     /// Returns the static processor descriptor for this slot, when known.
     #[must_use]
     pub fn descriptor(&self) -> Option<&'static ProcessorDescriptor> {
-        instrument_descriptor(&self.kind)
+        descriptor(&self.kind)
     }
 
     /// Returns the static editor descriptor for this slot, when supported.
@@ -334,77 +332,33 @@ impl InstrumentSlotState {
     pub fn create_editor_session(&self) -> Result<Option<Box<dyn EditorSession>>, EditorError> {
         Ok(None)
     }
-}
 
-/// Supported effect backends.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EffectKind {
-    /// Built-in effect processor.
-    BuiltIn {
-        /// Engine-defined effect identifier.
-        effect_id: String,
-    },
-    /// Hosted external plugin effect.
-    Plugin {
-        /// Engine-defined plugin instance identifier.
-        plugin_id: String,
-    },
-}
-
-/// Persisted effect slot state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EffectSlotState {
-    /// Which effect backend this slot uses.
-    pub kind: EffectKind,
-    /// Opaque persisted processor state.
-    pub state: ProcessorState,
-}
-
-impl EffectSlotState {
-    /// Returns the static processor descriptor for this slot, when known.
+    /// Returns a display title for this slot.
     #[must_use]
-    pub fn descriptor(&self) -> Option<&'static ProcessorDescriptor> {
-        effect_descriptor(&self.kind)
-    }
-
-    /// Returns the static editor descriptor for this slot, when supported.
-    #[must_use]
-    pub fn editor_descriptor(&self) -> Option<EditorDescriptor> {
-        self.descriptor().and_then(|descriptor| descriptor.editor)
-    }
-
-    /// Returns whether this slot supports opening an editor.
-    #[must_use]
-    pub fn supports_editor(&self) -> bool {
-        self.editor_descriptor().is_some()
-    }
-
-    /// Creates a live editor session for this slot, when supported.
-    pub fn create_editor_session(&self) -> Result<Option<Box<dyn EditorSession>>, EditorError> {
-        Ok(None)
+    pub fn title(&self, strip_name: &str, slot_index: usize) -> String {
+        if slot_index == 0 {
+            format!("{strip_name} Instrument")
+        } else {
+            format!("{strip_name} Effect {slot_index}")
+        }
     }
 }
 
-/// Returns the static descriptor for one instrument backend, when known.
+/// Returns the static descriptor for one backend, when known.
 #[must_use]
-pub fn instrument_descriptor(kind: &InstrumentKind) -> Option<&'static ProcessorDescriptor> {
+pub fn descriptor(kind: &ProcessorKind) -> Option<&'static ProcessorDescriptor> {
     match kind {
-        InstrumentKind::BuiltIn { instrument_id } if instrument_id == BUILTIN_SOUNDFONT_ID => {
+        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_SOUNDFONT_ID => {
             Some(soundfont_synth::descriptor())
         }
-        InstrumentKind::BuiltIn { instrument_id } if instrument_id == BUILTIN_NONE_ID => None,
-        InstrumentKind::BuiltIn { .. } | InstrumentKind::Plugin { .. } => None,
-    }
-}
-
-/// Returns the static descriptor for one effect backend, when known.
-#[must_use]
-pub fn effect_descriptor(kind: &EffectKind) -> Option<&'static ProcessorDescriptor> {
-    match kind {
-        EffectKind::BuiltIn { effect_id } if effect_id == BUILTIN_GAIN_ID => {
+        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_GAIN_ID => {
             Some(gain_effect::descriptor())
         }
-        EffectKind::BuiltIn { .. } | EffectKind::Plugin { .. } => None,
+        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_METRONOME_ID => {
+            Some(metronome_synth::descriptor())
+        }
+        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_NONE_ID => None,
+        ProcessorKind::BuiltIn { .. } | ProcessorKind::Plugin { .. } => None,
     }
 }
 
@@ -490,12 +444,12 @@ impl Gen for InstrumentProcessorNode {
             &mut self.scratch_right[..frames],
         );
         let mut outputs = ctx.outputs.iter_mut();
-        let left_out = outputs
-            .next()
-            .expect("instrument node must expose left output");
-        let right_out = outputs
-            .next()
-            .expect("instrument node must expose right output");
+        let Some(left_out) = outputs.next() else {
+            return GenState::Continue;
+        };
+        let Some(right_out) = outputs.next() else {
+            return GenState::Continue;
+        };
         left_out[..frames].copy_from_slice(&self.scratch_left[..frames]);
         right_out[..frames].copy_from_slice(&self.scratch_right[..frames]);
         if self.processor.is_sleeping() {
@@ -606,7 +560,7 @@ impl InstrumentRuntimeHandle {
         self.handle
             .node_ids()
             .next()
-            .expect("instrument handle should always own one node")
+            .unwrap_or_else(|| knyst::prelude::NodeId::new(u64::MAX))
     }
 
     pub(crate) fn request_reset_now(&self, generation: u32) {
@@ -620,8 +574,9 @@ impl InstrumentRuntimeHandle {
         let _ = commands
             .request_graph_settled()
             .recv_timeout(Self::SCHEDULER_TARGET_TIMEOUT);
+        let node_id = self.node_id();
         self.scheduler_event_target = commands
-            .resolve_scheduler_event_input(self.node_id().event_input("event"))
+            .resolve_scheduler_event_input(node_id.event_input("event"))
             .recv_timeout(Self::SCHEDULER_TARGET_TIMEOUT)
             .ok()
             .flatten();
@@ -659,8 +614,9 @@ impl InstrumentRuntimeHandle {
         generation: u32,
         event: MidiEvent,
     ) {
+        let node_id = self.node_id();
         let change = EventChange::beats(
-            self.node_id().event_input("event"),
+            node_id.event_input("event"),
             encode_instrument_event(ScheduledInstrumentEvent::Midi { generation, event }),
             scheduled_at,
         );
@@ -673,8 +629,9 @@ impl InstrumentRuntimeHandle {
         scheduled_at: knyst::prelude::Beats,
         generation: u32,
     ) {
+        let node_id = self.node_id();
         commands.schedule_event(EventChange::beats(
-            self.node_id().event_input("event"),
+            node_id.event_input("event"),
             encode_instrument_event(ScheduledInstrumentEvent::Reset { generation }),
             scheduled_at,
         ));
@@ -687,8 +644,9 @@ impl InstrumentRuntimeHandle {
         event: MidiEvent,
         delay: Duration,
     ) {
+        let node_id = self.node_id();
         commands.schedule_event(EventChange::duration_from_now(
-            self.node_id().event_input("event"),
+            node_id.event_input("event"),
             encode_instrument_event(ScheduledInstrumentEvent::Midi { generation, event }),
             delay,
         ));
@@ -701,8 +659,9 @@ impl InstrumentRuntimeHandle {
 
     #[allow(dead_code)]
     pub(crate) fn send_reset(&self, commands: &mut MultiThreadedKnystCommands, generation: u32) {
+        let node_id = self.node_id();
         commands.schedule_event(EventChange::duration_from_now(
-            self.node_id().event_input("event"),
+            node_id.event_input("event"),
             encode_instrument_event(ScheduledInstrumentEvent::Reset { generation }),
             Self::IMMEDIATE_EVENT_LEAD,
         ));
@@ -714,8 +673,9 @@ impl InstrumentRuntimeHandle {
     }
 
     fn send_live_midi(&self, event: MidiEvent) {
+        let node_id = self.node_id();
         knyst_commands().schedule_event(EventChange::duration_from_now(
-            self.node_id().event_input("event"),
+            node_id.event_input("event"),
             encode_instrument_event(ScheduledInstrumentEvent::Midi {
                 generation: 0,
                 event,
@@ -761,18 +721,18 @@ impl EffectRuntimeHandle {
         self.0
             .node_ids()
             .next()
-            .expect("effect handle should always own one node")
+            .unwrap_or_else(|| knyst::prelude::NodeId::new(u64::MAX))
     }
 }
 
 pub(crate) fn create_effect_processor(
-    effect: &EffectSlotState,
+    effect: &SlotState,
 ) -> Result<Option<Box<dyn EffectProcessor>>, ProcessorStateError> {
     match &effect.kind {
-        EffectKind::BuiltIn { effect_id } if effect_id == BUILTIN_GAIN_ID => Ok(Some(Box::new(
-            gain_effect::GainEffectProcessor::from_state(&effect.state)?,
-        ))),
-        EffectKind::BuiltIn { .. } | EffectKind::Plugin { .. } => Ok(None),
+        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_GAIN_ID => Ok(Some(
+            Box::new(gain_effect::GainEffectProcessor::from_state(&effect.state)?),
+        )),
+        ProcessorKind::BuiltIn { .. } | ProcessorKind::Plugin { .. } => Ok(None),
     }
 }
 
@@ -1303,7 +1263,7 @@ mod tests {
 
     #[test]
     fn soundfont_slot_reports_processor_descriptor_and_no_editor_yet() {
-        let slot = crate::instrument::InstrumentSlotState::soundfont("test", 0, 0);
+        let slot = crate::instrument::SlotState::soundfont("test", 0, 0);
 
         let descriptor = slot
             .descriptor()
@@ -1316,9 +1276,9 @@ mod tests {
 
     #[test]
     fn gain_effect_slot_reports_processor_descriptor_and_no_editor_yet() {
-        let slot = crate::instrument::EffectSlotState {
-            kind: crate::instrument::EffectKind::BuiltIn {
-                effect_id: crate::instrument::BUILTIN_GAIN_ID.to_string(),
+        let slot = crate::instrument::SlotState {
+            kind: crate::instrument::ProcessorKind::BuiltIn {
+                processor_id: crate::instrument::BUILTIN_GAIN_ID.to_string(),
             },
             state: crate::instrument::ProcessorState::default(),
         };

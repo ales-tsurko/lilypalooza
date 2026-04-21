@@ -13,14 +13,11 @@ use knyst::prelude::{Beats, MultiThreadedKnystCommands, TransportState};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{AudioEngineError, AudioEngineSettings};
-use crate::instrument::{
-    EffectSlotState, InstrumentRuntimeHandle, InstrumentSlotState, SoundfontResource,
-};
+use crate::instrument::{InstrumentRuntimeHandle, SlotState, SoundfontResource};
 use crate::sequencer::Sequencer;
 use runtime::{MixerRuntime, MixerRuntimeError, TrackInstrumentSync};
 pub use track::{
-    BusId, BusSend, BusTrack, INSTRUMENT_TRACK_COUNT, MasterTrack, MixerTrack, TrackId, TrackRoute,
-    TrackRouting, TrackState,
+    BusId, BusSend, INSTRUMENT_TRACK_COUNT, Track, TrackId, TrackRoute, TrackRouting, TrackState,
 };
 
 const GRAPH_SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -113,9 +110,7 @@ pub struct MixerMeterSnapshotWindow {
 /// Serializable mixer state with fixed instrument tracks, dynamic buses, and a dedicated master.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MixerState {
-    tracks: Vec<MixerTrack>,
-    buses: Vec<BusTrack>,
-    master: MasterTrack,
+    strips: Vec<Track>,
     soundfonts: Vec<SoundfontResource>,
     next_bus_id: u16,
 }
@@ -130,13 +125,13 @@ impl MixerState {
     /// Creates the mixer.
     #[must_use]
     pub fn new() -> Self {
-        let tracks = (0..INSTRUMENT_TRACK_COUNT)
-            .map(|index| MixerTrack::new(TrackId(index as u16)))
-            .collect();
+        let mut strips = Vec::with_capacity(1 + INSTRUMENT_TRACK_COUNT);
+        strips.push(Track::master());
+        strips.extend(
+            (0..INSTRUMENT_TRACK_COUNT).map(|index| Track::instrument(TrackId(index as u16))),
+        );
         Self {
-            tracks,
-            buses: Vec::new(),
-            master: MasterTrack::default(),
+            strips,
             soundfonts: Vec::new(),
             next_bus_id: 1,
         }
@@ -145,53 +140,86 @@ impl MixerState {
     /// Returns the number of fixed instrument tracks.
     #[must_use]
     pub fn track_count(&self) -> usize {
-        self.tracks.len()
+        INSTRUMENT_TRACK_COUNT
     }
 
     /// Returns the number of dynamic bus tracks.
     #[must_use]
     pub fn bus_count(&self) -> usize {
-        self.buses.len()
+        self.strips.len().saturating_sub(1 + INSTRUMENT_TRACK_COUNT)
+    }
+
+    /// Returns the total visible strip count including the master strip.
+    #[must_use]
+    pub fn strip_count(&self) -> usize {
+        self.strips.len()
+    }
+
+    /// Returns one strip by visible mixer index.
+    #[must_use]
+    pub fn strip_by_index(&self, strip_index: usize) -> Option<&Track> {
+        self.strips.get(strip_index)
     }
 
     /// Returns immutable access to one instrument track.
-    pub fn track(&self, id: TrackId) -> Result<&MixerTrack, MixerError> {
-        self.tracks
-            .get(id.index())
+    pub fn track(&self, id: TrackId) -> Result<&Track, MixerError> {
+        self.strips
+            .get(1 + id.index())
             .ok_or(MixerError::InvalidTrackId(id))
     }
 
     /// Returns all fixed instrument tracks.
     #[must_use]
-    pub fn tracks(&self) -> &[MixerTrack] {
-        &self.tracks
+    pub fn tracks(&self) -> &[Track] {
+        &self.strips[1..1 + INSTRUMENT_TRACK_COUNT]
+    }
+
+    /// Returns all fixed instrument tracks with their stable ids.
+    pub fn tracks_with_ids(&self) -> impl Iterator<Item = (TrackId, &Track)> {
+        self.tracks()
+            .iter()
+            .enumerate()
+            .map(|(index, track)| (TrackId(index as u16), track))
     }
 
     /// Returns mutable access to one instrument track.
-    pub(crate) fn track_mut(&mut self, id: TrackId) -> Result<&mut MixerTrack, MixerError> {
-        self.tracks
-            .get_mut(id.index())
+    pub(crate) fn track_mut(&mut self, id: TrackId) -> Result<&mut Track, MixerError> {
+        self.strips
+            .get_mut(1 + id.index())
             .ok_or(MixerError::InvalidTrackId(id))
     }
 
     /// Returns immutable access to one bus.
-    pub fn bus(&self, id: BusId) -> Result<&BusTrack, MixerError> {
-        self.buses
+    pub fn bus(&self, id: BusId) -> Result<&Track, MixerError> {
+        self.buses()
             .iter()
-            .find(|bus| bus.id == id)
+            .find(|bus| bus.bus_id == Some(id))
             .ok_or(MixerError::InvalidBusId(id))
     }
 
     /// Returns all dynamic buses.
     #[must_use]
-    pub fn buses(&self) -> &[BusTrack] {
-        &self.buses
+    pub fn buses(&self) -> &[Track] {
+        &self.strips[1 + INSTRUMENT_TRACK_COUNT..]
+    }
+
+    /// Returns all dynamic bus tracks with their stable ids.
+    pub fn buses_with_ids(&self) -> impl Iterator<Item = (BusId, &Track)> {
+        self.buses()
+            .iter()
+            .filter_map(|bus| bus.bus_id.map(|bus_id| (bus_id, bus)))
     }
 
     /// Returns the dedicated master track.
     #[must_use]
-    pub fn master(&self) -> &MasterTrack {
-        &self.master
+    pub fn master(&self) -> &Track {
+        &self.strips[0]
+    }
+
+    /// Returns mutable access to the dedicated master track.
+    #[must_use]
+    pub(crate) fn master_mut(&mut self) -> &mut Track {
+        &mut self.strips[0]
     }
 
     /// Returns all configured shared SoundFonts.
@@ -201,10 +229,10 @@ impl MixerState {
     }
 
     /// Returns mutable access to one bus.
-    pub(crate) fn bus_mut(&mut self, id: BusId) -> Result<&mut BusTrack, MixerError> {
-        self.buses
+    pub(crate) fn bus_mut(&mut self, id: BusId) -> Result<&mut Track, MixerError> {
+        self.strips[1 + INSTRUMENT_TRACK_COUNT..]
             .iter_mut()
-            .find(|bus| bus.id == id)
+            .find(|bus| bus.bus_id == Some(id))
             .ok_or(MixerError::InvalidBusId(id))
     }
 
@@ -212,30 +240,24 @@ impl MixerState {
     pub(crate) fn add_bus(&mut self, name: impl Into<String>) -> BusId {
         let id = BusId(self.next_bus_id);
         self.next_bus_id = self.next_bus_id.saturating_add(1);
-        self.buses.push(BusTrack::new(id, name));
+        self.strips.push(Track::bus(id, name));
         id
     }
 
     /// Removes one dynamic bus and reroutes everything targeting it back to master.
-    pub(crate) fn remove_bus(&mut self, id: BusId) -> Result<BusTrack, MixerError> {
+    pub(crate) fn remove_bus(&mut self, id: BusId) -> Result<Track, MixerError> {
         let index = self
-            .buses
+            .strips
             .iter()
-            .position(|bus| bus.id == id)
+            .position(|strip| strip.bus_id == Some(id))
             .ok_or(MixerError::InvalidBusId(id))?;
-        let removed = self.buses.remove(index);
+        let removed = self.strips.remove(index);
 
-        for track in &mut self.tracks {
-            if track.routing.main == TrackRoute::Bus(id) {
-                track.routing.main = TrackRoute::Master;
+        for strip in &mut self.strips[1..] {
+            if strip.routing.main == TrackRoute::Bus(id) {
+                strip.routing.main = TrackRoute::Master;
             }
-            track.routing.sends.retain(|send| send.bus_id != id);
-        }
-        for bus in &mut self.buses {
-            if bus.routing.main == TrackRoute::Bus(id) {
-                bus.routing.main = TrackRoute::Master;
-            }
-            bus.routing.sends.retain(|send| send.bus_id != id);
+            strip.routing.sends.retain(|send| send.bus_id != id);
         }
 
         Ok(removed)
@@ -535,11 +557,11 @@ impl MixerHandle<'_> {
         self.mixer.state = state;
         old_runtime.free();
         settle_graph_mutation(self.commands);
-        for track in self.mixer.state.tracks() {
+        for (track_id, _) in self.mixer.state.tracks_with_ids() {
             self.sequencer.sync_track_handle(
                 self.commands,
-                track.id,
-                self.mixer.instrument_handle(track.id),
+                track_id,
+                self.mixer.instrument_handle(track_id),
             );
         }
         self.sequencer
@@ -558,11 +580,11 @@ impl MixerHandle<'_> {
             &soundfont_id,
         )?;
         settle_graph_mutation(self.commands);
-        for track in self.mixer.state.tracks() {
+        for (track_id, _) in self.mixer.state.tracks_with_ids() {
             self.sequencer.sync_track_handle(
                 self.commands,
-                track.id,
-                self.mixer.instrument_handle(track.id),
+                track_id,
+                self.mixer.instrument_handle(track_id),
             );
         }
         Ok(())
@@ -578,11 +600,11 @@ impl MixerHandle<'_> {
             &removed.id,
         )?;
         settle_graph_mutation(self.commands);
-        for track in self.mixer.state.tracks() {
+        for (track_id, _) in self.mixer.state.tracks_with_ids() {
             self.sequencer.sync_track_handle(
                 self.commands,
-                track.id,
-                self.mixer.instrument_handle(track.id),
+                track_id,
+                self.mixer.instrument_handle(track_id),
             );
         }
         Ok(removed)
@@ -597,7 +619,7 @@ impl MixerHandle<'_> {
         Ok(bus_id)
     }
 
-    pub fn remove_bus(&mut self, id: BusId) -> Result<BusTrack, AudioEngineError> {
+    pub fn remove_bus(&mut self, id: BusId) -> Result<Track, AudioEngineError> {
         let removed = self.mixer.state.remove_bus(id)?;
         self.mixer
             .runtime
@@ -609,9 +631,12 @@ impl MixerHandle<'_> {
     pub fn set_track_instrument(
         &mut self,
         id: TrackId,
-        instrument: InstrumentSlotState,
+        instrument: SlotState,
     ) -> Result<(), AudioEngineError> {
-        self.mixer.state.track_mut(id)?.instrument = instrument;
+        self.mixer
+            .state
+            .track_mut(id)?
+            .set_instrument_slot(instrument);
         let sync = self.mixer.runtime.sync_track_instrument(
             self.context,
             self.commands,
@@ -639,9 +664,9 @@ impl MixerHandle<'_> {
     pub fn set_track_effects(
         &mut self,
         id: TrackId,
-        effects: Vec<EffectSlotState>,
+        effects: Vec<SlotState>,
     ) -> Result<(), AudioEngineError> {
-        self.mixer.state.track_mut(id)?.effects = effects;
+        self.mixer.state.track_mut(id)?.set_effects(effects);
         self.mixer.runtime.sync_track_effects(
             self.context,
             self.commands,
@@ -796,9 +821,9 @@ impl MixerHandle<'_> {
     pub fn set_bus_effects(
         &mut self,
         id: BusId,
-        effects: Vec<EffectSlotState>,
+        effects: Vec<SlotState>,
     ) -> Result<(), AudioEngineError> {
-        self.mixer.state.bus_mut(id)?.effects = effects;
+        self.mixer.state.bus_mut(id)?.set_effects(effects);
         self.mixer
             .runtime
             .sync_bus_effects(self.context, self.commands, &self.mixer.state, id)?;
@@ -889,14 +914,14 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_master_gain_db(&mut self, gain_db: f32) {
-        self.mixer.state.master.state.gain_db = gain_db;
+        self.mixer.state.master_mut().state.gain_db = gain_db;
         self.mixer
             .runtime
             .sync_all_levels(self.commands, &self.mixer.state);
     }
 
     pub fn set_master_pan(&mut self, pan: f32) {
-        self.mixer.state.master.state.pan = pan.clamp(-1.0, 1.0);
+        self.mixer.state.master_mut().state.pan = pan.clamp(-1.0, 1.0);
         self.mixer
             .runtime
             .sync_all_levels(self.commands, &self.mixer.state);
@@ -914,11 +939,8 @@ impl MixerHandle<'_> {
         self.mixer.reset_bus_meter(id)
     }
 
-    pub fn set_master_effects(
-        &mut self,
-        effects: Vec<EffectSlotState>,
-    ) -> Result<(), AudioEngineError> {
-        self.mixer.state.master.effects = effects;
+    pub fn set_master_effects(&mut self, effects: Vec<SlotState>) -> Result<(), AudioEngineError> {
+        self.mixer.state.master_mut().set_effects(effects);
         self.mixer
             .runtime
             .sync_master_effects(self.context, self.commands, &self.mixer.state)?;
@@ -952,7 +974,9 @@ fn current_playing_beat(commands: &mut MultiThreadedKnystCommands) -> Option<Bea
 #[cfg(test)]
 mod tests {
     use super::{MixerError, MixerState};
-    use crate::instrument::{EffectKind, EffectSlotState, ProcessorState, SoundfontResource};
+    use crate::instrument::{
+        BUILTIN_GAIN_ID, ProcessorKind, ProcessorState, SlotState, SoundfontResource,
+    };
     use crate::mixer::{BusId, BusSend, INSTRUMENT_TRACK_COUNT, TrackId, TrackRoute};
     use std::path::PathBuf;
 
@@ -961,20 +985,19 @@ mod tests {
         let mixer = MixerState::new();
         assert_eq!(mixer.track_count(), INSTRUMENT_TRACK_COUNT);
         assert_eq!(mixer.bus_count(), 0);
+        assert_eq!(mixer.strip_count(), 1 + INSTRUMENT_TRACK_COUNT);
         assert_eq!(mixer.master().name, "Master");
-        assert!(
-            mixer
-                .track(TrackId(0))
-                .expect("track should exist")
-                .id
-                .is_instrument()
+        assert_eq!(mixer.master().bus_id, None);
+        assert_eq!(
+            mixer.track(TrackId(0)).expect("track should exist").bus_id,
+            None
         );
-        assert!(
+        assert_eq!(
             mixer
                 .track(TrackId((INSTRUMENT_TRACK_COUNT - 1) as u16))
                 .expect("track should exist")
-                .id
-                .is_instrument()
+                .bus_id,
+            None
         );
     }
 
@@ -1075,10 +1098,9 @@ mod tests {
         mixer
             .track_mut(TrackId(0))
             .expect("track should exist")
-            .effects
-            .push(EffectSlotState {
-                kind: EffectKind::BuiltIn {
-                    effect_id: crate::instrument::BUILTIN_GAIN_ID.to_string(),
+            .push_effect(SlotState {
+                kind: ProcessorKind::BuiltIn {
+                    processor_id: BUILTIN_GAIN_ID.to_string(),
                 },
                 state: ProcessorState::default(),
             });
@@ -1086,5 +1108,73 @@ mod tests {
         let ron = ron::to_string(&mixer).expect("mixer should serialize");
         let restored: MixerState = ron::from_str(&ron).expect("mixer should deserialize");
         assert_eq!(restored, mixer);
+    }
+
+    #[test]
+    fn strip_by_index_uses_visible_mixer_order() {
+        let mut mixer = MixerState::new();
+        let bus_id = mixer.add_bus("Verb");
+
+        let master = mixer.strip_by_index(0).expect("master strip should exist");
+        assert_eq!(master.name, "Master");
+        assert_eq!(master.bus_id, None);
+
+        let first_track = mixer.strip_by_index(1).expect("track strip should exist");
+        assert_eq!(first_track.name, "Track 1");
+        assert_eq!(first_track.bus_id, None);
+
+        let bus = mixer
+            .strip_by_index(1 + INSTRUMENT_TRACK_COUNT)
+            .expect("bus strip should exist");
+        assert_eq!(bus.name, "Verb");
+        assert_eq!(bus.bus_id, Some(bus_id));
+    }
+
+    #[test]
+    fn strip_slots_use_shared_index_convention() {
+        let mut mixer = MixerState::new();
+        mixer
+            .track_mut(TrackId(0))
+            .expect("track should exist")
+            .set_instrument_slot(SlotState::soundfont("default", 0, 0));
+        mixer
+            .track_mut(TrackId(0))
+            .expect("track should exist")
+            .push_effect(SlotState {
+                kind: ProcessorKind::BuiltIn {
+                    processor_id: BUILTIN_GAIN_ID.to_string(),
+                },
+                state: ProcessorState::default(),
+            });
+        let bus_id = mixer.add_bus("Verb");
+        mixer
+            .bus_mut(bus_id)
+            .expect("bus should exist")
+            .push_effect(SlotState {
+                kind: ProcessorKind::BuiltIn {
+                    processor_id: BUILTIN_GAIN_ID.to_string(),
+                },
+                state: ProcessorState::default(),
+            });
+
+        let track = mixer.strip_by_index(1).expect("track strip should exist");
+        assert_eq!(track.slot(0), track.instrument_slot());
+        assert!(track.slot(1).is_some());
+
+        let master = mixer.strip_by_index(0).expect("master strip should exist");
+        assert!(master.slot(0).is_some());
+        assert_eq!(master.effect_count(), 0);
+
+        let bus = mixer
+            .strip_by_index(1 + INSTRUMENT_TRACK_COUNT)
+            .expect("bus strip should exist");
+        assert!(bus.slot(0).is_some());
+        assert_eq!(
+            bus.slot(1).and_then(|slot| match &slot.kind {
+                ProcessorKind::BuiltIn { processor_id } => Some(processor_id.as_str()),
+                ProcessorKind::Plugin { .. } => None,
+            }),
+            Some(BUILTIN_GAIN_ID)
+        );
     }
 }

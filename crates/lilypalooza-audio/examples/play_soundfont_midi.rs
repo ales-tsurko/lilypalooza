@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use lilypalooza_audio::{
-    AudioEngine, AudioEngineOptions, InstrumentSlotState, MixerState, SoundfontResource, TrackId,
+    AudioEngine, AudioEngineOptions, MixerState, SlotState, SoundfontResource, TrackId,
 };
 
 const DEFAULT_SOUNDFONT_ID: &str = "default";
@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (track_index, program) in DEFAULT_PIANO_PROGRAMS.iter().copied().enumerate() {
             mixer.set_track_instrument(
                 TrackId(track_index as u16),
-                InstrumentSlotState::soundfont(DEFAULT_SOUNDFONT_ID, 0, program),
+                SlotState::soundfont(DEFAULT_SOUNDFONT_ID, 0, program),
             )?;
         }
     }

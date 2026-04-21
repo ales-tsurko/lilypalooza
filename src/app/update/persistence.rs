@@ -174,8 +174,8 @@ impl Lilypalooza {
         if let Some(playback) = self.playback.as_mut() {
             let state = self.project_mixer_state.clone();
             if playback.mixer().replace_state(state.clone()).is_ok() {
-                for track in state.tracks() {
-                    let index = track.id.index();
+                for (track_id, track) in state.tracks_with_ids() {
+                    let index = track_id.index();
                     let _ = self.piano_roll.set_track_muted(index, track.state.muted);
                     let _ = self.piano_roll.set_track_soloed(index, track.state.soloed);
                 }

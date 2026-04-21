@@ -75,10 +75,7 @@ impl Processor for GainEffectProcessor {
     }
 
     fn save_state(&self) -> ProcessorState {
-        ProcessorState(
-            bincode::serialize(&self.state)
-                .expect("gain effect state serialization should never fail"),
-        )
+        ProcessorState(bincode::serialize(&self.state).unwrap_or_default())
     }
 
     fn load_state(&mut self, state: &ProcessorState) -> Result<(), ProcessorStateError> {

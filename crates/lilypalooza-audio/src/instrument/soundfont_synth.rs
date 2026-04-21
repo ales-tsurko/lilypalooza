@@ -412,7 +412,7 @@ impl InstrumentProcessor for SoundfontProcessor {
 }
 
 pub(crate) fn encode_soundfont_state(state: &SoundfontProcessorState) -> ProcessorState {
-    ProcessorState(bincode::serialize(state).expect("soundfont state serialization should succeed"))
+    ProcessorState(bincode::serialize(state).unwrap_or_default())
 }
 
 #[cfg(test)]

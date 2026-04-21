@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::instrument::{EffectSlotState, InstrumentSlotState};
+use crate::instrument::SlotState;
 
 /// Number of fixed instrument tracks.
 pub const INSTRUMENT_TRACK_COUNT: usize = 128;
@@ -95,84 +95,126 @@ impl Default for TrackState {
     }
 }
 
-/// One fixed instrument track.
+/// Shared strip model used for instrument tracks, buses, and the master.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MixerTrack {
-    /// Stable mixer track identifier.
-    pub id: TrackId,
+pub struct Track {
+    /// Stable bus identifier on bus strips.
+    pub bus_id: Option<BusId>,
     /// User-visible name.
     pub name: String,
     /// Strip state.
     pub state: TrackState,
     /// Routing state.
     pub routing: TrackRouting,
-    /// Instrument slot.
-    pub instrument: InstrumentSlotState,
-    /// Effect slots in processing order.
-    pub effects: Vec<EffectSlotState>,
+    /// Processor slots in processing order.
+    ///
+    /// Convention:
+    /// - `0` is always the instrument slot
+    /// - `1..` are effect slots
+    pub slots: Vec<SlotState>,
 }
 
-impl MixerTrack {
-    /// Creates a fixed instrument track from its stable id.
-    #[must_use]
-    pub fn new(id: TrackId) -> Self {
+impl Track {
+    fn new(name: impl Into<String>) -> Self {
         Self {
-            id,
-            name: format!("Track {}", id.index() + 1),
-            state: TrackState::default(),
-            routing: TrackRouting::default(),
-            instrument: InstrumentSlotState::default(),
-            effects: Vec::new(),
-        }
-    }
-}
-
-/// One dynamic bus track.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BusTrack {
-    /// Stable bus identifier.
-    pub id: BusId,
-    /// User-visible name.
-    pub name: String,
-    /// Strip state.
-    pub state: TrackState,
-    /// Routing state.
-    pub routing: TrackRouting,
-    /// Effect slots in processing order.
-    pub effects: Vec<EffectSlotState>,
-}
-
-impl BusTrack {
-    /// Creates one bus track.
-    #[must_use]
-    pub fn new(id: BusId, name: impl Into<String>) -> Self {
-        Self {
-            id,
+            bus_id: None,
             name: name.into(),
             state: TrackState::default(),
             routing: TrackRouting::default(),
-            effects: Vec::new(),
+            slots: vec![SlotState::default()],
         }
     }
-}
 
-/// Dedicated master track.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MasterTrack {
-    /// User-visible name.
-    pub name: String,
-    /// Strip state.
-    pub state: TrackState,
-    /// Effect slots in processing order.
-    pub effects: Vec<EffectSlotState>,
-}
+    /// Creates a fixed instrument track from its stable id.
+    #[must_use]
+    pub fn instrument(id: TrackId) -> Self {
+        Self::new(format!("Track {}", id.index() + 1))
+    }
 
-impl Default for MasterTrack {
-    fn default() -> Self {
-        Self {
-            name: String::from("Master"),
-            state: TrackState::default(),
-            effects: Vec::new(),
+    /// Creates one bus track.
+    #[must_use]
+    pub fn bus(id: BusId, name: impl Into<String>) -> Self {
+        let mut track = Self::new(name);
+        track.bus_id = Some(id);
+        track
+    }
+
+    /// Creates the dedicated master track.
+    #[must_use]
+    pub fn master() -> Self {
+        Self::new("Master")
+    }
+
+    /// Returns one slot by unified index.
+    #[must_use]
+    pub fn slot(&self, slot_index: usize) -> Option<&SlotState> {
+        self.slots.get(slot_index)
+    }
+
+    /// Returns mutable access to one slot by unified index.
+    #[must_use]
+    pub fn slot_mut(&mut self, slot_index: usize) -> Option<&mut SlotState> {
+        self.slots.get_mut(slot_index)
+    }
+
+    /// Returns the instrument slot.
+    #[must_use]
+    pub fn instrument_slot(&self) -> Option<&SlotState> {
+        self.slots.first()
+    }
+
+    /// Returns mutable access to the instrument slot.
+    #[must_use]
+    pub fn instrument_slot_mut(&mut self) -> Option<&mut SlotState> {
+        self.slots.first_mut()
+    }
+
+    /// Replaces the instrument slot.
+    pub fn set_instrument_slot(&mut self, instrument: SlotState) {
+        if let Some(slot) = self.slots.first_mut() {
+            *slot = instrument;
+        } else {
+            self.slots.push(instrument);
         }
+    }
+
+    /// Returns one effect slot by zero-based effect index.
+    #[must_use]
+    pub fn effect(&self, effect_index: usize) -> Option<&SlotState> {
+        self.slots.get(effect_index + 1)
+    }
+
+    /// Returns mutable access to one effect slot by zero-based effect index.
+    #[must_use]
+    pub fn effect_mut(&mut self, effect_index: usize) -> Option<&mut SlotState> {
+        self.slots.get_mut(effect_index + 1)
+    }
+
+    /// Returns all effect slots.
+    #[must_use]
+    pub fn effects(&self) -> &[SlotState] {
+        &self.slots[1..]
+    }
+
+    /// Returns all effect slots as typed states.
+    pub fn effect_states(&self) -> impl Iterator<Item = &SlotState> + '_ {
+        self.slots.iter().skip(1)
+    }
+
+    /// Returns the number of effect slots.
+    #[must_use]
+    pub fn effect_count(&self) -> usize {
+        self.slots.len().saturating_sub(1)
+    }
+
+    /// Replaces all effect slots.
+    pub fn set_effects(&mut self, effects: Vec<SlotState>) {
+        self.slots.truncate(1);
+        self.slots.extend(effects);
+    }
+
+    /// Appends one effect slot.
+    pub fn push_effect(&mut self, effect: SlotState) {
+        self.slots.push(effect);
     }
 }
