@@ -7,6 +7,13 @@ use super::*;
 
 const DEFAULT_SOUNDFONT_ID: &str = "default";
 impl Lilypalooza {
+    pub(in crate::app) fn sync_project_mixer_state_from_playback(&mut self) {
+        let Some(playback) = self.playback.as_ref() else {
+            return;
+        };
+        self.project_mixer_state = playback.mixer_state().clone();
+    }
+
     pub(in crate::app) fn apply_metronome_state_to_playback(&mut self) {
         let Some(playback) = self.playback.as_mut() else {
             return;
@@ -75,6 +82,7 @@ impl Lilypalooza {
 
         self.apply_metronome_state_to_playback();
         self.sync_playback_file();
+        self.sync_project_mixer_state_from_playback();
     }
 
     pub(in crate::app) fn restart_playback_engine(&mut self) {
@@ -83,7 +91,7 @@ impl Lilypalooza {
         };
 
         match AudioEngine::start_cpal(
-            MixerState::new(),
+            self.project_mixer_state.clone(),
             audio_engine_options(&self.playback_settings),
         ) {
             Ok(engine) => {
@@ -96,6 +104,7 @@ impl Lilypalooza {
                     self.soundfont_status = SoundfontStatus::NotSelected;
                     self.unload_playback_file();
                 }
+                self.sync_project_mixer_state_from_playback();
             }
             Err(error) => {
                 self.playback = Some(previous_engine);
@@ -160,6 +169,7 @@ impl Lilypalooza {
                     self.piano_roll.set_playback_position(0, total_ticks, false);
                     self.refresh_score_cursor_overlay();
                     self.sync_playback_track_mix();
+                    self.sync_project_mixer_state_from_playback();
                 }
             }
             Err(error) => {
@@ -195,16 +205,19 @@ impl Lilypalooza {
             return;
         }
 
-        let mut mixer = playback.mixer();
-        for (track_index, state) in track_mix.into_iter().enumerate() {
-            if track_index >= INSTRUMENT_TRACK_COUNT {
-                continue;
-            }
+        {
+            let mut mixer = playback.mixer();
+            for (track_index, state) in track_mix.into_iter().enumerate() {
+                if track_index >= INSTRUMENT_TRACK_COUNT {
+                    continue;
+                }
 
-            let track_id = TrackId(track_index as u16);
-            let _ = mixer.set_track_muted(track_id, state.muted);
-            let _ = mixer.set_track_soloed(track_id, state.soloed);
+                let track_id = TrackId(track_index as u16);
+                let _ = mixer.set_track_muted(track_id, state.muted);
+                let _ = mixer.set_track_soloed(track_id, state.soloed);
+            }
         }
+        self.sync_project_mixer_state_from_playback();
     }
 
     pub(in crate::app) fn seek_playback_normalized(&mut self, position: f32) {

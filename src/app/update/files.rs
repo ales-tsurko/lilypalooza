@@ -56,25 +56,7 @@ impl Lilypalooza {
                         EditorContinuation::OpenScore(path),
                     );
                 }
-
-                match selected_score_from_path(path) {
-                    Ok(selected_score) => {
-                        self.attach_persistence_context_for_score(&selected_score.path);
-                        self.activate_score(selected_score)
-                    }
-                    Err(error) => {
-                        self.show_prompt(
-                            ErrorPrompt::new(
-                                "Open File Error",
-                                error,
-                                ErrorFatality::Recoverable,
-                                PromptButtons::Ok,
-                            ),
-                            None,
-                        );
-                        Task::none()
-                    }
-                }
+                self.continue_editor_continuation(EditorContinuation::OpenScore(path))
             }
             FileMessage::Picked(None) => Task::none(),
             FileMessage::RequestCreateProject => {
@@ -138,7 +120,16 @@ impl Lilypalooza {
                 )
             }
             FileMessage::CreateProjectPicked(Some(project_root)) => {
-                self.save_project_to_root(project_root)
+                let save_task = self.save_project_to_root(project_root);
+                if matches!(
+                    self.pending_editor_action,
+                    Some(PendingEditorAction::ResolveDirtyProject { .. })
+                ) {
+                    let advance_task = self.advance_pending_editor_action();
+                    Task::batch([save_task, advance_task])
+                } else {
+                    save_task
+                }
             }
             FileMessage::CreateProjectPicked(None) => Task::none(),
             FileMessage::LoadProjectPicked(Some(project_root)) => {
@@ -262,6 +253,9 @@ impl Lilypalooza {
         self.unload_playback_file();
         self.current_score = Some(selected_score);
         self.persist_settings();
+        if self.project_root.is_none() {
+            self.saved_project_state = Some(self.current_project_state());
+        }
         self.sync_editor_file_watcher();
         self.restart_score_watcher(&watched_path);
         self.queue_compile("Score loaded, compiling SVG and MIDI");

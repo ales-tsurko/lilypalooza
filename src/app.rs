@@ -21,7 +21,7 @@ use crate::score_watcher::ScoreWatcher;
 use crate::settings::{
     self, DockAxis, DockNodeSettings, FoldedPaneRestoreSettings, FoldedPaneSettings,
 };
-use crate::state::{self, GlobalState};
+use crate::state::{self, GlobalState, ProjectState};
 
 use messages::{
     EditorMessage, FileMessage, KeyPress, LoggerMessage, Message, PaneMessage, PianoRollMessage,
@@ -146,6 +146,8 @@ struct Lilypalooza {
     playback: Option<AudioEngine>,
     soundfont_status: SoundfontStatus,
     playback_settings: settings::PlaybackSettings,
+    saved_project_state: Option<ProjectState>,
+    project_mixer_state: MixerState,
     workspace_panes: pane_grid::State<DockGroupId>,
     dock_layout: Option<DockNode>,
     dock_groups: HashMap<DockGroupId, DockGroup>,
@@ -465,6 +467,9 @@ enum PendingEditorAction {
         dirty_tab_ids: Vec<u64>,
         continuation: EditorContinuation,
     },
+    ResolveDirtyProject {
+        continuation: EditorContinuation,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -625,6 +630,8 @@ fn new(
         playback,
         soundfont_status: SoundfontStatus::NotSelected,
         playback_settings: stored_settings.playback.clone(),
+        saved_project_state: None,
+        project_mixer_state: MixerState::new(),
         workspace_panes,
         dock_layout,
         dock_groups,
@@ -778,6 +785,7 @@ fn new(
     if audio_enabled && let Some(path) = startup_soundfont {
         app.initialize_playback(path);
     }
+    app.saved_project_state = Some(app.current_project_state());
     if let Some(path) = startup_score.or(stored_state.main_score.clone()) {
         startup_tasks.push(Task::done(Message::File(FileMessage::Picked(Some(path)))));
     }
@@ -1486,6 +1494,58 @@ mod tests {
                 settings::ShortcutActionId::OpenSettingsFile
             ))
         )));
+    }
+
+    #[test]
+    fn project_dirty_only_tracks_project_state_changes() {
+        let (mut app, _task) = new(None, None, false);
+        let temp = tempfile::tempdir().expect("temp dir should exist");
+
+        app.apply_project_state(temp.path().to_path_buf(), ProjectState::default());
+        assert!(!app.project_is_dirty());
+
+        app.editor_recent_files.push(PathBuf::from("/tmp/test.ly"));
+        assert!(!app.project_is_dirty());
+
+        app.metronome.enabled = true;
+        assert!(app.project_is_dirty());
+    }
+
+    #[test]
+    fn window_close_prompts_for_dirty_project_changes() {
+        let (mut app, _task) = new(None, None, false);
+        let temp = tempfile::tempdir().expect("temp dir should exist");
+
+        app.apply_project_state(temp.path().to_path_buf(), ProjectState::default());
+        app.metronome.enabled = true;
+
+        let _ = app.handle_window_close_requested();
+
+        assert!(matches!(
+            app.pending_editor_action,
+            Some(PendingEditorAction::ResolveDirtyProject {
+                continuation: EditorContinuation::ExitApp
+            })
+        ));
+        assert!(matches!(
+            app.error_prompt.as_ref().map(|prompt| prompt.buttons()),
+            Some(crate::error_prompt::PromptButtons::SaveDiscardCancel)
+        ));
+    }
+
+    #[test]
+    fn discard_dirty_project_prompt_clears_pending_action() {
+        let (mut app, _task) = new(None, None, false);
+        let temp = tempfile::tempdir().expect("temp dir should exist");
+
+        app.apply_project_state(temp.path().to_path_buf(), ProjectState::default());
+        app.metronome.enabled = true;
+        let _ = app.handle_window_close_requested();
+
+        let _ = app.handle_prompt_message(PromptMessage::Discard);
+
+        assert!(app.pending_editor_action.is_none());
+        assert!(app.error_prompt.is_none());
     }
 
     #[test]

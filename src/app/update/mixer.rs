@@ -221,6 +221,7 @@ impl Lilypalooza {
             MixerMessage::CancelTrackRename => {}
         }
 
+        self.project_mixer_state = playback.mixer_state().clone();
         Task::none()
     }
 }
@@ -306,6 +307,7 @@ mod tests {
     use super::{Lilypalooza, MixerHistoryMode, mixer_message_history_mode};
     use crate::app::RenameTarget;
     use crate::app::messages::MixerMessage;
+    use crate::state::ProjectState;
     use lilypalooza_audio::{AudioEngine, AudioEngineOptions, BusId, MixerState};
 
     fn test_app() -> Lilypalooza {
@@ -391,5 +393,52 @@ mod tests {
                 .bus(BusId(bus_id.0))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn mixer_changes_mark_project_dirty() {
+        let mut app = test_app();
+        let temp = tempfile::tempdir().expect("temp dir should exist");
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        app.apply_project_state(temp.path().to_path_buf(), ProjectState::default());
+        assert!(!app.project_is_dirty());
+
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+        let bus_id = app
+            .playback
+            .as_ref()
+            .expect("playback should exist")
+            .mixer_state()
+            .buses()
+            .first()
+            .map(|bus| bus.id.0)
+            .expect("bus should be added");
+        let _ = app.handle_mixer_message(MixerMessage::SetBusGain(bus_id, -6.0));
+
+        assert!(app.project_is_dirty());
+    }
+
+    #[test]
+    fn unsaved_project_mixer_changes_prompt_on_close() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        app.saved_project_state = Some(app.current_project_state());
+
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+
+        let _ = app.handle_window_close_requested();
+
+        assert!(matches!(
+            app.pending_editor_action,
+            Some(crate::app::PendingEditorAction::ResolveDirtyProject {
+                continuation: crate::app::EditorContinuation::ExitApp
+            })
+        ));
     }
 }

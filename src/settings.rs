@@ -54,7 +54,7 @@ impl Default for FoldedPaneSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub(crate) struct DockGroupSettings {
     pub(crate) tabs: Vec<WorkspacePane>,
@@ -70,7 +70,7 @@ impl Default for DockGroupSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) enum DockNodeSettings {
     Group(DockGroupSettings),
     Split {
@@ -106,7 +106,7 @@ impl Default for DockNodeSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub(crate) struct WorkspaceLayoutSettings {
     pub(crate) root: Option<DockNodeSettings>,
@@ -124,7 +124,7 @@ impl Default for WorkspaceLayoutSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub(crate) struct ScoreViewSettings {
     pub(crate) zoom: f32,
@@ -140,7 +140,7 @@ impl Default for ScoreViewSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub(crate) struct PianoRollViewSettings {
     pub(crate) zoom_x: f32,

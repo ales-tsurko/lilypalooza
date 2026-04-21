@@ -799,8 +799,8 @@ impl Lilypalooza {
     ) -> Task<Message> {
         if self.pending_editor_action.is_some() {
             return match message {
-                PromptMessage::Acknowledge => self.handle_pending_editor_prompt_save(),
-                PromptMessage::Discard => self.advance_pending_editor_action(),
+                PromptMessage::Acknowledge => self.handle_pending_prompt_save(),
+                PromptMessage::Discard => self.handle_pending_prompt_discard(),
                 PromptMessage::Cancel => {
                     self.error_prompt = None;
                     self.prompt_selected_button = PromptSelectedButton::Ok;
@@ -860,6 +860,9 @@ impl Lilypalooza {
     pub(in crate::app) fn handle_window_close_requested(&mut self) -> Task<Message> {
         let dirty_tabs = self.editor.tabs_requiring_resolution();
         if dirty_tabs.is_empty() {
+            if self.project_is_dirty() {
+                return self.begin_pending_project_action(EditorContinuation::ExitApp);
+            }
             return iced::exit();
         }
 
@@ -915,94 +918,141 @@ impl Lilypalooza {
         Task::none()
     }
 
+    pub(in crate::app) fn begin_pending_project_action(
+        &mut self,
+        continuation: EditorContinuation,
+    ) -> Task<Message> {
+        if !self.project_is_dirty() {
+            return self.continue_editor_continuation(continuation);
+        }
+
+        self.pending_editor_action =
+            Some(PendingEditorAction::ResolveDirtyProject { continuation });
+        self.show_current_pending_editor_prompt();
+        Task::none()
+    }
+
     pub(in crate::app) fn show_current_pending_editor_prompt(&mut self) {
-        let Some(PendingEditorAction::ResolveDirtyTabs { dirty_tab_ids, .. }) =
-            self.pending_editor_action.as_ref()
-        else {
-            return;
-        };
-        let Some(&tab_id) = dirty_tab_ids.first() else {
+        let Some(action) = self.pending_editor_action.as_ref() else {
             return;
         };
 
-        let title = self.editor.tab_title(tab_id);
-        let prompt =
-            if self.editor.tab_file_state(tab_id) == Some(EditorTabFileState::MissingOnDisk) {
-                ErrorPrompt::new(
-                format!("Save {title}?"),
-                format!(
-                    "{title} is missing on disk. Save it before continuing to recreate the file?"
-                ),
+        let prompt = match action {
+            PendingEditorAction::ResolveDirtyTabs { dirty_tab_ids, .. } => {
+                let Some(&tab_id) = dirty_tab_ids.first() else {
+                    return;
+                };
+                let title = self.editor.tab_title(tab_id);
+                if self.editor.tab_file_state(tab_id) == Some(EditorTabFileState::MissingOnDisk) {
+                    ErrorPrompt::new(
+                        format!("Save {title}?"),
+                        format!(
+                            "{title} is missing on disk. Save it before continuing to recreate the file?"
+                        ),
+                        ErrorFatality::Recoverable,
+                        PromptButtons::SaveDiscardCancel,
+                    )
+                    .with_discard_label("Close Without Saving")
+                } else {
+                    ErrorPrompt::new(
+                        format!("Close {title}?"),
+                        format!("Save changes to {title} before continuing?"),
+                        ErrorFatality::Recoverable,
+                        PromptButtons::SaveDiscardCancel,
+                    )
+                }
+            }
+            PendingEditorAction::ResolveDirtyProject { .. } => ErrorPrompt::new(
+                "Save project changes?",
+                "Project state changed. Save the project before continuing?",
                 ErrorFatality::Recoverable,
                 PromptButtons::SaveDiscardCancel,
-            )
-            .with_discard_label("Close Without Saving")
-            } else {
-                ErrorPrompt::new(
-                    format!("Close {title}?"),
-                    format!("Save changes to {title} before continuing?"),
-                    ErrorFatality::Recoverable,
-                    PromptButtons::SaveDiscardCancel,
-                )
-            };
+            ),
+        };
         self.error_prompt = Some(prompt);
         self.prompt_ok_action = None;
         self.prompt_selected_button = PromptSelectedButton::Ok;
     }
 
-    pub(in crate::app) fn handle_pending_editor_prompt_save(&mut self) -> Task<Message> {
-        let Some(PendingEditorAction::ResolveDirtyTabs { dirty_tab_ids, .. }) =
-            self.pending_editor_action.as_ref()
-        else {
-            return Task::none();
-        };
-        let Some(&tab_id) = dirty_tab_ids.first() else {
-            return Task::none();
-        };
-
+    pub(in crate::app) fn handle_pending_prompt_save(&mut self) -> Task<Message> {
         self.error_prompt = None;
         self.prompt_selected_button = PromptSelectedButton::Ok;
+        match self.pending_editor_action.as_ref() {
+            Some(PendingEditorAction::ResolveDirtyTabs { dirty_tab_ids, .. }) => {
+                let Some(&tab_id) = dirty_tab_ids.first() else {
+                    return Task::none();
+                };
 
-        if self.editor.tab_path(tab_id).is_none() {
-            self.pending_editor_save_as_tab = Some(tab_id);
-            let suggested_name = self.editor.suggested_rename_name(tab_id);
-            return Task::perform(
-                async move {
-                    rfd::AsyncFileDialog::new()
-                        .set_file_name(&suggested_name)
-                        .save_file()
-                        .await
-                        .map(|file| file.path().to_path_buf())
-                },
-                |picked| Message::Editor(EditorMessage::SaveAsPicked(picked)),
-            );
+                if self.editor.tab_path(tab_id).is_none() {
+                    self.pending_editor_save_as_tab = Some(tab_id);
+                    let suggested_name = self.editor.suggested_rename_name(tab_id);
+                    return Task::perform(
+                        async move {
+                            rfd::AsyncFileDialog::new()
+                                .set_file_name(&suggested_name)
+                                .save_file()
+                                .await
+                                .map(|file| file.path().to_path_buf())
+                        },
+                        |picked| Message::Editor(EditorMessage::SaveAsPicked(picked)),
+                    );
+                }
+
+                let save_task = self.save_editor_tab(tab_id);
+                let advance_task = self.advance_pending_editor_action();
+                Task::batch([save_task, advance_task])
+            }
+            Some(PendingEditorAction::ResolveDirtyProject { .. }) => {
+                match self.project_root.clone() {
+                    Some(project_root) => {
+                        let save_task = self.save_project_to_root(project_root);
+                        let advance_task = self.advance_pending_editor_action();
+                        Task::batch([save_task, advance_task])
+                    }
+                    None => update(self, Message::File(FileMessage::RequestCreateProject)),
+                }
+            }
+            None => Task::none(),
         }
+    }
 
-        let save_task = self.save_editor_tab(tab_id);
-        let advance_task = self.advance_pending_editor_action();
-        Task::batch([save_task, advance_task])
+    pub(in crate::app) fn handle_pending_prompt_discard(&mut self) -> Task<Message> {
+        match self.pending_editor_action.take() {
+            Some(PendingEditorAction::ResolveDirtyProject { continuation }) => {
+                self.error_prompt = None;
+                self.prompt_selected_button = PromptSelectedButton::Ok;
+                self.continue_editor_continuation_without_project_dirty_check(continuation)
+            }
+            Some(action) => {
+                self.pending_editor_action = Some(action);
+                self.advance_pending_editor_action()
+            }
+            None => Task::none(),
+        }
     }
 
     pub(in crate::app) fn advance_pending_editor_action(&mut self) -> Task<Message> {
-        let Some(PendingEditorAction::ResolveDirtyTabs {
-            dirty_tab_ids,
-            continuation: _,
-        }) = self.pending_editor_action.as_mut()
-        else {
+        let Some(action) = self.pending_editor_action.as_mut() else {
             return Task::none();
         };
 
-        if !dirty_tab_ids.is_empty() {
-            dirty_tab_ids.remove(0);
-        }
+        match action {
+            PendingEditorAction::ResolveDirtyTabs { dirty_tab_ids, .. } => {
+                if !dirty_tab_ids.is_empty() {
+                    dirty_tab_ids.remove(0);
+                }
 
-        if !dirty_tab_ids.is_empty() {
-            self.show_current_pending_editor_prompt();
-            return Task::none();
+                if !dirty_tab_ids.is_empty() {
+                    self.show_current_pending_editor_prompt();
+                    return Task::none();
+                }
+            }
+            PendingEditorAction::ResolveDirtyProject { .. } => {}
         }
 
         let continuation = match self.pending_editor_action.take() {
-            Some(PendingEditorAction::ResolveDirtyTabs { continuation, .. }) => continuation,
+            Some(PendingEditorAction::ResolveDirtyTabs { continuation, .. })
+            | Some(PendingEditorAction::ResolveDirtyProject { continuation }) => continuation,
             None => return Task::none(),
         };
 
@@ -1012,6 +1062,59 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn continue_editor_continuation(
+        &mut self,
+        continuation: EditorContinuation,
+    ) -> Task<Message> {
+        match continuation {
+            EditorContinuation::CloseTab(tab_id) => {
+                self.editor.close_tab(tab_id);
+                self.sync_editor_file_watcher();
+                self.focus_editor_text_area();
+                self.persist_settings();
+                Task::none()
+            }
+            EditorContinuation::LoadProject(project_root) => {
+                if self.project_root.as_ref() != Some(&project_root) && self.project_is_dirty() {
+                    return self.begin_pending_project_action(EditorContinuation::LoadProject(
+                        project_root,
+                    ));
+                }
+                self.load_project_from_root(project_root)
+            }
+            EditorContinuation::OpenScore(path) => {
+                let next_project_root = state::find_project_root(&path);
+                if next_project_root != self.project_root && self.project_is_dirty() {
+                    return self.begin_pending_project_action(EditorContinuation::OpenScore(path));
+                }
+                match selected_score_from_path(path) {
+                    Ok(selected_score) => {
+                        self.attach_persistence_context_for_score(&selected_score.path);
+                        self.activate_score(selected_score)
+                    }
+                    Err(error) => {
+                        self.show_prompt(
+                            ErrorPrompt::new(
+                                "Open File Error",
+                                error,
+                                ErrorFatality::Recoverable,
+                                PromptButtons::Ok,
+                            ),
+                            None,
+                        );
+                        Task::none()
+                    }
+                }
+            }
+            EditorContinuation::ExitApp => {
+                if self.project_is_dirty() {
+                    return self.begin_pending_project_action(EditorContinuation::ExitApp);
+                }
+                iced::exit()
+            }
+        }
+    }
+
+    fn continue_editor_continuation_without_project_dirty_check(
         &mut self,
         continuation: EditorContinuation,
     ) -> Task<Message> {

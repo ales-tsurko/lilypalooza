@@ -2,6 +2,63 @@ use super::*;
 use crate::settings::WorkspaceLayoutSettings;
 
 impl Lilypalooza {
+    pub(in crate::app) fn current_project_state(&self) -> ProjectState {
+        ProjectState {
+            project_name: self.project_name.clone(),
+            workspace_layout: WorkspaceLayoutSettings {
+                root: self
+                    .dock_layout
+                    .as_ref()
+                    .map(|layout| dock_node_to_settings(layout, &self.dock_groups)),
+                folded_panes: self
+                    .folded_panes
+                    .iter()
+                    .cloned()
+                    .map(folded_pane_to_settings)
+                    .collect(),
+                piano_visible: !self.is_pane_folded(WorkspacePaneKind::PianoRoll),
+            },
+            score_view: settings::ScoreViewSettings {
+                zoom: self.svg_zoom,
+                page_brightness: self.svg_page_brightness,
+            },
+            piano_roll_view: settings::PianoRollViewSettings {
+                zoom_x: self.piano_roll.zoom_x,
+                beat_subdivision: self.piano_roll.beat_subdivision,
+            },
+            main_score: self.current_score.as_ref().map(|score| {
+                self.project_root
+                    .as_ref()
+                    .and_then(|project_root| {
+                        state::main_score_relative_to(project_root, &score.path).ok()
+                    })
+                    .unwrap_or_else(|| score.path.clone())
+            }),
+            editor_tabs: self.editor.file_backed_tab_paths(),
+            active_editor_tab: self.editor.active_file_backed_tab_path(),
+            has_clean_untitled_editor_tab: self.editor.has_clean_untitled_tab(),
+            track_name_overrides: self.track_name_overrides.clone(),
+            track_color_overrides: self
+                .track_color_overrides
+                .iter()
+                .copied()
+                .map(|color: Option<iced::Color>| color.map(crate::track_colors::to_override))
+                .collect(),
+            metronome: self.metronome,
+            mixer_state: self
+                .playback
+                .as_ref()
+                .map(|playback| playback.mixer_state().clone())
+                .unwrap_or_else(|| self.project_mixer_state.clone()),
+        }
+    }
+
+    pub(in crate::app) fn project_is_dirty(&self) -> bool {
+        self.saved_project_state
+            .as_ref()
+            .is_some_and(|saved| self.current_project_state() != *saved)
+    }
+
     pub(in crate::app) fn attach_persistence_context_for_score(&mut self, score_path: &Path) {
         let next_project_root = state::find_project_root(score_path);
         if next_project_root == self.project_root {
@@ -68,6 +125,7 @@ impl Lilypalooza {
         self.track_name_overrides.clear();
         self.track_color_overrides.clear();
         self.metronome = state::MetronomeState::default();
+        self.project_mixer_state = lilypalooza_audio::MixerState::new();
         self.metronome_menu_open = false;
         self.cancel_track_rename();
         self.apply_metronome_state_to_playback();
@@ -83,6 +141,7 @@ impl Lilypalooza {
             state.score_view,
             state.piano_roll_view,
         );
+        self.saved_project_state = Some(self.current_project_state());
     }
 
     pub(in crate::app) fn apply_project_state(
@@ -90,13 +149,15 @@ impl Lilypalooza {
         project_root: PathBuf,
         state: ProjectState,
     ) {
+        let project_name = state
+            .project_name
+            .clone()
+            .or_else(|| Some(default_project_name(&project_root)));
         self.register_recent_project(&project_root);
         self.project_root = Some(project_root);
         self.editor.set_project_root(self.project_root.clone());
         self.sync_browser_file_watcher();
-        self.project_name = state
-            .project_name
-            .or_else(|| self.project_root.as_deref().map(default_project_name));
+        self.project_name = project_name;
         self.track_name_overrides = state.track_name_overrides;
         self.track_color_overrides = state
             .track_color_overrides
@@ -104,9 +165,24 @@ impl Lilypalooza {
             .map(|color| color.map(crate::track_colors::from_override))
             .collect();
         self.metronome = state.metronome;
+        self.project_mixer_state = state.mixer_state;
         self.metronome_menu_open = false;
         self.cancel_track_rename();
         self.apply_metronome_state_to_playback();
+        if let Some(playback) = self.playback.as_mut() {
+            let state = self.project_mixer_state.clone();
+            if playback.mixer().replace_state(state.clone()).is_ok() {
+                for track in state.tracks() {
+                    let index = track.id.index();
+                    let _ = self.piano_roll.set_track_muted(index, track.state.muted);
+                    let _ = self.piano_roll.set_track_soloed(index, track.state.soloed);
+                }
+                self.piano_roll.set_global_solo_active(
+                    state.tracks().iter().any(|track| track.state.soloed)
+                        || state.buses().iter().any(|bus| bus.state.soloed),
+                );
+            }
+        }
         self.restore_editor_session(
             &state.editor_tabs,
             state.active_editor_tab.as_deref(),
@@ -117,6 +193,7 @@ impl Lilypalooza {
             state.score_view,
             state.piano_roll_view,
         );
+        self.saved_project_state = Some(self.current_project_state());
     }
 
     pub(in crate::app) fn apply_workspace_state(
@@ -225,49 +302,8 @@ impl Lilypalooza {
         }
 
         if let Some(project_root) = self.project_root.as_ref() {
-            state::save_project(
-                project_root,
-                &ProjectState {
-                    project_name: self.project_name.clone(),
-                    workspace_layout: WorkspaceLayoutSettings {
-                        root: self
-                            .dock_layout
-                            .as_ref()
-                            .map(|layout| dock_node_to_settings(layout, &self.dock_groups)),
-                        folded_panes: self
-                            .folded_panes
-                            .iter()
-                            .cloned()
-                            .map(folded_pane_to_settings)
-                            .collect(),
-                        piano_visible: !self.is_pane_folded(WorkspacePaneKind::PianoRoll),
-                    },
-                    score_view: settings::ScoreViewSettings {
-                        zoom: self.svg_zoom,
-                        page_brightness: self.svg_page_brightness,
-                    },
-                    piano_roll_view: settings::PianoRollViewSettings {
-                        zoom_x: self.piano_roll.zoom_x,
-                        beat_subdivision: self.piano_roll.beat_subdivision,
-                    },
-                    main_score: self.current_score.as_ref().and_then(|score| {
-                        state::main_score_relative_to(project_root, &score.path).ok()
-                    }),
-                    editor_tabs: self.editor.file_backed_tab_paths(),
-                    active_editor_tab: self.editor.active_file_backed_tab_path(),
-                    has_clean_untitled_editor_tab: self.editor.has_clean_untitled_tab(),
-                    track_name_overrides: self.track_name_overrides.clone(),
-                    track_color_overrides: self
-                        .track_color_overrides
-                        .iter()
-                        .copied()
-                        .map(|color: Option<iced::Color>| {
-                            color.map(crate::track_colors::to_override)
-                        })
-                        .collect(),
-                    metronome: self.metronome,
-                },
-            )?;
+            let project_state = self.current_project_state();
+            state::save_project(project_root, &project_state)?;
 
             let mut global_state = state::load_global()?;
             global_state.editor_recent_files = self.editor_recent_files.clone();
@@ -318,6 +354,7 @@ impl Lilypalooza {
             self.project_name = Some(default_project_name(&project_root));
         }
         self.persist_settings();
+        self.saved_project_state = Some(self.current_project_state());
         self.logger.push(format!(
             "Saved project {}",
             state::project_file_path(&project_root).display()
@@ -334,6 +371,13 @@ impl Lilypalooza {
                 self.editor.tabs_requiring_resolution(),
                 EditorContinuation::LoadProject(project_root),
             );
+        }
+        if self.pending_editor_action.is_none()
+            && self.project_root.as_ref() != Some(&project_root)
+            && self.project_is_dirty()
+        {
+            return self
+                .begin_pending_project_action(EditorContinuation::LoadProject(project_root));
         }
 
         self.open_project_menu = false;

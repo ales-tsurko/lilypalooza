@@ -4,6 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
+use lilypalooza_audio::MixerState;
 use ron::ser::PrettyConfig;
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +52,7 @@ pub(crate) struct GlobalState {
     pub(crate) recent_projects: Vec<PathBuf>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub(crate) struct ProjectState {
     pub(crate) project_name: Option<String>,
@@ -68,6 +69,7 @@ pub(crate) struct ProjectState {
     #[serde(skip_serializing_if = "track_color_overrides_is_empty")]
     pub(crate) track_color_overrides: Vec<Option<TrackColorOverride>>,
     pub(crate) metronome: MetronomeState,
+    pub(crate) mixer_state: MixerState,
 }
 
 pub(crate) fn load_global() -> Result<GlobalState, String> {
