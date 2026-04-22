@@ -1,5 +1,5 @@
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, stack, svg, text, text_input,
+    button, column, container, mouse_area, row, scrollable, stack, text, text_input,
 };
 use iced::{Element, Fill, Length, alignment};
 
@@ -126,21 +126,15 @@ fn shortcuts_overlay(app: &Lilypalooza) -> Element<'_, Message> {
                     ..fonts::UI
                 }),
             container(text("")).width(Fill),
-            button(ui_style::icon(
+            ui_style::flat_icon_button(
                 icons::x(),
-                12.0,
-                |theme: &iced::Theme, _status| {
-                    let palette = theme.extended_palette();
-                    svg::Style {
-                        color: Some(palette.background.weak.text),
-                    }
-                }
-            ))
-            .style(ui_style::button_neutral)
-            .padding([
-                ui_style::PADDING_BUTTON_COMPACT_V,
-                ui_style::PADDING_BUTTON_COMPACT_H
-            ])
+                ui_style::grid_f32(5),
+                ui_style::grid_f32(3),
+                ui_style::button_pane_header_control,
+                ui_style::svg_dimmed_control,
+            )
+            .width(Length::Fixed(ui_style::grid_f32(5)))
+            .height(Length::Fixed(ui_style::grid_f32(5)))
             .on_press(Message::Shortcuts(ShortcutsMessage::CloseDialog)),
         ]
         .spacing(ui_style::SPACE_XS)

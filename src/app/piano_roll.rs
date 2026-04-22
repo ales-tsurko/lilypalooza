@@ -2556,9 +2556,10 @@ mod tests {
 
     #[test]
     fn track_row_controls_are_smaller_than_track_height() {
-        assert!(TRACK_COLOR_BUTTON_SIZE < TRACK_ROW_HEIGHT);
-        assert!(TRACK_BUTTON_HEIGHT < TRACK_ROW_HEIGHT);
-        assert!(TRACK_BUTTON_WIDTH < TRACK_ROW_HEIGHT);
+        let track_row_height = std::hint::black_box(TRACK_ROW_HEIGHT);
+        assert!(std::hint::black_box(TRACK_COLOR_BUTTON_SIZE) < track_row_height);
+        assert!(std::hint::black_box(TRACK_BUTTON_HEIGHT) < track_row_height);
+        assert!(std::hint::black_box(TRACK_BUTTON_WIDTH) < track_row_height);
     }
 
     #[test]

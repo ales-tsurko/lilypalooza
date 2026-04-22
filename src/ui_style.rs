@@ -129,23 +129,6 @@ pub(crate) fn tooltip_popup(theme: &Theme) -> container::Style {
     }
 }
 
-pub(crate) fn pane_main_surface(theme: &Theme) -> container::Style {
-    pane_main_surface_focused(theme, false)
-}
-
-pub(crate) fn pane_main_surface_focused(theme: &Theme, _focused: bool) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(palette.background.base.color.into()),
-        text_color: Some(palette.background.base.text),
-        border: border::rounded(RADIUS_NONE)
-            .width(0)
-            .color(Color::TRANSPARENT),
-        ..container::Style::default()
-    }
-}
-
 pub(crate) fn popup_surface(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
     let border_color = mix_color(
@@ -780,35 +763,26 @@ pub(crate) fn button_selector_field(
     }
 }
 
-pub(crate) fn button_browser_tab(
+pub(crate) fn button_pane_tab(
     theme: &Theme,
     status: button::Status,
     active: bool,
 ) -> button::Style {
     let palette = theme.extended_palette();
     let base = button::Style {
-        background: Some(
-            if active {
-                mix_color(
-                    palette.background.strong.color,
-                    palette.primary.base.color,
-                    0.10,
-                )
-            } else {
-                palette.background.weak.color
-            }
-            .into(),
-        ),
+        background: None,
         text_color: if active {
             palette.background.base.text
         } else {
-            palette.background.weak.text
+            palette.background.strong.text
         },
-        border: border::rounded(RADIUS_UI).width(1).color(if active {
-            palette.primary.base.color
-        } else {
-            palette.background.strong.color
-        }),
+        border: border::rounded(RADIUS_UI)
+            .width(if active { 1 } else { 0 })
+            .color(if active {
+                palette.background.strong.color
+            } else {
+                Color::TRANSPARENT
+            }),
         ..button::Style::default()
     };
 
@@ -816,19 +790,16 @@ pub(crate) fn button_browser_tab(
         button::Status::Active => base,
         button::Status::Hovered => button::Style {
             background: Some(palette.background.strong.color.into()),
-            text_color: palette.background.strong.text,
+            text_color: palette.background.base.text,
             ..base
         },
         button::Status::Pressed => button::Style {
             background: Some(palette.background.base.color.into()),
             text_color: palette.background.base.text,
-            border: border::rounded(RADIUS_UI)
-                .width(1)
-                .color(palette.primary.base.color),
             ..base
         },
         button::Status::Disabled => button::Style {
-            text_color: palette.background.weakest.text,
+            text_color: palette.background.weak.text,
             ..base
         },
     }
@@ -1567,13 +1538,15 @@ pub(crate) fn svg_muted_control(theme: &Theme, status: svg::Status) -> svg::Styl
 
 pub(crate) fn svg_dimmed_control(theme: &Theme, status: svg::Status) -> svg::Style {
     let palette = theme.extended_palette();
+    let idle = mix_color(
+        palette.background.weak.text,
+        palette.background.weak.color,
+        0.54,
+    );
 
     svg::Style {
         color: Some(match status {
-            svg::Status::Idle => Color {
-                a: 0.58,
-                ..palette.background.weak.text
-            },
+            svg::Status::Idle => idle,
             svg::Status::Hovered => palette.background.base.text,
         }),
     }
@@ -1605,6 +1578,7 @@ where
     button(control_icon::control_icon::<Message, iced::Renderer>(
         handle,
         button_size,
+        button_size,
         icon_size,
         icon_style,
     ))
@@ -1619,7 +1593,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn is_grid_multiple(value: u32) -> bool {
-        value % 4 == 0
+        value.is_multiple_of(4)
     }
 
     fn collect_rust_files(root: &Path, out: &mut Vec<PathBuf>) {
@@ -1643,7 +1617,15 @@ mod tests {
 
     #[test]
     fn mixer_track_strip_surface_differs_from_plain_pane_surface() {
-        let plain = pane_main_surface(&Theme::Dark);
+        let palette = Theme::Dark.extended_palette();
+        let plain = container::Style {
+            background: Some(palette.background.base.color.into()),
+            text_color: Some(palette.background.base.text),
+            border: border::rounded(RADIUS_NONE)
+                .width(0)
+                .color(Color::TRANSPARENT),
+            ..container::Style::default()
+        };
         let tinted =
             mixer_track_strip_surface(&Theme::Dark, Some(Color::from_rgb(0.3, 0.4, 0.5)), false);
         assert_ne!(plain.background, tinted.background);
@@ -1672,16 +1654,18 @@ mod tests {
 
     #[test]
     fn compact_and_window_buttons_use_tighter_radius_than_general_ui() {
+        let tight_radius = std::hint::black_box(RADIUS_TIGHT);
+        let ui_radius = std::hint::black_box(RADIUS_UI);
         for style in [
             button_compact_solid(&Theme::Dark, button::Status::Active),
             button_compact_active(&Theme::Dark, button::Status::Active),
             button_window_control(&Theme::Dark, button::Status::Active),
         ] {
-            assert_eq!(style.border.radius.top_left, RADIUS_TIGHT);
-            assert_eq!(style.border.radius.top_right, RADIUS_TIGHT);
-            assert_eq!(style.border.radius.bottom_left, RADIUS_TIGHT);
-            assert_eq!(style.border.radius.bottom_right, RADIUS_TIGHT);
-            assert!(RADIUS_TIGHT < RADIUS_UI);
+            assert_eq!(style.border.radius.top_left, tight_radius);
+            assert_eq!(style.border.radius.top_right, tight_radius);
+            assert_eq!(style.border.radius.bottom_left, tight_radius);
+            assert_eq!(style.border.radius.bottom_right, tight_radius);
+            assert!(tight_radius < ui_radius);
         }
     }
 
@@ -1696,6 +1680,14 @@ mod tests {
             assert_eq!(style.border.radius.bottom_left, RADIUS_UI);
             assert_eq!(style.border.radius.bottom_right, RADIUS_UI);
         }
+    }
+
+    #[test]
+    fn pane_tab_inactive_is_flat() {
+        let style = button_pane_tab(&Theme::Dark, button::Status::Active, false);
+
+        assert_eq!(style.background, None);
+        assert_eq!(style.border.width, 0.0);
     }
 
     #[test]

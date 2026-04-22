@@ -1,5 +1,5 @@
 use iced::widget::{button, container, keyed_column, text};
-use iced::{Element, Fill};
+use iced::{Color, Element, Fill, Theme, border};
 use iced_code_editor::{CodeEditor, Message as EditorWidgetMessage, theme::ThemeTuning};
 use std::env;
 use std::fs;
@@ -940,7 +940,17 @@ impl EditorState {
         )
         .width(Fill)
         .height(Fill)
-        .style(ui_style::pane_main_surface)
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                text_color: Some(palette.background.base.text),
+                border: border::rounded(ui_style::RADIUS_NONE)
+                    .width(0)
+                    .color(Color::TRANSPARENT),
+                ..container::Style::default()
+            }
+        })
         .into()
     }
 

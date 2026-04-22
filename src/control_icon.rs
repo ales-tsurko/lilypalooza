@@ -9,7 +9,8 @@ use iced::{ContentFit, Element, Event, Length, Point, Rectangle, Size, Theme, Ve
 
 pub(crate) struct ControlIcon<'a> {
     handle: svg::Handle,
-    button_size: f32,
+    width: f32,
+    height: f32,
     icon_size: f32,
     style: svg::StyleFn<'a, Theme>,
     status: Option<svg::Status>,
@@ -17,7 +18,8 @@ pub(crate) struct ControlIcon<'a> {
 
 pub(crate) fn control_icon<'a, Message, Renderer>(
     handle: svg::Handle,
-    button_size: f32,
+    width: f32,
+    height: f32,
     icon_size: f32,
     style: impl Fn(&Theme, svg::Status) -> svg::Style + 'a,
 ) -> Element<'a, Message, Theme, Renderer>
@@ -27,7 +29,8 @@ where
 {
     Element::new(ControlIcon {
         handle,
-        button_size,
+        width,
+        height,
         icon_size,
         style: Box::new(style),
         status: None,
@@ -39,10 +42,7 @@ where
     Renderer: advanced_svg::Renderer,
 {
     fn size(&self) -> Size<Length> {
-        Size::new(
-            Length::Fixed(self.button_size),
-            Length::Fixed(self.button_size),
-        )
+        Size::new(Length::Fixed(self.width), Length::Fixed(self.height))
     }
 
     fn layout(
@@ -52,9 +52,9 @@ where
         limits: &layout::Limits,
     ) -> layout::Node {
         let size = limits.resolve(
-            Length::Fixed(self.button_size),
-            Length::Fixed(self.button_size),
-            Size::new(self.button_size, self.button_size),
+            Length::Fixed(self.width),
+            Length::Fixed(self.height),
+            Size::new(self.width, self.height),
         );
 
         layout::Node::new(size)

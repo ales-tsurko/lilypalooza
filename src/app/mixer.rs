@@ -359,10 +359,10 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
         .into();
     }
 
-    content_without_audio(app, colors)
+    content_without_audio()
 }
 
-fn content_without_audio(_app: &Lilypalooza, _colors: MeterColors) -> Element<'_, Message> {
+fn content_without_audio() -> Element<'static, Message> {
     container(
         text("Audio engine disabled")
             .size(ui_style::FONT_SIZE_UI_SM)
@@ -1025,8 +1025,8 @@ fn bus_track_area(
 fn add_bus_button(controls_enabled: bool) -> Element<'static, Message> {
     ui_style::flat_icon_button(
         icons::plus(),
-        ui_style::grid_f32(5),
-        ui_style::grid_f32(3),
+        ui_style::grid_f32(7),
+        ui_style::grid_f32(4),
         ui_style::button_flat_compact_control,
         ui_style::svg_muted_control,
     )
@@ -1672,7 +1672,7 @@ pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Messa
     let Some(track) = mixer.tracks().get(track_index) else {
         return container(text("")).width(Fill).height(Fill).into();
     };
-    let choices = instrument_choices(mixer);
+    let choices = instrument_choices();
     let selected = selected_instrument_choice(track.instrument_slot(), mixer);
 
     let header = container(
@@ -1690,21 +1690,15 @@ pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Messa
             ]
             .spacing(ui_style::SPACE_XS),
             container(text("")).width(Fill),
-            button(ui_style::icon(
+            ui_style::flat_icon_button(
                 icons::x(),
+                ui_style::grid_f32(5),
                 ui_style::grid_f32(3),
-                |theme: &iced::Theme, _status| {
-                    let palette = theme.extended_palette();
-                    svg::Style {
-                        color: Some(palette.background.weak.text),
-                    }
-                }
-            ))
-            .style(ui_style::button_neutral)
-            .padding([
-                ui_style::PADDING_BUTTON_COMPACT_V,
-                ui_style::PADDING_BUTTON_COMPACT_H
-            ])
+                ui_style::button_pane_header_control,
+                ui_style::svg_dimmed_control,
+            )
+            .width(Length::Fixed(ui_style::grid_f32(5)))
+            .height(Length::Fixed(ui_style::grid_f32(5)))
             .on_press(Message::Mixer(MixerMessage::CloseTrackInstrumentBrowser)),
         ]
         .spacing(ui_style::SPACE_XS)
@@ -1787,8 +1781,9 @@ fn instrument_browser_tab_button(
     active: InstrumentBrowserBackend,
 ) -> Element<'static, Message> {
     button(text(tab.label()).size(ui_style::FONT_SIZE_UI_XS))
-        .style(move |theme, status| ui_style::button_browser_tab(theme, status, tab == active))
+        .style(move |theme, status| ui_style::button_pane_tab(theme, status, tab == active))
         .padding([ui_style::grid(1), ui_style::grid(3)])
+        .height(Length::Fixed(ui_style::grid_f32(6)))
         .on_press(Message::Mixer(
             MixerMessage::SelectInstrumentBrowserBackend(tab),
         ))
@@ -1932,7 +1927,7 @@ fn instrument_browser_entries(
     InstrumentBrowserEntries { show_none, entries }
 }
 
-fn instrument_choices(_mixer: &MixerState) -> Vec<InstrumentChoice> {
+fn instrument_choices() -> Vec<InstrumentChoice> {
     let mut choices = Vec::new();
     choices.push(InstrumentChoice::None);
     choices.extend(
@@ -1976,7 +1971,7 @@ fn selected_instrument_choice(
 #[cfg(test)]
 mod tests {
     use crate::ui_style;
-    use iced::widget::container;
+    use iced::widget::{container, row};
     use iced::{Color, Element, Length, Theme};
     use iced_test::Simulator;
     use lilypalooza_audio::mixer::MixerMeterSnapshotWindow;
@@ -2447,6 +2442,33 @@ mod tests {
             &mut icon_hover,
             "instrument_slot_button_hover_consistency",
         )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn instrument_browser_tabs_match_snapshot() -> Result<(), iced_test::Error> {
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [ui_style::grid_f32(48), ui_style::grid_f32(8)],
+            row![
+                super::instrument_browser_tab_button(
+                    InstrumentBrowserBackend::BuiltIn,
+                    InstrumentBrowserBackend::BuiltIn,
+                ),
+                super::instrument_browser_tab_button(
+                    InstrumentBrowserBackend::Clap,
+                    InstrumentBrowserBackend::BuiltIn,
+                ),
+                super::instrument_browser_tab_button(
+                    InstrumentBrowserBackend::Vst3,
+                    InstrumentBrowserBackend::BuiltIn,
+                ),
+            ]
+            .spacing(ui_style::SPACE_XS),
+        );
+
+        assert_snapshot_matches(&mut ui, "tests/snapshots/instrument_browser_tabs")?;
 
         Ok(())
     }

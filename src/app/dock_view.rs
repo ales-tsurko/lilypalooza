@@ -21,7 +21,7 @@ const TOOLBAR_ICON_SIZE: f32 = ui_style::grid_f32(3);
 pub(super) const HEADER_CONTROL_HEIGHT: f32 = ui_style::grid_f32(6);
 const PANE_HEADER_VERTICAL_PADDING: u16 = ui_style::grid(1);
 const HEADER_MENU_ICON_SIZE: f32 = 12.0;
-const HEADER_CLOSE_ICON_SIZE: f32 = ui_style::grid_f32(4);
+const HEADER_CLOSE_ICON_SIZE: f32 = ui_style::grid_f32(3);
 const HEADER_MENU_BUTTON_WIDTH: f32 = ui_style::grid_f32(6);
 const EDITOR_MENU_ROOT_WIDTH: f32 = ui_style::grid_f32(32);
 const EDITOR_FILE_SUBMENU_WIDTH: f32 = 320.0;
@@ -158,11 +158,10 @@ fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
         TOOLBAR_FILE_NAME_MAX_CHARS,
     );
     let tooltip_text = "Menu";
-    let chevron = svg(icons::chevron_down())
-        .width(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
-        .height(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
-        .content_fit(ContentFit::Contain)
-        .style(|theme: &Theme, status| {
+    let chevron = ui_style::icon(
+        icons::chevron_down(),
+        TOOLBAR_TOGGLE_ICON_SIZE,
+        |theme: &Theme, status| {
             let palette = theme.extended_palette();
             svg::Style {
                 color: Some(match status {
@@ -170,7 +169,8 @@ fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
                     svg::Status::Hovered => palette.primary.weak.text,
                 }),
             }
-        });
+        },
+    );
     delayed_tooltip(
         app,
         "toolbar-project-menu",
@@ -455,17 +455,19 @@ fn project_root_menu_item<'a>(
             row![
                 text(label).size(ui_style::FONT_SIZE_UI_XS),
                 container(text("")).width(Fill),
-                svg(icons::chevron_right())
-                    .width(Length::Fixed(10.0))
-                    .height(Length::Fixed(10.0))
-                    .content_fit(ContentFit::Contain)
-                    .style(move |theme: &Theme, _status| svg::Style {
-                        color: Some(if active {
-                            theme.extended_palette().background.weakest.text
-                        } else {
-                            Color::from_rgb(0.12, 0.12, 0.14)
-                        }),
-                    }),
+                ui_style::icon(
+                    icons::chevron_right(),
+                    10.0,
+                    move |theme: &Theme, _status| {
+                        svg::Style {
+                            color: Some(if active {
+                                theme.extended_palette().background.weakest.text
+                            } else {
+                                Color::from_rgb(0.12, 0.12, 0.14)
+                            }),
+                        }
+                    }
+                ),
             ]
             .spacing(ui_style::SPACE_XS)
             .width(Fill)
@@ -563,8 +565,16 @@ fn workspace_panes(app: &Lilypalooza) -> Element<'_, Message> {
 
                 pane_grid::Content::new(body)
                     .title_bar(group_title_bar(app, *group_id, group_width, is_focused))
-                    .style(move |theme: &Theme| {
-                        ui_style::pane_main_surface_focused(theme, is_focused)
+                    .style(|theme: &Theme| {
+                        let palette = theme.extended_palette();
+                        container::Style {
+                            background: Some(palette.background.base.color.into()),
+                            text_color: Some(palette.background.base.text),
+                            border: border::rounded(ui_style::RADIUS_NONE)
+                                .width(0)
+                                .color(Color::TRANSPARENT),
+                            ..container::Style::default()
+                        }
                     })
             })
             .width(Fill)
@@ -725,7 +735,17 @@ fn editor_file_browser(app: &Lilypalooza) -> Element<'_, Message> {
 
     let content = container(iced::widget::column![toolbar, browser_body, status_line,].spacing(0))
         .width(Fill)
-        .style(ui_style::pane_main_surface);
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                text_color: Some(palette.background.base.text),
+                border: border::rounded(ui_style::RADIUS_NONE)
+                    .width(0)
+                    .color(Color::TRANSPARENT),
+                ..container::Style::default()
+            }
+        });
 
     mouse_area(content)
         .on_press(Message::Editor(super::EditorMessage::FileBrowserFocused))
@@ -1097,21 +1117,19 @@ fn editor_tab_strip(app: &Lilypalooza) -> Element<'_, Message> {
     .on_release(Message::Editor(super::EditorMessage::TabDragReleased))
     .on_exit(Message::Editor(super::EditorMessage::TabDragExited));
 
-    let new_tab = button(
-        svg(icons::plus())
-            .width(Length::Fixed(14.0))
-            .height(Length::Fixed(14.0))
-            .content_fit(ContentFit::Contain)
-            .style(|theme: &Theme, status| {
-                let palette = theme.extended_palette();
-                svg::Style {
-                    color: Some(match status {
-                        svg::Status::Idle => palette.background.weak.text,
-                        svg::Status::Hovered => palette.background.base.text,
-                    }),
-                }
-            }),
-    )
+    let new_tab = button(ui_style::icon(
+        icons::plus(),
+        14.0,
+        |theme: &Theme, status| {
+            let palette = theme.extended_palette();
+            svg::Style {
+                color: Some(match status {
+                    svg::Status::Idle => palette.background.weak.text,
+                    svg::Status::Hovered => palette.background.base.text,
+                }),
+            }
+        },
+    ))
     .style(ui_style::button_neutral)
     .padding([
         ui_style::PADDING_BUTTON_COMPACT_V,
@@ -1244,27 +1262,25 @@ fn editor_tab(app: &Lilypalooza, tab: super::editor::EditorTabSummary) -> Elemen
             .into()
     } else {
         button(
-            container(
-                svg(icons::x())
-                    .width(Length::Fixed(11.0))
-                    .height(Length::Fixed(11.0))
-                    .content_fit(ContentFit::Contain)
-                    .style(move |theme: &Theme, status| {
-                        let palette = theme.extended_palette();
-                        svg::Style {
-                            color: Some(match status {
-                                svg::Status::Idle => {
-                                    if tab.active {
-                                        palette.background.base.text
-                                    } else {
-                                        palette.background.strong.text
-                                    }
+            container(ui_style::icon(
+                icons::x(),
+                11.0,
+                move |theme: &Theme, status| {
+                    let palette = theme.extended_palette();
+                    svg::Style {
+                        color: Some(match status {
+                            svg::Status::Idle => {
+                                if tab.active {
+                                    palette.background.base.text
+                                } else {
+                                    palette.background.strong.text
                                 }
-                                svg::Status::Hovered => palette.primary.weak.text,
-                            }),
-                        }
-                    }),
-            )
+                            }
+                            svg::Status::Hovered => palette.primary.weak.text,
+                        }),
+                    }
+                },
+            ))
             .width(Length::Fixed(14.0))
             .height(Length::Fixed(EDITOR_TAB_HEIGHT))
             .center_y(Length::Fixed(EDITOR_TAB_HEIGHT)),
@@ -1383,7 +1399,7 @@ fn group_header<'a>(
         return container(text("")).width(Fill).into();
     };
     let active_pane = group.active;
-    let control_groups = pane_header_control_groups(app, group_id, active_pane);
+    let control_groups = pane_header_control_groups(app, active_pane);
     let title_width = group_tabs_min_width(group);
     let available_controls_width = (group_width - title_width).max(0.0);
     let (inline_controls, overflow_controls) = if active_pane == WorkspacePaneKind::Editor {
@@ -1430,12 +1446,16 @@ fn header_close_trigger(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'
         app,
         format!("header-close-{pane:?}"),
         container(
-            button(header_icon(icons::x(), HEADER_CLOSE_ICON_SIZE))
-                .style(ui_style::button_pane_header_control)
-                .padding([4, 7])
-                .width(Length::Fixed(HEADER_MENU_BUTTON_WIDTH))
-                .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
-                .on_press(Message::Pane(PaneMessage::ToggleWorkspacePane(pane))),
+            ui_style::flat_icon_button(
+                icons::x(),
+                HEADER_MENU_BUTTON_WIDTH,
+                HEADER_CLOSE_ICON_SIZE,
+                ui_style::button_pane_header_control,
+                ui_style::svg_dimmed_control,
+            )
+            .width(Length::Fixed(HEADER_MENU_BUTTON_WIDTH))
+            .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
+            .on_press(Message::Pane(PaneMessage::ToggleWorkspacePane(pane))),
         )
         .padding([0, 2])
         .into(),
@@ -1468,7 +1488,7 @@ fn header_overflow_menu_overlay<'a>(
     let menu_content = if active_pane == WorkspacePaneKind::Editor {
         editor_header_menu_panel(app)
     } else {
-        let control_groups = pane_header_control_groups(app, group_id, active_pane);
+        let control_groups = pane_header_control_groups(app, active_pane);
         let title_width = group_tabs_min_width(group);
         let available_controls_width = (bounds.width - title_width).max(0.0);
         let (_inline_controls, overflow_controls) =
@@ -1972,38 +1992,25 @@ fn header_groups_total_width(groups: &[HeaderControlGroup<'_>]) -> f32 {
 }
 
 pub(super) fn compact_control_icon(icon: svg::Handle) -> Element<'static, Message> {
-    container(
-        svg(icon)
-            .width(Length::Fixed(12.0))
-            .height(Length::Fixed(12.0))
-            .content_fit(ContentFit::Contain)
-            .style(ui_style::svg_window_control),
-    )
-    .width(Length::Fixed(12.0))
-    .height(Length::Fixed(12.0))
-    .center_x(Length::Fixed(12.0))
-    .center_y(Length::Fixed(12.0))
-    .into()
+    container(ui_style::icon(icon, 12.0, ui_style::svg_window_control))
+        .width(Length::Fixed(12.0))
+        .height(Length::Fixed(12.0))
+        .center_x(Length::Fixed(12.0))
+        .center_y(Length::Fixed(12.0))
+        .into()
 }
 
 fn header_icon(icon: svg::Handle, size: f32) -> Element<'static, Message> {
-    container(
-        svg(icon)
-            .width(Length::Fixed(size))
-            .height(Length::Fixed(size))
-            .content_fit(ContentFit::Contain)
-            .style(ui_style::svg_window_control),
-    )
-    .width(Length::Fixed(size))
-    .height(Length::Fixed(size))
-    .center_x(Length::Fixed(size))
-    .center_y(Length::Fixed(size))
-    .into()
+    container(ui_style::icon(icon, size, ui_style::svg_window_control))
+        .width(Length::Fixed(size))
+        .height(Length::Fixed(size))
+        .center_x(Length::Fixed(size))
+        .center_y(Length::Fixed(size))
+        .into()
 }
 
 fn pane_header_control_groups<'a>(
     app: &'a Lilypalooza,
-    _group_id: super::DockGroupId,
     pane: WorkspacePaneKind,
 ) -> Vec<HeaderControlGroup<'a>> {
     match pane {
@@ -2352,17 +2359,19 @@ fn editor_root_menu_item<'a>(
             row![
                 text(label).size(ui_style::FONT_SIZE_UI_XS),
                 container(text("")).width(Fill),
-                svg(icons::chevron_right())
-                    .width(Length::Fixed(10.0))
-                    .height(Length::Fixed(10.0))
-                    .content_fit(ContentFit::Contain)
-                    .style(move |theme: &Theme, _status| svg::Style {
-                        color: Some(if active {
-                            theme.extended_palette().background.weakest.text
-                        } else {
-                            Color::from_rgb(0.12, 0.12, 0.14)
-                        }),
-                    }),
+                ui_style::icon(
+                    icons::chevron_right(),
+                    10.0,
+                    move |theme: &Theme, _status| {
+                        svg::Style {
+                            color: Some(if active {
+                                theme.extended_palette().background.weakest.text
+                            } else {
+                                Color::from_rgb(0.12, 0.12, 0.14)
+                            }),
+                        }
+                    }
+                ),
             ]
             .spacing(ui_style::SPACE_XS)
             .width(Fill)
@@ -2884,17 +2893,19 @@ fn editor_fold_menu_item<'a>(
             container(text(label).size(ui_style::FONT_SIZE_UI_XS))
                 .width(Fill)
                 .align_x(alignment::Horizontal::Left),
-            svg(icons::chevron_down())
-                .width(Length::Fixed(12.0))
-                .height(Length::Fixed(12.0))
-                .content_fit(ContentFit::Contain)
-                .style(move |theme: &Theme, _status| svg::Style {
-                    color: Some(if highlighted {
-                        theme.extended_palette().background.weakest.text
-                    } else {
-                        Color::from_rgb(0.12, 0.12, 0.14)
-                    }),
-                }),
+            ui_style::icon(
+                icons::chevron_down(),
+                12.0,
+                move |theme: &Theme, _status| {
+                    svg::Style {
+                        color: Some(if highlighted {
+                            theme.extended_palette().background.weakest.text
+                        } else {
+                            Color::from_rgb(0.12, 0.12, 0.14)
+                        }),
+                    }
+                }
+            ),
         ]
         .spacing(ui_style::SPACE_XS)
         .width(Fill)
@@ -3066,23 +3077,29 @@ mod tests {
 
     #[test]
     fn toolbar_and_pane_header_use_swapped_height_scales() {
+        let toolbar_height = std::hint::black_box(TOOLBAR_HEIGHT);
+        let toolbar_button_height = std::hint::black_box(TOOLBAR_BUTTON_HEIGHT);
+        let header_control_height = std::hint::black_box(HEADER_CONTROL_HEIGHT);
         let pane_header_height =
-            HEADER_CONTROL_HEIGHT + (PANE_HEADER_VERTICAL_PADDING as f32 * 2.0);
+            header_control_height + (PANE_HEADER_VERTICAL_PADDING as f32 * 2.0);
         assert_eq!(
             pane_header_height,
-            HEADER_CONTROL_HEIGHT + (PANE_HEADER_VERTICAL_PADDING as f32 * 2.0)
+            header_control_height + (PANE_HEADER_VERTICAL_PADDING as f32 * 2.0)
         );
         assert_eq!(
-            TOOLBAR_HEIGHT,
-            TOOLBAR_BUTTON_HEIGHT + (TOOLBAR_VERTICAL_PADDING as f32 * 2.0)
+            toolbar_height,
+            toolbar_button_height + (TOOLBAR_VERTICAL_PADDING as f32 * 2.0)
         );
-        assert!(TOOLBAR_HEIGHT > pane_header_height);
-        assert!(TOOLBAR_BUTTON_HEIGHT > HEADER_CONTROL_HEIGHT);
+        assert!(toolbar_height > pane_header_height);
+        assert!(toolbar_button_height > header_control_height);
     }
 
     #[test]
-    fn close_button_icon_is_larger_than_other_pane_header_icons() {
-        assert!(HEADER_CLOSE_ICON_SIZE > HEADER_MENU_ICON_SIZE);
+    fn close_button_icon_matches_other_pane_header_icons() {
+        assert_eq!(
+            std::hint::black_box(HEADER_CLOSE_ICON_SIZE),
+            std::hint::black_box(HEADER_MENU_ICON_SIZE)
+        );
     }
 
     #[test]
@@ -3118,7 +3135,8 @@ mod tests {
 
     #[test]
     fn editor_pane_header_matches_snapshot() -> Result<(), iced_test::Error> {
-        let (app, _task) = super::super::new(None, None, false);
+        let (mut app, _task) = super::super::new(None, None, false);
+        let _ = app.unfold_workspace_pane(WorkspacePaneKind::Editor);
         let group_id = app
             .group_for_pane(WorkspacePaneKind::Editor)
             .expect("editor pane should exist");

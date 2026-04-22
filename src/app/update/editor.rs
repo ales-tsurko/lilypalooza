@@ -337,7 +337,7 @@ impl Lilypalooza {
                 is_dir,
             } => {
                 self.cancel_browser_inline_edit_state();
-                self.begin_browser_entry_press(column_index, path.clone(), is_dir);
+                self.begin_browser_entry_press(path.clone(), is_dir);
                 self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.focus_editor_file_browser();
                 self.editor.set_file_browser_active_column(column_index);
@@ -1326,7 +1326,7 @@ impl Lilypalooza {
         }
     }
 
-    fn begin_browser_entry_press(&mut self, _column_index: usize, path: PathBuf, is_dir: bool) {
+    fn begin_browser_entry_press(&mut self, path: PathBuf, is_dir: bool) {
         self.browser_pressed_entry = Some(BrowserPressedEntry {
             path,
             is_dir,
