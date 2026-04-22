@@ -11,10 +11,10 @@ use crate::midi::{MidiRollData, TimeSignatureChange};
 use crate::shortcuts::{self, ShortcutAction};
 use crate::ui_style;
 
-pub(super) const HEIGHT: f32 = 34.0;
-const ICON_BUTTON_WIDTH: f32 = 34.0;
-const ICON_BUTTON_HEIGHT: f32 = 22.0;
-const ICON_SIZE: f32 = 14.0;
+pub(super) const HEIGHT: f32 = ui_style::grid_f32(9);
+const ICON_BUTTON_WIDTH: f32 = ui_style::grid_f32(9);
+const ICON_BUTTON_HEIGHT: f32 = ui_style::grid_f32(6);
+const ICON_SIZE: f32 = ui_style::grid_f32(4);
 
 pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     let is_playing = app.piano_roll.playback_is_playing();
@@ -174,7 +174,7 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
         ]
         .spacing(ui_style::SPACE_XS),
     )
-    .width(Length::Fixed(220.0))
+    .width(Length::Fixed(ui_style::grid_f32(56)))
     .padding(ui_style::PADDING_SM)
     .style(ui_style::popup_surface);
     let metronome_control: Element<'_, Message> =
@@ -394,4 +394,20 @@ fn beat_step_ticks(ppq: u16, signature: TimeSignatureChange) -> u64 {
     let denominator = u64::from(signature.denominator.max(1));
 
     quarter.saturating_mul(4) / denominator
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HEIGHT, ICON_BUTTON_HEIGHT, ICON_BUTTON_WIDTH, ICON_SIZE};
+
+    fn is_grid_multiple(value: f32) -> bool {
+        ((value / 4.0).round() - (value / 4.0)).abs() < 1.0e-4
+    }
+
+    #[test]
+    fn fixed_transport_sizes_follow_four_px_grid() {
+        for value in [HEIGHT, ICON_BUTTON_WIDTH, ICON_BUTTON_HEIGHT, ICON_SIZE] {
+            assert!(is_grid_multiple(value), "{value} should use the 4px grid");
+        }
+    }
 }

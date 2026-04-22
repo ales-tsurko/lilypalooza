@@ -126,17 +126,16 @@ fn shortcuts_overlay(app: &Lilypalooza) -> Element<'_, Message> {
                     ..fonts::UI
                 }),
             container(text("")).width(Fill),
-            button(
-                svg(icons::x())
-                    .width(Length::Fixed(12.0))
-                    .height(Length::Fixed(12.0))
-                    .style(|theme: &iced::Theme, _status| {
-                        let palette = theme.extended_palette();
-                        svg::Style {
-                            color: Some(palette.background.weak.text),
-                        }
-                    })
-            )
+            button(ui_style::icon(
+                icons::x(),
+                12.0,
+                |theme: &iced::Theme, _status| {
+                    let palette = theme.extended_palette();
+                    svg::Style {
+                        color: Some(palette.background.weak.text),
+                    }
+                }
+            ))
             .style(ui_style::button_neutral)
             .padding([
                 ui_style::PADDING_BUTTON_COMPACT_V,

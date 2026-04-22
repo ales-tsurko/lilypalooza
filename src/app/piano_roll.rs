@@ -5,8 +5,7 @@ use iced::widget::{
     svg, text, text_input, tooltip,
 };
 use iced::{
-    Color, ContentFit, Element, Fill, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
-    alignment, mouse,
+    Color, Element, Fill, Length, Pixels, Point, Rectangle, Renderer, Size, Theme, alignment, mouse,
 };
 use iced_aw::helpers::color_picker_with_change;
 
@@ -15,33 +14,34 @@ use crate::midi::{MidiNote, MidiRollData, MidiRollFile, TimeSignatureChange};
 use crate::settings::PianoRollViewSettings;
 use crate::{fonts, icons, ui_style};
 
+const HEADER_CONTROL_HEIGHT: f32 = super::dock_view::HEADER_CONTROL_HEIGHT;
 const TRACK_PANEL_DEFAULT_WIDTH: f32 = 168.0;
-const TRACK_PANEL_MIN_WIDTH: f32 = 116.0;
-const TRACK_PANEL_MAX_WIDTH: f32 = 220.0;
-const TRACK_RESIZE_HANDLE_WIDTH: f32 = 6.0;
-const TRACK_COLOR_BUTTON_SIZE: f32 = 18.0;
-const TRACK_COLOR_BUTTON_GAP: f32 = 6.0;
-const TRACK_BUTTON_WIDTH: f32 = 22.0;
-const TRACK_BUTTON_HEIGHT: f32 = 18.0;
-const TRACK_ROW_HEIGHT: f32 = 26.0;
+const TRACK_PANEL_MIN_WIDTH: f32 = 124.0;
+const TRACK_PANEL_MAX_WIDTH: f32 = ui_style::grid_f32(56);
+const TRACK_RESIZE_HANDLE_WIDTH: f32 = ui_style::grid_f32(2);
+const TRACK_COLOR_BUTTON_SIZE: f32 = ui_style::grid_f32(4);
+const TRACK_COLOR_BUTTON_GAP: f32 = ui_style::grid_f32(2);
+const TRACK_BUTTON_WIDTH: f32 = ui_style::grid_f32(4);
+const TRACK_BUTTON_HEIGHT: f32 = ui_style::grid_f32(4);
+const TRACK_ROW_HEIGHT: f32 = ui_style::grid_f32(7);
 const TRACK_LIST_SCROLLBAR_GUTTER: u16 = 12;
 const TRACK_BUTTONS_GAP: f32 = 4.0;
-const TRACK_LABEL_BUTTON_GAP: f32 = 10.0;
+const TRACK_LABEL_BUTTON_GAP: f32 = ui_style::grid_f32(3);
 const TRACK_BUTTONS_GROUP_WIDTH: f32 = TRACK_BUTTON_WIDTH * 2.0 + TRACK_BUTTONS_GAP;
 const DRAG_START_THRESHOLD: f32 = 8.0;
-const KEYBOARD_WIDTH: f32 = 30.0;
+const KEYBOARD_WIDTH: f32 = ui_style::grid_f32(8);
 const TEMPO_LANE_HEIGHT: f32 = 28.0;
-const REWIND_FLAG_HITBOX_WIDTH: f32 = 14.0;
-const REWIND_FLAG_WIDTH: f32 = 11.0;
+const REWIND_FLAG_HITBOX_WIDTH: f32 = ui_style::grid_f32(4);
+const REWIND_FLAG_WIDTH: f32 = ui_style::grid_f32(3);
 const REWIND_FLAG_BANNER_HEIGHT: f32 = 12.0;
 const SCROLL_MARKER_THICKNESS: f32 = 3.0;
-const SCROLL_MARKER_LENGTH: f32 = 18.0;
+const SCROLL_MARKER_LENGTH: f32 = ui_style::grid_f32(4);
 const SCROLL_MARKER_EDGE_INSET: f32 = 3.0;
-const TEMPO_LABEL_TOP_PADDING: f32 = 1.0;
-const BAR_LABEL_BOTTOM_PADDING: f32 = 1.0;
-const NOTE_ROW_HEIGHT: f32 = 14.0;
+const TEMPO_LABEL_TOP_PADDING: f32 = ui_style::grid_f32(1);
+const BAR_LABEL_BOTTOM_PADDING: f32 = ui_style::grid_f32(1);
+const NOTE_ROW_HEIGHT: f32 = ui_style::grid_f32(4);
 const CONTENT_RIGHT_PADDING: f32 = 24.0;
-const TRACK_TOGGLE_ICON_SIZE: f32 = 13.0;
+const TRACK_TOGGLE_ICON_SIZE: f32 = ui_style::grid_f32(3);
 const ZOOM_MIN: f32 = 0.3;
 const ZOOM_MAX: f32 = 6.0;
 const ZOOM_STEP: f32 = 0.1;
@@ -441,34 +441,33 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
         .current_file()
         .is_some_and(|file| file.data.tracks.len() > 1);
 
-    let track_toggle_button = button(
-        svg(icons::list_music())
-            .width(Length::Fixed(TRACK_TOGGLE_ICON_SIZE))
-            .height(Length::Fixed(TRACK_TOGGLE_ICON_SIZE))
-            .content_fit(ContentFit::Contain)
-            .style(move |theme: &Theme, status| {
-                let palette = theme.extended_palette();
-                svg::Style {
-                    color: Some(if can_toggle_tracks && state.track_panel_visible() {
-                        match status {
-                            svg::Status::Idle => palette.background.weakest.text,
-                            svg::Status::Hovered => palette.background.base.text,
-                        }
-                    } else {
-                        match status {
-                            svg::Status::Idle => palette.background.base.text,
-                            svg::Status::Hovered => palette.primary.weak.text,
-                        }
-                    }),
-                }
-            }),
-    )
+    let track_toggle_button = button(ui_style::icon(
+        icons::list_music(),
+        TRACK_TOGGLE_ICON_SIZE,
+        move |theme: &Theme, status| {
+            let palette = theme.extended_palette();
+            svg::Style {
+                color: Some(if can_toggle_tracks && state.track_panel_visible() {
+                    match status {
+                        svg::Status::Idle => palette.background.weakest.text,
+                        svg::Status::Hovered => palette.background.base.text,
+                    }
+                } else {
+                    match status {
+                        svg::Status::Idle => palette.background.base.text,
+                        svg::Status::Hovered => palette.primary.weak.text,
+                    }
+                }),
+            }
+        },
+    ))
     .style(if can_toggle_tracks && state.track_panel_visible() {
-        ui_style::button_toolbar_toggle_active
+        ui_style::button_pane_header_control_active
     } else {
-        ui_style::button_neutral
+        ui_style::button_pane_header_control
     })
-    .padding([6, 7]);
+    .padding([ui_style::grid(1), ui_style::grid(2)])
+    .height(Length::Fixed(HEADER_CONTROL_HEIGHT));
     let track_toggle_button = if can_toggle_tracks {
         track_toggle_button.on_press(Message::PianoRoll(PianoRollMessage::TrackPanelToggle))
     } else {
@@ -483,11 +482,12 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
     );
 
     let zoom_out_button = button(super::dock_view::compact_control_icon(icons::zoom_out()))
-        .style(ui_style::button_neutral)
+        .style(ui_style::button_pane_header_control)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
             ui_style::PADDING_BUTTON_COMPACT_H,
-        ]);
+        ])
+        .height(Length::Fixed(HEADER_CONTROL_HEIGHT));
     let zoom_out_button = if state.can_zoom_out() {
         zoom_out_button.on_press(Message::PianoRoll(PianoRollMessage::ZoomOut))
     } else {
@@ -495,11 +495,12 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
     };
 
     let zoom_in_button = button(super::dock_view::compact_control_icon(icons::zoom_in()))
-        .style(ui_style::button_neutral)
+        .style(ui_style::button_pane_header_control)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
             ui_style::PADDING_BUTTON_COMPACT_H,
-        ]);
+        ])
+        .height(Length::Fixed(HEADER_CONTROL_HEIGHT));
     let zoom_in_button = if state.can_zoom_in() {
         zoom_in_button.on_press(Message::PianoRoll(PianoRollMessage::ZoomIn))
     } else {
@@ -514,14 +515,20 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
     .step(1u8)
     .width(Length::Fixed(120.0));
 
-    let subdivision_input = text_input("", state.beat_subdivision_input())
-        .on_input(|value| Message::PianoRoll(PianoRollMessage::BeatSubdivisionInputChanged(value)))
-        .padding([
-            ui_style::PADDING_BUTTON_COMPACT_V,
-            ui_style::PADDING_BUTTON_COMPACT_H,
-        ])
-        .size(Pixels(ui_style::FONT_SIZE_UI_XS as f32))
-        .width(Length::Fixed(44.0));
+    let subdivision_input = container(
+        text_input("", state.beat_subdivision_input())
+            .on_input(|value| {
+                Message::PianoRoll(PianoRollMessage::BeatSubdivisionInputChanged(value))
+            })
+            .padding([
+                ui_style::PADDING_BUTTON_COMPACT_V,
+                ui_style::PADDING_BUTTON_COMPACT_H,
+            ])
+            .size(Pixels(ui_style::FONT_SIZE_UI_XS as f32))
+            .width(Length::Fixed(44.0)),
+    )
+    .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
+    .center_y(Length::Fixed(HEADER_CONTROL_HEIGHT));
 
     let zoom_group = HeaderControlGroup {
         min_width: 132.0,
@@ -569,7 +576,7 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
 
     let mut controls = vec![
         HeaderControlGroup {
-            min_width: 34.0,
+            min_width: ui_style::grid_f32(9),
             content: track_toggle_button,
         },
         zoom_group,
@@ -578,19 +585,21 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
 
     if state.has_multiple_files() {
         let prev_file_button = button(text("←").size(ui_style::FONT_SIZE_UI_SM))
-            .style(ui_style::button_neutral)
+            .style(ui_style::button_pane_header_control)
             .padding([
                 ui_style::PADDING_BUTTON_COMPACT_V,
                 ui_style::PADDING_BUTTON_COMPACT_H,
             ])
+            .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
             .on_press(Message::PianoRoll(PianoRollMessage::FilePrevious));
 
         let next_file_button = button(text("→").size(ui_style::FONT_SIZE_UI_SM))
-            .style(ui_style::button_neutral)
+            .style(ui_style::button_pane_header_control)
             .padding([
                 ui_style::PADDING_BUTTON_COMPACT_V,
                 ui_style::PADDING_BUTTON_COMPACT_H,
             ])
+            .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
             .on_press(Message::PianoRoll(PianoRollMessage::FileNext));
 
         let file_name = state
@@ -599,7 +608,7 @@ pub(super) fn controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup<'a>> 
             .unwrap_or("No MIDI");
 
         controls.push(HeaderControlGroup {
-            min_width: 182.0,
+            min_width: ui_style::grid_f32(46),
             content: row![
                 text("MIDI").size(ui_style::FONT_SIZE_UI_XS),
                 prev_file_button,
@@ -2499,7 +2508,58 @@ fn shorten_label(label: &str, max_len: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TrackMixState, track_visibility_alpha};
+    use super::{
+        BAR_LABEL_BOTTOM_PADDING, HEADER_CONTROL_HEIGHT, KEYBOARD_WIDTH, PianoRollState,
+        REWIND_FLAG_BANNER_HEIGHT, REWIND_FLAG_HITBOX_WIDTH, REWIND_FLAG_WIDTH,
+        TEMPO_LABEL_TOP_PADDING, TEMPO_LANE_HEIGHT, TRACK_BUTTON_HEIGHT, TRACK_BUTTON_WIDTH,
+        TRACK_COLOR_BUTTON_GAP, TRACK_COLOR_BUTTON_SIZE, TRACK_LABEL_BUTTON_GAP,
+        TRACK_LIST_SCROLLBAR_GUTTER, TRACK_PANEL_DEFAULT_WIDTH, TRACK_PANEL_MAX_WIDTH,
+        TRACK_PANEL_MIN_WIDTH, TRACK_RESIZE_HANDLE_WIDTH, TRACK_ROW_HEIGHT, TrackMixState,
+        track_visibility_alpha,
+    };
+    use crate::settings::PianoRollViewSettings;
+
+    fn is_grid_multiple(value: f32) -> bool {
+        ((value / 4.0).round() - (value / 4.0)).abs() < 1.0e-4
+    }
+
+    #[test]
+    fn fixed_piano_roll_sizes_follow_four_px_grid() {
+        for value in [
+            TRACK_PANEL_DEFAULT_WIDTH,
+            TRACK_PANEL_MIN_WIDTH,
+            TRACK_PANEL_MAX_WIDTH,
+            TRACK_RESIZE_HANDLE_WIDTH,
+            TRACK_COLOR_BUTTON_SIZE,
+            TRACK_COLOR_BUTTON_GAP,
+            TRACK_BUTTON_WIDTH,
+            TRACK_BUTTON_HEIGHT,
+            TRACK_ROW_HEIGHT,
+            f32::from(TRACK_LIST_SCROLLBAR_GUTTER),
+            TRACK_LABEL_BUTTON_GAP,
+            KEYBOARD_WIDTH,
+            TEMPO_LANE_HEIGHT,
+            REWIND_FLAG_HITBOX_WIDTH,
+            REWIND_FLAG_WIDTH,
+            REWIND_FLAG_BANNER_HEIGHT,
+            TEMPO_LABEL_TOP_PADDING,
+            BAR_LABEL_BOTTOM_PADDING,
+        ] {
+            assert!(is_grid_multiple(value), "{value} should use the 4px grid");
+        }
+    }
+
+    #[test]
+    fn track_list_min_width_increases_by_two_grid_units() {
+        assert_eq!(TRACK_PANEL_MIN_WIDTH, 124.0);
+    }
+
+    #[test]
+    fn track_row_controls_are_smaller_than_track_height() {
+        assert!(TRACK_COLOR_BUTTON_SIZE < TRACK_ROW_HEIGHT);
+        assert!(TRACK_BUTTON_HEIGHT < TRACK_ROW_HEIGHT);
+        assert!(TRACK_BUTTON_WIDTH < TRACK_ROW_HEIGHT);
+    }
 
     #[test]
     fn external_solo_dims_visible_tracks() {
@@ -2524,5 +2584,19 @@ mod tests {
 
         assert!(track_visibility_alpha(&track_mix, 0, false) < 0.20);
         assert_eq!(track_visibility_alpha(&track_mix, 1, false), 1.0);
+    }
+
+    #[test]
+    fn piano_roll_default_track_panel_width_uses_grid() {
+        let state = PianoRollState::new(PianoRollViewSettings::default());
+        assert!(is_grid_multiple(state.track_panel_width));
+    }
+
+    #[test]
+    fn header_controls_use_shared_pane_header_height() {
+        assert_eq!(
+            HEADER_CONTROL_HEIGHT,
+            super::super::dock_view::HEADER_CONTROL_HEIGHT
+        );
     }
 }

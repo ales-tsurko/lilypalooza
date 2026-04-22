@@ -17,28 +17,33 @@ use super::{
 };
 use crate::{fonts, icons, shortcuts, ui_style};
 
-const TOOLBAR_ICON_SIZE: f32 = 14.0;
-const HEADER_CONTROL_HEIGHT: f32 = 22.0;
+const TOOLBAR_ICON_SIZE: f32 = ui_style::grid_f32(3);
+pub(super) const HEADER_CONTROL_HEIGHT: f32 = ui_style::grid_f32(6);
+const PANE_HEADER_VERTICAL_PADDING: u16 = ui_style::grid(1);
 const HEADER_MENU_ICON_SIZE: f32 = 12.0;
-const HEADER_MENU_BUTTON_WIDTH: f32 = 26.0;
-const EDITOR_MENU_ROOT_WIDTH: f32 = 126.0;
+const HEADER_CLOSE_ICON_SIZE: f32 = ui_style::grid_f32(4);
+const HEADER_MENU_BUTTON_WIDTH: f32 = ui_style::grid_f32(6);
+const EDITOR_MENU_ROOT_WIDTH: f32 = ui_style::grid_f32(32);
 const EDITOR_FILE_SUBMENU_WIDTH: f32 = 320.0;
-const EDITOR_EDIT_SUBMENU_WIDTH: f32 = 220.0;
+const EDITOR_EDIT_SUBMENU_WIDTH: f32 = ui_style::grid_f32(56);
 const EDITOR_APPEARANCE_SUBMENU_WIDTH: f32 = 272.0;
 const EDITOR_MENU_ITEM_HEIGHT: f32 = 24.0;
+const EDITOR_MENU_ITEM_PADDING_V: u16 = 0;
+const EDITOR_MENU_ITEM_PADDING_H: u16 = ui_style::PADDING_BUTTON_COMPACT_H;
 const EDITOR_RECENT_FILE_LABEL_MAX_CHARS: usize = 40;
 const TAB_ICON_GAP: u32 = 6;
 const HEADER_WIDTH_SAFETY: f32 = 24.0;
-pub(super) const TOOLBAR_HEIGHT: f32 = 32.0;
-const TOOLBAR_TOGGLE_ICON_SIZE: f32 = 13.0;
-const TOOLBAR_BUTTON_HEIGHT: f32 = 25.0;
+const TOOLBAR_VERTICAL_PADDING: u16 = ui_style::grid(1);
+pub(super) const TOOLBAR_HEIGHT: f32 = ui_style::grid_f32(10);
+const TOOLBAR_TOGGLE_ICON_SIZE: f32 = ui_style::grid_f32(4);
+const TOOLBAR_BUTTON_HEIGHT: f32 = ui_style::grid_f32(8);
 const TOOLBAR_FILE_NAME_MAX_CHARS: usize = 20;
 const TOOLBAR_PROJECT_NAME_MAX_CHARS: usize = 28;
-const PROJECT_MENU_ROOT_WIDTH: f32 = 126.0;
+const PROJECT_MENU_ROOT_WIDTH: f32 = ui_style::grid_f32(32);
 const PROJECT_MENU_WIDTH: f32 = 280.0;
-const PROJECT_SETTINGS_SUBMENU_WIDTH: f32 = 220.0;
+const PROJECT_SETTINGS_SUBMENU_WIDTH: f32 = ui_style::grid_f32(56);
 const PROJECT_RECENT_LABEL_MAX_CHARS: usize = 40;
-const EDITOR_FILE_BROWSER_ICON_SIZE: f32 = 14.0;
+const EDITOR_FILE_BROWSER_ICON_SIZE: f32 = ui_style::grid_f32(4);
 const EDITOR_TAB_WIDTH: f32 = 140.0;
 const EDITOR_TAB_HEIGHT: f32 = 32.0;
 const EDITOR_TAB_TITLE_MAX_CHARS: usize = 18;
@@ -83,7 +88,7 @@ pub(super) fn delayed_tooltip<'a>(
 
     if app.is_tooltip_open(&key) {
         Tooltip::new(tracked, tooltip_content, position)
-            .gap(6)
+            .gap(ui_style::grid_f32(2))
             .padding(8)
             .style(ui_style::tooltip_popup)
             .into()
@@ -114,10 +119,7 @@ fn workspace_toolbar(app: &Lilypalooza) -> Element<'_, Message> {
                 .width(Fill),
             )
             .height(Fill)
-            .padding([
-                ui_style::PADDING_STATUS_BAR_V,
-                ui_style::PADDING_STATUS_BAR_H,
-            ])
+            .padding([TOOLBAR_VERTICAL_PADDING, ui_style::PADDING_STATUS_BAR_H,])
             .style(ui_style::workspace_toolbar_surface),
             container(text(""))
                 .height(Length::Fixed(1.0))
@@ -134,7 +136,7 @@ fn workspace_toolbar(app: &Lilypalooza) -> Element<'_, Message> {
 fn toolbar_separator() -> Element<'static, Message> {
     container(text(""))
         .width(Length::Fixed(1.0))
-        .height(Length::Fixed(16.0))
+        .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
             container::Style {
@@ -157,8 +159,8 @@ fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
     );
     let tooltip_text = "Menu";
     let chevron = svg(icons::chevron_down())
-        .width(Length::Fixed(12.0))
-        .height(Length::Fixed(12.0))
+        .width(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
+        .height(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
         .content_fit(ContentFit::Contain)
         .style(|theme: &Theme, status| {
             let palette = theme.extended_palette();
@@ -175,9 +177,9 @@ fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
         button(
             row![
                 container(chevron)
-                    .width(Length::Fixed(12.0))
+                    .width(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
                     .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
-                    .center_x(Length::Fixed(12.0))
+                    .center_x(Length::Fixed(TOOLBAR_TOGGLE_ICON_SIZE))
                     .center_y(Length::Fixed(TOOLBAR_BUTTON_HEIGHT)),
                 container(
                     row![
@@ -227,7 +229,7 @@ fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
                 .padding(Padding {
                     top: 0.0,
                     right: 0.0,
-                    bottom: 2.0,
+                    bottom: ui_style::grid_f32(1),
                     left: 0.0,
                 })
                 .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
@@ -238,7 +240,7 @@ fn toolbar_project_button(app: &Lilypalooza) -> Element<'_, Message> {
             .align_y(alignment::Vertical::Center),
         )
         .style(ui_style::button_toolbar_chip)
-        .padding([0, 8])
+        .padding([0, ui_style::grid(3)])
         .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
         .on_press(Message::Pane(PaneMessage::ToggleProjectMenu))
         .into(),
@@ -449,31 +451,33 @@ fn project_root_menu_item<'a>(
     section: ProjectMenuSection,
 ) -> Element<'a, Message> {
     let button = button(
-        row![
-            text(label).size(ui_style::FONT_SIZE_UI_XS),
-            container(text("")).width(Fill),
-            svg(icons::chevron_right())
-                .width(Length::Fixed(10.0))
-                .height(Length::Fixed(10.0))
-                .content_fit(ContentFit::Contain)
-                .style(move |theme: &Theme, _status| svg::Style {
-                    color: Some(if active {
-                        theme.extended_palette().background.weakest.text
-                    } else {
-                        Color::from_rgb(0.12, 0.12, 0.14)
+        container(
+            row![
+                text(label).size(ui_style::FONT_SIZE_UI_XS),
+                container(text("")).width(Fill),
+                svg(icons::chevron_right())
+                    .width(Length::Fixed(10.0))
+                    .height(Length::Fixed(10.0))
+                    .content_fit(ContentFit::Contain)
+                    .style(move |theme: &Theme, _status| svg::Style {
+                        color: Some(if active {
+                            theme.extended_palette().background.weakest.text
+                        } else {
+                            Color::from_rgb(0.12, 0.12, 0.14)
+                        }),
                     }),
-                }),
-        ]
-        .spacing(ui_style::SPACE_XS)
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .width(Fill)
+            .align_y(alignment::Vertical::Center),
+        )
         .width(Fill)
-        .align_y(alignment::Vertical::Center),
+        .height(Fill)
+        .center_y(Fill),
     )
     .width(Fill)
     .height(Length::Fixed(EDITOR_MENU_ITEM_HEIGHT))
-    .padding([
-        ui_style::PADDING_BUTTON_COMPACT_V + 2,
-        ui_style::PADDING_BUTTON_COMPACT_H,
-    ])
+    .padding([EDITOR_MENU_ITEM_PADDING_V, EDITOR_MENU_ITEM_PADDING_H])
     .style(move |theme: &Theme, status| ui_style::button_menu_item(theme, status, active))
     .on_press(Message::Pane(PaneMessage::SetProjectMenuSection(Some(
         section,
@@ -960,8 +964,8 @@ fn editor_file_browser_toolbar_button<'a>(
         key.into(),
         button(
             svg(icon)
-                .width(Length::Fixed(14.0))
-                .height(Length::Fixed(14.0))
+                .width(Length::Fixed(ui_style::grid_f32(4)))
+                .height(Length::Fixed(ui_style::grid_f32(4)))
                 .content_fit(ContentFit::Contain)
                 .style(|theme: &Theme, status| {
                     let palette = theme.extended_palette();
@@ -978,7 +982,7 @@ fn editor_file_browser_toolbar_button<'a>(
             ui_style::button_toolbar_chip
         })
         .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
-        .padding([6, 8])
+        .padding([ui_style::grid(2), ui_style::grid(2)])
         .on_press(on_press)
         .into(),
         text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS).into(),
@@ -1019,7 +1023,7 @@ fn editor_file_browser_inline_entry(app: &Lilypalooza, is_dir: bool) -> Element<
                     super::EditorMessage::CommitFileBrowserInlineEdit,
                 ))
                 .size(ui_style::FONT_SIZE_UI_SM)
-                .padding([2, 0])
+                .padding([ui_style::grid(1), 0])
                 .width(Fill),
         ]
         .spacing(ui_style::SPACE_XS)
@@ -1407,10 +1411,10 @@ fn group_header<'a>(
     }
     header = header.push(header_close_trigger(app, active_pane));
     iced::widget::column![
-        mouse_area(container(header).padding([
-            ui_style::PADDING_STATUS_BAR_V,
-            ui_style::PADDING_STATUS_BAR_H,
-        ]),)
+        mouse_area(
+            container(header)
+                .padding([PANE_HEADER_VERTICAL_PADDING, ui_style::PADDING_STATUS_BAR_H,]),
+        )
         .on_press(Message::Pane(PaneMessage::FocusWorkspacePane(active_pane))),
         container(text(""))
             .height(Length::Fixed(1.0))
@@ -1426,8 +1430,8 @@ fn header_close_trigger(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'
         app,
         format!("header-close-{pane:?}"),
         container(
-            button(header_icon(icons::x(), HEADER_MENU_ICON_SIZE))
-                .style(ui_style::button_window_control)
+            button(header_icon(icons::x(), HEADER_CLOSE_ICON_SIZE))
+                .style(ui_style::button_pane_header_control)
                 .padding([4, 7])
                 .width(Length::Fixed(HEADER_MENU_BUTTON_WIDTH))
                 .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
@@ -1567,10 +1571,9 @@ fn workspace_tab(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'_, Mess
         .align_y(alignment::Vertical::Center),
     )
     .width(Length::Shrink)
-    .padding([
-        ui_style::PADDING_STATUS_BAR_V + 3,
-        ui_style::PADDING_STATUS_BAR_H + 8,
-    ])
+    .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
+    .center_y(Length::Fixed(HEADER_CONTROL_HEIGHT))
+    .padding([0, ui_style::PADDING_STATUS_BAR_H + 8])
     .style(move |theme: &Theme| {
         let palette = theme.extended_palette();
 
@@ -1734,7 +1737,8 @@ fn toolbar_pane_toggle(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'s
             } else {
                 ui_style::button_toolbar_chip
             })
-            .padding([6, 7])
+            .padding([ui_style::grid(2), ui_style::grid(2)])
+            .height(Length::Fixed(TOOLBAR_BUTTON_HEIGHT))
             .on_press(Message::Pane(PaneMessage::ToggleWorkspacePane(pane)))
             .into(),
         text(tooltip_label).size(ui_style::FONT_SIZE_UI_XS).into(),
@@ -1795,7 +1799,7 @@ fn header_overflow_button(
         icons::ellipsis_vertical(),
         HEADER_MENU_ICON_SIZE,
     ))
-    .style(ui_style::button_window_control)
+    .style(ui_style::button_pane_header_control)
     .padding([4, 7])
     .width(Length::Fixed(HEADER_MENU_BUTTON_WIDTH))
     .height(Length::Fixed(HEADER_CONTROL_HEIGHT))
@@ -1833,9 +1837,9 @@ fn header_overflow_trigger(
                 container(
                     button(header_icon(icons::folder_tree(), HEADER_MENU_ICON_SIZE))
                         .style(if browser_open {
-                            ui_style::button_toolbar_toggle_active
+                            ui_style::button_pane_header_control_active
                         } else {
-                            ui_style::button_toolbar_chip
+                            ui_style::button_pane_header_control
                         })
                         .padding([4, 7])
                         .width(Length::Fixed(HEADER_MENU_BUTTON_WIDTH))
@@ -2344,31 +2348,33 @@ fn editor_root_menu_item<'a>(
     section: EditorHeaderMenuSection,
 ) -> Element<'a, Message> {
     let button = button(
-        row![
-            text(label).size(ui_style::FONT_SIZE_UI_XS),
-            container(text("")).width(Fill),
-            svg(icons::chevron_right())
-                .width(Length::Fixed(10.0))
-                .height(Length::Fixed(10.0))
-                .content_fit(ContentFit::Contain)
-                .style(move |theme: &Theme, _status| svg::Style {
-                    color: Some(if active {
-                        theme.extended_palette().background.weakest.text
-                    } else {
-                        Color::from_rgb(0.12, 0.12, 0.14)
+        container(
+            row![
+                text(label).size(ui_style::FONT_SIZE_UI_XS),
+                container(text("")).width(Fill),
+                svg(icons::chevron_right())
+                    .width(Length::Fixed(10.0))
+                    .height(Length::Fixed(10.0))
+                    .content_fit(ContentFit::Contain)
+                    .style(move |theme: &Theme, _status| svg::Style {
+                        color: Some(if active {
+                            theme.extended_palette().background.weakest.text
+                        } else {
+                            Color::from_rgb(0.12, 0.12, 0.14)
+                        }),
                     }),
-                }),
-        ]
-        .spacing(ui_style::SPACE_XS)
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .width(Fill)
+            .align_y(alignment::Vertical::Center),
+        )
         .width(Fill)
-        .align_y(alignment::Vertical::Center),
+        .height(Fill)
+        .center_y(Fill),
     )
     .width(Fill)
     .height(Length::Fixed(EDITOR_MENU_ITEM_HEIGHT))
-    .padding([
-        ui_style::PADDING_BUTTON_COMPACT_V + 2,
-        ui_style::PADDING_BUTTON_COMPACT_H,
-    ])
+    .padding([EDITOR_MENU_ITEM_PADDING_V, EDITOR_MENU_ITEM_PADDING_H])
     .style(move |theme: &Theme, status| ui_style::button_menu_item(theme, status, active))
     .on_press(Message::Pane(PaneMessage::SetEditorHeaderMenuSection(
         Some(section),
@@ -2840,16 +2846,14 @@ fn editor_menu_item<'a>(
     on_press: Option<Message>,
 ) -> Element<'a, Message> {
     let mut item = button(
-        container(text(label.into()).size(ui_style::FONT_SIZE_UI_XS))
+        container(container(text(label.into()).size(ui_style::FONT_SIZE_UI_XS)).center_y(Fill))
             .width(Fill)
+            .height(Fill)
             .align_x(alignment::Horizontal::Left),
     )
     .width(Fill)
     .height(Length::Fixed(EDITOR_MENU_ITEM_HEIGHT))
-    .padding([
-        ui_style::PADDING_BUTTON_COMPACT_V + 2,
-        ui_style::PADDING_BUTTON_COMPACT_H,
-    ])
+    .padding([EDITOR_MENU_ITEM_PADDING_V, EDITOR_MENU_ITEM_PADDING_H])
     .style(|theme: &Theme, status| ui_style::button_menu_item(theme, status, false));
 
     if enabled && let Some(message) = on_press {
@@ -2875,33 +2879,35 @@ fn editor_fold_menu_item<'a>(
     on_press: Message,
 ) -> Element<'a, Message> {
     let highlighted = active || hovered;
-    let content = row![
-        container(text(label).size(ui_style::FONT_SIZE_UI_XS))
-            .width(Fill)
-            .align_x(alignment::Horizontal::Left),
-        svg(icons::chevron_down())
-            .width(Length::Fixed(12.0))
-            .height(Length::Fixed(12.0))
-            .content_fit(ContentFit::Contain)
-            .style(move |theme: &Theme, _status| svg::Style {
-                color: Some(if highlighted {
-                    theme.extended_palette().background.weakest.text
-                } else {
-                    Color::from_rgb(0.12, 0.12, 0.14)
+    let content = container(
+        row![
+            container(text(label).size(ui_style::FONT_SIZE_UI_XS))
+                .width(Fill)
+                .align_x(alignment::Horizontal::Left),
+            svg(icons::chevron_down())
+                .width(Length::Fixed(12.0))
+                .height(Length::Fixed(12.0))
+                .content_fit(ContentFit::Contain)
+                .style(move |theme: &Theme, _status| svg::Style {
+                    color: Some(if highlighted {
+                        theme.extended_palette().background.weakest.text
+                    } else {
+                        Color::from_rgb(0.12, 0.12, 0.14)
+                    }),
                 }),
-            }),
-    ]
-    .spacing(ui_style::SPACE_XS)
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .width(Fill)
+        .align_y(alignment::Vertical::Center),
+    )
     .width(Fill)
-    .align_y(alignment::Vertical::Center);
+    .height(Fill)
+    .center_y(Fill);
 
     let button = button(content)
         .width(Fill)
         .height(Length::Fixed(EDITOR_MENU_ITEM_HEIGHT))
-        .padding([
-            ui_style::PADDING_BUTTON_COMPACT_V + 2,
-            ui_style::PADDING_BUTTON_COMPACT_H,
-        ])
+        .padding([EDITOR_MENU_ITEM_PADDING_V, EDITOR_MENU_ITEM_PADDING_H])
         .style(move |theme: &Theme, status| {
             ui_style::button_menu_item(theme, status, active || hovered)
         });
@@ -3005,6 +3011,123 @@ mod tests {
     use super::*;
     use iced_test::simulator;
     use std::fs;
+    use std::path::Path;
+
+    fn assert_snapshot_matches(
+        ui: &mut iced_test::Simulator<'_, Message>,
+        baseline_name: &str,
+    ) -> Result<(), iced_test::Error> {
+        let snapshot = ui.snapshot(&iced::Theme::Dark)?;
+        let baseline_path = Path::new(baseline_name);
+
+        assert!(
+            snapshot.matches_hash(baseline_name)?,
+            "snapshot hash mismatch for: {baseline_name}"
+        );
+        assert!(
+            snapshot.matches_image(baseline_path)?,
+            "snapshot image mismatch for: {baseline_name}"
+        );
+
+        Ok(())
+    }
+
+    fn is_grid_multiple(value: f32) -> bool {
+        ((value / 4.0).round() - (value / 4.0)).abs() < 1.0e-4
+    }
+
+    #[test]
+    fn fixed_dock_sizes_follow_four_px_grid() {
+        for value in [
+            TOOLBAR_ICON_SIZE,
+            HEADER_CONTROL_HEIGHT,
+            HEADER_MENU_ICON_SIZE,
+            HEADER_CLOSE_ICON_SIZE,
+            HEADER_MENU_BUTTON_WIDTH,
+            EDITOR_MENU_ROOT_WIDTH,
+            EDITOR_FILE_SUBMENU_WIDTH,
+            EDITOR_EDIT_SUBMENU_WIDTH,
+            EDITOR_APPEARANCE_SUBMENU_WIDTH,
+            EDITOR_MENU_ITEM_HEIGHT,
+            HEADER_WIDTH_SAFETY,
+            TOOLBAR_HEIGHT,
+            TOOLBAR_TOGGLE_ICON_SIZE,
+            TOOLBAR_BUTTON_HEIGHT,
+            PROJECT_MENU_ROOT_WIDTH,
+            PROJECT_MENU_WIDTH,
+            PROJECT_SETTINGS_SUBMENU_WIDTH,
+            EDITOR_FILE_BROWSER_ICON_SIZE,
+            EDITOR_TAB_WIDTH,
+            EDITOR_TAB_HEIGHT,
+        ] {
+            assert!(is_grid_multiple(value), "{value} should use the 4px grid");
+        }
+    }
+
+    #[test]
+    fn toolbar_and_pane_header_use_swapped_height_scales() {
+        let pane_header_height =
+            HEADER_CONTROL_HEIGHT + (PANE_HEADER_VERTICAL_PADDING as f32 * 2.0);
+        assert_eq!(
+            pane_header_height,
+            HEADER_CONTROL_HEIGHT + (PANE_HEADER_VERTICAL_PADDING as f32 * 2.0)
+        );
+        assert_eq!(
+            TOOLBAR_HEIGHT,
+            TOOLBAR_BUTTON_HEIGHT + (TOOLBAR_VERTICAL_PADDING as f32 * 2.0)
+        );
+        assert!(TOOLBAR_HEIGHT > pane_header_height);
+        assert!(TOOLBAR_BUTTON_HEIGHT > HEADER_CONTROL_HEIGHT);
+    }
+
+    #[test]
+    fn close_button_icon_is_larger_than_other_pane_header_icons() {
+        assert!(HEADER_CLOSE_ICON_SIZE > HEADER_MENU_ICON_SIZE);
+    }
+
+    #[test]
+    fn popup_menu_items_do_not_use_vertical_padding() {
+        assert_eq!(EDITOR_MENU_ITEM_PADDING_V, 0);
+    }
+
+    #[test]
+    fn editor_menu_item_matches_snapshot() -> Result<(), iced_test::Error> {
+        let mut ui = simulator(
+            container(editor_menu_item("Open...", true, None))
+                .width(Length::Fixed(EDITOR_MENU_ROOT_WIDTH))
+                .padding(ui_style::PADDING_SM),
+        );
+        assert_snapshot_matches(&mut ui, "tests/snapshots/editor_menu_item")?;
+        Ok(())
+    }
+
+    #[test]
+    fn project_root_menu_item_matches_snapshot() -> Result<(), iced_test::Error> {
+        let mut ui = simulator(
+            container(project_root_menu_item(
+                "Project",
+                false,
+                ProjectMenuSection::Project,
+            ))
+            .width(Length::Fixed(PROJECT_MENU_ROOT_WIDTH))
+            .padding(ui_style::PADDING_SM),
+        );
+        assert_snapshot_matches(&mut ui, "tests/snapshots/project_root_menu_item")?;
+        Ok(())
+    }
+
+    #[test]
+    fn editor_pane_header_matches_snapshot() -> Result<(), iced_test::Error> {
+        let (app, _task) = super::super::new(None, None, false);
+        let group_id = app
+            .group_for_pane(WorkspacePaneKind::Editor)
+            .expect("editor pane should exist");
+
+        let mut ui = simulator(group_header(&app, group_id, 600.0));
+        assert_snapshot_matches(&mut ui, "tests/snapshots/editor_pane_header")?;
+
+        Ok(())
+    }
 
     #[test]
     fn browser_column_click_emits_entry_press_message() {

@@ -30,27 +30,33 @@ pub(super) fn instrument_scroll_id() -> Id {
 }
 
 const GROUP_SIDE_BORDER_WIDTH: f32 = 1.0;
-const MAIN_STRIP_WIDTH: f32 = 141.0;
+const MAIN_STRIP_WIDTH: f32 = ui_style::grid_f32(36);
 const MAIN_SECTION_WIDTH: f32 = MAIN_STRIP_WIDTH + GROUP_SIDE_BORDER_WIDTH * 2.0;
-const STRIP_WIDTH: f32 = 146.0;
+const STRIP_WIDTH: f32 = ui_style::grid_f32(37);
 const STRIP_SPACING: f32 = 0.0;
-const INSTRUMENT_PICKER_HEIGHT: f32 = 22.0;
-const INSTRUMENT_SLOT_BUTTON_HEIGHT: f32 = 18.0;
+const INSTRUMENT_PICKER_HEIGHT: f32 = ui_style::grid_f32(6);
+const INSTRUMENT_SLOT_BUTTON_HEIGHT: f32 = ui_style::grid_f32(5);
 const INSTRUMENT_SLOT_WIDTH: f32 = 112.0;
 const INSTRUMENT_SLOT_LABEL_MAX_LEN: usize = 11;
 const INSTRUMENT_BROWSER_WIDTH: f32 = 520.0;
 const INSTRUMENT_BROWSER_HEIGHT: f32 = 360.0;
-const INSTRUMENT_BROWSER_ICON_SIZE: f32 = 13.0;
+const INSTRUMENT_BROWSER_ICON_SIZE: f32 = ui_style::grid_f32(3);
 const SECTION_HEADER_HEIGHT: f32 = 24.0;
 const STRIP_MIN_HEIGHT: f32 = 140.0;
 const STRIP_TOGGLE_SIZE: f32 = INSTRUMENT_PICKER_HEIGHT - 4.0;
+const TRACK_TITLE_EDITOR_HEIGHT: f32 = ui_style::grid_f32(5);
+const TRACK_TITLE_EDITOR_CONTROL_HEIGHT: f32 = TRACK_TITLE_EDITOR_HEIGHT;
+const TRACK_TITLE_EDITOR_SWATCH_SIZE: f32 = TRACK_TITLE_EDITOR_HEIGHT;
+const TRACK_TITLE_EDITOR_INPUT_PADDING_V: u16 = 2;
+const TRACK_TITLE_EDITOR_INPUT_PADDING_H: u16 = ui_style::grid(1);
 const COMPACT_GAIN_SWITCH_OFFSET: f32 = 20.0;
-const VALUE_LABEL_HEIGHT: f32 = 14.0;
+const VALUE_LABEL_HEIGHT: f32 = ui_style::grid_f32(4);
 const HEADER_SIDE_INSET: f32 = 12.0;
-const METER_STACK_SPACING: f32 = 6.0;
-const STRIP_STACK_SPACING: f32 = 2.0;
+const SECTION_BODY_GAP: f32 = 0.0;
+const METER_STACK_SPACING: f32 = ui_style::grid_f32(2);
+const STRIP_STACK_SPACING: f32 = ui_style::grid_f32(1);
 const LABEL_CONTROL_SPACING: f32 = ui_style::SPACE_XS as f32;
-const TITLE_TOP_SPACING: f32 = 6.0;
+const TITLE_TOP_SPACING: f32 = ui_style::grid_f32(3);
 const STRIP_VIRTUALIZATION_OVERSCAN: usize = 2;
 
 pub(super) fn instrument_track_scroll_x(track_index: usize) -> f32 {
@@ -485,6 +491,7 @@ fn master_track_area(
     column![
         container(section_header_bar(row![section_title("Main")]))
             .style(ui_style::workspace_toolbar_surface),
+        container(text("")).height(Length::Fixed(SECTION_BODY_GAP)),
         row![
             container(text(""))
                 .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
@@ -538,7 +545,10 @@ fn sticky_master_strip(
             };
             strip_panel(
                 strip_shell(
-                    section_title("Main"),
+                    container(section_title("Main"))
+                        .width(Fill)
+                        .center_x(Fill)
+                        .into(),
                     None,
                     f32::from_bits(dependency.gain_bits),
                     f32::from_bits(dependency.pan_bits),
@@ -760,6 +770,7 @@ fn instrument_track_area(
     column![
         container(section_header_bar(row![section_title("Instrument Tracks")]))
             .style(ui_style::workspace_toolbar_surface),
+        container(text("")).height(Length::Fixed(SECTION_BODY_GAP)),
         row![
             container(text(""))
                 .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
@@ -805,8 +816,44 @@ fn bus_track_area(
     track_rename_value: &str,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
+    if mixer.buses().is_empty() {
+        return column![
+            container(section_header_bar(row![section_title("Buses")]))
+                .style(ui_style::workspace_toolbar_surface),
+            container(text("")).height(Length::Fixed(SECTION_BODY_GAP)),
+            row![
+                container(text(""))
+                    .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
+                    .height(Fill)
+                    .style(ui_style::chrome_separator),
+                container(add_bus_button(controls_enabled))
+                    .width(Fill)
+                    .height(Fill)
+                    .center_x(Fill)
+                    .center_y(Fill),
+                container(text(""))
+                    .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
+                    .height(Fill)
+                    .style(ui_style::chrome_separator),
+            ]
+            .height(Fill),
+            container(text(""))
+                .width(Fill)
+                .height(Length::Fixed(1.0))
+                .style(ui_style::chrome_separator)
+        ]
+        .spacing(0)
+        .height(Fill)
+        .into();
+    }
+
+    let total_buses = mixer.buses().len();
     let left_spacer = strip_span_width(visible.start);
-    let right_spacer = strip_span_width(mixer.buses().len().saturating_sub(visible.end));
+    let right_spacer = if visible.end < total_buses {
+        strip_span_width(total_buses.saturating_sub(visible.end) + 1)
+    } else {
+        0.0
+    };
     let bus_row = mixer.buses()[visible.clone()].iter().enumerate().fold(
         row![]
             .spacing(STRIP_SPACING)
@@ -913,33 +960,20 @@ fn bus_track_area(
                         None,
                     );
                     let remove_button: Element<'static, Message> = container(
-                        button(
-                            container(
-                                svg(icons::x())
-                                    .width(Length::Fixed(10.0))
-                                    .height(Length::Fixed(10.0))
-                                    .content_fit(iced::ContentFit::Contain)
-                                    .style(move |theme: &iced::Theme, _status| {
-                                        let palette = theme.extended_palette();
-                                        svg::Style {
-                                            color: Some(palette.background.weak.text),
-                                        }
-                                    }),
-                            )
-                            .width(Length::Fixed(16.0))
-                            .height(Length::Fixed(16.0))
-                            .center_x(Length::Fixed(16.0))
-                            .center_y(Length::Fixed(16.0)),
+                        ui_style::flat_icon_button(
+                            icons::x(),
+                            ui_style::grid_f32(4),
+                            ui_style::grid_f32(3),
+                            ui_style::button_flat_compact_control,
+                            ui_style::svg_dimmed_control,
                         )
-                        .style(ui_style::button_ghost_subtle)
-                        .padding(0)
                         .on_press(Message::Mixer(MixerMessage::RemoveBus(bus_id))),
                     )
                     .width(Fill)
                     .height(Fill)
                     .align_x(alignment::Horizontal::Right)
                     .align_y(alignment::Vertical::Top)
-                    .padding([6, 6])
+                    .padding([ui_style::grid(2), ui_style::grid(2)])
                     .into();
                     let layered: Element<'static, Message> =
                         stack([base_strip, remove_button]).into();
@@ -948,29 +982,17 @@ fn bus_track_area(
             ))
         },
     );
+    let bus_row = if visible.end >= total_buses {
+        bus_row.push(add_bus_lane(strip_height, controls_enabled))
+    } else {
+        bus_row
+    };
     let bus_row = bus_row.push(horizontal_spacer(right_spacer));
 
     column![
-        container(section_header_bar(
-            row![
-                section_title("Buses"),
-                container(text("")).width(Fill),
-                button(text("+ Bus").size(ui_style::FONT_SIZE_UI_XS))
-                    .style(ui_style::button_neutral)
-                    .padding([
-                        ui_style::PADDING_BUTTON_COMPACT_V,
-                        ui_style::PADDING_BUTTON_COMPACT_H
-                    ])
-                    .on_press_maybe(Some(if controls_enabled {
-                        Message::Mixer(MixerMessage::AddBus)
-                    } else {
-                        noop_message()
-                    })),
-                container(text("")).width(Length::Fixed(HEADER_SIDE_INSET)),
-            ]
-            .align_y(alignment::Vertical::Center),
-        ),)
-        .style(ui_style::workspace_toolbar_surface),
+        container(section_header_bar(row![section_title("Buses")]))
+            .style(ui_style::workspace_toolbar_surface),
+        container(text("")).height(Length::Fixed(SECTION_BODY_GAP)),
         row![
             container(text(""))
                 .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
@@ -998,6 +1020,31 @@ fn bus_track_area(
     .spacing(0)
     .height(Fill)
     .into()
+}
+
+fn add_bus_button(controls_enabled: bool) -> Element<'static, Message> {
+    ui_style::flat_icon_button(
+        icons::plus(),
+        ui_style::grid_f32(5),
+        ui_style::grid_f32(3),
+        ui_style::button_flat_compact_control,
+        ui_style::svg_muted_control,
+    )
+    .on_press_maybe(Some(if controls_enabled {
+        Message::Mixer(MixerMessage::AddBus)
+    } else {
+        noop_message()
+    }))
+    .into()
+}
+
+fn add_bus_lane(strip_height: f32, controls_enabled: bool) -> Element<'static, Message> {
+    container(add_bus_button(controls_enabled))
+        .width(Length::Fixed(STRIP_WIDTH))
+        .height(Length::Fixed(strip_height))
+        .center_x(Length::Fixed(STRIP_WIDTH))
+        .center_y(Length::Fixed(strip_height))
+        .into()
 }
 
 fn section_title<'a>(label: impl Into<String>) -> Element<'a, Message> {
@@ -1105,8 +1152,7 @@ fn strip_shell<'a>(
     let mut content = column![]
         .spacing(STRIP_STACK_SPACING)
         .align_x(alignment::Horizontal::Center)
-        .width(Fill)
-        .height(Fill);
+        .width(Fill);
 
     content = content.push(
         container(instrument_picker.unwrap_or_else(|| container(text("")).into()))
@@ -1183,14 +1229,25 @@ fn strip_shell<'a>(
         .center_x(Fill),
     );
 
-    content = content.push(container(title).padding([TITLE_TOP_SPACING as u16, 0]));
-
-    container(content)
-        .padding(ui_style::PADDING_SM)
+    let title = container(title)
         .width(Fill)
-        .height(Length::Fixed(strip_height))
-        .style(ui_style::transparent_surface)
-        .into()
+        .height(Length::Fixed(TRACK_TITLE_EDITOR_HEIGHT))
+        .align_y(alignment::Vertical::Center);
+
+    container(
+        column![
+            container(content).width(Fill),
+            container(text("")).height(Length::Fixed(TITLE_TOP_SPACING)),
+            title,
+        ]
+        .spacing(0)
+        .width(Fill),
+    )
+    .padding(ui_style::PADDING_SM)
+    .width(Fill)
+    .height(Length::Fixed(strip_height))
+    .style(ui_style::transparent_surface)
+    .into()
 }
 
 fn track_title_content<'a>(
@@ -1202,19 +1259,26 @@ fn track_title_content<'a>(
     color_picker_open: bool,
 ) -> Element<'a, Message> {
     if renaming {
-        let swatch = button(container(text("")).width(16).height(16))
-            .padding(0)
-            .width(18)
-            .height(18)
-            .style(move |theme, status| ui_style::track_color_swatch_button(theme, status, color))
-            .on_press(Message::Mixer(MixerMessage::OpenTrackColorPicker));
+        let swatch = button(
+            container(text(""))
+                .width(Length::Fixed(TRACK_TITLE_EDITOR_SWATCH_SIZE))
+                .height(Length::Fixed(TRACK_TITLE_EDITOR_SWATCH_SIZE)),
+        )
+        .padding(0)
+        .width(Length::Fixed(TRACK_TITLE_EDITOR_SWATCH_SIZE))
+        .height(Length::Fixed(TRACK_TITLE_EDITOR_CONTROL_HEIGHT))
+        .style(move |theme, status| ui_style::track_color_swatch_button(theme, status, color))
+        .on_press(Message::Mixer(MixerMessage::OpenTrackColorPicker));
         let input = text_input::<Message, iced::Theme, iced::Renderer>("", rename_value)
             .id(Id::new(super::TRACK_RENAME_INPUT_ID))
             .on_input(|value| Message::Mixer(MixerMessage::TrackRenameInputChanged(value)))
             .on_submit(Message::Mixer(MixerMessage::CommitTrackRename))
             .style(ui_style::track_name_input)
             .size(ui_style::FONT_SIZE_UI_SM)
-            .padding([2, 4])
+            .padding([
+                TRACK_TITLE_EDITOR_INPUT_PADDING_V,
+                TRACK_TITLE_EDITOR_INPUT_PADDING_H,
+            ])
             .width(Fill);
         let focused = color_picker_open;
         let editor_row = container(
@@ -1222,15 +1286,18 @@ fn track_title_content<'a>(
                 swatch,
                 container(text(""))
                     .width(1)
-                    .height(18)
+                    .height(Length::Fixed(TRACK_TITLE_EDITOR_CONTROL_HEIGHT))
                     .style(move |theme| { ui_style::track_name_editor_divider(theme, focused) }),
-                input
+                container(input)
+                    .height(Length::Fixed(TRACK_TITLE_EDITOR_CONTROL_HEIGHT))
+                    .center_y(Length::Fixed(TRACK_TITLE_EDITOR_CONTROL_HEIGHT))
             ]
             .spacing(0)
             .align_y(alignment::Vertical::Center)
             .width(Fill),
         )
         .padding(0)
+        .height(Length::Fixed(TRACK_TITLE_EDITOR_HEIGHT))
         .style(move |theme| ui_style::track_name_editor_shell(theme, focused))
         .width(Fill);
         return color_picker_with_change(
@@ -1269,14 +1336,21 @@ fn bus_title_content<'a>(
     rename_value: &str,
 ) -> Element<'a, Message> {
     if renaming {
-        return text_input::<Message, iced::Theme, iced::Renderer>("", rename_value)
-            .id(Id::new(super::TRACK_RENAME_INPUT_ID))
-            .on_input(|value| Message::Mixer(MixerMessage::TrackRenameInputChanged(value)))
-            .on_submit(Message::Mixer(MixerMessage::CommitTrackRename))
-            .size(ui_style::FONT_SIZE_UI_SM)
-            .padding([2, 4])
-            .width(Fill)
-            .into();
+        return container(
+            text_input::<Message, iced::Theme, iced::Renderer>("", rename_value)
+                .id(Id::new(super::TRACK_RENAME_INPUT_ID))
+                .on_input(|value| Message::Mixer(MixerMessage::TrackRenameInputChanged(value)))
+                .on_submit(Message::Mixer(MixerMessage::CommitTrackRename))
+                .size(ui_style::FONT_SIZE_UI_SM)
+                .padding([
+                    TRACK_TITLE_EDITOR_INPUT_PADDING_V,
+                    TRACK_TITLE_EDITOR_INPUT_PADDING_H,
+                ])
+                .width(Fill),
+        )
+        .height(Length::Fixed(TRACK_TITLE_EDITOR_HEIGHT))
+        .center_y(Length::Fixed(TRACK_TITLE_EDITOR_HEIGHT))
+        .into();
     }
 
     mouse_area(
@@ -1512,12 +1586,11 @@ fn slot_selector_controls(
     let button: Element<'static, Message> = button(
         container(
             row![
-                container(
-                    svg(icons::keyboard_music())
-                        .width(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
-                        .height(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
-                        .style(ui_style::svg_muted_control),
-                )
+                container(ui_style::icon(
+                    icons::keyboard_music(),
+                    INSTRUMENT_BROWSER_ICON_SIZE,
+                    |theme, _status| { ui_style::svg_muted_control(theme, svg::Status::Idle) },
+                ),)
                 .width(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
                 .center_x(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
                 .center_y(Fill),
@@ -1544,7 +1617,7 @@ fn slot_selector_controls(
         .center_y(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT)),
     )
     .style(|theme, status| ui_style::button_selector_field(theme, status, false))
-    .padding([0, 6])
+    .padding([0, ui_style::grid(2)])
     .width(Length::Fixed(INSTRUMENT_SLOT_WIDTH))
     .height(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT))
     .on_press_maybe(primary_action)
@@ -1615,19 +1688,18 @@ pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Messa
                     .size(ui_style::FONT_SIZE_UI_XS)
                     .font(fonts::MONO),
             ]
-            .spacing(2),
+            .spacing(ui_style::SPACE_XS),
             container(text("")).width(Fill),
-            button(
-                svg(icons::x())
-                    .width(Length::Fixed(12.0))
-                    .height(Length::Fixed(12.0))
-                    .style(|theme: &iced::Theme, _status| {
-                        let palette = theme.extended_palette();
-                        svg::Style {
-                            color: Some(palette.background.weak.text),
-                        }
-                    })
-            )
+            button(ui_style::icon(
+                icons::x(),
+                ui_style::grid_f32(3),
+                |theme: &iced::Theme, _status| {
+                    let palette = theme.extended_palette();
+                    svg::Style {
+                        color: Some(palette.background.weak.text),
+                    }
+                }
+            ))
             .style(ui_style::button_neutral)
             .padding([
                 ui_style::PADDING_BUTTON_COMPACT_V,
@@ -1716,7 +1788,7 @@ fn instrument_browser_tab_button(
 ) -> Element<'static, Message> {
     button(text(tab.label()).size(ui_style::FONT_SIZE_UI_XS))
         .style(move |theme, status| ui_style::button_browser_tab(theme, status, tab == active))
-        .padding([5, 10])
+        .padding([ui_style::grid(1), ui_style::grid(3)])
         .on_press(Message::Mixer(
             MixerMessage::SelectInstrumentBrowserBackend(tab),
         ))
@@ -1775,7 +1847,7 @@ fn instrument_browser_choice_button(
         .center_y(Fill),
     )
     .style(move |theme, status| ui_style::button_browser_entry(theme, status, selected))
-    .padding([8, 10])
+    .padding([ui_style::grid(2), ui_style::grid(3)])
     .width(Fill)
     .on_press(Message::Mixer(MixerMessage::SelectTrackInstrument(
         track_index,
@@ -1904,19 +1976,525 @@ fn selected_instrument_choice(
 #[cfg(test)]
 mod tests {
     use crate::ui_style;
+    use iced::widget::container;
+    use iced::{Color, Element, Length, Theme};
+    use iced_test::Simulator;
+    use lilypalooza_audio::mixer::MixerMeterSnapshotWindow;
+    use lilypalooza_audio::{AudioEngine, AudioEngineOptions};
     use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, MixerState, SlotState};
+    use std::path::{Path, PathBuf};
 
     use super::{
         COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
         INSTRUMENT_PICKER_HEIGHT, InstrumentBrowserBackend, InstrumentChoice, MAIN_SECTION_WIDTH,
-        MAIN_STRIP_WIDTH, MIXER_MIN_HEIGHT, MeterDependency, STRIP_TOGGLE_SIZE,
-        STRIP_VIRTUALIZATION_OVERSCAN, STRIP_WIDTH, StripMeterSnapshot, TrackStripDependency,
-        VALUE_LABEL_HEIGHT, color_bits, control_stack_height, gain_control_height,
-        gain_control_mode, gain_label, instrument_browser_entries, instrument_slot_primary_action,
-        instrument_trigger_label, meter_control_height, meter_peak_label, meter_scale_visible,
+        MAIN_STRIP_WIDTH, MIXER_MIN_HEIGHT, MeterDependency, SECTION_BODY_GAP, STRIP_MIN_HEIGHT,
+        STRIP_TOGGLE_SIZE, STRIP_VIRTUALIZATION_OVERSCAN, STRIP_WIDTH, StripMeterSnapshot,
+        TITLE_TOP_SPACING, TRACK_TITLE_EDITOR_CONTROL_HEIGHT, TRACK_TITLE_EDITOR_HEIGHT,
+        TRACK_TITLE_EDITOR_INPUT_PADDING_H, TRACK_TITLE_EDITOR_INPUT_PADDING_V,
+        TRACK_TITLE_EDITOR_SWATCH_SIZE, TrackStripDependency, VALUE_LABEL_HEIGHT, color_bits,
+        control_stack_height, gain_control_height, gain_control_mode, gain_label,
+        instrument_browser_entries, instrument_slot_primary_action, instrument_trigger_label,
+        meter_colors, meter_control_height, meter_peak_label, meter_scale_visible,
         selected_instrument_choice, track_should_use_roll_tint, visible_strip_window,
     };
+    use crate::app::Message;
+    use crate::app::messages::MixerMessage;
+    use crate::icons;
     use lilypalooza_audio::mixer::ChannelMeterSnapshot;
+
+    fn assert_snapshot_matches(
+        ui: &mut iced_test::Simulator<'_, crate::app::Message>,
+        baseline_name: &str,
+    ) -> Result<(), iced_test::Error> {
+        let snapshot = ui.snapshot(&Theme::Dark)?;
+        let baseline_path = Path::new(baseline_name);
+
+        assert!(
+            snapshot.matches_hash(baseline_name)?,
+            "snapshot hash mismatch for: {baseline_name}"
+        );
+        assert!(
+            snapshot.matches_image(baseline_path)?,
+            "snapshot image mismatch for: {baseline_name}"
+        );
+
+        Ok(())
+    }
+
+    fn assert_snapshots_equal(
+        first: &mut iced_test::Simulator<'_, crate::app::Message>,
+        second: &mut iced_test::Simulator<'_, crate::app::Message>,
+        baseline_name: &str,
+    ) -> Result<(), iced_test::Error> {
+        let mut baseline_path = PathBuf::from("/tmp");
+        baseline_path.push(baseline_name);
+
+        let png = baseline_path.with_file_name(format!("{baseline_name}-wgpu.png"));
+        let sha = baseline_path.with_file_name(format!("{baseline_name}-wgpu.sha256"));
+        let _ = std::fs::remove_file(&png);
+        let _ = std::fs::remove_file(&sha);
+
+        let first_snapshot = first.snapshot(&Theme::Dark)?;
+        assert!(first_snapshot.matches_hash(&baseline_path)?);
+        assert!(first_snapshot.matches_image(&baseline_path)?);
+
+        let second_snapshot = second.snapshot(&Theme::Dark)?;
+        assert!(
+            second_snapshot.matches_hash(&baseline_path)?,
+            "snapshot hash mismatch for: {baseline_name}"
+        );
+        assert!(
+            second_snapshot.matches_image(&baseline_path)?,
+            "snapshot image mismatch for: {baseline_name}"
+        );
+
+        Ok(())
+    }
+
+    fn assert_snapshots_differ(
+        first: &mut iced_test::Simulator<'_, crate::app::Message>,
+        second: &mut iced_test::Simulator<'_, crate::app::Message>,
+        baseline_name: &str,
+    ) -> Result<(), iced_test::Error> {
+        let mut baseline_path = PathBuf::from("/tmp");
+        baseline_path.push(baseline_name);
+
+        let png = baseline_path.with_file_name(format!("{baseline_name}-wgpu.png"));
+        let sha = baseline_path.with_file_name(format!("{baseline_name}-wgpu.sha256"));
+        let _ = std::fs::remove_file(&png);
+        let _ = std::fs::remove_file(&sha);
+
+        let first_snapshot = first.snapshot(&Theme::Dark)?;
+        assert!(first_snapshot.matches_hash(&baseline_path)?);
+        assert!(first_snapshot.matches_image(&baseline_path)?);
+
+        let second_snapshot = second.snapshot(&Theme::Dark)?;
+        assert!(
+            !second_snapshot.matches_hash(&baseline_path)?,
+            "snapshot hash unexpectedly matched for: {baseline_name}"
+        );
+
+        Ok(())
+    }
+
+    fn is_grid_multiple(value: f32) -> bool {
+        ((value / 4.0).round() - (value / 4.0)).abs() < 1.0e-4
+    }
+
+    #[test]
+    fn fixed_strip_sizes_follow_four_px_grid() {
+        for value in [
+            MAIN_STRIP_WIDTH,
+            STRIP_WIDTH,
+            INSTRUMENT_PICKER_HEIGHT,
+            TRACK_TITLE_EDITOR_HEIGHT,
+            VALUE_LABEL_HEIGHT,
+            COMPACT_GAIN_SWITCH_OFFSET,
+        ] {
+            assert!(is_grid_multiple(value), "{value} should use the 4px grid");
+        }
+    }
+
+    #[test]
+    fn mixer_track_title_editor_height_increases_by_one_grid_unit() {
+        assert_eq!(TRACK_TITLE_EDITOR_HEIGHT, ui_style::grid_f32(5));
+    }
+
+    #[test]
+    fn mixer_track_title_editor_input_padding_matches_taller_height() {
+        assert_eq!(TRACK_TITLE_EDITOR_INPUT_PADDING_V, 2);
+        assert_eq!(TRACK_TITLE_EDITOR_INPUT_PADDING_H, ui_style::grid(1));
+    }
+
+    #[test]
+    fn mixer_track_title_editor_controls_scale_with_taller_shell() {
+        assert_eq!(TRACK_TITLE_EDITOR_CONTROL_HEIGHT, TRACK_TITLE_EDITOR_HEIGHT);
+    }
+
+    #[test]
+    fn mixer_track_title_editor_swatch_is_square() {
+        assert_eq!(TRACK_TITLE_EDITOR_SWATCH_SIZE, TRACK_TITLE_EDITOR_HEIGHT);
+    }
+
+    #[test]
+    fn mixer_strip_title_gap_uses_three_grid_units() {
+        assert_eq!(TITLE_TOP_SPACING, ui_style::grid_f32(3));
+    }
+
+    #[test]
+    fn mixer_section_header_has_no_body_gap() {
+        assert_eq!(SECTION_BODY_GAP, 0.0);
+    }
+
+    #[test]
+    fn mixer_track_title_editor_widget_matches_snapshot() -> Result<(), iced_test::Error> {
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [
+                STRIP_WIDTH + ui_style::grid_f32(4),
+                TRACK_TITLE_EDITOR_HEIGHT + ui_style::grid_f32(4),
+            ],
+            container(super::track_title_content(
+                0,
+                "Track 1",
+                true,
+                "Track 1",
+                Color::from_rgb(0.42, 0.58, 0.86),
+                false,
+            ))
+            .width(Length::Fixed(STRIP_WIDTH))
+            .padding(ui_style::PADDING_SM),
+        );
+        assert_snapshot_matches(
+            &mut ui,
+            "tests/snapshots/mixer_track_title_editor_widget_five_grid",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixer_strip_title_editor_matches_snapshot() -> Result<(), iced_test::Error> {
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [
+                STRIP_WIDTH + ui_style::grid_f32(8),
+                STRIP_MIN_HEIGHT + ui_style::grid_f32(8),
+            ],
+            container(super::strip_shell(
+                super::track_title_content(
+                    0,
+                    "Track 1",
+                    true,
+                    "Track 1",
+                    Color::from_rgb(0.42, 0.58, 0.86),
+                    false,
+                ),
+                None,
+                0.0,
+                0.0,
+                container(iced::widget::text("")).into(),
+                super::StripActions {
+                    solo: None,
+                    mute: None,
+                    on_gain: None,
+                    on_pan: None,
+                },
+                STRIP_MIN_HEIGHT,
+                GainControlMode::Knob,
+            ))
+            .padding(ui_style::PADDING_SM),
+        );
+        assert_snapshot_matches(
+            &mut ui,
+            "tests/snapshots/mixer_strip_title_editor_integration_five_grid",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixer_strip_controls_leave_gap_above_title_matches_snapshot() -> Result<(), iced_test::Error>
+    {
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [STRIP_WIDTH + ui_style::grid_f32(8), 520.0],
+            container(super::strip_shell(
+                super::track_title_content(
+                    0,
+                    "Violin",
+                    true,
+                    "Violin",
+                    Color::from_rgb(0.92, 0.34, 0.34),
+                    false,
+                ),
+                Some(super::instrument_slot_controls(
+                    0,
+                    Some(InstrumentChoice::None),
+                    false,
+                    true,
+                )),
+                0.0,
+                0.0,
+                container(iced::widget::text(""))
+                    .width(Length::Fixed(72.0))
+                    .height(Length::Fixed(220.0))
+                    .into(),
+                super::StripActions {
+                    solo: Some((false, super::noop_message())),
+                    mute: Some((false, super::noop_message())),
+                    on_gain: Some(Box::new(|_| super::noop_message())),
+                    on_pan: Some(Box::new(|_| super::noop_message())),
+                },
+                480.0,
+                GainControlMode::Knob,
+            ))
+            .padding(ui_style::PADDING_SM),
+        );
+        assert_snapshot_matches(
+            &mut ui,
+            "tests/snapshots/mixer_strip_controls_title_gap_fixed",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixer_full_track_strip_rename_matches_snapshot() -> Result<(), iced_test::Error> {
+        let mixer = MixerState::new();
+        let meters = MixerMeterSnapshotWindow::default();
+        let colors = meter_colors(&Theme::Dark);
+
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [STRIP_WIDTH + ui_style::grid_f32(8), 520.0],
+            super::instrument_track_area(
+                &mixer,
+                &meters,
+                colors,
+                STRIP_MIN_HEIGHT,
+                GainControlMode::Knob,
+                0..1,
+                1,
+                &[crate::track_colors::default_track_color(0)],
+                Some(crate::app::RenameTarget::Track(0)),
+                Some(crate::app::WorkspacePaneKind::Mixer),
+                "Violin",
+                Color::from_rgb(0.92, 0.34, 0.34),
+                false,
+                None,
+                true,
+            ),
+        );
+        assert_snapshot_matches(
+            &mut ui,
+            "tests/snapshots/mixer_full_track_strip_rename_no_section_gap",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixer_master_strip_main_title_matches_snapshot() -> Result<(), iced_test::Error> {
+        let mixer = MixerState::new();
+        let colors = meter_colors(&Theme::Dark);
+
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [
+                MAIN_STRIP_WIDTH + ui_style::grid_f32(8),
+                STRIP_MIN_HEIGHT + ui_style::grid_f32(8),
+            ],
+            super::sticky_master_strip(
+                &mixer,
+                StripMeterSnapshot::default(),
+                colors,
+                STRIP_MIN_HEIGHT,
+                GainControlMode::Knob,
+                true,
+            ),
+        );
+        assert_snapshot_matches(
+            &mut ui,
+            "tests/snapshots/mixer_master_strip_main_title_no_section_gap",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixer_bus_area_empty_centers_add_bus_matches_snapshot() -> Result<(), iced_test::Error> {
+        let mixer = MixerState::new();
+        let meters = MixerMeterSnapshotWindow::default();
+        let colors = meter_colors(&Theme::Dark);
+
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [STRIP_WIDTH + ui_style::grid_f32(8), 320.0],
+            super::bus_track_area(
+                &mixer,
+                &meters,
+                colors,
+                STRIP_MIN_HEIGHT,
+                GainControlMode::Knob,
+                0..0,
+                None,
+                None,
+                "",
+                true,
+            ),
+        );
+        assert_snapshot_matches(
+            &mut ui,
+            "tests/snapshots/mixer_bus_area_empty_centered_add_icon_no_section_gap",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixer_bus_area_nonempty_appends_add_bus_lane_matches_snapshot()
+    -> Result<(), iced_test::Error> {
+        let (mut app, _task) = crate::app::new(None, None, false);
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+
+        let mixer = app
+            .playback
+            .as_ref()
+            .expect("playback should exist")
+            .mixer_state()
+            .clone();
+        let meters = MixerMeterSnapshotWindow::default();
+        let colors = meter_colors(&Theme::Dark);
+
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [STRIP_WIDTH * 2.0 + ui_style::grid_f32(8), 320.0],
+            super::bus_track_area(
+                &mixer,
+                &meters,
+                colors,
+                STRIP_MIN_HEIGHT,
+                GainControlMode::Knob,
+                0..mixer.bus_count(),
+                None,
+                None,
+                "",
+                true,
+            ),
+        );
+        assert_snapshot_matches(
+            &mut ui,
+            "tests/snapshots/mixer_bus_area_nonempty_add_icon_lane_flat_close",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn add_bus_button_hover_is_consistent_across_whole_button() -> Result<(), iced_test::Error> {
+        let view = || -> Element<'static, Message> {
+            container(super::add_bus_button(true))
+                .width(Length::Fixed(ui_style::grid_f32(12)))
+                .height(Length::Fixed(ui_style::grid_f32(12)))
+                .center_x(Length::Fixed(ui_style::grid_f32(12)))
+                .center_y(Length::Fixed(ui_style::grid_f32(12)))
+                .into()
+        };
+
+        let mut button_hover = Simulator::with_size(
+            iced::Settings::default(),
+            [ui_style::grid_f32(12), ui_style::grid_f32(12)],
+            view(),
+        );
+        button_hover.point_at(iced::Point::new(
+            ui_style::grid_f32(4),
+            ui_style::grid_f32(6),
+        ));
+
+        let mut icon_hover = Simulator::with_size(
+            iced::Settings::default(),
+            [ui_style::grid_f32(12), ui_style::grid_f32(12)],
+            view(),
+        );
+        icon_hover.point_at(iced::Point::new(
+            ui_style::grid_f32(6),
+            ui_style::grid_f32(6),
+        ));
+
+        assert_snapshots_equal(
+            &mut button_hover,
+            &mut icon_hover,
+            "add_bus_button_hover_consistency",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn instrument_slot_button_hover_is_consistent_across_whole_button()
+    -> Result<(), iced_test::Error> {
+        let view = || -> Element<'static, Message> {
+            super::slot_selector_controls("Violin".to_string(), Some(Message::Noop), None)
+        };
+
+        let mut label_hover = Simulator::with_size(
+            iced::Settings::default(),
+            [ui_style::grid_f32(32), ui_style::grid_f32(10)],
+            view(),
+        );
+        label_hover.point_at(iced::Point::new(
+            ui_style::grid_f32(18),
+            ui_style::grid_f32(5),
+        ));
+
+        let mut icon_hover = Simulator::with_size(
+            iced::Settings::default(),
+            [ui_style::grid_f32(32), ui_style::grid_f32(10)],
+            view(),
+        );
+        icon_hover.point_at(iced::Point::new(
+            ui_style::grid_f32(5),
+            ui_style::grid_f32(5),
+        ));
+
+        assert_snapshots_equal(
+            &mut label_hover,
+            &mut icon_hover,
+            "instrument_slot_button_hover_consistency",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn remove_bus_button_idle_and_hover_render_differ() -> Result<(), iced_test::Error> {
+        let view = || -> Element<'static, Message> {
+            container(
+                ui_style::flat_icon_button(
+                    icons::x(),
+                    ui_style::grid_f32(4),
+                    ui_style::grid_f32(3),
+                    ui_style::button_flat_compact_control,
+                    ui_style::svg_dimmed_control,
+                )
+                .on_press(Message::Noop),
+            )
+            .width(Length::Fixed(ui_style::grid_f32(8)))
+            .height(Length::Fixed(ui_style::grid_f32(8)))
+            .center_x(Length::Fixed(ui_style::grid_f32(8)))
+            .center_y(Length::Fixed(ui_style::grid_f32(8)))
+            .into()
+        };
+
+        let mut idle = Simulator::with_size(
+            iced::Settings::default(),
+            [ui_style::grid_f32(8), ui_style::grid_f32(8)],
+            view(),
+        );
+
+        let mut hover = Simulator::with_size(
+            iced::Settings::default(),
+            [ui_style::grid_f32(8), ui_style::grid_f32(8)],
+            view(),
+        );
+        hover.point_at(iced::Point::new(
+            ui_style::grid_f32(4),
+            ui_style::grid_f32(4),
+        ));
+
+        assert_snapshots_differ(
+            &mut idle,
+            &mut hover,
+            "remove_bus_button_idle_hover_difference",
+        )?;
+
+        Ok(())
+    }
 
     #[test]
     fn empty_slot_maps_to_none_choice() {
@@ -2109,7 +2687,7 @@ mod tests {
 
     #[test]
     fn value_labels_use_shared_slot_height() {
-        assert_eq!(VALUE_LABEL_HEIGHT, 14.0);
+        assert!(is_grid_multiple(VALUE_LABEL_HEIGHT));
     }
 
     #[test]

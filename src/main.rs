@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 mod app;
 mod browser_file_watcher;
+mod control_icon;
 mod editor_file_watcher;
 mod error_prompt;
 mod fonts;

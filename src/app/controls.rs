@@ -1,18 +1,19 @@
 use std::time::{Duration, Instant};
 
+use crate::ui_style;
 use iced::widget::canvas::{self as canvas_widget, Path, Stroke};
 use iced::widget::{canvas, container};
 use iced::{Color, Element, Length, Point, Radians, Rectangle, Renderer, Theme, alignment, mouse};
 
-const FADER_WIDTH: f32 = 30.0;
-const FADER_HANDLE_HEIGHT: f32 = 18.0;
-const FADER_RAIL_WIDTH: f32 = 6.0;
+const FADER_WIDTH: f32 = ui_style::grid_f32(8);
+const FADER_HANDLE_HEIGHT: f32 = ui_style::grid_f32(5);
+const FADER_RAIL_WIDTH: f32 = ui_style::grid_f32(2);
 const HORIZONTAL_SLIDER_HEIGHT: f32 = 24.0;
-const HORIZONTAL_SLIDER_RAIL_HEIGHT: f32 = 6.0;
-const HORIZONTAL_SLIDER_HANDLE_WIDTH: f32 = 18.0;
-const HORIZONTAL_SLIDER_HANDLE_HEIGHT: f32 = 18.0;
+const HORIZONTAL_SLIDER_RAIL_HEIGHT: f32 = ui_style::grid_f32(2);
+const HORIZONTAL_SLIDER_HANDLE_WIDTH: f32 = ui_style::grid_f32(5);
+const HORIZONTAL_SLIDER_HANDLE_HEIGHT: f32 = ui_style::grid_f32(5);
 const GAIN_KNOB_SIZE: f32 = 48.0;
-const PAN_KNOB_SIZE: f32 = 42.0;
+const PAN_KNOB_SIZE: f32 = 40.0;
 const KNOB_ANGLE_START: f32 = 135.0;
 const KNOB_ANGLE_END: f32 = 405.0;
 const KNOB_CENTER_ANGLE: f32 = (KNOB_ANGLE_START + KNOB_ANGLE_END) * 0.5;
@@ -434,8 +435,7 @@ impl<Message: Clone> canvas_widget::Program<Message> for GainFader<'_, Message> 
         };
         let handle_bounds = Rectangle {
             x: 4.0,
-            y: (handle_center_y - FADER_HANDLE_HEIGHT * 0.5)
-                .clamp(2.0, bounds.height - FADER_HANDLE_HEIGHT - 2.0),
+            y: gain_fader_handle_y(bounds.height, handle_center_y),
             width: (bounds.width - 8.0).max(12.0),
             height: FADER_HANDLE_HEIGHT,
         };
@@ -599,8 +599,7 @@ impl<Message: Clone> canvas_widget::Program<Message> for HorizontalSlider<'_, Me
         let handle_center_x = self.handle_center_x(bounds.width, self.normalize(self.value));
         let fill_width = (handle_center_x - rail_x).clamp(0.0, rail_width);
         let handle_bounds = Rectangle {
-            x: (handle_center_x - HORIZONTAL_SLIDER_HANDLE_WIDTH * 0.5)
-                .clamp(0.0, bounds.width - HORIZONTAL_SLIDER_HANDLE_WIDTH),
+            x: horizontal_slider_handle_x(bounds.width, handle_center_x),
             y: (bounds.height - HORIZONTAL_SLIDER_HANDLE_HEIGHT) * 0.5,
             width: HORIZONTAL_SLIDER_HANDLE_WIDTH,
             height: HORIZONTAL_SLIDER_HANDLE_HEIGHT,
@@ -796,6 +795,18 @@ fn clamp_gain(value: f32) -> f32 {
     value.clamp(GAIN_MIN_DB, GAIN_MAX_DB)
 }
 
+fn gain_fader_handle_y(bounds_height: f32, handle_center_y: f32) -> f32 {
+    let min_y = 2.0;
+    let max_y = (bounds_height - FADER_HANDLE_HEIGHT - 2.0).max(min_y);
+    (handle_center_y - FADER_HANDLE_HEIGHT * 0.5).clamp(min_y, max_y)
+}
+
+fn horizontal_slider_handle_x(bounds_width: f32, handle_center_x: f32) -> f32 {
+    let min_x = 0.0;
+    let max_x = (bounds_width - HORIZONTAL_SLIDER_HANDLE_WIDTH).max(min_x);
+    (handle_center_x - HORIZONTAL_SLIDER_HANDLE_WIDTH * 0.5).clamp(min_x, max_x)
+}
+
 fn gain_fader_rail_bounds(bounds: Rectangle) -> Rectangle {
     let rail_width = FADER_RAIL_WIDTH;
     let rail_x = (bounds.width - rail_width) * 0.5;
@@ -837,8 +848,8 @@ mod tests {
 
     use super::{
         GAIN_MIN_DB, GainFader, HorizontalSlider, HorizontalSliderState, Knob, KnobMode,
-        gain_db_to_normalized, gain_normalized_to_db, gain_value_to_y, is_double_click,
-        y_to_gain_value,
+        gain_db_to_normalized, gain_fader_handle_y, gain_normalized_to_db, gain_value_to_y,
+        horizontal_slider_handle_x, is_double_click, y_to_gain_value,
     };
 
     #[test]
@@ -973,6 +984,11 @@ mod tests {
     }
 
     #[test]
+    fn gain_fader_handle_y_stays_valid_for_short_bounds() {
+        assert_eq!(gain_fader_handle_y(23.0, 12.0), 2.0);
+    }
+
+    #[test]
     fn gain_mapping_keeps_zero_db_near_top() {
         let rail = Rectangle {
             x: 0.0,
@@ -1067,5 +1083,10 @@ mod tests {
         let (message, _, status) = action.into_inner();
         assert_eq!(message, Some(-12.0));
         assert_eq!(status, iced::event::Status::Captured);
+    }
+
+    #[test]
+    fn horizontal_slider_handle_x_stays_valid_for_narrow_bounds() {
+        assert_eq!(horizontal_slider_handle_x(19.0, 10.0), 0.0);
     }
 }

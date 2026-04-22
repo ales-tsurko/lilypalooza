@@ -3,7 +3,7 @@ use iced::{Color, Element, Fill, Theme};
 
 use crate::{fonts, ui_style};
 
-pub(crate) const HEIGHT: f32 = 26.0;
+pub(crate) const HEIGHT: f32 = ui_style::grid_f32(7);
 
 pub(crate) struct Data<'a> {
     pub(crate) spinner: &'a str,

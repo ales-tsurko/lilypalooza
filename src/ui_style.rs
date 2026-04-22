@@ -1,30 +1,47 @@
 use iced::widget::{button, container, scrollable, svg, text_editor, text_input};
-use iced::{Color, Shadow, Theme, Vector, border};
+use iced::{Color, ContentFit, Length, Shadow, Theme, Vector, border};
 use iced_aw::style::Status as AwStatus;
 use iced_aw::style::color_picker::Style as AwColorPickerStyle;
 
-pub(crate) const FONT_SIZE_BODY_MD: u32 = 15;
-pub(crate) const FONT_SIZE_UI_SM: u32 = 12;
-pub(crate) const FONT_SIZE_UI_XS: u32 = 11;
+use crate::control_icon;
 
-pub(crate) const SIZE_SURFACE_LG: u32 = 620;
+pub(crate) const GRID_PX: u16 = 4;
 
-pub(crate) const SPACE_SM: u32 = 10;
-pub(crate) const SPACE_MD: u32 = 16;
-pub(crate) const SPACE_XS: u32 = 4;
+pub(crate) const fn grid(units: u16) -> u16 {
+    units * GRID_PX
+}
 
-pub(crate) const PADDING_XS: u16 = 6;
-pub(crate) const PADDING_SM: u16 = 14;
-pub(crate) const PADDING_MD: u16 = 24;
-pub(crate) const PADDING_BUTTON_V: u16 = 10;
-pub(crate) const PADDING_BUTTON_H: u16 = 24;
-pub(crate) const PADDING_BUTTON_COMPACT_V: u16 = 2;
-pub(crate) const PADDING_BUTTON_COMPACT_H: u16 = 10;
-pub(crate) const PADDING_STATUS_BAR_V: u16 = 4;
-pub(crate) const PADDING_STATUS_BAR_H: u16 = 8;
+pub(crate) const fn grid_u32(units: u32) -> u32 {
+    units * GRID_PX as u32
+}
+
+pub(crate) const fn grid_f32(units: u16) -> f32 {
+    grid(units) as f32
+}
+
+pub(crate) const FONT_SIZE_BODY_MD: u32 = grid_u32(4);
+pub(crate) const FONT_SIZE_UI_SM: u32 = grid_u32(3);
+pub(crate) const FONT_SIZE_UI_XS: u32 = (grid_u32(2) as f32 * 1.5) as u32;
+
+pub(crate) const SIZE_SURFACE_LG: u32 = grid_u32(156);
+
+pub(crate) const SPACE_SM: u32 = grid_u32(3);
+pub(crate) const SPACE_MD: u32 = grid_u32(4);
+pub(crate) const SPACE_XS: u32 = grid_u32(1);
+
+pub(crate) const PADDING_XS: u16 = grid(2);
+pub(crate) const PADDING_SM: u16 = grid(4);
+pub(crate) const PADDING_MD: u16 = grid(6);
+pub(crate) const PADDING_BUTTON_V: u16 = grid(2);
+pub(crate) const PADDING_BUTTON_H: u16 = grid(6);
+pub(crate) const PADDING_BUTTON_COMPACT_V: u16 = grid(1);
+pub(crate) const PADDING_BUTTON_COMPACT_H: u16 = grid(2);
+pub(crate) const PADDING_STATUS_BAR_V: u16 = grid(1);
+pub(crate) const PADDING_STATUS_BAR_H: u16 = grid(2);
 
 pub(crate) const RADIUS_NONE: f32 = 0.0;
-pub(crate) const RADIUS_UI: f32 = 6.0;
+pub(crate) const RADIUS_TIGHT: f32 = grid_f32(1);
+pub(crate) const RADIUS_UI: f32 = grid_f32(2);
 pub(crate) const RADIUS_PILL: f32 = 999.0;
 
 fn top_radius(radius: f32) -> border::Radius {
@@ -712,43 +729,6 @@ pub(crate) fn button_danger(theme: &Theme, status: button::Status) -> button::St
     }
 }
 
-pub(crate) fn button_ghost_subtle(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
-
-    let base = button::Style {
-        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.0).into()),
-        text_color: palette.background.weak.text,
-        border: border::rounded(RADIUS_UI).width(1).color(Color::from_rgba(
-            palette.background.strong.color.r,
-            palette.background.strong.color.g,
-            palette.background.strong.color.b,
-            0.55,
-        )),
-        ..button::Style::default()
-    };
-
-    match status {
-        button::Status::Active => base,
-        button::Status::Hovered => button::Style {
-            background: Some(palette.background.strong.color.into()),
-            text_color: palette.background.strong.text,
-            ..base
-        },
-        button::Status::Pressed => button::Style {
-            background: Some(palette.background.base.color.into()),
-            text_color: palette.background.base.text,
-            border: border::rounded(RADIUS_UI)
-                .width(1)
-                .color(palette.background.base.color),
-            ..base
-        },
-        button::Status::Disabled => button::Style {
-            text_color: palette.background.weakest.text,
-            ..base
-        },
-    }
-}
-
 pub(crate) fn button_selector_field(
     theme: &Theme,
     status: button::Status,
@@ -916,7 +896,7 @@ pub(crate) fn button_compact_solid(theme: &Theme, status: button::Status) -> but
     let base = button::Style {
         background: Some(palette.background.strong.color.into()),
         text_color: palette.background.strong.text,
-        border: border::rounded(RADIUS_UI)
+        border: border::rounded(RADIUS_TIGHT)
             .width(1)
             .color(palette.background.base.color),
         ..button::Style::default()
@@ -927,7 +907,7 @@ pub(crate) fn button_compact_solid(theme: &Theme, status: button::Status) -> but
         button::Status::Hovered => button::Style {
             background: Some(palette.primary.weak.color.into()),
             text_color: palette.primary.weak.text,
-            border: border::rounded(RADIUS_UI)
+            border: border::rounded(RADIUS_TIGHT)
                 .width(1)
                 .color(palette.primary.base.color),
             ..base
@@ -935,7 +915,7 @@ pub(crate) fn button_compact_solid(theme: &Theme, status: button::Status) -> but
         button::Status::Pressed => button::Style {
             background: Some(palette.primary.base.color.into()),
             text_color: palette.primary.base.text,
-            border: border::rounded(RADIUS_UI)
+            border: border::rounded(RADIUS_TIGHT)
                 .width(1)
                 .color(palette.primary.strong.color),
             ..base
@@ -954,7 +934,7 @@ pub(crate) fn button_compact_active(theme: &Theme, status: button::Status) -> bu
     let base = button::Style {
         background: Some(palette.primary.base.color.into()),
         text_color: palette.primary.base.text,
-        border: border::rounded(RADIUS_UI)
+        border: border::rounded(RADIUS_TIGHT)
             .width(1)
             .color(palette.primary.strong.color),
         ..button::Style::default()
@@ -975,7 +955,7 @@ pub(crate) fn button_compact_active(theme: &Theme, status: button::Status) -> bu
         button::Status::Disabled => button::Style {
             background: Some(palette.background.strong.color.into()),
             text_color: palette.background.weak.text,
-            border: border::rounded(RADIUS_UI)
+            border: border::rounded(RADIUS_TIGHT)
                 .width(1)
                 .color(palette.background.base.color),
             ..base
@@ -1379,7 +1359,7 @@ pub(crate) fn button_window_control(theme: &Theme, status: button::Status) -> bu
     let base = button::Style {
         background: None,
         text_color: palette.background.strong.text,
-        border: border::rounded(RADIUS_PILL)
+        border: border::rounded(RADIUS_TIGHT)
             .width(0)
             .color(Color::TRANSPARENT),
         shadow: Shadow::default(),
@@ -1391,7 +1371,7 @@ pub(crate) fn button_window_control(theme: &Theme, status: button::Status) -> bu
         button::Status::Hovered => button::Style {
             background: Some(palette.background.base.color.into()),
             text_color: palette.background.base.text,
-            border: border::rounded(RADIUS_PILL)
+            border: border::rounded(RADIUS_TIGHT)
                 .width(1)
                 .color(palette.background.strong.color),
             shadow: Shadow {
@@ -1404,7 +1384,146 @@ pub(crate) fn button_window_control(theme: &Theme, status: button::Status) -> bu
         button::Status::Pressed => button::Style {
             background: Some(palette.primary.base.color.into()),
             text_color: palette.primary.base.text,
-            border: border::rounded(RADIUS_PILL)
+            border: border::rounded(RADIUS_TIGHT)
+                .width(1)
+                .color(palette.primary.strong.color),
+            shadow: Shadow::default(),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(palette.background.weak.color.into()),
+            text_color: palette.background.weak.text,
+            shadow: Shadow::default(),
+            ..base
+        },
+    }
+}
+
+pub(crate) fn button_pane_header_control(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let base = button::Style {
+        background: None,
+        text_color: palette.background.strong.text,
+        border: border::rounded(RADIUS_UI)
+            .width(0)
+            .color(Color::TRANSPARENT),
+        shadow: Shadow::default(),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.background.base.color.into()),
+            text_color: palette.background.base.text,
+            border: border::rounded(RADIUS_UI)
+                .width(1)
+                .color(palette.background.strong.color),
+            shadow: Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.10),
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 4.0,
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.primary.base.color.into()),
+            text_color: palette.primary.base.text,
+            border: border::rounded(RADIUS_UI)
+                .width(1)
+                .color(palette.primary.strong.color),
+            shadow: Shadow::default(),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(palette.background.weak.color.into()),
+            text_color: palette.background.weak.text,
+            shadow: Shadow::default(),
+            ..base
+        },
+    }
+}
+
+pub(crate) fn button_flat_compact_control(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let base = button::Style {
+        background: None,
+        text_color: palette.background.strong.text,
+        border: border::rounded(RADIUS_TIGHT)
+            .width(0)
+            .color(Color::TRANSPARENT),
+        shadow: Shadow::default(),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.background.base.color.into()),
+            text_color: palette.background.base.text,
+            border: border::rounded(RADIUS_TIGHT)
+                .width(1)
+                .color(palette.background.strong.color),
+            shadow: Shadow::default(),
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.background.strong.color.into()),
+            text_color: palette.background.strong.text,
+            border: border::rounded(RADIUS_TIGHT)
+                .width(1)
+                .color(palette.background.strong.color),
+            shadow: Shadow::default(),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: None,
+            text_color: palette.background.weak.text,
+            shadow: Shadow::default(),
+            ..base
+        },
+    }
+}
+
+pub(crate) fn button_pane_header_control_active(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let palette = theme.extended_palette();
+
+    let base = button::Style {
+        background: Some(palette.background.base.color.into()),
+        text_color: palette.background.base.text,
+        border: border::rounded(RADIUS_UI)
+            .width(1)
+            .color(palette.background.strong.color),
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.08),
+            offset: Vector::new(0.0, 1.0),
+            blur_radius: 3.0,
+        },
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(
+                mix_color(
+                    palette.background.base.color,
+                    palette.background.strong.color,
+                    0.10,
+                )
+                .into(),
+            ),
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.primary.base.color.into()),
+            text_color: palette.primary.base.text,
+            border: border::rounded(RADIUS_UI)
                 .width(1)
                 .color(palette.primary.strong.color),
             shadow: Shadow::default(),
@@ -1446,9 +1565,75 @@ pub(crate) fn svg_muted_control(theme: &Theme, status: svg::Status) -> svg::Styl
     }
 }
 
+pub(crate) fn svg_dimmed_control(theme: &Theme, status: svg::Status) -> svg::Style {
+    let palette = theme.extended_palette();
+
+    svg::Style {
+        color: Some(match status {
+            svg::Status::Idle => Color {
+                a: 0.58,
+                ..palette.background.weak.text
+            },
+            svg::Status::Hovered => palette.background.base.text,
+        }),
+    }
+}
+
+pub(crate) fn icon<'a, F>(handle: svg::Handle, size: f32, style: F) -> svg::Svg<'a, Theme>
+where
+    F: Fn(&Theme, svg::Status) -> svg::Style + 'a,
+{
+    svg(handle)
+        .width(Length::Fixed(size))
+        .height(Length::Fixed(size))
+        .content_fit(ContentFit::Contain)
+        .style(style)
+}
+
+pub(crate) fn flat_icon_button<'a, Message, FB, FI>(
+    handle: svg::Handle,
+    button_size: f32,
+    icon_size: f32,
+    button_style: FB,
+    icon_style: FI,
+) -> button::Button<'a, Message, Theme>
+where
+    Message: Clone + 'a,
+    FB: Fn(&Theme, button::Status) -> button::Style + 'a,
+    FI: Fn(&Theme, svg::Status) -> svg::Style + 'a,
+{
+    button(control_icon::control_icon::<Message, iced::Renderer>(
+        handle,
+        button_size,
+        icon_size,
+        icon_style,
+    ))
+    .style(button_style)
+    .padding(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn is_grid_multiple(value: u32) -> bool {
+        value % 4 == 0
+    }
+
+    fn collect_rust_files(root: &Path, out: &mut Vec<PathBuf>) {
+        let entries = fs::read_dir(root).expect("read dir");
+        for entry in entries {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rust_files(&path, out);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
 
     #[test]
     fn transparent_surface_has_no_background() {
@@ -1462,5 +1647,75 @@ mod tests {
         let tinted =
             mixer_track_strip_surface(&Theme::Dark, Some(Color::from_rgb(0.3, 0.4, 0.5)), false);
         assert_ne!(plain.background, tinted.background);
+    }
+
+    #[test]
+    fn shared_spacing_and_surface_tokens_follow_four_px_grid() {
+        for value in [
+            SIZE_SURFACE_LG,
+            SPACE_XS,
+            SPACE_SM,
+            SPACE_MD,
+            u32::from(PADDING_XS),
+            u32::from(PADDING_SM),
+            u32::from(PADDING_MD),
+            u32::from(PADDING_BUTTON_V),
+            u32::from(PADDING_BUTTON_H),
+            u32::from(PADDING_BUTTON_COMPACT_V),
+            u32::from(PADDING_BUTTON_COMPACT_H),
+            u32::from(PADDING_STATUS_BAR_V),
+            u32::from(PADDING_STATUS_BAR_H),
+        ] {
+            assert!(is_grid_multiple(value), "{value} should use the 4px grid");
+        }
+    }
+
+    #[test]
+    fn compact_and_window_buttons_use_tighter_radius_than_general_ui() {
+        for style in [
+            button_compact_solid(&Theme::Dark, button::Status::Active),
+            button_compact_active(&Theme::Dark, button::Status::Active),
+            button_window_control(&Theme::Dark, button::Status::Active),
+        ] {
+            assert_eq!(style.border.radius.top_left, RADIUS_TIGHT);
+            assert_eq!(style.border.radius.top_right, RADIUS_TIGHT);
+            assert_eq!(style.border.radius.bottom_left, RADIUS_TIGHT);
+            assert_eq!(style.border.radius.bottom_right, RADIUS_TIGHT);
+            assert!(RADIUS_TIGHT < RADIUS_UI);
+        }
+    }
+
+    #[test]
+    fn pane_header_buttons_use_general_ui_radius() {
+        for style in [
+            button_pane_header_control(&Theme::Dark, button::Status::Active),
+            button_pane_header_control_active(&Theme::Dark, button::Status::Active),
+        ] {
+            assert_eq!(style.border.radius.top_left, RADIUS_UI);
+            assert_eq!(style.border.radius.top_right, RADIUS_UI);
+            assert_eq!(style.border.radius.bottom_left, RADIUS_UI);
+            assert_eq!(style.border.radius.bottom_right, RADIUS_UI);
+        }
+    }
+
+    #[test]
+    fn app_code_does_not_use_icons_without_the_shared_helper() {
+        let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut rust_files = Vec::new();
+        collect_rust_files(&src_root, &mut rust_files);
+
+        let offenders: Vec<_> = rust_files
+            .into_iter()
+            .filter(|path| path != &src_root.join("ui_style.rs"))
+            .filter_map(|path| {
+                let content = fs::read_to_string(&path).expect("read source");
+                content.contains("svg(icons::").then_some(path)
+            })
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "icons must go through the shared helper, direct svg(icons::...) found in: {offenders:?}"
+        );
     }
 }

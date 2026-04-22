@@ -54,7 +54,7 @@ pub(super) fn score_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup
         app.svg_page_brightness != app.default_global_state.score_view.page_brightness;
 
     let prev_button = button(super::dock_view::compact_control_icon(icons::arrow_left()))
-        .style(ui_style::button_neutral)
+        .style(ui_style::button_pane_header_control)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
             ui_style::PADDING_BUTTON_COMPACT_H,
@@ -66,7 +66,7 @@ pub(super) fn score_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup
     };
 
     let next_button = button(super::dock_view::compact_control_icon(icons::arrow_right()))
-        .style(ui_style::button_neutral)
+        .style(ui_style::button_pane_header_control)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
             ui_style::PADDING_BUTTON_COMPACT_H,
@@ -78,7 +78,7 @@ pub(super) fn score_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup
     };
 
     let zoom_out_button = button(super::dock_view::compact_control_icon(icons::zoom_out()))
-        .style(ui_style::button_neutral)
+        .style(ui_style::button_pane_header_control)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
             ui_style::PADDING_BUTTON_COMPACT_H,
@@ -90,7 +90,7 @@ pub(super) fn score_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup
     };
 
     let zoom_in_button = button(super::dock_view::compact_control_icon(icons::zoom_in()))
-        .style(ui_style::button_neutral)
+        .style(ui_style::button_pane_header_control)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
             ui_style::PADDING_BUTTON_COMPACT_H,
@@ -102,7 +102,7 @@ pub(super) fn score_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup
     };
 
     let brightness_down_button = button(super::dock_view::compact_control_icon(icons::sun_dim()))
-        .style(ui_style::button_neutral)
+        .style(ui_style::button_pane_header_control)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
             ui_style::PADDING_BUTTON_COMPACT_H,
@@ -114,7 +114,7 @@ pub(super) fn score_controls<'a>(app: &'a Lilypalooza) -> Vec<HeaderControlGroup
     };
 
     let brightness_up_button = button(super::dock_view::compact_control_icon(icons::sun()))
-        .style(ui_style::button_neutral)
+        .style(ui_style::button_pane_header_control)
         .padding([
             ui_style::PADDING_BUTTON_COMPACT_V,
             ui_style::PADDING_BUTTON_COMPACT_H,
