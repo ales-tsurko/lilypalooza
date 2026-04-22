@@ -1,4 +1,5 @@
-use lilypalooza_audio::{BusId, SlotState, TrackId};
+use lilypalooza_audio::instrument::soundfont_synth;
+use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, BusId, SlotState, SoundfontProcessorState, TrackId};
 
 use super::super::messages::MixerMessage;
 use super::*;
@@ -193,13 +194,20 @@ impl Lilypalooza {
             }
             MixerMessage::SelectTrackInstrument(index, choice) => {
                 let slot = match choice {
-                    super::super::mixer::InstrumentChoice::None => SlotState::empty(),
+                    super::super::mixer::InstrumentChoice::None => SlotState::default(),
                     super::super::mixer::InstrumentChoice::SoundfontProgram {
                         soundfont_id,
                         bank,
                         program,
                         ..
-                    } => SlotState::soundfont(soundfont_id, bank, program),
+                    } => SlotState::built_in(
+                        BUILTIN_SOUNDFONT_ID,
+                        soundfont_synth::encode_state(&SoundfontProcessorState {
+                            soundfont_id,
+                            bank,
+                            program,
+                        }),
+                    ),
                 };
                 let _ = mixer.set_track_instrument(TrackId(index as u16), slot);
             }

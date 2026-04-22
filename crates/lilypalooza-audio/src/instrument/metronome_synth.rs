@@ -65,15 +65,11 @@ const PARAMS: &[ParameterDescriptor] = &[
     },
 ];
 
-const DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+pub(crate) const DESCRIPTOR: &ProcessorDescriptor = &ProcessorDescriptor {
     name: "Metronome",
     params: PARAMS,
     editor: None,
 };
-
-pub(crate) fn descriptor() -> &'static ProcessorDescriptor {
-    &DESCRIPTOR
-}
 
 pub(crate) struct MetronomeProcessor {
     shared: SharedMetronomeState,
@@ -127,7 +123,7 @@ impl MetronomeProcessor {
 
 impl Processor for MetronomeProcessor {
     fn descriptor(&self) -> &'static ProcessorDescriptor {
-        &DESCRIPTOR
+        DESCRIPTOR
     }
 
     fn set_param(&mut self, id: &str, normalized: f32) -> bool {

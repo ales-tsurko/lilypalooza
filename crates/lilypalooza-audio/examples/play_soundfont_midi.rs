@@ -6,12 +6,21 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
+use lilypalooza_audio::instrument::soundfont_synth;
 use lilypalooza_audio::{
-    AudioEngine, AudioEngineOptions, MixerState, SlotState, SoundfontResource, TrackId,
+    AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, MixerState, SlotState,
+    SoundfontResource, TrackId,
 };
 
 const DEFAULT_SOUNDFONT_ID: &str = "default";
 const DEFAULT_PIANO_PROGRAMS: [u8; 4] = [0, 1, 2, 3];
+
+fn soundfont_slot(soundfont_id: &str, program: u8) -> SlotState {
+    SlotState::built_in(
+        BUILTIN_SOUNDFONT_ID,
+        soundfont_synth::state(soundfont_id, 0, program),
+    )
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os();
@@ -41,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (track_index, program) in DEFAULT_PIANO_PROGRAMS.iter().copied().enumerate() {
             mixer.set_track_instrument(
                 TrackId(track_index as u16),
-                SlotState::soundfont(DEFAULT_SOUNDFONT_ID, 0, program),
+                soundfont_slot(DEFAULT_SOUNDFONT_ID, program),
             )?;
         }
     }

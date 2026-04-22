@@ -3,8 +3,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::instrument::{
-    EffectProcessor, ParameterDescriptor, Processor, ProcessorDescriptor, ProcessorState,
-    ProcessorStateError,
+    BUILTIN_GAIN_ID, Controller, ControllerError, EffectProcessor, EffectRuntimeSpec,
+    ParameterDescriptor, Processor, ProcessorDescriptor, ProcessorKind, ProcessorState,
+    ProcessorStateError, RuntimeBinding, RuntimeFactoryError, SlotState,
 };
 
 pub(crate) const MIN_GAIN_DB: f32 = -60.0;
@@ -19,14 +20,97 @@ const GAIN_EFFECT_PARAMS: &[ParameterDescriptor] = &[ParameterDescriptor {
     default: DEFAULT_GAIN_NORMALIZED,
 }];
 
-const GAIN_EFFECT_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+pub(crate) const DESCRIPTOR: &ProcessorDescriptor = &ProcessorDescriptor {
     name: "Gain",
     params: GAIN_EFFECT_PARAMS,
     editor: None,
 };
 
 pub(crate) fn descriptor() -> &'static ProcessorDescriptor {
-    &GAIN_EFFECT_DESCRIPTOR
+    DESCRIPTOR
+}
+
+fn is_slot(slot: &SlotState) -> bool {
+    matches!(
+        slot.kind,
+        ProcessorKind::BuiltIn { ref processor_id } if processor_id == BUILTIN_GAIN_ID
+    )
+}
+
+#[derive(Debug, Clone)]
+struct GainBinding {
+    shared: SharedGainState,
+}
+
+impl RuntimeBinding for GainBinding {
+    fn controller(&self) -> Box<dyn Controller> {
+        Box::new(GainController {
+            shared: self.shared.clone(),
+        })
+    }
+}
+
+struct GainController {
+    shared: SharedGainState,
+}
+
+impl Controller for GainController {
+    fn descriptor(&self) -> &'static ProcessorDescriptor {
+        descriptor()
+    }
+
+    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
+        if id != "gain_db" {
+            return Err(ControllerError::UnknownParameter(id.to_string()));
+        }
+        Ok(((self.shared.gain_db() - MIN_GAIN_DB) / GAIN_RANGE_DB).clamp(0.0, 1.0))
+    }
+
+    fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError> {
+        if id != "gain_db" {
+            return Err(ControllerError::UnknownParameter(id.to_string()));
+        }
+        self.shared
+            .set_gain_db(MIN_GAIN_DB + normalized.clamp(0.0, 1.0) * GAIN_RANGE_DB);
+        Ok(())
+    }
+
+    fn save_state(&self) -> Result<ProcessorState, ControllerError> {
+        let normalized = ((self.shared.gain_db() - MIN_GAIN_DB) / GAIN_RANGE_DB).clamp(0.0, 1.0);
+        let mut processor = GainEffectProcessor::from_state(&ProcessorState::default())
+            .map_err(|error| ControllerError::Backend(error.to_string()))?;
+        let _ = processor.set_param("gain_db", normalized);
+        Ok(processor.save_state())
+    }
+
+    fn load_state(&self, state: &ProcessorState) -> Result<(), ControllerError> {
+        let processor = GainEffectProcessor::from_state(state)
+            .map_err(|error| ControllerError::Backend(error.to_string()))?;
+        self.shared.set_gain_db(
+            processor
+                .get_param("gain_db")
+                .ok_or_else(|| ControllerError::UnknownParameter("gain_db".to_string()))
+                .map(|normalized| MIN_GAIN_DB + normalized * GAIN_RANGE_DB)?,
+        );
+        Ok(())
+    }
+}
+
+pub(crate) fn create_runtime(
+    slot: &SlotState,
+) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError> {
+    if !is_slot(slot) {
+        return Ok(None);
+    }
+    let shared = SharedGainState::default();
+    let processor = Box::new(GainEffectProcessor::from_state_with_shared(
+        &slot.state,
+        Some(shared.clone()),
+    )?);
+    Ok(Some(EffectRuntimeSpec {
+        processor,
+        binding: Some(Box::new(GainBinding { shared })),
+    }))
 }
 
 #[derive(Debug, Clone)]

@@ -51,6 +51,14 @@ pub enum MixerError {
     /// SoundFont id does not exist.
     #[error("soundfont id `{0}` does not exist")]
     InvalidSoundfontId(String),
+    /// Slot address is outside the current strip layout.
+    #[error("slot address strip {strip_index} slot {slot_index} is invalid")]
+    InvalidSlotAddress {
+        /// Visible strip index.
+        strip_index: usize,
+        /// Unified slot index inside that strip.
+        slot_index: usize,
+    },
 }
 
 /// One channel meter snapshot.
@@ -254,6 +262,16 @@ impl MixerState {
             .iter_mut()
             .find(|bus| bus.bus_id == Some(id))
             .ok_or(MixerError::InvalidBusId(id))
+    }
+
+    pub(crate) fn slot_mut(&mut self, address: SlotAddress) -> Result<&mut SlotState, MixerError> {
+        self.strips
+            .get_mut(address.strip_index)
+            .and_then(|strip| strip.slot_mut(address.slot_index))
+            .ok_or(MixerError::InvalidSlotAddress {
+                strip_index: address.strip_index,
+                slot_index: address.slot_index,
+            })
     }
 
     /// Adds one dynamic bus.
@@ -976,6 +994,67 @@ impl MixerHandle<'_> {
         settle_graph_mutation(self.commands);
         Ok(())
     }
+
+    pub fn set_slot_bypassed(
+        &mut self,
+        address: SlotAddress,
+        bypassed: bool,
+    ) -> Result<(), AudioEngineError> {
+        if address.slot_index == 0 {
+            return Err(MixerError::InvalidSlotAddress {
+                strip_index: address.strip_index,
+                slot_index: address.slot_index,
+            }
+            .into());
+        }
+        self.mixer.state.slot_mut(address)?.bypassed = bypassed;
+        match address.strip_index {
+            0 => {
+                self.mixer.runtime.sync_master_effects(
+                    self.context,
+                    self.commands,
+                    &self.mixer.state,
+                )?;
+            }
+            strip_index if strip_index <= self.mixer.state.track_count() => {
+                let track_id = TrackId((strip_index - 1) as u16);
+                self.mixer.runtime.sync_track_effects(
+                    self.context,
+                    self.commands,
+                    &self.mixer.state,
+                    track_id,
+                )?;
+                self.mixer.runtime.sync_track_routing(
+                    self.context,
+                    self.commands,
+                    &self.mixer.state,
+                    track_id,
+                )?;
+            }
+            _ => {
+                let Some(bus_id) = self
+                    .mixer
+                    .state
+                    .strip_by_index(address.strip_index)
+                    .and_then(|strip| strip.bus_id)
+                else {
+                    return Err(MixerError::InvalidSlotAddress {
+                        strip_index: address.strip_index,
+                        slot_index: address.slot_index,
+                    }
+                    .into());
+                };
+                self.mixer.runtime.sync_bus_effects(
+                    self.context,
+                    self.commands,
+                    &self.mixer.state,
+                    bus_id,
+                )?;
+            }
+        }
+        settle_graph_mutation(self.commands);
+        Ok(())
+    }
 }
 
 fn settle_graph_mutation(commands: &mut MultiThreadedKnystCommands) {
@@ -1004,10 +1083,18 @@ fn current_playing_beat(commands: &mut MultiThreadedKnystCommands) -> Option<Bea
 mod tests {
     use super::{MixerError, MixerState};
     use crate::instrument::{
-        BUILTIN_GAIN_ID, ProcessorKind, ProcessorState, SlotState, SoundfontResource,
+        BUILTIN_GAIN_ID, BUILTIN_SOUNDFONT_ID, ProcessorKind, ProcessorState, SlotState,
+        SoundfontResource, soundfont_synth,
     };
     use crate::mixer::{BusId, BusSend, INSTRUMENT_TRACK_COUNT, TrackId, TrackRoute};
     use std::path::PathBuf;
+
+    fn soundfont_slot(program: u8) -> SlotState {
+        SlotState::built_in(
+            BUILTIN_SOUNDFONT_ID,
+            soundfont_synth::state("default", 0, program),
+        )
+    }
 
     #[test]
     fn mixer_preallocates_instrument_tracks_and_master() {
@@ -1132,11 +1219,38 @@ mod tests {
                     processor_id: BUILTIN_GAIN_ID.to_string(),
                 },
                 state: ProcessorState::default(),
+                bypassed: false,
             });
 
         let ron = ron::to_string(&mixer).expect("mixer should serialize");
         let restored: MixerState = ron::from_str(&ron).expect("mixer should deserialize");
         assert_eq!(restored, mixer);
+    }
+
+    #[test]
+    fn mixer_roundtrips_bypassed_effect_slots() {
+        let mut mixer = MixerState::new();
+        mixer
+            .track_mut(TrackId(0))
+            .expect("track should exist")
+            .push_effect(SlotState {
+                kind: ProcessorKind::BuiltIn {
+                    processor_id: BUILTIN_GAIN_ID.to_string(),
+                },
+                state: ProcessorState::default(),
+                bypassed: true,
+            });
+
+        let ron = ron::to_string(&mixer).expect("mixer should serialize");
+        let restored: MixerState = ron::from_str(&ron).expect("mixer should deserialize");
+        assert!(
+            restored
+                .track(TrackId(0))
+                .expect("track should exist")
+                .effect(0)
+                .expect("effect should exist")
+                .bypassed
+        );
     }
 
     #[test]
@@ -1165,7 +1279,7 @@ mod tests {
         mixer
             .track_mut(TrackId(0))
             .expect("track should exist")
-            .set_instrument_slot(SlotState::soundfont("default", 0, 0));
+            .set_instrument_slot(soundfont_slot(0));
         mixer
             .track_mut(TrackId(0))
             .expect("track should exist")
@@ -1174,6 +1288,7 @@ mod tests {
                     processor_id: BUILTIN_GAIN_ID.to_string(),
                 },
                 state: ProcessorState::default(),
+                bypassed: false,
             });
         let bus_id = mixer.add_bus("Verb");
         mixer
@@ -1184,6 +1299,7 @@ mod tests {
                     processor_id: BUILTIN_GAIN_ID.to_string(),
                 },
                 state: ProcessorState::default(),
+                bypassed: false,
             });
 
         let track = mixer.strip_by_index(1).expect("track strip should exist");

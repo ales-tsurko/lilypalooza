@@ -2,15 +2,19 @@
 
 mod gain_effect;
 pub(crate) mod metronome_synth;
-pub(crate) mod soundfont_synth;
+/// Processor discovery and creation catalog.
+pub mod registry;
+/// Built-in SoundFont slot helpers used by the app and tests.
+pub mod soundfont_synth;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-pub(crate) use gain_effect::{
-    GAIN_RANGE_DB, GainEffectProcessor, MIN_GAIN_DB, SharedGainState, descriptor as gain_descriptor,
-};
+#[allow(unused_imports)]
+#[cfg(test)]
+pub(crate) use gain_effect::{GAIN_RANGE_DB, GainEffectProcessor, MIN_GAIN_DB, SharedGainState};
 use knyst::r#gen::{Gen, GenContext};
 use knyst::graph::{EventChange, EventPayload, ResolvedNodeEventInput, SchedulerChange};
 use knyst::handles::{GenericHandle, Handle, HandleData};
@@ -20,7 +24,9 @@ use knyst::prelude::{
 };
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use serde::{Deserialize, Serialize};
-pub(crate) use soundfont_synth::{MIDI_14BIT_MAX, encode_soundfont_state};
+#[allow(unused_imports)]
+#[cfg(test)]
+pub(crate) use soundfont_synth::MIDI_14BIT_MAX;
 pub use soundfont_synth::{SoundfontProcessorState, SoundfontResource};
 
 /// Built-in empty instrument id.
@@ -125,6 +131,37 @@ pub trait Controller: Send {
     fn create_editor_session(&self) -> Result<Option<Box<dyn EditorSession>>, EditorError> {
         Ok(None)
     }
+}
+
+pub(crate) trait RuntimeBinding: Send {
+    fn controller(&self) -> Box<dyn Controller>;
+
+    fn update_in_place(&self, _slot: &SlotState) -> Result<bool, ProcessorStateError> {
+        Ok(false)
+    }
+}
+
+pub(crate) struct InstrumentRuntimeSpec {
+    pub(crate) processor: Box<dyn InstrumentProcessor>,
+    pub(crate) binding: Box<dyn RuntimeBinding>,
+}
+
+pub(crate) struct EffectRuntimeSpec {
+    pub(crate) processor: Box<dyn EffectProcessor>,
+    pub(crate) binding: Option<Box<dyn RuntimeBinding>>,
+}
+
+pub(crate) struct InstrumentRuntimeContext<'a> {
+    pub(crate) soundfonts: &'a HashMap<String, soundfont_synth::LoadedSoundfont>,
+    pub(crate) soundfont_settings: soundfont_synth::SoundfontSynthSettings,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub(crate) enum RuntimeFactoryError {
+    #[error(transparent)]
+    State(#[from] ProcessorStateError),
+    #[error("{0}")]
+    Backend(String),
 }
 
 /// Live processor editor session.
@@ -262,6 +299,8 @@ pub struct SlotState {
     pub kind: ProcessorKind,
     /// Opaque persisted processor state.
     pub state: ProcessorState,
+    /// Whether the slot stays instantiated but is bypassed in the signal path.
+    pub bypassed: bool,
 }
 
 impl Default for SlotState {
@@ -271,57 +310,61 @@ impl Default for SlotState {
                 processor_id: BUILTIN_NONE_ID.to_string(),
             },
             state: ProcessorState::default(),
+            bypassed: false,
         }
     }
 }
 
 impl SlotState {
-    /// Creates an empty slot state.
+    /// Creates one slot state from an explicit backend kind and opaque state.
     #[must_use]
-    pub fn empty() -> Self {
-        Self::default()
+    pub fn new(kind: ProcessorKind, state: ProcessorState) -> Self {
+        Self {
+            kind,
+            state,
+            bypassed: false,
+        }
     }
 
-    /// Creates a built-in SoundFont instrument slot state.
+    /// Creates one built-in slot state from a processor id and opaque state.
     #[must_use]
-    pub fn soundfont(soundfont_id: impl Into<String>, bank: u16, program: u8) -> Self {
-        Self {
-            kind: ProcessorKind::BuiltIn {
-                processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
+    pub fn built_in(processor_id: impl Into<String>, state: ProcessorState) -> Self {
+        Self::new(
+            ProcessorKind::BuiltIn {
+                processor_id: processor_id.into(),
             },
-            state: soundfont_synth::encode_soundfont_state(&SoundfontProcessorState {
-                soundfont_id: soundfont_id.into(),
-                bank,
-                program,
-            }),
+            state,
+        )
+    }
+
+    /// Decodes one built-in state payload when the slot matches the requested processor id.
+    pub fn decode_built_in<T>(
+        &self,
+        processor_id: &str,
+        decode: fn(&ProcessorState) -> Result<T, ProcessorStateError>,
+    ) -> Result<Option<T>, ProcessorStateError> {
+        let ProcessorKind::BuiltIn {
+            processor_id: slot_id,
+        } = &self.kind
+        else {
+            return Ok(None);
+        };
+        if slot_id != processor_id {
+            return Ok(None);
         }
+        decode(&self.state).map(Some)
     }
 
     /// Returns whether this slot contains no processor.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        matches!(
-            self.kind,
-            ProcessorKind::BuiltIn {
-                ref processor_id
-            } if processor_id == BUILTIN_NONE_ID
-        )
-    }
-
-    /// Decodes the typed SoundFont state when this slot contains a SoundFont processor.
-    pub fn soundfont_state(&self) -> Result<Option<SoundfontProcessorState>, ProcessorStateError> {
-        match self.kind {
-            ProcessorKind::BuiltIn { ref processor_id } if processor_id == BUILTIN_SOUNDFONT_ID => {
-                soundfont_synth::SoundfontProcessor::decode_state(&self.state).map(Some)
-            }
-            _ => Ok(None),
-        }
+        registry::is_empty(&self.kind)
     }
 
     /// Returns the static processor descriptor for this slot, when known.
     #[must_use]
     pub fn descriptor(&self) -> Option<&'static ProcessorDescriptor> {
-        descriptor(&self.kind)
+        registry::resolve(&self.kind).map(|entry| entry.descriptor)
     }
 
     /// Returns a display title for this slot.
@@ -332,24 +375,6 @@ impl SlotState {
         } else {
             format!("{strip_name} Effect {slot_index}")
         }
-    }
-}
-
-/// Returns the static descriptor for one backend, when known.
-#[must_use]
-pub fn descriptor(kind: &ProcessorKind) -> Option<&'static ProcessorDescriptor> {
-    match kind {
-        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_SOUNDFONT_ID => {
-            Some(soundfont_synth::descriptor())
-        }
-        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_GAIN_ID => {
-            Some(gain_effect::descriptor())
-        }
-        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_METRONOME_ID => {
-            Some(metronome_synth::descriptor())
-        }
-        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_NONE_ID => None,
-        ProcessorKind::BuiltIn { .. } | ProcessorKind::Plugin { .. } => None,
     }
 }
 
@@ -716,25 +741,17 @@ impl EffectRuntimeHandle {
     }
 }
 
-pub(crate) fn create_effect_processor(
-    effect: &SlotState,
-) -> Result<Option<Box<dyn EffectProcessor>>, ProcessorStateError> {
-    create_effect_processor_with_shared(effect, None)
+pub(crate) fn create_instrument_runtime(
+    slot: &SlotState,
+    context: &InstrumentRuntimeContext<'_>,
+) -> Result<Option<InstrumentRuntimeSpec>, RuntimeFactoryError> {
+    registry::create_instrument_runtime(slot, context)
 }
 
-pub(crate) fn create_effect_processor_with_shared(
+pub(crate) fn create_effect_runtime(
     effect: &SlotState,
-    gain_shared: Option<gain_effect::SharedGainState>,
-) -> Result<Option<Box<dyn EffectProcessor>>, ProcessorStateError> {
-    match &effect.kind {
-        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_GAIN_ID => Ok(Some(
-            Box::new(gain_effect::GainEffectProcessor::from_state_with_shared(
-                &effect.state,
-                gain_shared,
-            )?),
-        )),
-        ProcessorKind::BuiltIn { .. } | ProcessorKind::Plugin { .. } => Ok(None),
-    }
+) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError> {
+    registry::create_effect_runtime(effect)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -884,14 +901,21 @@ mod tests {
     use knyst::prelude::{Beats, graph_output, handle};
 
     use super::{
-        EffectProcessor, InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle,
-        MidiEvent, Processor, ProcessorDescriptor, ProcessorState, ProcessorStateError,
-        SharedInstrumentResetState,
+        BUILTIN_SOUNDFONT_ID, EffectProcessor, InstrumentProcessor, InstrumentProcessorNode,
+        InstrumentRuntimeHandle, MidiEvent, Processor, ProcessorDescriptor, ProcessorState,
+        ProcessorStateError, SharedInstrumentResetState, SlotState, soundfont_synth,
         soundfont_synth::{
             LoadedSoundfont, SoundfontProcessor, SoundfontProcessorState, SoundfontSynthSettings,
         },
     };
     use crate::test_utils::{OfflineHarness, test_soundfont_resource};
+
+    fn soundfont_slot(soundfont_id: &str, program: u8) -> SlotState {
+        SlotState::built_in(
+            BUILTIN_SOUNDFONT_ID,
+            soundfont_synth::state(soundfont_id, 0, program),
+        )
+    }
 
     struct GateProcessor {
         active: bool,
@@ -1264,7 +1288,7 @@ mod tests {
 
     #[test]
     fn soundfont_slot_reports_processor_descriptor_and_no_editor_yet() {
-        let slot = crate::instrument::SlotState::soundfont("test", 0, 0);
+        let slot = soundfont_slot("test", 0);
 
         let descriptor = slot
             .descriptor()
@@ -1281,6 +1305,7 @@ mod tests {
                 processor_id: crate::instrument::BUILTIN_GAIN_ID.to_string(),
             },
             state: crate::instrument::ProcessorState::default(),
+            bypassed: false,
         };
 
         let descriptor = slot

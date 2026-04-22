@@ -1266,9 +1266,16 @@ mod tests {
         metronome_clicks_between, normalized_time_signatures, ordered_events_at_same_time,
         ticks_to_beats,
     };
-    use crate::instrument::{MidiEvent, SlotState};
+    use crate::instrument::{BUILTIN_SOUNDFONT_ID, MidiEvent, SlotState, soundfont_synth};
     use crate::mixer::{Mixer, MixerState, TrackId};
     use crate::test_utils::{OfflineHarness, simple_midi_bytes, test_soundfont_resource};
+
+    fn soundfont_slot(program: u8) -> SlotState {
+        SlotState::built_in(
+            BUILTIN_SOUNDFONT_ID,
+            soundfont_synth::state("default", 0, program),
+        )
+    }
 
     #[test]
     fn ticks_to_beats_maps_whole_and_fractional_beats() {
@@ -1298,7 +1305,7 @@ mod tests {
         state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .set_instrument_slot(SlotState::soundfont("default", 0, 0));
+            .set_instrument_slot(soundfont_slot(0));
         let context = harness.context().clone();
         let settings = harness.settings();
         let mixer = Mixer::new(&context, harness.commands(), &settings, state)

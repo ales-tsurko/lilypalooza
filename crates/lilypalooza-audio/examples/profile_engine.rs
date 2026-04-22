@@ -10,13 +10,22 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use lilypalooza_audio::instrument::soundfont_synth;
 use lilypalooza_audio::{
-    AudioEngine, AudioEngineOptions, MixerState, SlotState, SoundfontResource, TrackId,
+    AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, MixerState, SlotState,
+    SoundfontResource, TrackId,
 };
 use midly::num::{u4, u7, u15, u24, u28};
 use midly::{
     Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
 };
+
+fn soundfont_slot(soundfont_id: &str, program: u8) -> SlotState {
+    SlotState::built_in(
+        BUILTIN_SOUNDFONT_ID,
+        soundfont_synth::state(soundfont_id, 0, program),
+    )
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = options_from_iter(env::args_os().skip(1));
@@ -37,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for track_index in 0..options.assign_tracks {
             mixer.set_track_instrument(
                 TrackId(track_index as u16),
-                SlotState::soundfont("default", 0, options.base_program + track_index as u8),
+                soundfont_slot("default", options.base_program + track_index as u8),
             )?;
         }
     }

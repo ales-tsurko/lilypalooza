@@ -8,11 +8,12 @@ use iced::widget::{
 };
 use iced::{Color, Element, Fill, FillPortion, Length, alignment};
 use iced_aw::helpers::color_picker_with_change;
+use lilypalooza_audio::instrument::soundfont_synth;
 use lilypalooza_audio::mixer::{
     ChannelMeterSnapshot, MixerMeterSnapshot, MixerMeterSnapshotWindow, STRIP_METER_MIN_DB,
     StripMeterSnapshot,
 };
-use lilypalooza_audio::{MixerState, SlotState, SoundfontProcessorState};
+use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, MixerState, SlotState, SoundfontProcessorState};
 
 use super::controls::{GAIN_MIN_DB, gain_control_width, gain_fader, gain_knob, pan_knob};
 use super::messages::MixerMessage;
@@ -1640,7 +1641,7 @@ fn selected_instrument_choice(
         soundfont_id,
         bank,
         program,
-    })) = slot.soundfont_state()
+    })) = slot.decode_built_in(BUILTIN_SOUNDFONT_ID, soundfont_synth::decode_state)
     else {
         return None;
     };
@@ -1663,7 +1664,8 @@ fn selected_instrument_choice(
 #[cfg(test)]
 mod tests {
     use crate::ui_style;
-    use lilypalooza_audio::{MixerState, SlotState};
+    use lilypalooza_audio::instrument::soundfont_synth;
+    use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, MixerState, SlotState, SoundfontProcessorState};
 
     use super::{
         COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
@@ -1680,7 +1682,7 @@ mod tests {
     fn empty_slot_maps_to_none_choice() {
         let mixer = MixerState::new();
         assert_eq!(
-            selected_instrument_choice(Some(&SlotState::empty()), &mixer),
+            selected_instrument_choice(Some(&SlotState::default()), &mixer),
             Some(InstrumentChoice::None)
         );
     }
@@ -1689,7 +1691,17 @@ mod tests {
     fn soundfont_slot_maps_to_soundfont_choice() {
         let mixer = MixerState::new();
         assert_eq!(
-            selected_instrument_choice(Some(&SlotState::soundfont("default", 0, 2)), &mixer),
+            selected_instrument_choice(
+                Some(&SlotState::built_in(
+                    BUILTIN_SOUNDFONT_ID,
+                    soundfont_synth::encode_state(&SoundfontProcessorState {
+                        soundfont_id: "default".to_string(),
+                        bank: 0,
+                        program: 2,
+                    }),
+                )),
+                &mixer
+            ),
             Some(InstrumentChoice::SoundfontProgram {
                 soundfont_id: "default".to_string(),
                 soundfont_name: "default".to_string(),

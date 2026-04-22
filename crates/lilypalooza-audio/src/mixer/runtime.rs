@@ -5,17 +5,15 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::engine::AudioEngineSettings;
 use crate::instrument::metronome_synth::{MetronomeProcessor, SharedMetronomeState};
 use crate::instrument::soundfont_synth::{
-    LoadedSoundfont, SharedSoundfontProgramState, SoundfontProcessor, SoundfontSynthError,
-    SoundfontSynthSettings,
+    LoadedSoundfont, SoundfontSynthError, SoundfontSynthSettings,
 };
 use crate::instrument::{
-    BUILTIN_GAIN_ID, BUILTIN_NONE_ID, BUILTIN_SOUNDFONT_ID, Controller, ControllerError,
-    EffectProcessorNode, EffectRuntimeHandle, GAIN_RANGE_DB, GainEffectProcessor,
-    InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle, MIDI_14BIT_MAX,
-    MIN_GAIN_DB, Processor, ProcessorDescriptor, ProcessorKind, ProcessorState,
-    ProcessorStateError, ScheduledInstrumentEvent, SharedGainState, SharedInstrumentResetState,
-    SlotState, create_effect_processor, create_effect_processor_with_shared,
-    decode_instrument_event, gain_descriptor, generation_is_current_or_newer,
+    Controller, EffectProcessorNode, EffectRuntimeHandle, InstrumentProcessor,
+    InstrumentProcessorNode, InstrumentRuntimeContext, InstrumentRuntimeHandle,
+    ProcessorStateError, RuntimeBinding, RuntimeFactoryError, ScheduledInstrumentEvent,
+    SharedInstrumentResetState, SlotState, create_effect_runtime as build_effect_runtime_spec,
+    create_instrument_runtime as build_instrument_runtime_spec, decode_instrument_event,
+    generation_is_current_or_newer, registry,
 };
 use crate::mixer::{
     BusId, BusSend, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot, MixerMeterSnapshotWindow,
@@ -40,6 +38,8 @@ pub(crate) enum MixerRuntimeError {
     Soundfont(#[from] SoundfontSynthError),
     #[error(transparent)]
     ProcessorState(#[from] ProcessorStateError),
+    #[error(transparent)]
+    RuntimeFactory(#[from] RuntimeFactoryError),
 }
 
 pub(crate) enum TrackInstrumentSync {
@@ -244,6 +244,7 @@ impl MixerRuntime {
                 .master
                 .effects
                 .get(address.slot_index.checked_sub(1).unwrap_or(usize::MAX))
+                .and_then(|runtime| runtime.as_ref())
                 .and_then(EffectRuntime::controller));
         }
 
@@ -265,6 +266,7 @@ impl MixerRuntime {
                 effect_index => runtime
                     .effects
                     .get(effect_index - 1)
+                    .and_then(|runtime| runtime.as_ref())
                     .and_then(EffectRuntime::controller),
             });
         }
@@ -278,6 +280,7 @@ impl MixerRuntime {
         Ok(runtime
             .effects
             .get(address.slot_index.checked_sub(1).unwrap_or(usize::MAX))
+            .and_then(|runtime| runtime.as_ref())
             .and_then(EffectRuntime::controller))
     }
 
@@ -507,13 +510,10 @@ impl MixerRuntime {
             let Some(slot) = track.instrument_slot() else {
                 continue;
             };
-            let ProcessorKind::BuiltIn { processor_id } = &slot.kind else {
-                continue;
-            };
-            if processor_id != BUILTIN_SOUNDFONT_ID {
-                continue;
-            }
-            let Ok(state) = SoundfontProcessor::decode_state(&slot.state) else {
+            let Ok(Some(state)) = slot.decode_built_in(
+                crate::instrument::BUILTIN_SOUNDFONT_ID,
+                crate::instrument::soundfont_synth::decode_state,
+            ) else {
                 continue;
             };
             let track_soundfont_id = state.soundfont_id;
@@ -870,111 +870,9 @@ impl MixerRuntime {
     }
 }
 
-struct SoundfontController {
-    soundfont_id: String,
-    program: SharedSoundfontProgramState,
-}
-
-impl Controller for SoundfontController {
-    fn descriptor(&self) -> &'static ProcessorDescriptor {
-        crate::instrument::soundfont_synth::descriptor()
-    }
-
-    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
-        let (bank, program, _) = self.program.snapshot();
-        match id {
-            "bank" => Ok(f32::from(bank) / f32::from(MIDI_14BIT_MAX)),
-            "program" => Ok(f32::from(program) / 127.0),
-            _ => Err(ControllerError::UnknownParameter(id.to_string())),
-        }
-    }
-
-    fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError> {
-        let (mut bank, mut program, _) = self.program.snapshot();
-        match id {
-            "bank" => {
-                bank = (normalized.clamp(0.0, 1.0) * f32::from(MIDI_14BIT_MAX)).round() as u16
-            }
-            "program" => program = (normalized.clamp(0.0, 1.0) * 127.0).round() as u8,
-            _ => return Err(ControllerError::UnknownParameter(id.to_string())),
-        }
-        self.program.update(bank, program);
-        Ok(())
-    }
-
-    fn save_state(&self) -> Result<ProcessorState, ControllerError> {
-        let (bank, program, _) = self.program.snapshot();
-        Ok(crate::instrument::encode_soundfont_state(
-            &crate::instrument::SoundfontProcessorState {
-                soundfont_id: self.soundfont_id.clone(),
-                bank,
-                program,
-            },
-        ))
-    }
-
-    fn load_state(&self, state: &ProcessorState) -> Result<(), ControllerError> {
-        let state = crate::instrument::soundfont_synth::SoundfontProcessor::decode_state(state)
-            .map_err(|error| ControllerError::Backend(error.to_string()))?;
-        if state.soundfont_id != self.soundfont_id {
-            return Err(ControllerError::Backend(
-                "changing soundfont resource requires slot rebuild".to_string(),
-            ));
-        }
-        self.program.update(state.bank, state.program);
-        Ok(())
-    }
-}
-
-struct GainController {
-    shared: SharedGainState,
-}
-
-impl Controller for GainController {
-    fn descriptor(&self) -> &'static ProcessorDescriptor {
-        gain_descriptor()
-    }
-
-    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
-        if id != "gain_db" {
-            return Err(ControllerError::UnknownParameter(id.to_string()));
-        }
-        Ok(((self.shared.gain_db() - MIN_GAIN_DB) / GAIN_RANGE_DB).clamp(0.0, 1.0))
-    }
-
-    fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError> {
-        if id != "gain_db" {
-            return Err(ControllerError::UnknownParameter(id.to_string()));
-        }
-        self.shared
-            .set_gain_db(MIN_GAIN_DB + normalized.clamp(0.0, 1.0) * GAIN_RANGE_DB);
-        Ok(())
-    }
-
-    fn save_state(&self) -> Result<ProcessorState, ControllerError> {
-        let normalized = ((self.shared.gain_db() - MIN_GAIN_DB) / GAIN_RANGE_DB).clamp(0.0, 1.0);
-        let mut processor = GainEffectProcessor::from_state(&ProcessorState::default())
-            .map_err(|error| ControllerError::Backend(error.to_string()))?;
-        let _ = processor.set_param("gain_db", normalized);
-        Ok(processor.save_state())
-    }
-
-    fn load_state(&self, state: &ProcessorState) -> Result<(), ControllerError> {
-        let processor = GainEffectProcessor::from_state(state)
-            .map_err(|error| ControllerError::Backend(error.to_string()))?;
-        self.shared.set_gain_db(
-            processor
-                .get_param("gain_db")
-                .ok_or_else(|| ControllerError::UnknownParameter("gain_db".to_string()))
-                .map(|normalized| MIN_GAIN_DB + normalized * GAIN_RANGE_DB)?,
-        );
-        Ok(())
-    }
-}
-
 struct MasterRuntime {
     input: Handle<GenericHandle>,
-    effects: Vec<EffectRuntime>,
+    effects: Vec<Option<EffectRuntime>>,
     strip: Handle<GenericHandle>,
     meter: SharedStripMeter,
     level: SharedStripLevel,
@@ -1060,17 +958,17 @@ impl MasterRuntime {
     ) {
         context.with_activation(|| {
             knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.input)));
-            for effect in self.effects.drain(..) {
+            for effect in self.effects.drain(..).flatten() {
                 free_effect(effect);
             }
             let mut previous = node_id_of(self.input);
-            for effect in track.effect_states() {
-                let Some(effect) = create_effect_runtime(effect) else {
-                    continue;
-                };
-                let node = effect.node_id();
-                connect_stereo(previous, node);
-                previous = node;
+            for effect_slot in track.effect_states() {
+                let effect = create_effect_runtime(effect_slot);
+                if let Some(effect) = effect.as_ref().filter(|_| !effect_slot.bypassed) {
+                    let node = effect.node_id();
+                    connect_stereo(previous, node);
+                    previous = node;
+                }
                 self.effects.push(effect);
             }
             connect_stereo(previous, node_id_of(self.strip));
@@ -1078,7 +976,7 @@ impl MasterRuntime {
     }
 
     fn free(self) {
-        for effect in self.effects {
+        for effect in self.effects.into_iter().flatten() {
             free_effect(effect);
         }
         knyst_commands().disconnect(Connection::clear_from_nodes(node_id_of(self.strip)));
@@ -1091,7 +989,7 @@ impl MasterRuntime {
 }
 
 struct TrackRuntime {
-    effects: Vec<EffectRuntime>,
+    effects: Vec<Option<EffectRuntime>>,
     meter: SharedStripMeter,
     level: SharedStripLevel,
     route_bus: Handle<GenericHandle>,
@@ -1271,17 +1169,17 @@ impl TrackRuntime {
         }
         context.with_activation(|| {
             knyst_commands().disconnect(Connection::clear_to_nodes(self.pre_send_source_node()));
-            for effect in self.effects.drain(..) {
+            for effect in self.effects.drain(..).flatten() {
                 free_effect(effect);
             }
             let mut previous = self.pre_send_source_node();
-            for effect in track.effect_states() {
-                let Some(effect) = create_effect_runtime(effect) else {
-                    continue;
-                };
-                let node = effect.node_id();
-                connect_stereo(previous, node);
-                previous = node;
+            for effect_slot in track.effect_states() {
+                let effect = create_effect_runtime(effect_slot);
+                if let Some(effect) = effect.as_ref().filter(|_| !effect_slot.bypassed) {
+                    let node = effect.node_id();
+                    connect_stereo(previous, node);
+                    previous = node;
+                }
                 self.effects.push(effect);
             }
             connect_stereo(previous, self.post_send_source_node());
@@ -1375,7 +1273,7 @@ impl TrackRuntime {
         if let Some(instrument) = self.instrument {
             instrument.free();
         }
-        for effect in self.effects {
+        for effect in self.effects.into_iter().flatten() {
             free_effect(effect);
         }
         for node in self.send_nodes {
@@ -1416,14 +1314,7 @@ impl TrackSignalPath {
 
 struct TrackInstrumentRuntime {
     handle: InstrumentRuntimeHandle,
-    kind: TrackInstrumentRuntimeKind,
-}
-
-enum TrackInstrumentRuntimeKind {
-    Soundfont {
-        soundfont_id: String,
-        program: SharedSoundfontProgramState,
-    },
+    binding: Box<dyn RuntimeBinding>,
 }
 
 impl TrackInstrumentRuntime {
@@ -1431,22 +1322,7 @@ impl TrackInstrumentRuntime {
         let Some(slot) = track.instrument_slot() else {
             return Ok(false);
         };
-        let ProcessorKind::BuiltIn { processor_id } = &slot.kind else {
-            return Ok(false);
-        };
-        if processor_id != BUILTIN_SOUNDFONT_ID {
-            return Ok(false);
-        }
-        let state = SoundfontProcessor::decode_state(&slot.state)?;
-        let TrackInstrumentRuntimeKind::Soundfont {
-            soundfont_id,
-            program,
-        } = &self.kind;
-        if soundfont_id != &state.soundfont_id {
-            return Ok(false);
-        }
-        program.update(state.bank, state.program);
-        Ok(true)
+        Ok(self.binding.update_in_place(slot)?)
     }
 
     fn connect(&self, destination: NodeId) {
@@ -1461,25 +1337,13 @@ impl TrackInstrumentRuntime {
     }
 
     fn controller(&self) -> Box<dyn Controller> {
-        match &self.kind {
-            TrackInstrumentRuntimeKind::Soundfont {
-                soundfont_id,
-                program,
-            } => Box::new(SoundfontController {
-                soundfont_id: soundfont_id.clone(),
-                program: program.clone(),
-            }),
-        }
+        self.binding.controller()
     }
 }
 
 struct EffectRuntime {
     handle: EffectRuntimeHandle,
-    controller: Option<EffectControllerKind>,
-}
-
-enum EffectControllerKind {
-    Gain { shared: SharedGainState },
+    binding: Option<Box<dyn RuntimeBinding>>,
 }
 
 impl EffectRuntime {
@@ -1488,36 +1352,17 @@ impl EffectRuntime {
     }
 
     fn controller(&self) -> Option<Box<dyn Controller>> {
-        match &self.controller {
-            Some(EffectControllerKind::Gain { shared }) => Some(Box::new(GainController {
-                shared: shared.clone(),
-            })),
-            None => None,
-        }
+        self.binding.as_ref().map(|binding| binding.controller())
     }
 }
 
 fn create_effect_runtime(effect: &SlotState) -> Option<EffectRuntime> {
-    match &effect.kind {
-        ProcessorKind::BuiltIn { processor_id } if processor_id == BUILTIN_GAIN_ID => {
-            let shared = SharedGainState::default();
-            let processor =
-                create_effect_processor_with_shared(effect, Some(shared.clone())).ok()??;
-            let node = handle(EffectProcessorNode::new(processor));
-            Some(EffectRuntime {
-                handle: EffectRuntimeHandle::new(node),
-                controller: Some(EffectControllerKind::Gain { shared }),
-            })
-        }
-        _ => {
-            let processor = create_effect_processor(effect).ok()??;
-            let node = handle(EffectProcessorNode::new(processor));
-            Some(EffectRuntime {
-                handle: EffectRuntimeHandle::new(node),
-                controller: None,
-            })
-        }
-    }
+    let spec = build_effect_runtime_spec(effect).ok()??;
+    let node = handle(EffectProcessorNode::new(spec.processor));
+    Some(EffectRuntime {
+        handle: EffectRuntimeHandle::new(node),
+        binding: spec.binding,
+    })
 }
 
 fn free_effect(effect: EffectRuntime) {
@@ -1529,7 +1374,7 @@ fn free_effect(effect: EffectRuntime) {
 
 struct BusRuntime {
     input: Handle<GenericHandle>,
-    effects: Vec<EffectRuntime>,
+    effects: Vec<Option<EffectRuntime>>,
     strip: Handle<GenericHandle>,
     meter: SharedStripMeter,
     level: SharedStripLevel,
@@ -1594,17 +1439,17 @@ impl BusRuntime {
     ) {
         context.with_activation(|| {
             knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.input)));
-            for effect in self.effects.drain(..) {
+            for effect in self.effects.drain(..).flatten() {
                 free_effect(effect);
             }
             let mut previous = node_id_of(self.input);
-            for effect in bus_track.effect_states() {
-                let Some(effect) = create_effect_runtime(effect) else {
-                    continue;
-                };
-                let node = effect.node_id();
-                connect_stereo(previous, node);
-                previous = node;
+            for effect_slot in bus_track.effect_states() {
+                let effect = create_effect_runtime(effect_slot);
+                if let Some(effect) = effect.as_ref().filter(|_| !effect_slot.bypassed) {
+                    let node = effect.node_id();
+                    connect_stereo(previous, node);
+                    previous = node;
+                }
                 self.effects.push(effect);
             }
             connect_stereo(previous, node_id_of(self.strip));
@@ -1690,7 +1535,7 @@ impl BusRuntime {
     }
 
     fn free(self) {
-        for effect in self.effects {
+        for effect in self.effects.into_iter().flatten() {
             free_effect(effect);
         }
         for node in self.send_nodes {
@@ -1735,50 +1580,35 @@ fn create_track_instrument(
     let Some(slot) = track.instrument_slot() else {
         return Ok(None);
     };
-    match &slot.kind {
-        ProcessorKind::BuiltIn { processor_id } => {
-            if processor_id != BUILTIN_SOUNDFONT_ID {
-                return Ok(None);
-            }
-            let state = SoundfontProcessor::decode_state(&slot.state)?;
-            let Some(loaded) = soundfonts.get(&state.soundfont_id) else {
-                return Ok(None);
-            };
-            let shared_program = SharedSoundfontProgramState::new(state.bank, state.program);
-            let soundfont_id = state.soundfont_id.clone();
-            let processor = SoundfontProcessor::new_with_shared_program(
-                &loaded.soundfont,
-                soundfont_settings,
-                state,
-                Some(shared_program.clone()),
-            )?;
-            let (node, kind) = context.with_activation(|| {
-                let reset_state = SharedInstrumentResetState::default();
-                let node = if let Some((level, meter)) = inline_strip {
-                    handle(TrackInstrumentStripNode::new(
-                        Box::new(processor),
-                        reset_state.clone(),
-                        level,
-                        meter,
-                    ))
-                } else {
-                    handle(InstrumentProcessorNode::new(
-                        Box::new(processor),
-                        reset_state.clone(),
-                    ))
-                };
-                (
-                    InstrumentRuntimeHandle::new(node, reset_state),
-                    TrackInstrumentRuntimeKind::Soundfont {
-                        soundfont_id,
-                        program: shared_program,
-                    },
-                )
-            });
-            Ok(Some(TrackInstrumentRuntime { handle: node, kind }))
-        }
-        ProcessorKind::Plugin { .. } => Ok(None),
-    }
+    let Some(spec) = build_instrument_runtime_spec(
+        slot,
+        &InstrumentRuntimeContext {
+            soundfonts,
+            soundfont_settings,
+        },
+    )?
+    else {
+        return Ok(None);
+    };
+    let crate::instrument::InstrumentRuntimeSpec { processor, binding } = spec;
+    let node = context.with_activation(|| {
+        let reset_state = SharedInstrumentResetState::default();
+        let node = if let Some((level, meter)) = inline_strip {
+            handle(TrackInstrumentStripNode::new(
+                processor,
+                reset_state.clone(),
+                level,
+                meter,
+            ))
+        } else {
+            handle(InstrumentProcessorNode::new(processor, reset_state.clone()))
+        };
+        InstrumentRuntimeHandle::new(node, reset_state)
+    });
+    Ok(Some(TrackInstrumentRuntime {
+        handle: node,
+        binding,
+    }))
 }
 
 fn destination_node(
@@ -1895,12 +1725,10 @@ fn route_bus_id(route: TrackRoute) -> Option<BusId> {
 }
 
 fn track_needs_runtime(track: &Track) -> bool {
-    !track.instrument_slot().is_some_and(|slot| {
-        matches!(
-            slot.kind,
-            ProcessorKind::BuiltIn { ref processor_id } if processor_id == BUILTIN_NONE_ID
-        )
-    }) || track.effect_count() > 0
+    !track
+        .instrument_slot()
+        .is_some_and(|slot| registry::is_empty(&slot.kind))
+        || track.effect_count() > 0
 }
 
 fn db_to_amplitude(db: f32) -> f32 {
@@ -2246,10 +2074,13 @@ mod tests {
 
     use super::{
         InstrumentProcessorNode, InstrumentRuntimeHandle, LoadedSoundfont, MasterRuntime, MeterTap,
-        MixerRuntimeError, SharedInstrumentResetState, SharedStripMeter, SoundfontProcessor,
-        SoundfontSynthSettings, connect_stereo, db_to_amplitude, node_id_of, normalize_meter_level,
+        MixerRuntimeError, SharedInstrumentResetState, SharedStripMeter, SoundfontSynthSettings,
+        connect_stereo, db_to_amplitude, node_id_of, normalize_meter_level,
     };
-    use crate::instrument::{MidiEvent, ProcessorKind, ProcessorState, SlotState, soundfont_synth};
+    use crate::instrument::{
+        BUILTIN_SOUNDFONT_ID, MidiEvent, ProcessorKind, ProcessorState, SlotState,
+        soundfont_synth::{self, SoundfontProcessor},
+    };
     use crate::mixer::{Mixer, MixerState, TrackId};
     use crate::test_utils::{OfflineHarness, test_soundfont_resource};
     use knyst::time::Beats;
@@ -2275,6 +2106,13 @@ mod tests {
 
     fn unity_strip_gain() -> super::SharedStripLevel {
         super::SharedStripLevel::new(1.0, 0.0)
+    }
+
+    fn soundfont_slot(program: u8) -> SlotState {
+        SlotState::built_in(
+            BUILTIN_SOUNDFONT_ID,
+            soundfont_synth::state("default", 0, program),
+        )
     }
 
     #[test]
@@ -2594,12 +2432,13 @@ mod tests {
                         plugin_id: "none".to_string(),
                     },
                     state: ProcessorState::default(),
+                    bypassed: false,
                 });
         }
         state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .set_instrument_slot(SlotState::soundfont("default", 0, 0));
+            .set_instrument_slot(soundfont_slot(0));
         let context = harness.context().clone();
         let settings = harness.settings();
         let mixer = Mixer::new(&context, harness.commands(), &settings, state)?;
@@ -2727,7 +2566,7 @@ mod tests {
         let mut state = MixerState::new();
         state.set_soundfont(test_soundfont_resource());
         let track = state.track_mut(TrackId(0)).expect("track 0 should exist");
-        track.set_instrument_slot(SlotState::soundfont("default", 0, 0));
+        track.set_instrument_slot(soundfont_slot(0));
         track.state.muted = true;
         let context = harness.context().clone();
         let settings = harness.settings();
@@ -2763,7 +2602,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
+            .set_instrument_slot(soundfont_slot(40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -2810,7 +2649,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
+            .set_instrument_slot(soundfont_slot(40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -3273,7 +3112,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
+            .set_instrument_slot(soundfont_slot(40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -3322,7 +3161,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
+            .set_instrument_slot(soundfont_slot(40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -3367,7 +3206,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
+            .set_instrument_slot(soundfont_slot(40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -3408,7 +3247,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
+            .set_instrument_slot(soundfont_slot(40));
         mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))
@@ -3435,7 +3274,7 @@ mod tests {
             .state
             .track_mut(TrackId(0))
             .expect("track 0 should exist")
-            .set_instrument_slot(SlotState::soundfont("default", 0, 40));
+            .set_instrument_slot(soundfont_slot(40));
         let sync = mixer
             .runtime
             .sync_track_instrument(&context, harness.commands(), &mixer.state, TrackId(0))

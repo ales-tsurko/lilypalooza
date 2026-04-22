@@ -7,8 +7,10 @@ use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 use serde::{Deserialize, Serialize};
 
 use crate::instrument::{
-    InstrumentProcessor, MidiEvent, ParameterDescriptor, Processor, ProcessorDescriptor,
-    ProcessorState, ProcessorStateError,
+    BUILTIN_SOUNDFONT_ID, Controller, ControllerError, InstrumentProcessor,
+    InstrumentRuntimeContext, InstrumentRuntimeSpec, MidiEvent, ParameterDescriptor, Processor,
+    ProcessorDescriptor, ProcessorState, ProcessorStateError, RuntimeBinding, RuntimeFactoryError,
+    SlotState,
 };
 
 pub(crate) const MIDI_14BIT_MAX: u16 = 16_383;
@@ -47,7 +49,7 @@ impl Default for SoundfontProcessorState {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum SoundfontSynthError {
+pub(crate) enum SoundfontSynthError {
     #[error("failed to read soundfont `{path}`: {source}")]
     ReadFile {
         path: PathBuf,
@@ -69,7 +71,7 @@ pub enum SoundfontSynthError {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct SoundfontSynthSettings {
+pub(crate) struct SoundfontSynthSettings {
     pub sample_rate: i32,
     pub block_size: usize,
     pub maximum_polyphony: usize,
@@ -112,7 +114,7 @@ impl LoadedSoundfont {
 }
 
 #[derive(Debug)]
-pub struct SoundfontProcessor {
+pub(crate) struct SoundfontProcessor {
     synthesizer: Synthesizer,
     state: SoundfontProcessorState,
     shared_program: Option<SharedSoundfontProgramState>,
@@ -174,14 +176,147 @@ const SOUNDFONT_PARAMS: &[ParameterDescriptor] = &[
     },
 ];
 
-const SOUNDFONT_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+pub(crate) const DESCRIPTOR: &ProcessorDescriptor = &ProcessorDescriptor {
     name: "SoundFont",
     params: SOUNDFONT_PARAMS,
     editor: None,
 };
 
 pub(crate) fn descriptor() -> &'static ProcessorDescriptor {
-    &SOUNDFONT_DESCRIPTOR
+    DESCRIPTOR
+}
+
+#[derive(Debug, Clone)]
+struct SoundfontBinding {
+    soundfont_id: String,
+    program: SharedSoundfontProgramState,
+}
+
+impl RuntimeBinding for SoundfontBinding {
+    fn controller(&self) -> Box<dyn Controller> {
+        Box::new(SoundfontController {
+            soundfont_id: self.soundfont_id.clone(),
+            program: self.program.clone(),
+        })
+    }
+
+    fn update_in_place(&self, slot: &SlotState) -> Result<bool, ProcessorStateError> {
+        let Some(state) = slot.decode_built_in(BUILTIN_SOUNDFONT_ID, decode_state)? else {
+            return Ok(false);
+        };
+        if state.soundfont_id != self.soundfont_id {
+            return Ok(false);
+        }
+        self.program.update(state.bank, state.program);
+        Ok(true)
+    }
+}
+
+struct SoundfontController {
+    soundfont_id: String,
+    program: SharedSoundfontProgramState,
+}
+
+impl Controller for SoundfontController {
+    fn descriptor(&self) -> &'static ProcessorDescriptor {
+        descriptor()
+    }
+
+    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
+        let (bank, program, _) = self.program.snapshot();
+        match id {
+            "bank" => Ok(f32::from(bank) / f32::from(MIDI_14BIT_MAX)),
+            "program" => Ok(f32::from(program) / f32::from(MIDI_PROGRAM_MAX)),
+            _ => Err(ControllerError::UnknownParameter(id.to_string())),
+        }
+    }
+
+    fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError> {
+        let (mut bank, mut program, _) = self.program.snapshot();
+        match id {
+            "bank" => {
+                bank = (normalized.clamp(0.0, 1.0) * f32::from(MIDI_14BIT_MAX)).round() as u16;
+            }
+            "program" => {
+                program = (normalized.clamp(0.0, 1.0) * f32::from(MIDI_PROGRAM_MAX)).round() as u8;
+            }
+            _ => return Err(ControllerError::UnknownParameter(id.to_string())),
+        }
+        self.program.update(bank, program);
+        Ok(())
+    }
+
+    fn save_state(&self) -> Result<ProcessorState, ControllerError> {
+        let (bank, program, _) = self.program.snapshot();
+        Ok(encode_state(&SoundfontProcessorState {
+            soundfont_id: self.soundfont_id.clone(),
+            bank,
+            program,
+        }))
+    }
+
+    fn load_state(&self, state: &ProcessorState) -> Result<(), ControllerError> {
+        let state =
+            decode_state(state).map_err(|error| ControllerError::Backend(error.to_string()))?;
+        if state.soundfont_id != self.soundfont_id {
+            return Err(ControllerError::Backend(
+                "changing soundfont resource requires slot rebuild".to_string(),
+            ));
+        }
+        self.program.update(state.bank, state.program);
+        Ok(())
+    }
+}
+
+pub(crate) fn create_runtime(
+    slot: &SlotState,
+    context: &InstrumentRuntimeContext<'_>,
+) -> Result<Option<InstrumentRuntimeSpec>, RuntimeFactoryError> {
+    let Some(state) = slot.decode_built_in(BUILTIN_SOUNDFONT_ID, decode_state)? else {
+        return Ok(None);
+    };
+    let Some(loaded) = context.soundfonts.get(&state.soundfont_id) else {
+        return Ok(None);
+    };
+    let shared_program = SharedSoundfontProgramState::new(state.bank, state.program);
+    let soundfont_id = state.soundfont_id.clone();
+    let processor = SoundfontProcessor::new_with_shared_program(
+        &loaded.soundfont,
+        context.soundfont_settings,
+        state,
+        Some(shared_program.clone()),
+    )
+    .map_err(|error| RuntimeFactoryError::Backend(error.to_string()))?;
+    Ok(Some(InstrumentRuntimeSpec {
+        processor: Box::new(processor),
+        binding: Box::new(SoundfontBinding {
+            soundfont_id,
+            program: shared_program,
+        }),
+    }))
+}
+
+/// Encodes typed SoundFont state into the processor state blob stored in slots.
+#[must_use]
+pub fn encode_state(state: &SoundfontProcessorState) -> ProcessorState {
+    encode_soundfont_state(state)
+}
+
+/// Encodes a simple SoundFont program selection into the processor state blob.
+#[must_use]
+pub fn state(soundfont_id: impl Into<String>, bank: u16, program: u8) -> ProcessorState {
+    encode_state(&SoundfontProcessorState {
+        soundfont_id: soundfont_id.into(),
+        bank,
+        program,
+    })
+}
+
+/// Decodes typed SoundFont state from the processor state blob stored in slots.
+pub fn decode_state(
+    state: &ProcessorState,
+) -> Result<SoundfontProcessorState, ProcessorStateError> {
+    SoundfontProcessor::decode_state(state)
 }
 
 impl SoundfontProcessor {
@@ -227,6 +362,7 @@ impl SoundfontProcessor {
         Ok(processor)
     }
 
+    /// Decodes typed SoundFont state from the processor state blob stored in slots.
     pub fn decode_state(
         state: &ProcessorState,
     ) -> Result<SoundfontProcessorState, ProcessorStateError> {
@@ -270,7 +406,7 @@ impl SoundfontProcessor {
 
 impl Processor for SoundfontProcessor {
     fn descriptor(&self) -> &'static ProcessorDescriptor {
-        descriptor()
+        DESCRIPTOR
     }
 
     fn set_param(&mut self, id: &str, normalized: f32) -> bool {
