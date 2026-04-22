@@ -131,7 +131,10 @@ fn should_commit_track_rename_before_message(message: &Message) -> bool {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::should_commit_track_rename_before_message;
+    use super::{
+        parse_svg_coordinate_size_from_source, parse_svg_size_from_source,
+        should_commit_track_rename_before_message,
+    };
     use crate::app::WorkspacePaneKind;
     use crate::app::messages::{Message, MixerMessage, PaneMessage, PianoRollMessage};
 
@@ -163,6 +166,66 @@ mod tests {
         assert!(!should_commit_track_rename_before_message(
             &Message::PianoRoll(PianoRollMessage::ViewportCursorMoved(iced::Point::ORIGIN),)
         ));
+    }
+
+    #[test]
+    fn svg_size_parser_normalizes_old_and_cairo_a4_outputs() {
+        let old_backend = r#"<svg width="210.00mm" height="297.00mm" viewBox="0.0000 -0.0000 119.5016 169.0094"></svg>"#;
+        let cairo_backend = r#"<svg width="596" height="842" viewBox="0 0 596 842"></svg>"#;
+
+        let old_size = parse_svg_size_from_source(old_backend).expect("old backend size");
+        let cairo_size = parse_svg_size_from_source(cairo_backend).expect("cairo backend size");
+
+        assert!((old_size.width - 595.2756).abs() < 0.001);
+        assert!((old_size.height - 841.8898).abs() < 0.001);
+        assert!((cairo_size.width - 596.0).abs() < 0.001);
+        assert!((cairo_size.height - 842.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn old_and_cairo_svg_sizes_render_at_same_zoom_scale() {
+        let old_backend = r#"<svg width="210.00mm" height="297.00mm" viewBox="0.0000 -0.0000 119.5016 169.0094"></svg>"#;
+        let cairo_backend = r#"<svg width="596" height="842" viewBox="0 0 596 842"></svg>"#;
+
+        let old_size = parse_svg_size_from_source(old_backend).expect("old backend size");
+        let cairo_size = parse_svg_size_from_source(cairo_backend).expect("cairo backend size");
+        let scale = super::score_view::score_base_scale();
+
+        let old_width = old_size.width * scale;
+        let cairo_width = cairo_size.width * scale;
+
+        assert!((old_width - cairo_width).abs() < 1.0);
+    }
+
+    #[test]
+    fn svg_coordinate_size_prefers_viewbox_for_interaction_mapping() {
+        let old_backend = r#"<svg width="210.00mm" height="297.00mm" viewBox="0.0000 -0.0000 119.5016 169.0094"></svg>"#;
+
+        let size = parse_svg_coordinate_size_from_source(old_backend).expect("coord size");
+
+        assert!((size.width - 119.5016).abs() < 0.001);
+        assert!((size.height - 169.0094).abs() < 0.001);
+    }
+
+    #[test]
+    fn svg_coordinate_size_falls_back_to_display_size_without_viewbox() {
+        let svg = r#"<svg width="596" height="842"></svg>"#;
+
+        let size = parse_svg_coordinate_size_from_source(svg).expect("coord size");
+
+        assert!((size.width - 596.0).abs() < 0.001);
+        assert!((size.height - 842.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn display_to_svg_coordinate_mapping_preserves_old_backend_click_space() {
+        let display_width = 595.2756_f32;
+        let coord_width = 119.5016_f32;
+        let display_x = 250.0_f32;
+
+        let svg_x = display_x * coord_width / display_width;
+
+        assert!((svg_x - 50.1875).abs() < 0.001);
     }
 }
 
@@ -807,8 +870,21 @@ fn svg_page_index(file_stem: &str, score_stem: &str) -> Option<u32> {
 
 fn read_svg_size(path: &Path) -> Option<SvgSize> {
     let source = fs::read_to_string(path).ok()?;
+    parse_svg_size_from_source(&source)
+}
 
-    if let Some(view_box) = svg_attribute_value(&source, "viewBox") {
+fn parse_svg_size_from_source(source: &str) -> Option<SvgSize> {
+    let width = svg_attribute_value(source, "width").and_then(parse_svg_dimension_points);
+    let height = svg_attribute_value(source, "height").and_then(parse_svg_dimension_points);
+
+    match (width, height) {
+        (Some(width), Some(height)) if width > 0.0 && height > 0.0 => {
+            return Some(SvgSize { width, height });
+        }
+        _ => {}
+    }
+
+    if let Some(view_box) = svg_attribute_value(source, "viewBox") {
         let numbers: Vec<f32> = view_box
             .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
             .filter(|value| !value.is_empty())
@@ -825,15 +901,28 @@ fn read_svg_size(path: &Path) -> Option<SvgSize> {
         }
     }
 
-    let width = svg_attribute_value(&source, "width").and_then(parse_svg_dimension);
-    let height = svg_attribute_value(&source, "height").and_then(parse_svg_dimension);
+    None
+}
 
-    match (width, height) {
-        (Some(width), Some(height)) if width > 0.0 && height > 0.0 => {
-            Some(SvgSize { width, height })
+fn parse_svg_coordinate_size_from_source(source: &str) -> Option<SvgSize> {
+    if let Some(view_box) = svg_attribute_value(source, "viewBox") {
+        let numbers: Vec<f32> = view_box
+            .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+            .filter(|value| !value.is_empty())
+            .filter_map(|value| value.parse::<f32>().ok())
+            .collect();
+
+        if numbers.len() >= 4 {
+            let width = numbers[2].abs();
+            let height = numbers[3].abs();
+
+            if width > 0.0 && height > 0.0 {
+                return Some(SvgSize { width, height });
+            }
         }
-        _ => None,
     }
+
+    parse_svg_size_from_source(source)
 }
 
 fn svg_attribute_value<'a>(source: &'a str, attribute_name: &str) -> Option<&'a str> {
@@ -854,9 +943,9 @@ fn svg_attribute_value<'a>(source: &'a str, attribute_name: &str) -> Option<&'a 
     None
 }
 
-fn parse_svg_dimension(raw_value: &str) -> Option<f32> {
-    let numeric_prefix: String = raw_value
-        .trim()
+fn parse_svg_dimension_points(raw_value: &str) -> Option<f32> {
+    let trimmed = raw_value.trim();
+    let numeric_prefix: String = trimmed
         .chars()
         .take_while(|ch| ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+'))
         .collect();
@@ -865,7 +954,19 @@ fn parse_svg_dimension(raw_value: &str) -> Option<f32> {
         return None;
     }
 
-    numeric_prefix.parse::<f32>().ok()
+    let value = numeric_prefix.parse::<f32>().ok()?;
+    let unit = trimmed[numeric_prefix.len()..].trim().to_ascii_lowercase();
+
+    let points = match unit.as_str() {
+        "" | "px" | "pt" => value,
+        "mm" => value * 72.0 / 25.4,
+        "cm" => value * 72.0 / 2.54,
+        "in" => value * 72.0,
+        "pc" => value * 12.0,
+        _ => value,
+    };
+
+    Some(points)
 }
 
 fn closest_system_band(

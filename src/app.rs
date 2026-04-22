@@ -277,7 +277,8 @@ struct LoadedCompileOutputs {
 struct RenderedPage {
     handle: svg::Handle,
     svg_bytes: Bytes,
-    size: SvgSize,
+    display_size: SvgSize,
+    coord_size: SvgSize,
     note_anchors: Vec<score_cursor::SvgNoteAnchor>,
     system_bands: Vec<score_cursor::SystemBand>,
 }
@@ -285,7 +286,8 @@ struct RenderedPage {
 #[derive(Debug, Clone)]
 struct LoadedRenderedPage {
     svg_bytes: Vec<u8>,
-    size: SvgSize,
+    display_size: SvgSize,
+    coord_size: SvgSize,
     note_anchors: Vec<score_cursor::SvgNoteAnchor>,
     system_bands: Vec<score_cursor::SystemBand>,
 }
@@ -1774,6 +1776,138 @@ mod tests {
             Some(before.as_str())
         );
         assert!(!app.editor.active_editor_is_focused());
+    }
+
+    #[test]
+    fn point_and_click_unfolds_and_focuses_editor_pane() {
+        let root = TempDir::new().expect("tempdir");
+        let score_path = root.path().join("score.ly");
+        let target_path = root.path().join("part.ly");
+        let other_path = root.path().join("other.ly");
+        fs::write(&score_path, "\\version \"2.24.0\"").expect("score file");
+        fs::write(&target_path, "{ c'4 }").expect("target file");
+        fs::write(&other_path, "{ d'4 }").expect("other file");
+
+        let svg_source = format!(
+            r#"<svg width="100" height="100" viewBox="0 0 100 100"><a xlink:href="textedit://{}:3:2:3"><g transform="translate(20,30)"></g></a></svg>"#,
+            target_path.display()
+        );
+        let note_anchors = score_cursor::parse_svg_note_anchors(&svg_source, 0);
+        assert_eq!(note_anchors.len(), 1);
+
+        let mut app = test_editor_app();
+        app.current_score = Some(SelectedScore {
+            path: score_path,
+            file_name: "score.ly".into(),
+        });
+        let svg_bytes = svg_source.clone().into_bytes();
+        app.rendered_score = Some(RenderedScore {
+            pages: vec![RenderedPage {
+                handle: svg::Handle::from_memory(svg_bytes.clone()),
+                svg_bytes: Bytes::from(svg_bytes),
+                display_size: SvgSize {
+                    width: 100.0,
+                    height: 100.0,
+                },
+                coord_size: SvgSize {
+                    width: 100.0,
+                    height: 100.0,
+                },
+                note_anchors,
+                system_bands: Vec::new(),
+            }],
+            current_page: 0,
+        });
+        let scale = score_view::score_base_scale() * app.svg_zoom;
+        let inset = f32::from(crate::ui_style::PADDING_SM);
+        app.score_viewport_cursor =
+            Some(iced::Point::new(20.0 * scale + inset, 30.0 * scale + inset));
+
+        if !app.is_pane_folded(WorkspacePaneKind::Editor) {
+            assert!(app.fold_workspace_pane(WorkspacePaneKind::Editor));
+        }
+        assert!(app.is_pane_folded(WorkspacePaneKind::Editor));
+
+        let _ = update(&mut app, Message::Viewer(ViewerMessage::OpenPointAndClick));
+
+        assert!(!app.is_pane_folded(WorkspacePaneKind::Editor));
+        assert_eq!(app.focused_workspace_pane, Some(WorkspacePaneKind::Editor));
+        assert!(app.editor.find_tab_by_path(&target_path).is_some());
+    }
+
+    #[test]
+    fn point_and_click_activates_editor_pane_tab_and_target_editor_tab() {
+        let root = TempDir::new().expect("tempdir");
+        let score_path = root.path().join("score.ly");
+        let target_path = root.path().join("part.ly");
+        let other_path = root.path().join("other.ly");
+        fs::write(&score_path, "\\version \"2.24.0\"").expect("score file");
+        fs::write(&target_path, "{ c'4 }").expect("target file");
+        fs::write(&other_path, "{ d'4 }").expect("other file");
+
+        let svg_source = format!(
+            r#"<svg width="100" height="100" viewBox="0 0 100 100"><a xlink:href="textedit://{}:3:2:3"><g transform="translate(20,30)"></g></a></svg>"#,
+            target_path.display()
+        );
+        let note_anchors = score_cursor::parse_svg_note_anchors(&svg_source, 0);
+
+        let mut app = test_editor_app();
+        app.current_score = Some(SelectedScore {
+            path: score_path,
+            file_name: "score.ly".into(),
+        });
+        let svg_bytes = svg_source.clone().into_bytes();
+        app.rendered_score = Some(RenderedScore {
+            pages: vec![RenderedPage {
+                handle: svg::Handle::from_memory(svg_bytes.clone()),
+                svg_bytes: Bytes::from(svg_bytes),
+                display_size: SvgSize {
+                    width: 100.0,
+                    height: 100.0,
+                },
+                coord_size: SvgSize {
+                    width: 100.0,
+                    height: 100.0,
+                },
+                note_anchors,
+                system_bands: Vec::new(),
+            }],
+            current_page: 0,
+        });
+        let _ = app.unfold_workspace_pane(WorkspacePaneKind::Editor);
+        let _ = app.open_editor_file_in_editor(&other_path);
+
+        if let Some(group_id) = app.group_for_pane(WorkspacePaneKind::Editor)
+            && let Some(group) = app.dock_groups.get_mut(&group_id)
+            && let Some(other_pane) = group
+                .tabs
+                .iter()
+                .copied()
+                .find(|pane| *pane != WorkspacePaneKind::Editor)
+        {
+            group.active = other_pane;
+        }
+
+        let scale = score_view::score_base_scale() * app.svg_zoom;
+        let inset = f32::from(crate::ui_style::PADDING_SM);
+        app.score_viewport_cursor =
+            Some(iced::Point::new(20.0 * scale + inset, 30.0 * scale + inset));
+
+        let _ = update(&mut app, Message::Viewer(ViewerMessage::OpenPointAndClick));
+
+        let group_id = app
+            .group_for_pane(WorkspacePaneKind::Editor)
+            .expect("editor group");
+        let group = app.dock_groups.get(&group_id).expect("editor group state");
+
+        assert_eq!(group.active, WorkspacePaneKind::Editor);
+        assert_eq!(
+            app.editor
+                .active_file_backed_tab_path()
+                .as_ref()
+                .map(|path| state::normalize_path(path)),
+            Some(state::normalize_path(&target_path))
+        );
     }
 
     #[test]

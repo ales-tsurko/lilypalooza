@@ -14,7 +14,7 @@ use crate::{fonts, icons, ui_style};
 const SCROLL_MARKER_THICKNESS: f32 = 3.0;
 const SCROLL_MARKER_LENGTH: f32 = 16.0;
 const SCROLL_MARKER_EDGE_INSET: f32 = 3.0;
-const SCORE_BASE_SCALE: f32 = 5.6;
+const SCORE_BASE_SCALE: f32 = 1.125;
 
 pub(super) fn score_base_scale() -> f32 {
     SCORE_BASE_SCALE
@@ -228,7 +228,8 @@ pub(super) fn score_body(app: &Lilypalooza) -> Element<'_, Message> {
         let svg_handle = rendered_page.handle.clone();
         let zoom = app.svg_zoom;
         let page_brightness = app.svg_page_brightness;
-        let page_size = rendered_page.size;
+        let display_size = rendered_page.display_size;
+        let coord_size = rendered_page.coord_size;
         let current_page = app
             .rendered_score
             .as_ref()
@@ -239,8 +240,8 @@ pub(super) fn score_body(app: &Lilypalooza) -> Element<'_, Message> {
             .filter(|placement| placement.page_index == current_page);
 
         responsive(move |size| {
-            let width = (page_size.width * SCORE_BASE_SCALE * zoom).max(1.0);
-            let height = (page_size.height * SCORE_BASE_SCALE * zoom).max(1.0);
+            let width = (display_size.width * SCORE_BASE_SCALE * zoom).max(1.0);
+            let height = (display_size.height * SCORE_BASE_SCALE * zoom).max(1.0);
 
             let page_visual: Element<'_, Message> = if app.score_zoom_preview_active() {
                 if let Some(preview) = app
@@ -263,7 +264,7 @@ pub(super) fn score_body(app: &Lilypalooza) -> Element<'_, Message> {
                     .content_fit(ContentFit::Fill)
                     .into()
             };
-            let overlay = score_cursor_overlay(cursor_overlay, page_size, width, height);
+            let overlay = score_cursor_overlay(cursor_overlay, coord_size, width, height);
             let layered_page = stack([page_visual, overlay]);
             let page_surface = container(layered_page)
                 .width(Length::Shrink)
@@ -288,7 +289,8 @@ pub(super) fn score_body(app: &Lilypalooza) -> Element<'_, Message> {
                 .height(Fill)
                 .style(ui_style::workspace_scrollable);
 
-            let score_scroll_marker = score_scroll_position_marker(cursor_overlay, page_size, size);
+            let score_scroll_marker =
+                score_scroll_position_marker(cursor_overlay, coord_size, size);
             let zoom_overlay: Element<'_, Message> = if app.zoom_modifier_active() {
                 mouse_area(container(text("")).width(Fill).height(Fill))
                     .on_scroll(|delta| Message::Viewer(ViewerMessage::SmoothZoom(delta)))

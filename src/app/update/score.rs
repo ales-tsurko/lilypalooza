@@ -154,16 +154,19 @@ impl Lilypalooza {
         let rendered_score = self.rendered_score.as_ref()?;
         let page = rendered_score.current_page()?;
 
-        let scale = crate::app::score_view::score_base_scale() * self.svg_zoom;
-        let page_x = (self.svg_scroll_x + pointer.x - f32::from(crate::ui_style::PADDING_SM))
-            / scale.max(f32::EPSILON);
-        let page_y = (self.svg_scroll_y + pointer.y - f32::from(crate::ui_style::PADDING_SM))
-            / scale.max(f32::EPSILON);
+        let display_scale = crate::app::score_view::score_base_scale() * self.svg_zoom;
+        let display_x = (self.svg_scroll_x + pointer.x - f32::from(crate::ui_style::PADDING_SM))
+            / display_scale.max(f32::EPSILON);
+        let display_y = (self.svg_scroll_y + pointer.y - f32::from(crate::ui_style::PADDING_SM))
+            / display_scale.max(f32::EPSILON);
+        let page_x = display_x * page.coord_size.width / page.display_size.width.max(f32::EPSILON);
+        let page_y =
+            display_y * page.coord_size.height / page.display_size.height.max(f32::EPSILON);
 
         if page_x.is_sign_negative()
             || page_y.is_sign_negative()
-            || page_x > page.size.width
-            || page_y > page.size.height
+            || page_x > page.coord_size.width
+            || page_y > page.coord_size.height
         {
             return None;
         }
@@ -183,6 +186,7 @@ impl Lilypalooza {
             return Task::none();
         };
 
+        let _ = self.unfold_workspace_pane(WorkspacePaneKind::Editor);
         self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
         self.open_editor_file_at_location(&path, line, column)
     }
@@ -294,7 +298,7 @@ impl Lilypalooza {
         };
 
         let svg_bytes = page.svg_bytes.clone();
-        let page_size = page.size;
+        let page_size = page.display_size;
         self.score_zoom_preview_pending = Some(request);
 
         Some(Task::perform(

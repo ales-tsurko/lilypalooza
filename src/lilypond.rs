@@ -299,7 +299,7 @@ fn parse_numeric_prefix(part: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Version, parse_version};
+    use super::{MIN_LILYPOND_VERSION, Version, parse_version};
 
     #[test]
     fn parses_version_from_lilypond_output() {
@@ -318,5 +318,10 @@ mod tests {
     #[test]
     fn version_ordering_works() {
         assert!(Version::new(2, 24, 0) > Version::new(2, 23, 82));
+    }
+
+    #[test]
+    fn minimum_supported_version_matches_supported_stable_line() {
+        assert_eq!(MIN_LILYPOND_VERSION, Version::new(2, 24, 0));
     }
 }

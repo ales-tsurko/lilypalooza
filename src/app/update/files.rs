@@ -647,14 +647,7 @@ impl Lilypalooza {
         };
 
         let mut request = lilypond::CompileRequest::new(selected_score.0.clone());
-        request.args = vec![
-            "--svg".to_string(),
-            "-dmidi-extension=midi".to_string(),
-            "-dinclude-settings=event-listener.ly".to_string(),
-            "-dpoint-and-click=note-event".to_string(),
-            "-o".to_string(),
-            output_prefix.to_string_lossy().to_string(),
-        ];
+        request.args = lilypond_compile_args(&output_prefix);
         request.working_dir = selected_score.0.parent().map(std::path::Path::to_path_buf);
 
         self.logger.push("Starting LilyPond compile".to_string());
@@ -822,7 +815,8 @@ impl Lilypalooza {
                         .map(|page| RenderedPage {
                             handle: svg::Handle::from_memory(page.svg_bytes.clone()),
                             svg_bytes: Bytes::from(page.svg_bytes),
-                            size: page.size,
+                            display_size: page.display_size,
+                            coord_size: page.coord_size,
                             note_anchors: page.note_anchors,
                             system_bands: page.system_bands,
                         })
@@ -908,6 +902,17 @@ impl Lilypalooza {
     }
 }
 
+fn lilypond_compile_args(output_prefix: &Path) -> Vec<String> {
+    vec![
+        "--svg".to_string(),
+        "-dmidi-extension=midi".to_string(),
+        "-dinclude-settings=event-listener.ly".to_string(),
+        "-dpoint-and-click=note-event".to_string(),
+        "-o".to_string(),
+        output_prefix.to_string_lossy().to_string(),
+    ]
+}
+
 fn load_compile_outputs(
     build_dir: PathBuf,
     score_path: PathBuf,
@@ -971,19 +976,23 @@ fn collect_loaded_rendered_pages(
             continue;
         };
 
-        let page_size = read_svg_size(&path).unwrap_or(SvgSize {
+        let display_size = read_svg_size(&path).unwrap_or(SvgSize {
             width: 1200.0,
             height: 1700.0,
         });
+        let source = fs::read_to_string(&path)
+            .map_err(|error| format!("Failed to read SVG {}: {error}", path.display()))?;
+        let coord_size =
+            super::parse_svg_coordinate_size_from_source(&source).unwrap_or(display_size);
 
-        pages.push((page_index, path, page_size));
+        pages.push((page_index, path, display_size, coord_size));
     }
 
     pages.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
 
     let mut rendered_pages = Vec::with_capacity(pages.len());
 
-    for (index, path, size) in pages {
+    for (index, path, display_size, coord_size) in pages {
         let bytes = fs::read(&path)
             .map_err(|error| format!("Failed to read SVG {}: {error}", path.display()))?;
         let source = String::from_utf8_lossy(&bytes);
@@ -993,11 +1002,30 @@ fn collect_loaded_rendered_pages(
 
         rendered_pages.push(super::LoadedRenderedPage {
             svg_bytes: bytes,
-            size,
+            display_size,
+            coord_size,
             note_anchors,
             system_bands,
         });
     }
 
     Ok(rendered_pages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lilypond_compile_args;
+    use std::path::Path;
+
+    #[test]
+    fn lilypond_compile_args_keep_interactive_svg_output() {
+        let args = lilypond_compile_args(Path::new("/tmp/out"));
+
+        assert_eq!(args[0], "--svg");
+        assert!(!args.iter().any(|arg| arg == "-dbackend=cairo"));
+        assert!(args.iter().any(|arg| arg == "-dmidi-extension=midi"));
+        assert!(args.iter().any(|arg| arg == "-dpoint-and-click=note-event"));
+        assert_eq!(args[args.len() - 2], "-o");
+        assert_eq!(args[args.len() - 1], "/tmp/out");
+    }
 }

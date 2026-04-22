@@ -610,14 +610,13 @@ impl Lilypalooza {
                     self.logger
                         .push(format!("Opened editor file {}", path.display()));
                 }
+                self.editor.activate_tab(tab_id);
+                self.set_active_workspace_pane(WorkspacePaneKind::Editor);
+                self.set_focused_workspace_pane(WorkspacePaneKind::Editor);
                 self.focus_editor_text_area();
-                let sync_task = self.editor.sync_tab_scroll_state(tab_id);
                 let cursor_task = self.editor.set_tab_cursor(tab_id, line, column);
                 self.pending_reveal_editor_tab = Some(tab_id);
-                self.map_editor_widget_task(
-                    tab_id,
-                    iced::Task::batch([task, sync_task, cursor_task]),
-                )
+                self.map_editor_widget_task(tab_id, iced::Task::batch([task, cursor_task]))
             }
             Err(error) => {
                 self.show_prompt(
