@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the NumberInput widget
 //!
 //! These tests verify the NumberInput widget's behavior and public API

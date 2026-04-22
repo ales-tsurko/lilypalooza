@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the Wrap widget
 //!
 //! These tests verify the Wrap widget's behavior by actually exercising

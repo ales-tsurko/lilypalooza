@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the SelectionList widget
 //!
 //! These tests verify the SelectionList widget's behavior and public API

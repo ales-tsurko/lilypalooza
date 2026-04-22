@@ -1,19 +1,16 @@
-use std::fmt;
-use std::sync::Arc;
-
 use iced::widget::Id;
 use iced::widget::{
-    button, column, container, lazy, mouse_area, pick_list, responsive, row, scrollable, stack,
-    svg, text, text_input,
+    button, column, container, lazy, mouse_area, opaque, responsive, row, scrollable, stack, svg,
+    text, text_input,
 };
 use iced::{Color, Element, Fill, FillPortion, Length, alignment};
 use iced_aw::helpers::color_picker_with_change;
-use lilypalooza_audio::instrument::soundfont_synth;
+use lilypalooza_audio::instrument::registry;
 use lilypalooza_audio::mixer::{
     ChannelMeterSnapshot, MixerMeterSnapshot, MixerMeterSnapshotWindow, STRIP_METER_MIN_DB,
     StripMeterSnapshot,
 };
-use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, MixerState, SlotState, SoundfontProcessorState};
+use lilypalooza_audio::{BUILTIN_METRONOME_ID, BUILTIN_NONE_ID, MixerState, SlotState};
 
 use super::controls::{GAIN_MIN_DB, gain_control_width, gain_fader, gain_knob, pan_knob};
 use super::messages::MixerMessage;
@@ -37,7 +34,13 @@ const MAIN_STRIP_WIDTH: f32 = 141.0;
 const MAIN_SECTION_WIDTH: f32 = MAIN_STRIP_WIDTH + GROUP_SIDE_BORDER_WIDTH * 2.0;
 const STRIP_WIDTH: f32 = 146.0;
 const STRIP_SPACING: f32 = 0.0;
-const INSTRUMENT_PICKER_HEIGHT: f32 = 28.0;
+const INSTRUMENT_PICKER_HEIGHT: f32 = 22.0;
+const INSTRUMENT_SLOT_BUTTON_HEIGHT: f32 = 18.0;
+const INSTRUMENT_SLOT_WIDTH: f32 = 112.0;
+const INSTRUMENT_SLOT_LABEL_MAX_LEN: usize = 11;
+const INSTRUMENT_BROWSER_WIDTH: f32 = 520.0;
+const INSTRUMENT_BROWSER_HEIGHT: f32 = 360.0;
+const INSTRUMENT_BROWSER_ICON_SIZE: f32 = 13.0;
 const SECTION_HEADER_HEIGHT: f32 = 24.0;
 const STRIP_MIN_HEIGHT: f32 = 140.0;
 const STRIP_TOGGLE_SIZE: f32 = INSTRUMENT_PICKER_HEIGHT - 4.0;
@@ -65,161 +68,37 @@ fn noop_message() -> Message {
     Message::Noop
 }
 
-const GM_PROGRAM_NAMES: [&str; 128] = [
-    "Acoustic Grand Piano",
-    "Bright Acoustic Piano",
-    "Electric Grand Piano",
-    "Honky-tonk Piano",
-    "Electric Piano 1",
-    "Electric Piano 2",
-    "Harpsichord",
-    "Clavinet",
-    "Celesta",
-    "Glockenspiel",
-    "Music Box",
-    "Vibraphone",
-    "Marimba",
-    "Xylophone",
-    "Tubular Bells",
-    "Dulcimer",
-    "Drawbar Organ",
-    "Percussive Organ",
-    "Rock Organ",
-    "Church Organ",
-    "Reed Organ",
-    "Accordion",
-    "Harmonica",
-    "Tango Accordion",
-    "Acoustic Guitar (nylon)",
-    "Acoustic Guitar (steel)",
-    "Electric Guitar (jazz)",
-    "Electric Guitar (clean)",
-    "Electric Guitar (muted)",
-    "Overdriven Guitar",
-    "Distortion Guitar",
-    "Guitar Harmonics",
-    "Acoustic Bass",
-    "Electric Bass (finger)",
-    "Electric Bass (pick)",
-    "Fretless Bass",
-    "Slap Bass 1",
-    "Slap Bass 2",
-    "Synth Bass 1",
-    "Synth Bass 2",
-    "Violin",
-    "Viola",
-    "Cello",
-    "Contrabass",
-    "Tremolo Strings",
-    "Pizzicato Strings",
-    "Orchestral Harp",
-    "Timpani",
-    "String Ensemble 1",
-    "String Ensemble 2",
-    "SynthStrings 1",
-    "SynthStrings 2",
-    "Choir Aahs",
-    "Voice Oohs",
-    "Synth Voice",
-    "Orchestra Hit",
-    "Trumpet",
-    "Trombone",
-    "Tuba",
-    "Muted Trumpet",
-    "French Horn",
-    "Brass Section",
-    "SynthBrass 1",
-    "SynthBrass 2",
-    "Soprano Sax",
-    "Alto Sax",
-    "Tenor Sax",
-    "Baritone Sax",
-    "Oboe",
-    "English Horn",
-    "Bassoon",
-    "Clarinet",
-    "Piccolo",
-    "Flute",
-    "Recorder",
-    "Pan Flute",
-    "Blown Bottle",
-    "Shakuhachi",
-    "Whistle",
-    "Ocarina",
-    "Lead 1 (square)",
-    "Lead 2 (sawtooth)",
-    "Lead 3 (calliope)",
-    "Lead 4 (chiff)",
-    "Lead 5 (charang)",
-    "Lead 6 (voice)",
-    "Lead 7 (fifths)",
-    "Lead 8 (bass + lead)",
-    "Pad 1 (new age)",
-    "Pad 2 (warm)",
-    "Pad 3 (polysynth)",
-    "Pad 4 (choir)",
-    "Pad 5 (bowed)",
-    "Pad 6 (metallic)",
-    "Pad 7 (halo)",
-    "Pad 8 (sweep)",
-    "FX 1 (rain)",
-    "FX 2 (soundtrack)",
-    "FX 3 (crystal)",
-    "FX 4 (atmosphere)",
-    "FX 5 (brightness)",
-    "FX 6 (goblins)",
-    "FX 7 (echoes)",
-    "FX 8 (sci-fi)",
-    "Sitar",
-    "Banjo",
-    "Shamisen",
-    "Koto",
-    "Kalimba",
-    "Bag pipe",
-    "Fiddle",
-    "Shanai",
-    "Tinkle Bell",
-    "Agogo",
-    "Steel Drums",
-    "Woodblock",
-    "Taiko Drum",
-    "Melodic Tom",
-    "Synth Drum",
-    "Reverse Cymbal",
-    "Guitar Fret Noise",
-    "Breath Noise",
-    "Seashore",
-    "Bird Tweet",
-    "Telephone Ring",
-    "Helicopter",
-    "Applause",
-    "Gunshot",
-];
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum InstrumentChoice {
     None,
-    SoundfontProgram {
-        soundfont_id: String,
-        soundfont_name: String,
-        bank: u16,
-        program: u8,
+    Processor {
+        processor_id: String,
+        name: String,
+        backend: InstrumentBrowserBackend,
     },
 }
 
-impl fmt::Display for InstrumentChoice {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub(super) enum InstrumentBrowserBackend {
+    BuiltIn,
+    Clap,
+    Vst3,
+}
+
+impl InstrumentBrowserBackend {
+    fn label(self) -> &'static str {
         match self {
-            Self::None => f.write_str("None"),
-            Self::SoundfontProgram { bank, program, .. } => {
-                if *bank == 0 {
-                    f.write_str(GM_PROGRAM_NAMES[*program as usize])
-                } else {
-                    write!(f, "Bank {} / {}", bank, GM_PROGRAM_NAMES[*program as usize])
-                }
-            }
+            Self::BuiltIn => "Built-in",
+            Self::Clap => "CLAP",
+            Self::Vst3 => "VST3",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InstrumentBrowserEntries {
+    show_none: bool,
+    entries: Vec<InstrumentChoice>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -236,6 +115,7 @@ struct TrackStripDependency {
     index: usize,
     name: String,
     selected: Option<InstrumentChoice>,
+    editor_enabled: bool,
     color_bits: [u32; 4],
     gain_bits: u32,
     pan_bits: u32,
@@ -724,11 +604,6 @@ fn instrument_track_area(
     selected_track_index: Option<usize>,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
-    let options: Arc<[InstrumentChoice]> = if controls_enabled {
-        instrument_choices(mixer).into()
-    } else {
-        vec![InstrumentChoice::None].into()
-    };
     let left_spacer = strip_span_width(visible.start);
     let right_spacer = strip_span_width(mixer.tracks().len().saturating_sub(visible.end));
     let track_row = mixer.tracks()[visible.clone()].iter().enumerate().fold(
@@ -744,7 +619,6 @@ fn instrument_track_area(
                 .get(track_index)
                 .copied()
                 .unwrap_or_else(|| crate::track_colors::default_track_color(track_index));
-            let options = options.clone();
             let meter_dependency = MeterStackDependency {
                 meter: MeterDependency::from_snapshot(
                     meters.tracks.get(local_index).copied().unwrap_or_default(),
@@ -758,6 +632,12 @@ fn instrument_track_area(
                     index: track_index,
                     name: track.name.clone(),
                     selected: selected_choice.clone(),
+                    editor_enabled: track
+                        .instrument_slot()
+                        .filter(|slot| !slot.is_empty())
+                        .and_then(|slot| slot.descriptor())
+                        .and_then(|descriptor| descriptor.editor)
+                        .is_some(),
                     color_bits: color_bits(track_color),
                     gain_bits: track.state.gain_db.to_bits(),
                     pan_bits: track.state.pan.to_bits(),
@@ -800,24 +680,12 @@ fn instrument_track_area(
                             dependency.color_picker_open,
                         ),
                         Some({
-                            pick_list(
-                                options.clone(),
+                            instrument_slot_controls(
+                                track_index,
                                 dependency.selected.clone(),
-                                move |choice| {
-                                    if controls_enabled {
-                                        Message::Mixer(MixerMessage::SelectTrackInstrument(
-                                            track_index,
-                                            choice,
-                                        ))
-                                    } else {
-                                        noop_message()
-                                    }
-                                },
+                                dependency.editor_enabled,
+                                controls_enabled,
                             )
-                            .placeholder("Instrument")
-                            .text_size(ui_style::FONT_SIZE_UI_XS.saturating_sub(3))
-                            .width(Fill)
-                            .into()
                         }),
                         f32::from_bits(dependency.gain_bits),
                         f32::from_bits(dependency.pan_bits),
@@ -1249,6 +1117,7 @@ fn strip_shell<'a>(
     if let Some(on_pan) = actions.on_pan {
         content = content.push(
             column![
+                container(text("")).height(Length::Fixed(ui_style::SPACE_XS as f32)),
                 value_label_slot(INSTRUMENT_PICKER_HEIGHT, format!("{:+.2}", pan), None),
                 pan_knob(pan, on_pan),
             ]
@@ -1612,69 +1481,440 @@ fn strip_toggle_placeholder() -> Element<'static, Message> {
         .into()
 }
 
-fn instrument_choices(mixer: &MixerState) -> Vec<InstrumentChoice> {
-    let mut choices = Vec::with_capacity(1 + mixer.soundfonts().len() * GM_PROGRAM_NAMES.len());
-    choices.push(InstrumentChoice::None);
-    for soundfont in mixer.soundfonts() {
-        for (program, _) in GM_PROGRAM_NAMES.iter().enumerate() {
-            choices.push(InstrumentChoice::SoundfontProgram {
-                soundfont_id: soundfont.id.clone(),
-                soundfont_name: soundfont.name.clone(),
-                bank: 0,
-                program: program as u8,
-            });
+fn instrument_slot_controls(
+    track_index: usize,
+    selected: Option<InstrumentChoice>,
+    editor_enabled: bool,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    let primary_action = instrument_slot_primary_action(
+        track_index,
+        selected.as_ref(),
+        editor_enabled,
+        controls_enabled,
+    );
+    let secondary_action = controls_enabled.then_some(Message::Mixer(
+        MixerMessage::ToggleTrackInstrumentBrowser(track_index),
+    ));
+
+    slot_selector_controls(
+        instrument_trigger_label(selected.as_ref()),
+        primary_action,
+        secondary_action,
+    )
+}
+
+fn slot_selector_controls(
+    label: String,
+    primary_action: Option<Message>,
+    secondary_action: Option<Message>,
+) -> Element<'static, Message> {
+    let button: Element<'static, Message> = button(
+        container(
+            row![
+                container(
+                    svg(icons::keyboard_music())
+                        .width(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
+                        .height(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
+                        .style(ui_style::svg_muted_control),
+                )
+                .width(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
+                .center_x(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
+                .center_y(Fill),
+                container(
+                    text(label)
+                        .size(ui_style::FONT_SIZE_UI_XS)
+                        .wrapping(iced::widget::text::Wrapping::None),
+                )
+                .width(Fill)
+                .height(Fill)
+                .clip(true)
+                .center_x(Fill)
+                .align_y(alignment::Vertical::Center),
+                container(text(""))
+                    .width(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
+                    .height(Fill),
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center),
+        )
+        .width(Fill)
+        .height(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT))
+        .center_x(Fill)
+        .center_y(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT)),
+    )
+    .style(|theme, status| ui_style::button_selector_field(theme, status, false))
+    .padding([0, 6])
+    .width(Length::Fixed(INSTRUMENT_SLOT_WIDTH))
+    .height(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT))
+    .on_press_maybe(primary_action)
+    .into();
+
+    let button = if let Some(message) = secondary_action {
+        mouse_area(button).on_right_press(message).into()
+    } else {
+        button
+    };
+
+    container(button)
+        .width(Fill)
+        .height(Length::Fixed(INSTRUMENT_PICKER_HEIGHT))
+        .center_x(Fill)
+        .center_y(Length::Fixed(INSTRUMENT_PICKER_HEIGHT))
+        .into()
+}
+
+fn instrument_slot_primary_action(
+    track_index: usize,
+    selected: Option<&InstrumentChoice>,
+    editor_enabled: bool,
+    controls_enabled: bool,
+) -> Option<Message> {
+    if !controls_enabled {
+        return None;
+    }
+
+    match (selected, editor_enabled) {
+        (Some(InstrumentChoice::Processor { .. }), true) => Some(Message::Mixer(
+            MixerMessage::OpenEditor(super::processor_editor_windows::EditorTarget {
+                strip_index: track_index + 1,
+                slot_index: 0,
+            }),
+        )),
+        (Some(InstrumentChoice::None) | None, _) => Some(Message::Mixer(
+            MixerMessage::ToggleTrackInstrumentBrowser(track_index),
+        )),
+        (Some(InstrumentChoice::Processor { .. }), false) => None,
+    }
+}
+
+pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Message> {
+    let Some(track_index) = app.open_instrument_browser_track else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
+    let Some(playback) = app.playback.as_ref() else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
+    let mixer = playback.mixer_state();
+    let Some(track) = mixer.tracks().get(track_index) else {
+        return container(text("")).width(Fill).height(Fill).into();
+    };
+    let choices = instrument_choices(mixer);
+    let selected = selected_instrument_choice(track.instrument_slot(), mixer);
+
+    let header = container(
+        row![
+            column![
+                text("Choose Instrument")
+                    .size(ui_style::FONT_SIZE_UI_SM)
+                    .font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..fonts::UI
+                    }),
+                text(track.name.clone())
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .font(fonts::MONO),
+            ]
+            .spacing(2),
+            container(text("")).width(Fill),
+            button(
+                svg(icons::x())
+                    .width(Length::Fixed(12.0))
+                    .height(Length::Fixed(12.0))
+                    .style(|theme: &iced::Theme, _status| {
+                        let palette = theme.extended_palette();
+                        svg::Style {
+                            color: Some(palette.background.weak.text),
+                        }
+                    })
+            )
+            .style(ui_style::button_neutral)
+            .padding([
+                ui_style::PADDING_BUTTON_COMPACT_V,
+                ui_style::PADDING_BUTTON_COMPACT_H
+            ])
+            .on_press(Message::Mixer(MixerMessage::CloseTrackInstrumentBrowser)),
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Fill)
+    .padding([ui_style::PADDING_XS, ui_style::PADDING_SM])
+    .style(ui_style::prompt_header);
+
+    let tabs = row![
+        instrument_browser_tab_button(
+            InstrumentBrowserBackend::BuiltIn,
+            app.instrument_browser_backend
+        ),
+        instrument_browser_tab_button(
+            InstrumentBrowserBackend::Clap,
+            app.instrument_browser_backend
+        ),
+        instrument_browser_tab_button(
+            InstrumentBrowserBackend::Vst3,
+            app.instrument_browser_backend
+        ),
+    ]
+    .spacing(ui_style::SPACE_XS)
+    .width(Fill);
+
+    let search = text_input("Search instruments", &app.instrument_browser_search)
+        .on_input(|value| Message::Mixer(MixerMessage::InstrumentBrowserSearchChanged(value)))
+        .id(app.instrument_browser_search_input_id.clone())
+        .style(ui_style::browser_search_input)
+        .size(ui_style::FONT_SIZE_UI_SM)
+        .padding([ui_style::PADDING_XS, ui_style::PADDING_SM])
+        .width(Fill);
+
+    let body = match app.instrument_browser_backend {
+        InstrumentBrowserBackend::BuiltIn => instrument_browser_built_in_list(
+            track_index,
+            &choices,
+            selected.as_ref(),
+            &app.instrument_browser_search,
+        ),
+        InstrumentBrowserBackend::Clap => instrument_browser_empty_state("No CLAP instruments yet"),
+        InstrumentBrowserBackend::Vst3 => instrument_browser_empty_state("No VST3 instruments yet"),
+    };
+
+    let dialog = container(
+        column![
+            header,
+            container(column![tabs, search, body].spacing(ui_style::SPACE_SM))
+                .padding(ui_style::PADDING_SM)
+        ]
+        .spacing(0),
+    )
+    .width(Length::Fixed(INSTRUMENT_BROWSER_WIDTH))
+    .style(ui_style::prompt_dialog);
+
+    let centered_dialog = container(
+        mouse_area(opaque(dialog))
+            .on_press(Message::Noop)
+            .interaction(iced::mouse::Interaction::Pointer),
+    )
+    .width(Fill)
+    .height(Fill)
+    .center_x(Fill)
+    .center_y(Fill);
+
+    let backdrop = mouse_area(
+        container(centered_dialog)
+            .width(Fill)
+            .height(Fill)
+            .style(ui_style::prompt_backdrop),
+    )
+    .on_press(Message::Mixer(MixerMessage::CloseTrackInstrumentBrowser));
+
+    opaque(backdrop)
+}
+
+fn instrument_browser_tab_button(
+    tab: InstrumentBrowserBackend,
+    active: InstrumentBrowserBackend,
+) -> Element<'static, Message> {
+    button(text(tab.label()).size(ui_style::FONT_SIZE_UI_XS))
+        .style(move |theme, status| ui_style::button_browser_tab(theme, status, tab == active))
+        .padding([5, 10])
+        .on_press(Message::Mixer(
+            MixerMessage::SelectInstrumentBrowserBackend(tab),
+        ))
+        .into()
+}
+
+fn instrument_browser_built_in_list(
+    track_index: usize,
+    choices: &[InstrumentChoice],
+    selected: Option<&InstrumentChoice>,
+    search: &str,
+) -> Element<'static, Message> {
+    let browser = instrument_browser_entries(choices, InstrumentBrowserBackend::BuiltIn, search);
+    let InstrumentBrowserEntries { show_none, entries } = browser;
+    let mut content = column![].spacing(0).width(Fill);
+    if show_none {
+        content = content.push(instrument_browser_choice_button(
+            track_index,
+            InstrumentChoice::None,
+            selected == Some(&InstrumentChoice::None),
+        ));
+    }
+
+    let has_entries = !entries.is_empty();
+    for choice in entries {
+        content = content.push(instrument_browser_choice_button(
+            track_index,
+            choice.clone(),
+            selected == Some(&choice),
+        ));
+    }
+
+    if !show_none && !has_entries {
+        return instrument_browser_empty_state("No matching instruments");
+    }
+
+    scrollable(content)
+        .height(Length::Fixed(INSTRUMENT_BROWSER_HEIGHT))
+        .style(ui_style::workspace_scrollable)
+        .into()
+}
+
+fn instrument_browser_choice_button(
+    track_index: usize,
+    choice: InstrumentChoice,
+    selected: bool,
+) -> Element<'static, Message> {
+    button(
+        container(
+            text(instrument_choice_primary_label(&choice))
+                .size(ui_style::FONT_SIZE_UI_SM)
+                .width(Fill)
+                .wrapping(iced::widget::text::Wrapping::None),
+        )
+        .width(Fill)
+        .center_y(Fill),
+    )
+    .style(move |theme, status| ui_style::button_browser_entry(theme, status, selected))
+    .padding([8, 10])
+    .width(Fill)
+    .on_press(Message::Mixer(MixerMessage::SelectTrackInstrument(
+        track_index,
+        choice,
+    )))
+    .into()
+}
+
+fn instrument_browser_empty_state(label: &'static str) -> Element<'static, Message> {
+    container(
+        text(label)
+            .size(ui_style::FONT_SIZE_UI_SM)
+            .font(fonts::MONO),
+    )
+    .width(Fill)
+    .height(Length::Fixed(INSTRUMENT_BROWSER_HEIGHT))
+    .center_x(Fill)
+    .center_y(Length::Fixed(INSTRUMENT_BROWSER_HEIGHT))
+    .into()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn instrument_choice_primary_label(choice: &InstrumentChoice) -> String {
+    match choice {
+        InstrumentChoice::None => "Empty".to_string(),
+        InstrumentChoice::Processor { name, .. } => name.clone(),
+    }
+}
+
+fn instrument_trigger_label(choice: Option<&InstrumentChoice>) -> String {
+    crate::track_names::ellipsize_middle(
+        &choice
+            .map(instrument_choice_primary_label)
+            .unwrap_or_else(|| "Empty".to_string()),
+        INSTRUMENT_SLOT_LABEL_MAX_LEN,
+    )
+}
+
+fn instrument_choice_search_haystack(choice: &InstrumentChoice) -> String {
+    match choice {
+        InstrumentChoice::None => "empty none no instrument".to_string(),
+        InstrumentChoice::Processor { name, backend, .. } => {
+            format!("{} {}", name.to_lowercase(), backend.label().to_lowercase())
         }
     }
+}
+
+fn instrument_browser_entries(
+    choices: &[InstrumentChoice],
+    active_backend: InstrumentBrowserBackend,
+    search: &str,
+) -> InstrumentBrowserEntries {
+    if active_backend != InstrumentBrowserBackend::BuiltIn {
+        return InstrumentBrowserEntries {
+            show_none: false,
+            entries: Vec::new(),
+        };
+    }
+
+    let query = search.trim().to_lowercase();
+    let matches = |choice: &InstrumentChoice| {
+        query.is_empty() || instrument_choice_search_haystack(choice).contains(&query)
+    };
+
+    let mut entries = Vec::new();
+    let mut show_none = false;
+    for choice in choices {
+        match choice {
+            InstrumentChoice::None => {
+                if matches(choice) {
+                    show_none = true;
+                }
+            }
+            InstrumentChoice::Processor { backend, .. } if *backend != active_backend => {}
+            InstrumentChoice::Processor { .. } if matches(choice) => {
+                entries.push(choice.clone());
+            }
+            InstrumentChoice::Processor { .. } => {}
+        }
+    }
+
+    InstrumentBrowserEntries { show_none, entries }
+}
+
+fn instrument_choices(_mixer: &MixerState) -> Vec<InstrumentChoice> {
+    let mut choices = Vec::new();
+    choices.push(InstrumentChoice::None);
+    choices.extend(
+        registry::all()
+            .iter()
+            .filter(|entry| entry.role == registry::Role::Instrument)
+            .filter(|entry| entry.id != BUILTIN_NONE_ID && entry.id != BUILTIN_METRONOME_ID)
+            .map(|entry| InstrumentChoice::Processor {
+                processor_id: entry.id.to_string(),
+                name: entry.name.to_string(),
+                backend: match entry.backend {
+                    registry::Backend::BuiltIn => InstrumentBrowserBackend::BuiltIn,
+                    registry::Backend::Clap => InstrumentBrowserBackend::Clap,
+                    registry::Backend::Vst3 => InstrumentBrowserBackend::Vst3,
+                },
+            }),
+    );
     choices
 }
 
 fn selected_instrument_choice(
     slot: Option<&SlotState>,
-    mixer: &MixerState,
+    _mixer: &MixerState,
 ) -> Option<InstrumentChoice> {
     let slot = slot?;
     if slot.is_empty() {
         return Some(InstrumentChoice::None);
     }
-
-    let Ok(Some(SoundfontProcessorState {
-        soundfont_id,
-        bank,
-        program,
-    })) = slot.decode_built_in(BUILTIN_SOUNDFONT_ID, soundfont_synth::decode_state)
-    else {
-        return None;
-    };
-
-    let soundfont_name = mixer
-        .soundfonts()
-        .iter()
-        .find(|resource| resource.id == soundfont_id)
-        .map(|resource| resource.name.clone())
-        .unwrap_or(soundfont_id.clone());
-
-    Some(InstrumentChoice::SoundfontProgram {
-        soundfont_id,
-        soundfont_name,
-        bank,
-        program,
+    let entry = registry::resolve(&slot.kind)?;
+    Some(InstrumentChoice::Processor {
+        processor_id: entry.id.to_string(),
+        name: entry.name.to_string(),
+        backend: match entry.backend {
+            registry::Backend::BuiltIn => InstrumentBrowserBackend::BuiltIn,
+            registry::Backend::Clap => InstrumentBrowserBackend::Clap,
+            registry::Backend::Vst3 => InstrumentBrowserBackend::Vst3,
+        },
     })
 }
 
 #[cfg(test)]
 mod tests {
     use crate::ui_style;
-    use lilypalooza_audio::instrument::soundfont_synth;
-    use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, MixerState, SlotState, SoundfontProcessorState};
+    use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, MixerState, SlotState};
 
     use super::{
         COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
-        INSTRUMENT_PICKER_HEIGHT, InstrumentChoice, MAIN_SECTION_WIDTH, MAIN_STRIP_WIDTH,
-        MIXER_MIN_HEIGHT, MeterDependency, STRIP_TOGGLE_SIZE, STRIP_VIRTUALIZATION_OVERSCAN,
-        STRIP_WIDTH, StripMeterSnapshot, TrackStripDependency, VALUE_LABEL_HEIGHT, color_bits,
-        control_stack_height, gain_control_height, gain_control_mode, gain_label,
-        meter_control_height, meter_peak_label, meter_scale_visible, selected_instrument_choice,
-        track_should_use_roll_tint, visible_strip_window,
+        INSTRUMENT_PICKER_HEIGHT, InstrumentBrowserBackend, InstrumentChoice, MAIN_SECTION_WIDTH,
+        MAIN_STRIP_WIDTH, MIXER_MIN_HEIGHT, MeterDependency, STRIP_TOGGLE_SIZE,
+        STRIP_VIRTUALIZATION_OVERSCAN, STRIP_WIDTH, StripMeterSnapshot, TrackStripDependency,
+        VALUE_LABEL_HEIGHT, color_bits, control_stack_height, gain_control_height,
+        gain_control_mode, gain_label, instrument_browser_entries, instrument_slot_primary_action,
+        instrument_trigger_label, meter_control_height, meter_peak_label, meter_scale_visible,
+        selected_instrument_choice, track_should_use_roll_tint, visible_strip_window,
     };
     use lilypalooza_audio::mixer::ChannelMeterSnapshot;
 
@@ -1694,20 +1934,104 @@ mod tests {
             selected_instrument_choice(
                 Some(&SlotState::built_in(
                     BUILTIN_SOUNDFONT_ID,
-                    soundfont_synth::encode_state(&SoundfontProcessorState {
-                        soundfont_id: "default".to_string(),
-                        bank: 0,
-                        program: 2,
-                    }),
+                    lilypalooza_audio::instrument::soundfont_synth::state("default", 0, 2),
                 )),
                 &mixer
             ),
-            Some(InstrumentChoice::SoundfontProgram {
-                soundfont_id: "default".to_string(),
-                soundfont_name: "default".to_string(),
-                bank: 0,
-                program: 2,
+            Some(InstrumentChoice::Processor {
+                processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
+                name: "SoundFont".to_string(),
+                backend: InstrumentBrowserBackend::BuiltIn,
             })
+        );
+    }
+
+    #[test]
+    fn built_in_browser_entries_filter_by_instrument_name_without_section_headers() {
+        let choices = vec![
+            InstrumentChoice::None,
+            InstrumentChoice::Processor {
+                processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
+                name: "SoundFont".to_string(),
+                backend: InstrumentBrowserBackend::BuiltIn,
+            },
+        ];
+
+        let browser =
+            instrument_browser_entries(&choices, InstrumentBrowserBackend::BuiltIn, "sound");
+
+        assert!(!browser.show_none);
+        assert_eq!(
+            browser.entries,
+            vec![InstrumentChoice::Processor {
+                processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
+                name: "SoundFont".to_string(),
+                backend: InstrumentBrowserBackend::BuiltIn,
+            }]
+        );
+    }
+
+    #[test]
+    fn instrument_trigger_label_uses_none_and_truncates_long_names() {
+        assert_eq!(instrument_trigger_label(None), "Empty");
+
+        assert_eq!(
+            instrument_trigger_label(Some(&InstrumentChoice::Processor {
+                processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
+                name: "Extremely Long SoundFont Synth Name".to_string(),
+                backend: InstrumentBrowserBackend::BuiltIn,
+            })),
+            "Extre… Name"
+        );
+    }
+
+    #[test]
+    fn instrument_trigger_label_uses_none_for_empty_choice() {
+        assert_eq!(
+            instrument_trigger_label(Some(&InstrumentChoice::None)),
+            "Empty"
+        );
+    }
+
+    #[test]
+    fn instrument_slot_primary_action_opens_editor_when_available() {
+        assert!(matches!(
+            instrument_slot_primary_action(
+                2,
+                Some(&InstrumentChoice::Processor {
+                    processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
+                    name: "SoundFont".to_string(),
+                    backend: InstrumentBrowserBackend::BuiltIn,
+                }),
+                true,
+                true,
+            ),
+            Some(crate::app::messages::Message::Mixer(
+                crate::app::messages::MixerMessage::OpenEditor(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn instrument_slot_primary_action_opens_picker_only_when_empty() {
+        assert!(matches!(
+            instrument_slot_primary_action(2, Some(&InstrumentChoice::None), false, true),
+            Some(crate::app::messages::Message::Mixer(
+                crate::app::messages::MixerMessage::ToggleTrackInstrumentBrowser(2)
+            ))
+        ));
+        assert!(
+            instrument_slot_primary_action(
+                2,
+                Some(&InstrumentChoice::Processor {
+                    processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
+                    name: "SoundFont".to_string(),
+                    backend: InstrumentBrowserBackend::BuiltIn,
+                }),
+                false,
+                true,
+            )
+            .is_none()
         );
     }
 
@@ -1827,6 +2151,7 @@ mod tests {
             index: 0,
             name: "Track".to_string(),
             selected: Some(InstrumentChoice::None),
+            editor_enabled: false,
             color_bits: color_bits(iced::Color::from_rgb(0.1, 0.2, 0.3)),
             gain_bits: 0.0f32.to_bits(),
             pan_bits: 0.0f32.to_bits(),

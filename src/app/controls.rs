@@ -654,8 +654,14 @@ impl<Message: Clone> canvas_widget::Program<Message> for HorizontalSlider<'_, Me
 
 impl<Message> Knob<'_, Message> {
     fn apply_drag_delta(&self, delta_y: f32) -> f32 {
-        let normalized = (self.normalized_value() - delta_y * self.drag_scalar).clamp(0.0, 1.0);
-        self.value_from_normalized(normalized)
+        match self.mode {
+            KnobMode::Bipolar { .. } => self.normalize(self.value - delta_y * self.drag_scalar),
+            KnobMode::Gain => {
+                let normalized =
+                    (self.normalized_value() - delta_y * self.drag_scalar).clamp(0.0, 1.0);
+                self.value_from_normalized(normalized)
+            }
+        }
     }
 
     fn apply_scroll_delta(&self, delta: mouse::ScrollDelta) -> f32 {
@@ -663,8 +669,13 @@ impl<Message> Knob<'_, Message> {
             mouse::ScrollDelta::Lines { y, .. } => y * self.wheel_scalar,
             mouse::ScrollDelta::Pixels { y, .. } => y / 120.0 * self.wheel_scalar,
         };
-        let normalized = (self.normalized_value() + amount).clamp(0.0, 1.0);
-        self.value_from_normalized(normalized)
+        match self.mode {
+            KnobMode::Bipolar { .. } => self.normalize(self.value + amount),
+            KnobMode::Gain => {
+                let normalized = (self.normalized_value() + amount).clamp(0.0, 1.0);
+                self.value_from_normalized(normalized)
+            }
+        }
     }
 
     fn normalize(&self, value: f32) -> f32 {

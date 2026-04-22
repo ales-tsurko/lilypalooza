@@ -365,8 +365,8 @@ fn color_picker_overlay_cancel_button_click() {
 
         let mut ui = simulator(&app);
 
-        // Click the cancel button (using Unicode character from icon font)
-        ui.click("\u{e800}")?; // Cancel icon
+        // Click the cancel button
+        ui.click("Cancel")?;
 
         // Verify we got the Cancel message
         assert_message_received(
@@ -399,8 +399,8 @@ fn color_picker_overlay_submit_button_click() {
 
         let mut ui = simulator(&app);
 
-        // Click the submit button (using Unicode character from icon font)
-        ui.click("\u{e805}")?; // OK/Submit icon
+        // Click the submit button
+        ui.click("Apply")?;
 
         // Verify we got the Submit message
         assert_message_received(

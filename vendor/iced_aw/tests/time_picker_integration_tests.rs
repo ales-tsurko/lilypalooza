@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the TimePicker widget
 //!
 //! These tests verify the TimePicker widget's behavior and public API

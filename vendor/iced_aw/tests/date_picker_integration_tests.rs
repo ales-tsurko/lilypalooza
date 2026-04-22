@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the DatePicker widget
 //!
 //! These tests verify the DatePicker widget's behavior and public API

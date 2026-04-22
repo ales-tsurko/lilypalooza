@@ -99,6 +99,31 @@ impl Lilypalooza {
                     super::track_selection::TrackSelectionOrigin::Mixer,
                 );
             }
+            MixerMessage::ToggleTrackInstrumentBrowser(track_index) => {
+                if self.open_instrument_browser_track == Some(track_index) {
+                    self.close_track_instrument_browser();
+                    return Task::none();
+                }
+                self.open_instrument_browser_track = Some(track_index);
+                self.instrument_browser_backend =
+                    super::super::mixer::InstrumentBrowserBackend::BuiltIn;
+                self.instrument_browser_search.clear();
+                return iced::widget::operation::focus(
+                    self.instrument_browser_search_input_id.clone(),
+                );
+            }
+            MixerMessage::CloseTrackInstrumentBrowser => {
+                self.close_track_instrument_browser();
+                return Task::none();
+            }
+            MixerMessage::InstrumentBrowserSearchChanged(value) => {
+                self.instrument_browser_search = value;
+                return Task::none();
+            }
+            MixerMessage::SelectInstrumentBrowserBackend(backend) => {
+                self.instrument_browser_backend = backend;
+                return Task::none();
+            }
             MixerMessage::StartTrackRename(track_index) => {
                 return self.start_track_rename(track_index, WorkspacePaneKind::Mixer);
             }
@@ -138,6 +163,10 @@ impl Lilypalooza {
                 return Task::none();
             }
             _ => {}
+        }
+
+        if matches!(message, MixerMessage::SelectTrackInstrument(_, _)) {
+            self.close_track_instrument_browser();
         }
 
         let Some(playback) = self.playback.as_mut() else {
@@ -195,19 +224,13 @@ impl Lilypalooza {
             MixerMessage::SelectTrackInstrument(index, choice) => {
                 let slot = match choice {
                     super::super::mixer::InstrumentChoice::None => SlotState::default(),
-                    super::super::mixer::InstrumentChoice::SoundfontProgram {
-                        soundfont_id,
-                        bank,
-                        program,
-                        ..
-                    } => SlotState::built_in(
-                        BUILTIN_SOUNDFONT_ID,
-                        soundfont_synth::encode_state(&SoundfontProcessorState {
-                            soundfont_id,
-                            bank,
-                            program,
-                        }),
-                    ),
+                    super::super::mixer::InstrumentChoice::Processor { processor_id, .. } => {
+                        default_track_instrument_slot(
+                            &mixer,
+                            TrackId(index as u16),
+                            processor_id.as_str(),
+                        )
+                    }
                 };
                 let _ = mixer.set_track_instrument(TrackId(index as u16), slot);
             }
@@ -238,6 +261,10 @@ impl Lilypalooza {
             }
             MixerMessage::SelectTrack(_) => {}
             MixerMessage::StartTrackRename(_)
+            | MixerMessage::ToggleTrackInstrumentBrowser(_)
+            | MixerMessage::CloseTrackInstrumentBrowser
+            | MixerMessage::InstrumentBrowserSearchChanged(_)
+            | MixerMessage::SelectInstrumentBrowserBackend(_)
             | MixerMessage::StartBusRename(_)
             | MixerMessage::OpenEditor(_)
             | MixerMessage::TrackRenameInputChanged(_)
@@ -285,6 +312,10 @@ fn mixer_message_history_mode(
         | MixerMessage::InstrumentViewportScrolled(_)
         | MixerMessage::BusViewportScrolled(_)
         | MixerMessage::OpenTrackColorPicker
+        | MixerMessage::ToggleTrackInstrumentBrowser(_)
+        | MixerMessage::CloseTrackInstrumentBrowser
+        | MixerMessage::InstrumentBrowserSearchChanged(_)
+        | MixerMessage::SelectInstrumentBrowserBackend(_)
         | MixerMessage::OpenEditor(_)
         | MixerMessage::PreviewTrackColor(_) => MixerHistoryMode::None,
         MixerMessage::SetMasterGain(_)
@@ -317,6 +348,11 @@ fn mixer_message_history_mode(
 }
 
 impl Lilypalooza {
+    fn close_track_instrument_browser(&mut self) {
+        self.open_instrument_browser_track = None;
+        self.instrument_browser_search.clear();
+    }
+
     fn open_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
         let Some(playback) = self.playback.as_ref() else {
             return Task::none();
@@ -363,6 +399,47 @@ impl Lilypalooza {
             EditorOpenOutcome::Opened(_) | EditorOpenOutcome::Focused(_) => Task::none(),
         }
     }
+}
+
+fn default_track_instrument_slot(
+    mixer: &lilypalooza_audio::MixerHandle<'_>,
+    track_id: TrackId,
+    processor_id: &str,
+) -> SlotState {
+    if processor_id == BUILTIN_SOUNDFONT_ID {
+        let current_state = mixer
+            .track(track_id)
+            .ok()
+            .and_then(|track| track.instrument_slot())
+            .and_then(|slot| {
+                slot.decode_built_in(BUILTIN_SOUNDFONT_ID, soundfont_synth::decode_state)
+                    .ok()
+                    .flatten()
+            });
+        let soundfont_id = current_state
+            .as_ref()
+            .map(|state| state.soundfont_id.clone())
+            .or_else(|| {
+                mixer
+                    .soundfonts()
+                    .first()
+                    .map(|soundfont| soundfont.id.clone())
+            })
+            .unwrap_or_else(|| SoundfontProcessorState::default().soundfont_id);
+        let bank = current_state.as_ref().map_or(0, |state| state.bank);
+        let program = current_state.as_ref().map_or(0, |state| state.program);
+
+        return SlotState::built_in(
+            BUILTIN_SOUNDFONT_ID,
+            soundfont_synth::encode_state(&SoundfontProcessorState {
+                soundfont_id,
+                bank,
+                program,
+            }),
+        );
+    }
+
+    SlotState::built_in(processor_id, lilypalooza_audio::ProcessorState::default())
 }
 
 fn sync_piano_roll_mix_from_mixer_state(
@@ -418,6 +495,10 @@ mod tests {
                 false
             ),
             MixerHistoryMode::Immediate
+        );
+        assert_eq!(
+            mixer_message_history_mode(&MixerMessage::ToggleTrackInstrumentBrowser(0), false),
+            MixerHistoryMode::None
         );
     }
 
@@ -489,6 +570,43 @@ mod tests {
         let _ = app.handle_mixer_message(MixerMessage::OpenEditor(target));
 
         assert!(!app.processor_editor_windows.is_open(target));
+    }
+
+    #[test]
+    fn instrument_browser_toggle_opens_and_closes_same_track() {
+        let mut app = test_app();
+
+        let _ = app.handle_mixer_message(MixerMessage::ToggleTrackInstrumentBrowser(3));
+
+        assert_eq!(app.open_instrument_browser_track, Some(3));
+        assert_eq!(
+            app.instrument_browser_backend,
+            crate::app::mixer::InstrumentBrowserBackend::BuiltIn
+        );
+        assert!(app.instrument_browser_search.is_empty());
+
+        let _ = app.handle_mixer_message(MixerMessage::ToggleTrackInstrumentBrowser(3));
+
+        assert_eq!(app.open_instrument_browser_track, None);
+    }
+
+    #[test]
+    fn selecting_track_instrument_closes_open_browser() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        app.open_instrument_browser_track = Some(0);
+        app.instrument_browser_search = "piano".into();
+
+        let _ = app.handle_mixer_message(MixerMessage::SelectTrackInstrument(
+            0,
+            crate::app::mixer::InstrumentChoice::None,
+        ));
+
+        assert_eq!(app.open_instrument_browser_track, None);
+        assert!(app.instrument_browser_search.is_empty());
     }
 
     #[test]

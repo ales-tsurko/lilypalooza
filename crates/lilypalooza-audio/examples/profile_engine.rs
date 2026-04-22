@@ -220,6 +220,7 @@ fn simple_midi_bytes(ppq: u16) -> Vec<u8> {
 mod tests {
     use super::options_from_iter;
     use std::ffi::OsString;
+    use std::path::PathBuf;
 
     #[test]
     fn parses_profile_engine_options() {

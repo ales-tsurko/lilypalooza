@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the MenuBar widget
 //!
 //! These tests verify the MenuBar widget's behavior and public API

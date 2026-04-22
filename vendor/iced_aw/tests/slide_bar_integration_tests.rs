@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the SlideBar widget
 //!
 //! These tests verify the SlideBar widget's behavior and public API

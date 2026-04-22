@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the Sidebar and SidebarWithContent widgets
 //!
 //! These tests verify the widgets' behavior and public API

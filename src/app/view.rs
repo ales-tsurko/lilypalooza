@@ -32,6 +32,12 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     } else {
         container(text("")).width(Fill).height(Fill).into()
     };
+    let instrument_browser_overlay: Element<'_, Message> =
+        if app.open_instrument_browser_track.is_some() {
+            super::mixer::instrument_browser_overlay(app)
+        } else {
+            container(text("")).width(Fill).height(Fill).into()
+        };
 
     let prompt_overlay: Element<'_, Message> = if let Some(prompt) = &app.error_prompt {
         match prompt.buttons() {
@@ -55,7 +61,13 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
         container(text("")).width(Fill).height(Fill).into()
     };
 
-    stack([base, shortcuts_overlay, prompt_overlay]).into()
+    stack([
+        base,
+        shortcuts_overlay,
+        instrument_browser_overlay,
+        prompt_overlay,
+    ])
+    .into()
 }
 
 fn main_content(app: &Lilypalooza) -> Element<'_, Message> {
@@ -118,6 +130,12 @@ fn shortcuts_overlay(app: &Lilypalooza) -> Element<'_, Message> {
                 svg(icons::x())
                     .width(Length::Fixed(12.0))
                     .height(Length::Fixed(12.0))
+                    .style(|theme: &iced::Theme, _status| {
+                        let palette = theme.extended_palette();
+                        svg::Style {
+                            color: Some(palette.background.weak.text),
+                        }
+                    })
             )
             .style(ui_style::button_neutral)
             .padding([

@@ -281,6 +281,30 @@ pub(crate) fn track_name_input(theme: &Theme, status: text_input::Status) -> tex
     }
 }
 
+pub(crate) fn browser_search_input(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let palette = theme.extended_palette();
+    let border_color = match status {
+        text_input::Status::Focused { .. } => palette.primary.base.color,
+        text_input::Status::Hovered => mix_color(
+            palette.background.strong.color,
+            palette.primary.base.color,
+            0.18,
+        ),
+        text_input::Status::Active | text_input::Status::Disabled => {
+            palette.background.strong.color
+        }
+    };
+
+    text_input::Style {
+        background: palette.background.weak.color.into(),
+        border: border::rounded(RADIUS_UI).width(1).color(border_color),
+        icon: palette.background.weak.text,
+        placeholder: palette.background.strong.text,
+        value: palette.background.weak.text,
+        selection: palette.primary.weak.color,
+    }
+}
+
 pub(crate) fn track_name_editor_shell(theme: &Theme, focused: bool) -> container::Style {
     let palette = theme.extended_palette();
     let strong_border = mix_color(
@@ -720,6 +744,167 @@ pub(crate) fn button_ghost_subtle(theme: &Theme, status: button::Status) -> butt
         },
         button::Status::Disabled => button::Style {
             text_color: palette.background.weakest.text,
+            ..base
+        },
+    }
+}
+
+pub(crate) fn button_selector_field(
+    theme: &Theme,
+    status: button::Status,
+    open: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let border_color = if open {
+        palette.primary.base.color
+    } else {
+        mix_color(
+            palette.background.base.color,
+            palette.background.strong.color,
+            0.52,
+        )
+    };
+    let base = button::Style {
+        background: Some(palette.background.weak.color.into()),
+        text_color: palette.background.weak.text,
+        border: border::rounded(RADIUS_UI).width(1).color(border_color),
+        shadow: Shadow::default(),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.background.strong.color.into()),
+            text_color: palette.background.strong.text,
+            border: border::rounded(RADIUS_UI).width(1).color(if open {
+                palette.primary.base.color
+            } else {
+                palette.background.base.color
+            }),
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.background.base.color.into()),
+            text_color: palette.background.base.text,
+            border: border::rounded(RADIUS_UI)
+                .width(1)
+                .color(palette.primary.base.color),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(palette.background.weakest.color.into()),
+            text_color: palette.background.weakest.text,
+            ..base
+        },
+    }
+}
+
+pub(crate) fn button_browser_tab(
+    theme: &Theme,
+    status: button::Status,
+    active: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let base = button::Style {
+        background: Some(
+            if active {
+                mix_color(
+                    palette.background.strong.color,
+                    palette.primary.base.color,
+                    0.10,
+                )
+            } else {
+                palette.background.weak.color
+            }
+            .into(),
+        ),
+        text_color: if active {
+            palette.background.base.text
+        } else {
+            palette.background.weak.text
+        },
+        border: border::rounded(RADIUS_UI).width(1).color(if active {
+            palette.primary.base.color
+        } else {
+            palette.background.strong.color
+        }),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(palette.background.strong.color.into()),
+            text_color: palette.background.strong.text,
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(palette.background.base.color.into()),
+            text_color: palette.background.base.text,
+            border: border::rounded(RADIUS_UI)
+                .width(1)
+                .color(palette.primary.base.color),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.weakest.text,
+            ..base
+        },
+    }
+}
+
+pub(crate) fn button_browser_entry(
+    theme: &Theme,
+    status: button::Status,
+    selected: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let selected_background = mix_color(palette.background.weak.color, Color::WHITE, 0.04);
+    let base = button::Style {
+        background: Some(
+            if selected {
+                selected_background
+            } else {
+                palette.background.weak.color
+            }
+            .into(),
+        ),
+        text_color: palette.background.base.text,
+        border: border::rounded(RADIUS_NONE)
+            .width(0)
+            .color(Color::TRANSPARENT),
+        ..button::Style::default()
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(
+                if selected {
+                    mix_color(selected_background, palette.background.strong.color, 0.18)
+                } else {
+                    palette.background.strong.color
+                }
+                .into(),
+            ),
+            text_color: palette.background.strong.text,
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(
+                if selected {
+                    mix_color(selected_background, palette.background.base.color, 0.16)
+                } else {
+                    palette.background.base.color
+                }
+                .into(),
+            ),
+            text_color: palette.background.base.text,
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.weak.text,
             ..base
         },
     }
@@ -1241,6 +1426,22 @@ pub(crate) fn svg_window_control(theme: &Theme, status: svg::Status) -> svg::Sty
         color: Some(match status {
             svg::Status::Idle => palette.background.strong.text,
             svg::Status::Hovered => palette.background.base.text,
+        }),
+    }
+}
+
+pub(crate) fn svg_muted_control(theme: &Theme, status: svg::Status) -> svg::Style {
+    let palette = theme.extended_palette();
+    let idle = mix_color(
+        palette.background.weak.text,
+        palette.background.weak.color,
+        0.38,
+    );
+
+    svg::Style {
+        color: Some(match status {
+            svg::Status::Idle => idle,
+            svg::Status::Hovered => palette.background.weak.text,
         }),
     }
 }

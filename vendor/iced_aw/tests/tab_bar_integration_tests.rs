@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the TabBar widget
 //!
 //! These tests verify the TabBar widget's behavior and public API

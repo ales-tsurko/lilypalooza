@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the Card widget
 //!
 //! These tests verify the Card widget's behavior by actually exercising

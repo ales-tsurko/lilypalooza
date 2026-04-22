@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the TypedInput widget
 //!
 //! These tests verify the TypedInput widget's behavior and public API

@@ -213,6 +213,10 @@ struct Lilypalooza {
     track_rename_color_picker_open: bool,
     track_rename_color_value: Color,
     selected_track_index: Option<usize>,
+    open_instrument_browser_track: Option<usize>,
+    instrument_browser_backend: mixer::InstrumentBrowserBackend,
+    instrument_browser_search: String,
+    instrument_browser_search_input_id: Id,
     track_name_overrides: Vec<Option<String>>,
     track_color_overrides: Vec<Option<Color>>,
     metronome: crate::state::MetronomeState,
@@ -699,6 +703,10 @@ fn new(
         track_rename_color_picker_open: false,
         track_rename_color_value: crate::track_colors::default_track_color(0),
         selected_track_index: None,
+        open_instrument_browser_track: None,
+        instrument_browser_backend: mixer::InstrumentBrowserBackend::BuiltIn,
+        instrument_browser_search: String::new(),
+        instrument_browser_search_input_id: Id::unique(),
         track_name_overrides: Vec::new(),
         track_color_overrides: Vec::new(),
         metronome: crate::state::MetronomeState::default(),
@@ -1593,6 +1601,19 @@ mod tests {
         );
 
         assert!(!app.metronome_menu_open);
+    }
+
+    #[test]
+    fn instrument_browser_escape_closes_menu() {
+        let mut app = test_editor_app();
+        app.open_instrument_browser_track = Some(0);
+
+        let _ = update(
+            &mut app,
+            named_key_press(keyboard::key::Named::Escape, keyboard::key::Code::Escape),
+        );
+
+        assert_eq!(app.open_instrument_browser_track, None);
     }
 
     #[test]

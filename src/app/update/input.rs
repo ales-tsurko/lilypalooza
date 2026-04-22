@@ -132,6 +132,17 @@ impl Lilypalooza {
                 Message::PianoRoll(PianoRollMessage::TransportCloseMetronomeMenu),
             );
         }
+        if self.open_instrument_browser_track.is_some()
+            && matches!(
+                key_press.key,
+                keyboard::Key::Named(keyboard::key::Named::Escape)
+            )
+        {
+            return update(
+                self,
+                Message::Mixer(MixerMessage::CloseTrackInstrumentBrowser),
+            );
+        }
         if self.renaming_target.is_some()
             && matches!(key_press.status, iced::event::Status::Captured)
         {

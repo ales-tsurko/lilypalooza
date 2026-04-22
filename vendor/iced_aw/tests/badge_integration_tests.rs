@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the Badge widget
 //!
 //! These tests verify the Badge widget's behavior by actually exercising

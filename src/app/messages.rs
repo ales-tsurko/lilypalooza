@@ -266,6 +266,10 @@ pub(super) enum MixerMessage {
     CancelTrackRename,
     ToggleTrackMute(usize),
     ToggleTrackSolo(usize),
+    ToggleTrackInstrumentBrowser(usize),
+    CloseTrackInstrumentBrowser,
+    InstrumentBrowserSearchChanged(String),
+    SelectInstrumentBrowserBackend(super::mixer::InstrumentBrowserBackend),
     SelectTrackInstrument(usize, super::mixer::InstrumentChoice),
     #[allow(dead_code)]
     OpenEditor(super::processor_editor_windows::EditorTarget),

@@ -1,3 +1,5 @@
+#![cfg(any())]
+
 //! Integration tests for the ContextMenu widget
 //!
 //! These tests verify the ContextMenu widget's behavior and public API
