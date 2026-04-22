@@ -1402,11 +1402,10 @@ fn group_header<'a>(
         );
     }
 
-    header = header.push(header_close_trigger(app, active_pane));
-
     if shows_menu_button {
         header = header.push(header_overflow_trigger(app, group_id, is_menu_open));
     }
+    header = header.push(header_close_trigger(app, active_pane));
     iced::widget::column![
         mouse_area(container(header).padding([
             ui_style::PADDING_STATUS_BAR_V,
