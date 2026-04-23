@@ -14,8 +14,8 @@ use vizia::{
 };
 
 use crate::instrument::{
-    BUILTIN_SOUNDFONT_ID, Controller, ControllerError, EditorDescriptor, EditorError,
-    EditorParent, EditorSession, EditorSize, InstrumentProcessor, InstrumentRuntimeContext,
+    BUILTIN_SOUNDFONT_ID, Controller, ControllerError, EditorDescriptor, EditorError, EditorParent,
+    EditorSession, EditorSize, InstrumentProcessor, InstrumentRuntimeContext,
     InstrumentRuntimeSpec, MidiEvent, ParameterDescriptor, Processor, ProcessorDescriptor,
     ProcessorState, ProcessorStateError, RuntimeBinding, RuntimeFactoryError, SlotState,
 };
@@ -293,7 +293,7 @@ pub(crate) const DESCRIPTOR: &ProcessorDescriptor = &ProcessorDescriptor {
             width: 360,
             height: 320,
         }),
-        resizable: true,
+        resizable: false,
     }),
 };
 
@@ -395,9 +395,9 @@ impl Controller for SoundfontController {
     }
 
     fn create_editor_session(&self) -> Result<Option<Box<dyn EditorSession>>, EditorError> {
-        Ok(Some(Box::new(SoundfontEditorSession::new(
-            Arc::clone(&self.shared),
-        ))))
+        Ok(Some(Box::new(SoundfontEditorSession::new(Arc::clone(
+            &self.shared,
+        )))))
     }
 }
 
@@ -436,9 +436,7 @@ impl EditorSession for SoundfontEditorSession {
     }
 
     fn detach(&mut self) -> Result<(), EditorError> {
-        if let Some(mut window) = self.window.take()
-            && window.is_open()
-        {
+        if let Some(mut window) = self.window.take() {
             window.close();
         }
         Ok(())
@@ -595,9 +593,10 @@ impl Model for SoundfontEditorModel {
                 let _ = self.shared.apply_state(state);
             }
             SoundfontEditorEvent::SetPolyphony(value) => {
-                let polyphony =
-                    value.round().clamp(f64::from(MINIMUM_POLYPHONY), f64::from(MAXIMUM_POLYPHONY))
-                        as u16;
+                let polyphony = value
+                    .round()
+                    .clamp(f64::from(MINIMUM_POLYPHONY), f64::from(MAXIMUM_POLYPHONY))
+                    as u16;
                 self.maximum_polyphony.set(f64::from(polyphony));
                 let (mut state, _) = self.shared.state.snapshot();
                 state.maximum_polyphony = polyphony;
@@ -615,6 +614,14 @@ impl Model for SoundfontEditorModel {
 }
 
 fn build_soundfont_editor(cx: &mut Context, view: SoundfontEditorView) {
+    let selected_preset_label = Memo::new(move |_| {
+        view.preset_names
+            .get()
+            .get(view.selected_preset.get())
+            .cloned()
+            .unwrap_or_else(|| "No programs".to_string())
+    });
+
     VStack::new(cx, |cx| {
         editor_row(cx, "SoundFont", |cx| {
             ComboBox::new(cx, view.soundfont_names, view.selected_soundfont)
@@ -623,9 +630,32 @@ fn build_soundfont_editor(cx: &mut Context, view: SoundfontEditorView) {
         });
 
         editor_row(cx, "Program", |cx| {
-            ComboBox::new(cx, view.preset_names, view.selected_preset)
-                .on_select(|cx, index| cx.emit(SoundfontEditorEvent::SelectPreset(index)))
-                .width(Stretch(1.0));
+            Dropdown::new(
+                cx,
+                move |cx| {
+                    Button::new(cx, move |cx| {
+                        Label::new(cx, selected_preset_label).hoverable(false)
+                    })
+                    .on_press(|cx| cx.emit(PopupEvent::Switch))
+                    .width(Stretch(1.0));
+                },
+                move |cx| {
+                    VirtualList::new(cx, view.preset_names, 28.0, move |cx, _index, item| {
+                        Label::new(cx, item).hoverable(false)
+                    })
+                    .width(Stretch(1.0))
+                    .height(Pixels(224.0))
+                    .show_horizontal_scrollbar(false)
+                    .selectable(Selectable::Single)
+                    .selection(view.selected_preset.map(|index| vec![*index]))
+                    .on_select(|cx, index| {
+                        cx.emit(SoundfontEditorEvent::SelectPreset(index));
+                        cx.emit(PopupEvent::Close);
+                    });
+                },
+            )
+            .show_arrow(false)
+            .width(Stretch(1.0));
         });
 
         HStack::new(cx, |cx| {
@@ -849,24 +879,25 @@ impl SoundfontProcessor {
     pub fn decode_state(
         state: &ProcessorState,
     ) -> Result<SoundfontProcessorState, ProcessorStateError> {
-        bincode::deserialize(&state.0).or_else(|_| {
-            #[derive(Deserialize)]
-            struct LegacySoundfontProcessorState {
-                soundfont_id: String,
-                bank: u16,
-                program: u8,
-            }
-
-            bincode::deserialize::<LegacySoundfontProcessorState>(&state.0).map(|legacy| {
-                SoundfontProcessorState {
-                    soundfont_id: legacy.soundfont_id,
-                    bank: legacy.bank,
-                    program: legacy.program,
-                    ..SoundfontProcessorState::default()
+        bincode::deserialize(&state.0)
+            .or_else(|_| {
+                #[derive(Deserialize)]
+                struct LegacySoundfontProcessorState {
+                    soundfont_id: String,
+                    bank: u16,
+                    program: u8,
                 }
+
+                bincode::deserialize::<LegacySoundfontProcessorState>(&state.0).map(|legacy| {
+                    SoundfontProcessorState {
+                        soundfont_id: legacy.soundfont_id,
+                        bank: legacy.bank,
+                        program: legacy.program,
+                        ..SoundfontProcessorState::default()
+                    }
+                })
             })
-        })
-        .map_err(|error| ProcessorStateError::Decode(error.to_string()))
+            .map_err(|error| ProcessorStateError::Decode(error.to_string()))
     }
 
     fn apply_program(&mut self) {
@@ -1119,8 +1150,7 @@ fn normalize_polyphony(value: u16) -> f32 {
 
 fn denormalize_polyphony(normalized: f32) -> u16 {
     let span = f32::from(MAXIMUM_POLYPHONY - MINIMUM_POLYPHONY);
-    MINIMUM_POLYPHONY
-        + (normalized.clamp(0.0, 1.0) * span).round() as u16
+    MINIMUM_POLYPHONY + (normalized.clamp(0.0, 1.0) * span).round() as u16
 }
 
 fn build_synthesizer(
@@ -1145,7 +1175,7 @@ fn build_synthesizer(
 }
 
 fn soundfont_presets(soundfont: &SoundFont) -> Vec<SoundfontPreset> {
-    soundfont
+    let mut presets = soundfont
         .get_presets()
         .iter()
         .filter_map(|preset| {
@@ -1157,7 +1187,14 @@ fn soundfont_presets(soundfont: &SoundFont) -> Vec<SoundfontPreset> {
                 name: preset.get_name().trim().to_string(),
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    presets.sort_by(|left, right| {
+        left.bank
+            .cmp(&right.bank)
+            .then(left.program.cmp(&right.program))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    presets
 }
 
 #[cfg(test)]
@@ -1165,12 +1202,12 @@ mod tests {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use crate::instrument::{InstrumentRuntimeContext, SlotState};
     use super::{
         LoadedSoundfont, SoundfontProcessor, SoundfontProcessorState, SoundfontSynthSettings,
         create_runtime, decode_state, encode_state,
     };
     use crate::instrument::{InstrumentProcessor, MidiEvent, Processor};
+    use crate::instrument::{InstrumentRuntimeContext, SlotState};
     use crate::test_utils::test_soundfont_resource;
 
     #[test]
@@ -1204,6 +1241,20 @@ mod tests {
         }
 
         panic!("soundfont processor produced silence after note on");
+    }
+
+    #[test]
+    fn soundfont_presets_are_sorted_by_bank_program_and_name() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let presets = super::soundfont_presets(&loaded.soundfont);
+
+        assert!(presets.windows(2).all(|pair| {
+            let left = &pair[0];
+            let right = &pair[1];
+            (left.bank, left.program, left.name.as_str())
+                <= (right.bank, right.program, right.name.as_str())
+        }));
     }
 
     #[test]
@@ -1534,6 +1585,14 @@ mod tests {
                 .create_editor_session()
                 .expect("editor creation should succeed")
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn soundfont_editor_is_not_resizable() {
+        assert_eq!(
+            super::descriptor().editor.map(|editor| editor.resizable),
+            Some(false)
         );
     }
 

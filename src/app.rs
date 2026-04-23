@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use auxiliary_window::WindowSnapshot;
 use iced::event;
 use iced::keyboard;
 use iced::widget::{Id, pane_grid, svg};
@@ -121,6 +122,8 @@ enum ProjectMenuSection {
 
 struct Lilypalooza {
     theme: iced::Theme,
+    main_window_id: window::Id,
+    main_window_snapshot: Option<WindowSnapshot>,
     window_width: f32,
     window_height: f32,
     lilypond_status: LilypondStatus,
@@ -495,7 +498,7 @@ pub fn run(
     startup_score: Option<PathBuf>,
     audio_enabled: bool,
 ) -> iced::Result {
-    iced::application(
+    iced::daemon(
         move || {
             new(
                 startup_soundfont.clone(),
@@ -504,7 +507,7 @@ pub fn run(
             )
         },
         update,
-        view,
+        window_view,
     )
     .default_font(crate::fonts::UI)
     .font(crate::fonts::MANROPE_REGULAR_BYTES)
@@ -516,15 +519,40 @@ pub fn run(
     .font(crate::fonts::JETBRAINS_MONO_BOLD_ITALIC_BYTES)
     .font(crate::fonts::JETBRAINS_MONO_MEDIUM_BYTES)
     .font(crate::fonts::JETBRAINS_MONO_MEDIUM_ITALIC_BYTES)
-    .theme(|state: &Lilypalooza| state.theme.clone())
-    .title("Lilypalooza")
-    .window(window::Settings {
+    .theme(|state: &Lilypalooza, _window| state.theme.clone())
+    .title(window_title)
+    .subscription(subscription)
+    .run()
+}
+
+fn main_window_settings() -> window::Settings {
+    window::Settings {
         min_size: Some(Size::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)),
         exit_on_close_request: false,
         ..window::Settings::default()
-    })
-    .subscription(subscription)
-    .run()
+    }
+}
+
+fn window_view<'a>(app: &'a Lilypalooza, window_id: window::Id) -> iced::Element<'a, Message> {
+    if window_id == app.main_window_id {
+        return view(app);
+    }
+
+    iced::widget::container(iced::widget::text(""))
+        .width(iced::Fill)
+        .height(iced::Fill)
+        .into()
+}
+
+fn window_title(app: &Lilypalooza, window_id: window::Id) -> String {
+    if window_id == app.main_window_id {
+        return "Lilypalooza".to_string();
+    }
+
+    app.processor_editor_windows
+        .window_title(window_id)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "Processor Editor".to_string())
 }
 
 fn new(
@@ -532,6 +560,8 @@ fn new(
     startup_score: Option<PathBuf>,
     audio_enabled: bool,
 ) -> (Lilypalooza, Task<Message>) {
+    let _ = auxiliary_window::prepare_process();
+    let (main_window_id, open_main_window) = window::open(main_window_settings());
     let default_settings = settings::AppSettings::default();
     let default_global_state = GlobalState::default();
     let browser_history_dir = tempfile::Builder::new()
@@ -613,6 +643,8 @@ fn new(
 
     let mut app = Lilypalooza {
         theme: iced::Theme::Dark,
+        main_window_id,
+        main_window_snapshot: None,
         window_width: MIN_WINDOW_WIDTH,
         window_height: MIN_WINDOW_HEIGHT,
         lilypond_status: LilypondStatus::Checking,
@@ -785,10 +817,13 @@ fn new(
         stored_state.has_clean_untitled_editor_tab,
     );
 
-    let mut startup_tasks = vec![Task::perform(
-        async { lilypond::check_lilypond().map_err(|error| error.to_string()) },
-        Message::StartupChecked,
-    )];
+    let mut startup_tasks = vec![
+        open_main_window.map(|_| Message::Noop),
+        Task::perform(
+            async { lilypond::check_lilypond().map_err(|error| error.to_string()) },
+            Message::StartupChecked,
+        ),
+    ];
     startup_tasks.push(Task::perform(
         cleanup_stale_browser_history_dirs(
             app.browser_history_dir
@@ -811,7 +846,10 @@ fn new(
 
 fn subscription(app: &Lilypalooza) -> Subscription<Message> {
     let mut subscriptions = vec![
-        window::resize_events().map(|(_id, size)| Message::WindowResized(size)),
+        window::open_events().map(Message::WindowOpened),
+        window::close_events().map(Message::WindowClosed),
+        window::resize_events().map(|(window_id, size)| Message::WindowResized { window_id, size }),
+        window::close_requests().map(Message::WindowCloseRequested),
         event::listen_with(runtime_event_to_message),
     ];
 
@@ -902,7 +940,6 @@ fn runtime_event_to_message(
         iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
             Some(Message::PrimaryMousePressed(false))
         }
-        iced::Event::Window(window::Event::CloseRequested) => Some(Message::WindowCloseRequested),
         _ => None,
     }
 }
@@ -1535,7 +1572,7 @@ mod tests {
         app.apply_project_state(temp.path().to_path_buf(), ProjectState::default());
         app.metronome.enabled = true;
 
-        let _ = app.handle_window_close_requested();
+        let _ = app.handle_window_close_requested(app.main_window_id);
 
         assert!(matches!(
             app.pending_editor_action,
@@ -1556,7 +1593,7 @@ mod tests {
 
         app.apply_project_state(temp.path().to_path_buf(), ProjectState::default());
         app.metronome.enabled = true;
-        let _ = app.handle_window_close_requested();
+        let _ = app.handle_window_close_requested(app.main_window_id);
 
         let _ = app.handle_prompt_message(PromptMessage::Discard);
 

@@ -67,18 +67,21 @@ pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
         Message::Logger(message) => app.handle_logger_message(message),
         Message::Shortcuts(message) => app.handle_shortcuts_message(message),
         Message::Prompt(message) => app.handle_prompt_message(message),
-        Message::ProcessorEditorAttached {
-            window_token,
+        Message::WindowOpened(window_id) => app.handle_window_opened(window_id),
+        Message::WindowClosed(window_id) => app.handle_window_closed(window_id),
+        Message::WindowSnapshotCaptured {
+            window_id,
+            host,
             parent,
-        } => app.handle_processor_editor_attached(window_token, parent),
+        } => app.handle_processor_editor_attached(window_id, host, parent),
         Message::KeyPressed(key_press) => app.handle_key_pressed(key_press),
         Message::TrackRenameFocusChanged(focused) => app.handle_track_rename_focus_changed(focused),
         Message::ModifiersChanged(modifiers) => app.handle_modifiers_changed(modifiers),
         Message::PrimaryMousePressed(pressed) => app.handle_primary_mouse_pressed(pressed),
         Message::Tick => app.handle_tick(),
         Message::Frame(_now) => app.handle_frame(),
-        Message::WindowResized(size) => app.handle_window_resized(size),
-        Message::WindowCloseRequested => app.handle_window_close_requested(),
+        Message::WindowResized { window_id, size } => app.handle_window_resized(window_id, size),
+        Message::WindowCloseRequested(window_id) => app.handle_window_close_requested(window_id),
     }
 }
 
@@ -102,8 +105,10 @@ fn should_commit_track_rename_before_message(message: &Message) -> bool {
             | Message::PrimaryMousePressed(_)
             | Message::Tick
             | Message::Frame(_)
-            | Message::WindowResized(_)
-            | Message::WindowCloseRequested
+            | Message::WindowOpened(_)
+            | Message::WindowClosed(_)
+            | Message::WindowResized { .. }
+            | Message::WindowCloseRequested(_)
             | Message::PianoRoll(
                 PianoRollMessage::StartTrackRename(_)
                     | PianoRollMessage::OpenTrackColorPickerForTrack(_)

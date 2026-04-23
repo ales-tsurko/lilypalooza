@@ -4,13 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["crates/iced-code-editor", "crates/lilypalooza-audio"]
+members = [
+    "crates/auxiliary-window",
+    "crates/iced-code-editor",
+    "crates/lilypalooza-audio",
+]
 
 [workspace.dependencies]
 iced = "0.14"
 iced_core = "0.14.0"
 
 [dependencies]
+auxiliary-window = { path = "crates/auxiliary-window" }
 bytemuck = { version = "1.23.1", features = ["derive"] }
 directories = "5.0.1"
 iced = { workspace = true, features = ["canvas", "image", "lazy", "tokio", "svg"] }

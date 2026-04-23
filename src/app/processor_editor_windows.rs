@@ -1,14 +1,8 @@
 use std::collections::HashMap;
-use std::ffi::c_void;
-use std::num::{NonZeroIsize, NonZeroU32};
-use std::ptr::NonNull;
 
-use iced::window::raw_window_handle::{
-    AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
-    WaylandDisplayHandle, WaylandWindowHandle, Win32WindowHandle, XcbDisplayHandle,
-    XcbWindowHandle, XlibDisplayHandle, XlibWindowHandle,
-};
-use lilypalooza_audio::{EditorDescriptor, EditorError, EditorParent, EditorSession};
+use auxiliary_window::WindowSnapshot;
+use iced::window;
+use lilypalooza_audio::{EditorError, EditorParent, EditorSession};
 
 /// Mixer-strip processor target.
 ///
@@ -27,222 +21,88 @@ pub(super) struct EditorTarget {
 }
 
 pub(super) struct EditorWindow {
-    pub(super) _title: String,
-    pub(super) _descriptor: EditorDescriptor,
-    pub(super) _session: Box<dyn EditorSession>,
+    pub(super) title: String,
+    pub(super) resizable: bool,
+    pub(super) host_window_id: window::Id,
+    pub(super) host_snapshot: Option<WindowSnapshot>,
+    pub(super) session: Box<dyn EditorSession>,
 }
 
 pub(super) struct PendingEditorWindow {
     pub(super) target: EditorTarget,
-    pub(super) _title: String,
-    pub(super) _descriptor: EditorDescriptor,
+    pub(super) title: String,
+    pub(super) resizable: bool,
+    pub(super) host_window_id: window::Id,
     pub(super) session: Box<dyn EditorSession>,
-}
-
-pub(super) enum EditorOpenOutcome {
-    Pending(u64),
-    Opened,
-    Focused,
 }
 
 #[derive(Default)]
 pub(super) struct EditorWindowManager {
-    next_window_token: u64,
     windows: HashMap<EditorTarget, EditorWindow>,
-    pending: HashMap<u64, PendingEditorWindow>,
+    pending: HashMap<window::Id, PendingEditorWindow>,
+    windows_by_id: HashMap<window::Id, EditorTarget>,
     focused: Option<EditorTarget>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EditorWindowParent {
-    AppKit {
-        ns_view: usize,
-    },
-    Win32 {
-        hwnd: isize,
-    },
-    Xcb {
-        window: u32,
-    },
-    Xlib {
-        window: u64,
-    },
-    Wayland {
-        surface: usize,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EditorDisplayParent {
-    AppKit,
-    Xcb {
-        connection: Option<usize>,
-        screen: i32,
-    },
-    Xlib {
-        display: Option<usize>,
-        screen: i32,
-    },
-    Wayland {
-        display: usize,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct EditorParentSnapshot {
-    pub(super) window: EditorWindowParent,
-    pub(super) display: Option<EditorDisplayParent>,
-}
-
-impl EditorParentSnapshot {
-    pub(super) fn capture(
-        window: RawWindowHandle,
-        display: Option<RawDisplayHandle>,
-    ) -> Result<Self, String> {
-        let window = match window {
-            RawWindowHandle::AppKit(handle) => Self::capture_appkit_window(handle),
-            RawWindowHandle::Win32(handle) => Self::capture_win32_window(handle),
-            RawWindowHandle::Xcb(handle) => Self::capture_xcb_window(handle),
-            RawWindowHandle::Xlib(handle) => Self::capture_xlib_window(handle),
-            RawWindowHandle::Wayland(handle) => Self::capture_wayland_window(handle),
-            other => return Err(format!("unsupported editor parent handle: {other:?}")),
-        }?;
-        let display = display
-            .map(Self::capture_display)
-            .transpose()?;
-        Ok(Self { window, display })
-    }
-
-    pub(super) fn into_editor_parent(self) -> Result<EditorParent, String> {
-        let window = match self.window {
-            EditorWindowParent::AppKit { ns_view } => RawWindowHandle::AppKit(
-                AppKitWindowHandle::new(non_null_ptr(ns_view, "ns_view")?),
-            ),
-            EditorWindowParent::Win32 { hwnd } => {
-                RawWindowHandle::Win32(Win32WindowHandle::new(non_zero_isize(hwnd, "hwnd")?))
-            }
-            EditorWindowParent::Xcb { window } => {
-                RawWindowHandle::Xcb(XcbWindowHandle::new(non_zero_u32(window, "xcb window")?))
-            }
-            EditorWindowParent::Xlib { window } => {
-                RawWindowHandle::Xlib(XlibWindowHandle::new(window))
-            }
-            EditorWindowParent::Wayland { surface } => {
-                RawWindowHandle::Wayland(WaylandWindowHandle::new(non_null_ptr(
-                    surface,
-                    "wayland surface",
-                )?))
-            }
-        };
-        let display = self
-            .display
-            .map(|display| match display {
-                EditorDisplayParent::AppKit => Ok::<RawDisplayHandle, String>(RawDisplayHandle::AppKit(
-                    AppKitDisplayHandle::new(),
-                )),
-                EditorDisplayParent::Xcb { connection, screen } => Ok::<RawDisplayHandle, String>(RawDisplayHandle::Xcb(
-                    XcbDisplayHandle::new(connection.map(non_null_ptr_unchecked), screen),
-                )),
-                EditorDisplayParent::Xlib { display, screen } => Ok::<RawDisplayHandle, String>(RawDisplayHandle::Xlib(
-                    XlibDisplayHandle::new(display.map(non_null_ptr_unchecked), screen),
-                )),
-                EditorDisplayParent::Wayland { display } => Ok::<RawDisplayHandle, String>(RawDisplayHandle::Wayland(
-                    WaylandDisplayHandle::new(non_null_ptr(display, "wayland display")?),
-                )),
-            })
-            .transpose()?;
-        Ok(EditorParent { window, display })
-    }
-
-    fn capture_appkit_window(handle: AppKitWindowHandle) -> Result<EditorWindowParent, String> {
-        Ok(EditorWindowParent::AppKit {
-            ns_view: handle.ns_view.as_ptr() as usize,
-        })
-    }
-
-    fn capture_win32_window(handle: Win32WindowHandle) -> Result<EditorWindowParent, String> {
-        Ok(EditorWindowParent::Win32 {
-            hwnd: handle.hwnd.get(),
-        })
-    }
-
-    fn capture_xcb_window(handle: XcbWindowHandle) -> Result<EditorWindowParent, String> {
-        Ok(EditorWindowParent::Xcb {
-            window: handle.window.get(),
-        })
-    }
-
-    fn capture_xlib_window(handle: XlibWindowHandle) -> Result<EditorWindowParent, String> {
-        Ok(EditorWindowParent::Xlib {
-            window: handle.window,
-        })
-    }
-
-    fn capture_wayland_window(handle: WaylandWindowHandle) -> Result<EditorWindowParent, String> {
-        Ok(EditorWindowParent::Wayland {
-            surface: handle.surface.as_ptr() as usize,
-        })
-    }
-
-    fn capture_display(display: RawDisplayHandle) -> Result<EditorDisplayParent, String> {
-        match display {
-            RawDisplayHandle::AppKit(_) => Ok(EditorDisplayParent::AppKit),
-            RawDisplayHandle::Xcb(handle) => Ok(EditorDisplayParent::Xcb {
-                connection: handle.connection.map(|connection| connection.as_ptr() as usize),
-                screen: handle.screen,
-            }),
-            RawDisplayHandle::Xlib(handle) => Ok(EditorDisplayParent::Xlib {
-                display: handle.display.map(|display| display.as_ptr() as usize),
-                screen: handle.screen,
-            }),
-            RawDisplayHandle::Wayland(handle) => Ok(EditorDisplayParent::Wayland {
-                display: handle.display.as_ptr() as usize,
-            }),
-            other => Err(format!("unsupported editor display handle: {other:?}")),
-        }
-    }
+pub(super) fn snapshot_into_editor_parent(
+    snapshot: WindowSnapshot,
+) -> Result<EditorParent, String> {
+    let window = snapshot
+        .raw_window_handle()
+        .map_err(|error| error.to_string())?;
+    let display = snapshot
+        .raw_display_handle()
+        .map_err(|error| error.to_string())?;
+    Ok(EditorParent { window, display })
 }
 
 impl EditorWindowManager {
-    pub(super) fn begin_open_or_focus(
+    pub(super) fn focus_existing(&mut self, target: EditorTarget) -> Option<window::Id> {
+        if let Some(window) = self.windows.get(&target) {
+            self.focused = Some(target);
+            return Some(window.host_window_id);
+        }
+        if let Some((window_id, _)) = self
+            .pending
+            .iter()
+            .find(|(_, window)| window.target == target)
+        {
+            self.focused = Some(target);
+            return Some(*window_id);
+        }
+        None
+    }
+
+    pub(super) fn begin_open(
         &mut self,
         target: EditorTarget,
         title: String,
-        descriptor: EditorDescriptor,
+        resizable: bool,
         session: Box<dyn EditorSession>,
-    ) -> EditorOpenOutcome {
-        if self.windows.contains_key(&target) {
-            self.focused = Some(target);
-            return EditorOpenOutcome::Focused;
-        }
-        if let Some((token, _)) = self.pending.iter().find(|(_, window)| window.target == target) {
-            self.focused = Some(target);
-            let _ = token;
-            return EditorOpenOutcome::Focused;
-        }
-
-        let window_token = self.allocate_window_token();
+        window_id: window::Id,
+    ) {
         self.pending.insert(
-            window_token,
+            window_id,
             PendingEditorWindow {
                 target,
-                _title: title,
-                _descriptor: descriptor,
+                title,
+                resizable,
+                host_window_id: window_id,
                 session,
             },
         );
         self.focused = Some(target);
-        EditorOpenOutcome::Pending(window_token)
     }
 
     pub(super) fn attach(
         &mut self,
-        window_token: u64,
+        window_id: window::Id,
+        host_snapshot: Option<WindowSnapshot>,
         parent: EditorParent,
-    ) -> Result<EditorOpenOutcome, EditorError> {
-        let Some(mut pending) = self.pending.remove(&window_token) else {
+    ) -> Result<(), EditorError> {
+        let Some(mut pending) = self.pending.remove(&window_id) else {
             return Err(EditorError::HostUnavailable(format!(
-                "pending editor window `{window_token}` is missing"
+                "pending editor window `{window_id:?}` is missing"
             )));
         };
         pending.session.attach(parent)?;
@@ -250,54 +110,151 @@ impl EditorWindowManager {
         self.windows.insert(
             pending.target,
             EditorWindow {
-                _title: pending._title,
-                _descriptor: pending._descriptor,
-                _session: pending.session,
+                title: pending.title,
+                resizable: pending.resizable,
+                host_window_id: pending.host_window_id,
+                host_snapshot,
+                session: pending.session,
             },
         );
-        Ok(EditorOpenOutcome::Opened)
+        self.windows_by_id.insert(window_id, pending.target);
+        Ok(())
     }
 
-    fn allocate_window_token(&mut self) -> u64 {
-        self.next_window_token = self.next_window_token.saturating_add(1);
-        self.next_window_token
+    pub(super) fn pending_contains(&self, window_id: window::Id) -> bool {
+        self.pending.contains_key(&window_id)
+    }
+
+    pub(super) fn window_title(&self, window_id: window::Id) -> Option<&str> {
+        self.windows_by_id
+            .get(&window_id)
+            .and_then(|target| self.windows.get(target).map(|window| window.title.as_str()))
+            .or_else(|| {
+                self.pending
+                    .get(&window_id)
+                    .map(|window| window.title.as_str())
+            })
+    }
+
+    pub(super) fn window_resizable(&self, window_id: window::Id) -> Option<bool> {
+        self.windows_by_id
+            .get(&window_id)
+            .and_then(|target| self.windows.get(target).map(|window| window.resizable))
+            .or_else(|| self.pending.get(&window_id).map(|window| window.resizable))
+    }
+
+    pub(super) fn remove_window(
+        &mut self,
+        window_id: window::Id,
+    ) -> Option<(EditorTarget, Box<dyn EditorSession>)> {
+        if let Some(pending) = self.pending.remove(&window_id) {
+            if self.focused == Some(pending.target) {
+                self.focused = None;
+            }
+            return Some((pending.target, pending.session));
+        }
+
+        let target = self.windows_by_id.remove(&window_id)?;
+        let window = self.windows.remove(&target)?;
+        if self.focused == Some(target) {
+            self.focused = None;
+        }
+        Some((target, window.session))
+    }
+
+    pub(super) fn remove_target(
+        &mut self,
+        target: EditorTarget,
+    ) -> Option<(window::Id, Box<dyn EditorSession>)> {
+        let window = self.windows.remove(&target)?;
+        self.windows_by_id.remove(&window.host_window_id);
+        if self.focused == Some(target) {
+            self.focused = None;
+        }
+        Some((window.host_window_id, window.session))
+    }
+
+    pub(super) fn remove_all_windows(&mut self) -> Vec<(window::Id, Box<dyn EditorSession>)> {
+        let windows = self
+            .windows
+            .drain()
+            .map(|(target, window)| {
+                if self.focused == Some(target) {
+                    self.focused = None;
+                }
+                (window.host_window_id, window.session)
+            })
+            .collect::<Vec<_>>();
+        self.windows_by_id.clear();
+        self.pending.clear();
+        windows
+    }
+
+    pub(super) fn hide_window(
+        &mut self,
+        window_id: window::Id,
+    ) -> Option<(EditorTarget, Option<WindowSnapshot>, &mut dyn EditorSession)> {
+        let target = *self.windows_by_id.get(&window_id)?;
+        let window = self.windows.get_mut(&target)?;
+        let snapshot = window.host_snapshot;
+        if self.focused == Some(target) {
+            self.focused = None;
+        }
+        Some((target, snapshot, window.session.as_mut()))
+    }
+
+    pub(super) fn hide_all_windows(&mut self) -> Vec<Option<WindowSnapshot>> {
+        self.focused = None;
+        self.windows
+            .values_mut()
+            .map(|window| {
+                let _ = window.session.set_visible(false);
+                window.host_snapshot
+            })
+            .collect()
+    }
+
+    pub(super) fn host_snapshot_for(&self, window_id: window::Id) -> Option<WindowSnapshot> {
+        let target = *self.windows_by_id.get(&window_id)?;
+        self.windows.get(&target)?.host_snapshot
+    }
+
+    pub(super) fn session_mut(&mut self, window_id: window::Id) -> Option<&mut dyn EditorSession> {
+        let target = *self.windows_by_id.get(&window_id)?;
+        Some(self.windows.get_mut(&target)?.session.as_mut())
     }
 }
 
 #[cfg(test)]
 impl EditorWindowManager {
-    pub(super) fn is_open(&self, target: EditorTarget) -> bool {
+    pub(super) fn contains_window(&self, target: EditorTarget) -> bool {
         self.windows.contains_key(&target)
     }
-}
-
-fn non_null_ptr(value: usize, name: &str) -> Result<NonNull<c_void>, String> {
-    NonNull::new(value as *mut c_void).ok_or_else(|| format!("{name} is null"))
-}
-
-fn non_null_ptr_unchecked(value: usize) -> NonNull<c_void> {
-    NonNull::new(value as *mut c_void).expect("stored non-null pointer")
-}
-
-fn non_zero_isize(value: isize, name: &str) -> Result<NonZeroIsize, String> {
-    NonZeroIsize::new(value).ok_or_else(|| format!("{name} is zero"))
-}
-
-fn non_zero_u32(value: u32, name: &str) -> Result<NonZeroU32, String> {
-    NonZeroU32::new(value).ok_or_else(|| format!("{name} is zero"))
 }
 
 #[cfg(test)]
 mod tests {
     use std::ptr::NonNull;
 
-    use lilypalooza_audio::{
-        EditorDescriptor, EditorError, EditorParent, EditorSession, EditorSize,
-    };
+    use auxiliary_window::WindowSnapshot;
+    use iced::window;
+    use lilypalooza_audio::{EditorError, EditorParent, EditorSession, EditorSize};
 
-    use super::{
-        EditorOpenOutcome, EditorParentSnapshot, EditorTarget, EditorWindowManager,
-    };
+    use super::{EditorTarget, EditorWindowManager, snapshot_into_editor_parent};
+
+    fn fake_snapshot() -> WindowSnapshot {
+        WindowSnapshot::capture(
+            iced::window::raw_window_handle::RawWindowHandle::AppKit(
+                iced::window::raw_window_handle::AppKitWindowHandle::new(
+                    NonNull::<std::ffi::c_void>::dangling(),
+                ),
+            ),
+            Some(iced::window::raw_window_handle::RawDisplayHandle::AppKit(
+                iced::window::raw_window_handle::AppKitDisplayHandle::new(),
+            )),
+        )
+        .expect("snapshot should capture appkit")
+    }
 
     struct FakeEditorSession;
 
@@ -319,17 +276,6 @@ mod tests {
         }
     }
 
-    fn descriptor() -> EditorDescriptor {
-        EditorDescriptor {
-            default_size: EditorSize {
-                width: 640,
-                height: 480,
-            },
-            min_size: None,
-            resizable: true,
-        }
-    }
-
     #[test]
     fn processor_editor_window_manager_reuses_existing_target_window() {
         let mut manager = EditorWindowManager::default();
@@ -338,33 +284,17 @@ mod tests {
             slot_index: 0,
         };
 
-        let first = manager.begin_open_or_focus(
+        let first_id = window::Id::unique();
+        manager.begin_open(
             target,
             "Track 4".to_string(),
-            descriptor(),
+            true,
             Box::new(FakeEditorSession),
+            first_id,
         );
-        let second = manager.begin_open_or_focus(
-            target,
-            "Track 4".to_string(),
-            descriptor(),
-            Box::new(FakeEditorSession),
-        );
+        let second_token = manager.focus_existing(target);
 
-        let first_token = match first {
-            EditorOpenOutcome::Pending(token) => token,
-            EditorOpenOutcome::Opened | EditorOpenOutcome::Focused => {
-                panic!("first open should create pending window")
-            }
-        };
-        let second_token = match second {
-            EditorOpenOutcome::Opened | EditorOpenOutcome::Pending(_) => {
-                panic!("second open should focus window")
-            }
-            EditorOpenOutcome::Focused => first_token,
-        };
-
-        assert_eq!(first_token, second_token);
+        assert_eq!(Some(first_id), second_token);
         assert_eq!(manager.focused, Some(target));
     }
 
@@ -376,23 +306,19 @@ mod tests {
             slot_index: 0,
         };
 
-        let opened = manager.begin_open_or_focus(
+        let window_id = window::Id::unique();
+        manager.begin_open(
             target,
             "Track 1".to_string(),
-            descriptor(),
+            true,
             Box::new(FakeEditorSession),
+            window_id,
         );
 
-        let token = match opened {
-            EditorOpenOutcome::Pending(token) => token,
-            EditorOpenOutcome::Opened | EditorOpenOutcome::Focused => {
-                panic!("first open should become pending until attached")
-            }
-        };
-
-        let attached = manager
+        manager
             .attach(
-                token,
+                window_id,
+                Some(fake_snapshot()),
                 EditorParent {
                     window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
                         iced::window::raw_window_handle::AppKitWindowHandle::new(
@@ -403,21 +329,12 @@ mod tests {
                 },
             )
             .expect("attach should succeed");
-
-        let attached_token = match attached {
-            EditorOpenOutcome::Opened => token,
-            EditorOpenOutcome::Pending(_) | EditorOpenOutcome::Focused => {
-                panic!("attached window should be opened")
-            }
-        };
-
-        assert_eq!(attached_token, token);
         assert!(manager.windows.contains_key(&target));
     }
 
     #[test]
     fn editor_parent_snapshot_roundtrips_appkit_window_handle() {
-        let snapshot = EditorParentSnapshot::capture(
+        let snapshot = WindowSnapshot::capture(
             iced::window::raw_window_handle::RawWindowHandle::AppKit(
                 iced::window::raw_window_handle::AppKitWindowHandle::new(
                     NonNull::<std::ffi::c_void>::dangling(),
@@ -429,9 +346,7 @@ mod tests {
         )
         .expect("snapshot should capture appkit");
 
-        let parent = snapshot
-            .into_editor_parent()
-            .expect("snapshot should restore appkit");
+        let parent = snapshot_into_editor_parent(snapshot).expect("snapshot should restore appkit");
 
         assert!(matches!(
             parent.window,
@@ -441,5 +356,41 @@ mod tests {
             parent.display,
             Some(iced::window::raw_window_handle::RawDisplayHandle::AppKit(_))
         ));
+    }
+
+    #[test]
+    fn processor_editor_window_manager_removes_window_by_host_id() {
+        let mut manager = EditorWindowManager::default();
+        let target = EditorTarget {
+            strip_index: 2,
+            slot_index: 1,
+        };
+        let window_id = window::Id::unique();
+        manager.begin_open(
+            target,
+            "Track 2".to_string(),
+            true,
+            Box::new(FakeEditorSession),
+            window_id,
+        );
+        manager
+            .attach(
+                window_id,
+                Some(fake_snapshot()),
+                EditorParent {
+                    window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
+                        iced::window::raw_window_handle::AppKitWindowHandle::new(
+                            std::ptr::NonNull::<std::ffi::c_void>::dangling(),
+                        ),
+                    ),
+                    display: None,
+                },
+            )
+            .expect("attach should succeed");
+
+        let removed = manager.remove_window(window_id);
+
+        assert!(removed.is_some());
+        assert!(!manager.windows.contains_key(&target));
     }
 }

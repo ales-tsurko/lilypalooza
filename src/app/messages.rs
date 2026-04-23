@@ -1,17 +1,16 @@
 use std::path::PathBuf;
 
+use auxiliary_window::WindowSnapshot;
 use iced::event;
 use iced::time::Instant;
 use iced::widget::{pane_grid, text_editor};
-use iced::{Color, Size, keyboard, mouse};
+use iced::{Color, Size, keyboard, mouse, window};
 use iced_code_editor::Message as EditorWidgetMessage;
 use iced_core::image;
 
 use super::{
     EditorFileMenuSection, EditorHeaderMenuSection, ProjectMenuSection, WorkspacePaneKind,
 };
-use crate::app::processor_editor_windows::EditorParentSnapshot;
-
 #[derive(Debug, Clone)]
 pub(super) enum Message {
     Noop,
@@ -28,18 +27,24 @@ pub(super) enum Message {
     Logger(LoggerMessage),
     Shortcuts(ShortcutsMessage),
     Prompt(PromptMessage),
-    ProcessorEditorAttached {
-        window_token: u64,
-        parent: Result<EditorParentSnapshot, String>,
+    WindowSnapshotCaptured {
+        window_id: window::Id,
+        host: Result<WindowSnapshot, String>,
+        parent: Result<WindowSnapshot, String>,
     },
+    WindowOpened(window::Id),
+    WindowClosed(window::Id),
     KeyPressed(KeyPress),
     TrackRenameFocusChanged(bool),
     ModifiersChanged(keyboard::Modifiers),
     PrimaryMousePressed(bool),
     Tick,
     Frame(Instant),
-    WindowResized(Size),
-    WindowCloseRequested,
+    WindowResized {
+        window_id: window::Id,
+        size: Size,
+    },
+    WindowCloseRequested(window::Id),
 }
 
 #[derive(Debug, Clone)]

@@ -418,7 +418,7 @@ impl Lilypalooza {
         action: ShortcutAction,
     ) -> Task<Message> {
         match action {
-            ShortcutAction::QuitApp => self.handle_window_close_requested(),
+            ShortcutAction::QuitApp => self.handle_window_close_requested(self.main_window_id),
             ShortcutAction::OpenActions => {
                 update(self, Message::Shortcuts(ShortcutsMessage::OpenDialog))
             }
@@ -827,7 +827,7 @@ impl Lilypalooza {
                 if self.error_prompt.take().is_some() {
                     self.prompt_selected_button = PromptSelectedButton::Ok;
                     match self.prompt_ok_action.take() {
-                        Some(PromptOkAction::ExitApp) => iced::exit(),
+                        Some(PromptOkAction::ExitApp) => self.exit_app(),
                         Some(PromptOkAction::ClearLogs) => {
                             self.logger.clear();
                             Task::none()
@@ -868,13 +868,23 @@ impl Lilypalooza {
         }
     }
 
-    pub(in crate::app) fn handle_window_close_requested(&mut self) -> Task<Message> {
+    pub(in crate::app) fn handle_window_close_requested(
+        &mut self,
+        window_id: window::Id,
+    ) -> Task<Message> {
+        if window_id != self.main_window_id {
+            return self.handle_processor_editor_close_requested(window_id);
+        }
+        let hide_editors = self.hide_all_editor_windows();
         let dirty_tabs = self.editor.tabs_requiring_resolution();
         if dirty_tabs.is_empty() {
             if self.project_is_dirty() {
-                return self.begin_pending_project_action(EditorContinuation::ExitApp);
+                return Task::batch([
+                    hide_editors,
+                    self.begin_pending_project_action(EditorContinuation::ExitApp),
+                ]);
             }
-            return iced::exit();
+            return Task::batch([hide_editors, self.exit_app()]);
         }
 
         self.pending_editor_action = Some(PendingEditorAction::ResolveDirtyTabs {
@@ -882,10 +892,18 @@ impl Lilypalooza {
             continuation: EditorContinuation::ExitApp,
         });
         self.show_current_pending_editor_prompt();
-        Task::none()
+        hide_editors
     }
 
-    pub(in crate::app) fn handle_window_resized(&mut self, size: Size) -> Task<Message> {
+    pub(in crate::app) fn handle_window_resized(
+        &mut self,
+        window_id: window::Id,
+        size: Size,
+    ) -> Task<Message> {
+        if window_id != self.main_window_id {
+            return Task::none();
+        }
+
         self.window_width = size.width.max(1.0);
         self.window_height = size.height.max(1.0);
         self.patch_macos_quit_menu();
@@ -1120,7 +1138,7 @@ impl Lilypalooza {
                 if self.project_is_dirty() {
                     return self.begin_pending_project_action(EditorContinuation::ExitApp);
                 }
-                iced::exit()
+                self.exit_app()
             }
         }
     }
@@ -1158,8 +1176,12 @@ impl Lilypalooza {
                     Task::none()
                 }
             },
-            EditorContinuation::ExitApp => iced::exit(),
+            EditorContinuation::ExitApp => self.exit_app(),
         }
+    }
+
+    pub(in crate::app) fn exit_app(&mut self) -> Task<Message> {
+        Task::batch([self.destroy_all_editor_windows(), iced::exit()])
     }
 
     fn open_settings_file_in_editor(&mut self) -> Task<Message> {

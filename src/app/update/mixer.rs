@@ -1,23 +1,156 @@
+use auxiliary_window::{HostOptions, WindowSnapshot, install_editor_host, set_host_window_visible};
 use lilypalooza_audio::instrument::soundfont_synth;
 use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, BusId, SlotState, SoundfontProcessorState, TrackId};
 
 use super::super::messages::MixerMessage;
 use super::*;
-use crate::app::processor_editor_windows::{
-    EditorOpenOutcome, EditorParentSnapshot, EditorTarget,
-};
+use crate::app::processor_editor_windows::{EditorTarget, snapshot_into_editor_parent};
 use iced::window;
 
 impl Lilypalooza {
-    pub(in crate::app) fn handle_processor_editor_attached(
-        &mut self,
-        window_token: u64,
-        parent: Result<EditorParentSnapshot, String>,
-    ) -> Task<Message> {
-        let Ok(parent) = parent.and_then(EditorParentSnapshot::into_editor_parent) else {
+    pub(in crate::app) fn destroy_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
+        let Some((window_id, mut session)) = self.processor_editor_windows.remove_target(target)
+        else {
             return Task::none();
         };
-        let _ = self.processor_editor_windows.attach(window_token, parent);
+        let _ = session.detach();
+        window::close(window_id)
+    }
+
+    pub(in crate::app) fn destroy_all_editor_windows(&mut self) -> Task<Message> {
+        let removed = self.processor_editor_windows.remove_all_windows();
+        if removed.is_empty() {
+            return Task::none();
+        }
+
+        Task::batch(removed.into_iter().map(|(window_id, mut session)| {
+            let _ = session.detach();
+            window::close(window_id)
+        }))
+    }
+
+    pub(in crate::app) fn hide_all_editor_windows(&mut self) -> Task<Message> {
+        for host_snapshot in self
+            .processor_editor_windows
+            .hide_all_windows()
+            .into_iter()
+            .flatten()
+        {
+            let _ = set_host_window_visible(&host_snapshot, false);
+        }
+        Task::none()
+    }
+
+    pub(in crate::app) fn handle_window_opened(&mut self, window_id: window::Id) -> Task<Message> {
+        if window_id == self.main_window_id {
+            return window::run(window_id, move |window| {
+                let parent = window
+                    .window_handle()
+                    .map_err(|error| error.to_string())
+                    .and_then(|handle| {
+                        WindowSnapshot::capture(
+                            handle.as_raw(),
+                            window.display_handle().ok().map(|display| display.as_raw()),
+                        )
+                        .map_err(|error| error.to_string())
+                    });
+
+                Message::WindowSnapshotCaptured {
+                    window_id,
+                    host: parent.clone(),
+                    parent,
+                }
+            });
+        }
+
+        if !self.processor_editor_windows.pending_contains(window_id) {
+            return Task::none();
+        }
+
+        let owner = self.main_window_snapshot;
+        let title = self
+            .processor_editor_windows
+            .window_title(window_id)
+            .unwrap_or("Processor Editor")
+            .to_string();
+        let resizable = self
+            .processor_editor_windows
+            .window_resizable(window_id)
+            .unwrap_or(true);
+        window::run(window_id, move |window| {
+            let host = window
+                .window_handle()
+                .map_err(|error| error.to_string())
+                .and_then(|handle| {
+                    WindowSnapshot::capture(
+                        handle.as_raw(),
+                        window.display_handle().ok().map(|display| display.as_raw()),
+                    )
+                    .map_err(|error| error.to_string())
+                });
+            let parent = match &host {
+                Ok(host_snapshot) => install_editor_host(
+                    host_snapshot,
+                    owner.as_ref(),
+                    &HostOptions::new(title).with_resizable(resizable),
+                )
+                .map(|installed| installed.content)
+                .map_err(|error| error.to_string()),
+                Err(error) => Err(error.clone()),
+            };
+
+            Message::WindowSnapshotCaptured {
+                window_id,
+                host,
+                parent,
+            }
+        })
+    }
+
+    pub(in crate::app) fn handle_window_closed(&mut self, window_id: window::Id) -> Task<Message> {
+        if let Some((_target, mut session)) = self.processor_editor_windows.remove_window(window_id)
+        {
+            let _ = session.detach();
+        }
+        Task::none()
+    }
+
+    pub(in crate::app) fn handle_processor_editor_attached(
+        &mut self,
+        window_id: window::Id,
+        host: Result<WindowSnapshot, String>,
+        parent: Result<WindowSnapshot, String>,
+    ) -> Task<Message> {
+        if window_id == self.main_window_id {
+            self.main_window_snapshot = parent.ok();
+            return Task::none();
+        }
+
+        let Ok(host) = host else {
+            return Task::none();
+        };
+        let Ok(parent) = parent.and_then(snapshot_into_editor_parent) else {
+            return Task::none();
+        };
+        let _ = self
+            .processor_editor_windows
+            .attach(window_id, Some(host), parent);
+        Task::none()
+    }
+
+    pub(in crate::app) fn handle_processor_editor_close_requested(
+        &mut self,
+        window_id: window::Id,
+    ) -> Task<Message> {
+        let Some((_target, host_snapshot, session)) =
+            self.processor_editor_windows.hide_window(window_id)
+        else {
+            return Task::none();
+        };
+        let _ = session.set_visible(false);
+        if let Some(host_snapshot) = host_snapshot {
+            let _ = set_host_window_visible(&host_snapshot, false);
+        }
         Task::none()
     }
 
@@ -34,12 +167,13 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn undo_mixer_operation(&mut self) -> Task<Message> {
+        let close_editors = self.destroy_all_editor_windows();
         self.pending_mixer_undo_snapshot = None;
         let Some(previous) = self.mixer_undo_stack.pop() else {
-            return Task::none();
+            return close_editors;
         };
         let Some(playback) = self.playback.as_mut() else {
-            return Task::none();
+            return close_editors;
         };
 
         let current = playback.mixer_state().clone();
@@ -49,16 +183,17 @@ impl Lilypalooza {
             self.mixer_redo_stack.push(current);
             sync_piano_roll_mix_from_mixer_state(&mut self.piano_roll, &restored_state);
         }
-        Task::none()
+        close_editors
     }
 
     pub(in crate::app) fn redo_mixer_operation(&mut self) -> Task<Message> {
+        let close_editors = self.destroy_all_editor_windows();
         self.pending_mixer_undo_snapshot = None;
         let Some(next) = self.mixer_redo_stack.pop() else {
-            return Task::none();
+            return close_editors;
         };
         let Some(playback) = self.playback.as_mut() else {
-            return Task::none();
+            return close_editors;
         };
 
         let current = playback.mixer_state().clone();
@@ -68,7 +203,7 @@ impl Lilypalooza {
             self.mixer_undo_stack.push(current);
             sync_piano_roll_mix_from_mixer_state(&mut self.piano_roll, &restored_state);
         }
-        Task::none()
+        close_editors
     }
 
     pub(in crate::app) fn handle_mixer_message(&mut self, message: MixerMessage) -> Task<Message> {
@@ -184,10 +319,22 @@ impl Lilypalooza {
             self.close_track_instrument_browser();
         }
 
+        let editor_cleanup = match &message {
+            MixerMessage::AddBus | MixerMessage::RemoveBus(_) => self.destroy_all_editor_windows(),
+            MixerMessage::SelectTrackInstrument(index, _) => {
+                self.destroy_editor_target(EditorTarget {
+                    strip_index: index + 1,
+                    slot_index: 0,
+                })
+            }
+            _ => Task::none(),
+        };
+
         let Some(playback) = self.playback.as_mut() else {
-            return Task::none();
+            return editor_cleanup;
         };
         let mut mixer = playback.mixer();
+        let mut editor_target_to_open = None;
 
         match message {
             MixerMessage::AddBus => {
@@ -237,17 +384,27 @@ impl Lilypalooza {
                     .set_global_solo_active(mixer_has_any_solo(&mixer));
             }
             MixerMessage::SelectTrackInstrument(index, choice) => {
+                let open_editor_after_select = matches!(
+                    &choice,
+                    super::super::mixer::InstrumentChoice::Processor { .. }
+                );
                 let slot = match choice {
                     super::super::mixer::InstrumentChoice::None => SlotState::default(),
-                    super::super::mixer::InstrumentChoice::Processor { processor_id, .. } => {
-                        default_track_instrument_slot(
-                            &mixer,
-                            TrackId(index as u16),
-                            processor_id.as_str(),
-                        )
-                    }
+                    super::super::mixer::InstrumentChoice::Processor {
+                        ref processor_id, ..
+                    } => default_track_instrument_slot(
+                        &mixer,
+                        TrackId(index as u16),
+                        processor_id.as_str(),
+                    ),
                 };
                 let _ = mixer.set_track_instrument(TrackId(index as u16), slot);
+                if open_editor_after_select {
+                    editor_target_to_open = Some(EditorTarget {
+                        strip_index: index + 1,
+                        slot_index: 0,
+                    });
+                }
             }
             MixerMessage::ResetBusMeter(id) => {
                 let _ = mixer.reset_bus_meter(BusId(id));
@@ -291,7 +448,10 @@ impl Lilypalooza {
         }
 
         self.project_mixer_state = playback.mixer_state().clone();
-        Task::none()
+        if let Some(target) = editor_target_to_open {
+            return Task::batch([editor_cleanup, self.open_editor_target(target)]);
+        }
+        editor_cleanup
     }
 }
 
@@ -363,12 +523,40 @@ fn mixer_message_history_mode(
 }
 
 impl Lilypalooza {
+    fn editor_window_title(&self, strip_name: &str, slot: &SlotState, slot_index: usize) -> String {
+        if slot_index != 0 {
+            return slot.title(strip_name, slot_index);
+        }
+
+        let Some(descriptor) = slot.descriptor() else {
+            return slot.title(strip_name, slot_index);
+        };
+
+        format!("{strip_name}: {}", descriptor.name)
+    }
+
     fn close_track_instrument_browser(&mut self) {
         self.open_instrument_browser_track = None;
         self.instrument_browser_search.clear();
     }
 
     fn open_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
+        if let Some(window_id) = self.processor_editor_windows.focus_existing(target) {
+            return if self.processor_editor_windows.pending_contains(window_id) {
+                Task::none()
+            } else {
+                if let Some(host_snapshot) =
+                    self.processor_editor_windows.host_snapshot_for(window_id)
+                {
+                    let _ = set_host_window_visible(&host_snapshot, true);
+                }
+                if let Some(session) = self.processor_editor_windows.session_mut(window_id) {
+                    let _ = session.set_visible(true);
+                }
+                window::gain_focus(window_id)
+            };
+        }
+
         let Some(playback) = self.playback.as_ref() else {
             return Task::none();
         };
@@ -384,7 +572,7 @@ impl Lilypalooza {
         }) else {
             return Task::none();
         };
-        let title = slot.title(&strip.name, target.slot_index);
+        let title = self.editor_window_title(&strip.name, slot, target.slot_index);
         let descriptor = controller.descriptor().editor;
         let session_result = controller.create_editor_session();
 
@@ -407,38 +595,31 @@ impl Lilypalooza {
         let Ok(Some(session)) = session_result else {
             return Task::none();
         };
-        match self
-            .processor_editor_windows
-            .begin_open_or_focus(target, title, descriptor, session)
-        {
-            EditorOpenOutcome::Focused | EditorOpenOutcome::Opened => Task::none(),
-            EditorOpenOutcome::Pending(window_token) => open_processor_editor_parent(window_token),
-        }
+
+        let (window_id, open_task) = window::open(window::Settings {
+            size: Size::new(
+                descriptor.default_size.width as f32,
+                descriptor.default_size.height as f32,
+            ),
+            min_size: descriptor
+                .min_size
+                .map(|size| Size::new(size.width as f32, size.height as f32)),
+            resizable: descriptor.resizable,
+            closeable: true,
+            minimizable: false,
+            decorations: false,
+            exit_on_close_request: false,
+            ..window::Settings::default()
+        });
+        self.processor_editor_windows.begin_open(
+            target,
+            title,
+            descriptor.resizable,
+            session,
+            window_id,
+        );
+        open_task.map(|_| Message::Noop)
     }
-}
-
-fn open_processor_editor_parent(window_token: u64) -> Task<Message> {
-    window::oldest().then(move |window_id| match window_id {
-        Some(window_id) => window::run(window_id, move |window| {
-            let parent = window.window_handle().map_err(|error| error.to_string()).and_then(
-                |handle| {
-                    EditorParentSnapshot::capture(
-                        handle.as_raw(),
-                        window.display_handle().ok().map(|display| display.as_raw()),
-                    )
-                },
-            );
-
-            Message::ProcessorEditorAttached {
-                window_token,
-                parent,
-            }
-        }),
-        None => Task::done(Message::ProcessorEditorAttached {
-            window_token,
-            parent: Err("main window is unavailable".to_string()),
-        }),
-    })
 }
 
 fn default_track_instrument_slot(
@@ -500,12 +681,63 @@ fn sync_piano_roll_mix_from_mixer_state(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::{Lilypalooza, MixerHistoryMode, mixer_message_history_mode};
     use crate::app::RenameTarget;
     use crate::app::messages::MixerMessage;
     use crate::app::processor_editor_windows::EditorTarget;
     use crate::state::ProjectState;
-    use lilypalooza_audio::{AudioEngine, AudioEngineOptions, BusId, MixerState};
+    use lilypalooza_audio::{
+        AudioEngine, AudioEngineOptions, BusId, EditorError, EditorParent, EditorSession,
+        EditorSize, MixerState,
+    };
+
+    struct FakeEditorSession;
+
+    impl EditorSession for FakeEditorSession {
+        fn attach(&mut self, _parent: EditorParent) -> Result<(), EditorError> {
+            Ok(())
+        }
+
+        fn detach(&mut self) -> Result<(), EditorError> {
+            Ok(())
+        }
+
+        fn set_visible(&mut self, _visible: bool) -> Result<(), EditorError> {
+            Ok(())
+        }
+
+        fn resize(&mut self, _size: EditorSize) -> Result<(), EditorError> {
+            Ok(())
+        }
+    }
+
+    struct RecordingEditorSession {
+        visible: Rc<RefCell<Vec<bool>>>,
+        detached: Rc<RefCell<usize>>,
+    }
+
+    impl EditorSession for RecordingEditorSession {
+        fn attach(&mut self, _parent: EditorParent) -> Result<(), EditorError> {
+            Ok(())
+        }
+
+        fn detach(&mut self) -> Result<(), EditorError> {
+            *self.detached.borrow_mut() += 1;
+            Ok(())
+        }
+
+        fn set_visible(&mut self, visible: bool) -> Result<(), EditorError> {
+            self.visible.borrow_mut().push(visible);
+            Ok(())
+        }
+
+        fn resize(&mut self, _size: EditorSize) -> Result<(), EditorError> {
+            Ok(())
+        }
+    }
 
     fn test_app() -> Lilypalooza {
         let (app, _task) = super::super::super::new(None, None, false);
@@ -610,7 +842,7 @@ mod tests {
         };
         let _ = app.handle_mixer_message(MixerMessage::OpenEditor(target));
 
-        assert!(!app.processor_editor_windows.is_open(target));
+        assert!(!app.processor_editor_windows.contains_window(target));
     }
 
     #[test]
@@ -651,6 +883,44 @@ mod tests {
     }
 
     #[test]
+    fn selecting_track_instrument_opens_editor_when_available() {
+        let mut app = test_app();
+        let mut playback =
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start");
+        playback
+            .mixer()
+            .set_soundfont(lilypalooza_audio::SoundfontResource {
+                id: "default".to_string(),
+                name: "FluidR3".to_string(),
+                path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets/soundfonts/FluidR3_GM.sf2")
+                    .canonicalize()
+                    .expect("test SoundFont should exist"),
+            })
+            .expect("test SoundFont should load");
+        app.playback = Some(playback);
+
+        let _ = app.handle_mixer_message(MixerMessage::SelectTrackInstrument(
+            0,
+            crate::app::mixer::InstrumentChoice::Processor {
+                processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
+                name: "SoundFont".to_string(),
+                backend: crate::app::mixer::InstrumentBrowserBackend::BuiltIn,
+            },
+        ));
+
+        assert!(
+            app.processor_editor_windows
+                .focus_existing(EditorTarget {
+                    strip_index: 1,
+                    slot_index: 0,
+                })
+                .is_some()
+        );
+    }
+
+    #[test]
     fn mixer_changes_mark_project_dirty() {
         let mut app = test_app();
         let temp = tempfile::tempdir().expect("temp dir should exist");
@@ -687,7 +957,7 @@ mod tests {
 
         let _ = app.handle_mixer_message(MixerMessage::AddBus);
 
-        let _ = app.handle_window_close_requested();
+        let _ = app.handle_window_close_requested(app.main_window_id);
 
         assert!(matches!(
             app.pending_editor_action,
@@ -695,5 +965,144 @@ mod tests {
                 continuation: crate::app::EditorContinuation::ExitApp
             })
         ));
+    }
+
+    #[test]
+    fn editor_window_close_request_hides_only_editor_window() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        app.saved_project_state = Some(app.current_project_state());
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+
+        let target = EditorTarget {
+            strip_index: 1,
+            slot_index: 0,
+        };
+        let window_id = iced::window::Id::unique();
+        app.processor_editor_windows.begin_open(
+            target,
+            "Track 1".to_string(),
+            true,
+            Box::new(FakeEditorSession),
+            window_id,
+        );
+        app.processor_editor_windows
+            .attach(
+                window_id,
+                None,
+                EditorParent {
+                    window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
+                        iced::window::raw_window_handle::AppKitWindowHandle::new(
+                            std::ptr::NonNull::<std::ffi::c_void>::dangling(),
+                        ),
+                    ),
+                    display: None,
+                },
+            )
+            .expect("attach should succeed");
+
+        let _ = app.handle_window_close_requested(window_id);
+
+        assert!(app.processor_editor_windows.contains_window(target));
+        assert!(app.pending_editor_action.is_none());
+    }
+
+    #[test]
+    fn main_window_close_request_hides_editors_before_prompt() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        app.saved_project_state = Some(app.current_project_state());
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+
+        let visible = Rc::new(RefCell::new(Vec::new()));
+        let detached = Rc::new(RefCell::new(0));
+        let target = EditorTarget {
+            strip_index: 1,
+            slot_index: 0,
+        };
+        let window_id = iced::window::Id::unique();
+        app.processor_editor_windows.begin_open(
+            target,
+            "Track 1".to_string(),
+            true,
+            Box::new(RecordingEditorSession {
+                visible: Rc::clone(&visible),
+                detached: Rc::clone(&detached),
+            }),
+            window_id,
+        );
+        app.processor_editor_windows
+            .attach(
+                window_id,
+                None,
+                EditorParent {
+                    window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
+                        iced::window::raw_window_handle::AppKitWindowHandle::new(
+                            std::ptr::NonNull::<std::ffi::c_void>::dangling(),
+                        ),
+                    ),
+                    display: None,
+                },
+            )
+            .expect("attach should succeed");
+
+        let _ = app.handle_window_close_requested(app.main_window_id);
+
+        assert_eq!(*visible.borrow(), vec![false]);
+        assert_eq!(*detached.borrow(), 0);
+        assert!(app.processor_editor_windows.contains_window(target));
+        assert!(matches!(
+            app.pending_editor_action,
+            Some(crate::app::PendingEditorAction::ResolveDirtyProject {
+                continuation: crate::app::EditorContinuation::ExitApp
+            })
+        ));
+    }
+
+    #[test]
+    fn exit_app_detaches_editor_sessions() {
+        let mut app = test_app();
+        let visible = Rc::new(RefCell::new(Vec::new()));
+        let detached = Rc::new(RefCell::new(0));
+        let target = EditorTarget {
+            strip_index: 1,
+            slot_index: 0,
+        };
+        let window_id = iced::window::Id::unique();
+        app.processor_editor_windows.begin_open(
+            target,
+            "Track 1".to_string(),
+            true,
+            Box::new(RecordingEditorSession {
+                visible,
+                detached: Rc::clone(&detached),
+            }),
+            window_id,
+        );
+        app.processor_editor_windows
+            .attach(
+                window_id,
+                None,
+                EditorParent {
+                    window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
+                        iced::window::raw_window_handle::AppKitWindowHandle::new(
+                            std::ptr::NonNull::<std::ffi::c_void>::dangling(),
+                        ),
+                    ),
+                    display: None,
+                },
+            )
+            .expect("attach should succeed");
+
+        let _ = app.exit_app();
+
+        assert_eq!(*detached.borrow(), 1);
+        assert!(!app.processor_editor_windows.contains_window(target));
     }
 }
