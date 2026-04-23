@@ -3,9 +3,24 @@ use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, BusId, SlotState, SoundfontProcess
 
 use super::super::messages::MixerMessage;
 use super::*;
-use crate::app::processor_editor_windows::{EditorOpenOutcome, EditorTarget};
+use crate::app::processor_editor_windows::{
+    EditorOpenOutcome, EditorParentSnapshot, EditorTarget,
+};
+use iced::window;
 
 impl Lilypalooza {
+    pub(in crate::app) fn handle_processor_editor_attached(
+        &mut self,
+        window_token: u64,
+        parent: Result<EditorParentSnapshot, String>,
+    ) -> Task<Message> {
+        let Ok(parent) = parent.and_then(EditorParentSnapshot::into_editor_parent) else {
+            return Task::none();
+        };
+        let _ = self.processor_editor_windows.attach(window_token, parent);
+        Task::none()
+    }
+
     pub(in crate::app) fn handle_primary_mouse_pressed(&mut self, pressed: bool) -> Task<Message> {
         self.primary_mouse_pressed = pressed;
         if !pressed {
@@ -394,11 +409,36 @@ impl Lilypalooza {
         };
         match self
             .processor_editor_windows
-            .open_or_focus(target, title, descriptor, session)
+            .begin_open_or_focus(target, title, descriptor, session)
         {
-            EditorOpenOutcome::Opened(_) | EditorOpenOutcome::Focused(_) => Task::none(),
+            EditorOpenOutcome::Focused | EditorOpenOutcome::Opened => Task::none(),
+            EditorOpenOutcome::Pending(window_token) => open_processor_editor_parent(window_token),
         }
     }
+}
+
+fn open_processor_editor_parent(window_token: u64) -> Task<Message> {
+    window::oldest().then(move |window_id| match window_id {
+        Some(window_id) => window::run(window_id, move |window| {
+            let parent = window.window_handle().map_err(|error| error.to_string()).and_then(
+                |handle| {
+                    EditorParentSnapshot::capture(
+                        handle.as_raw(),
+                        window.display_handle().ok().map(|display| display.as_raw()),
+                    )
+                },
+            );
+
+            Message::ProcessorEditorAttached {
+                window_token,
+                parent,
+            }
+        }),
+        None => Task::done(Message::ProcessorEditorAttached {
+            window_token,
+            parent: Err("main window is unavailable".to_string()),
+        }),
+    })
 }
 
 fn default_track_instrument_slot(
@@ -435,6 +475,7 @@ fn default_track_instrument_slot(
                 soundfont_id,
                 bank,
                 program,
+                ..SoundfontProcessorState::default()
             }),
         );
     }

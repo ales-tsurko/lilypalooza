@@ -1,20 +1,31 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 
+use arc_swap::ArcSwap;
+use raw_window_handle::RawWindowHandle;
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 use serde::{Deserialize, Serialize};
+use vizia::prelude::*;
+use vizia::{
+    Application as ViziaApplication, ParentWindow, WindowHandle as ViziaWindowHandle,
+    WindowScalePolicy,
+};
 
 use crate::instrument::{
-    BUILTIN_SOUNDFONT_ID, Controller, ControllerError, InstrumentProcessor,
-    InstrumentRuntimeContext, InstrumentRuntimeSpec, MidiEvent, ParameterDescriptor, Processor,
-    ProcessorDescriptor, ProcessorState, ProcessorStateError, RuntimeBinding, RuntimeFactoryError,
-    SlotState,
+    BUILTIN_SOUNDFONT_ID, Controller, ControllerError, EditorDescriptor, EditorError,
+    EditorParent, EditorSession, EditorSize, InstrumentProcessor, InstrumentRuntimeContext,
+    InstrumentRuntimeSpec, MidiEvent, ParameterDescriptor, Processor, ProcessorDescriptor,
+    ProcessorState, ProcessorStateError, RuntimeBinding, RuntimeFactoryError, SlotState,
 };
 
 pub(crate) const MIDI_14BIT_MAX: u16 = 16_383;
 const MIDI_PROGRAM_MAX: u8 = 127;
+const DEFAULT_MAXIMUM_POLYPHONY: u16 = 64;
+const MINIMUM_POLYPHONY: u16 = 8;
+const MAXIMUM_POLYPHONY: u16 = 256;
+const DEFAULT_MASTER_VOLUME: f32 = 0.5;
 
 /// Shared SoundFont resource configured in the mixer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,7 +39,7 @@ pub struct SoundfontResource {
 }
 
 /// Persisted state for the built-in SoundFont instrument.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SoundfontProcessorState {
     /// Shared SoundFont resource identifier.
     pub soundfont_id: String,
@@ -36,6 +47,15 @@ pub struct SoundfontProcessorState {
     pub bank: u16,
     /// MIDI program.
     pub program: u8,
+    /// Whether MIDI bank/program messages should override the selected preset.
+    #[serde(default)]
+    pub follow_midi: bool,
+    /// Maximum voice count for the synthesizer instance.
+    #[serde(default = "default_maximum_polyphony")]
+    pub maximum_polyphony: u16,
+    /// Linear master output volume.
+    #[serde(default = "default_master_volume")]
+    pub master_volume: f32,
 }
 
 impl Default for SoundfontProcessorState {
@@ -44,8 +64,19 @@ impl Default for SoundfontProcessorState {
             soundfont_id: "default".to_string(),
             bank: 0,
             program: 0,
+            follow_midi: false,
+            maximum_polyphony: DEFAULT_MAXIMUM_POLYPHONY,
+            master_volume: DEFAULT_MASTER_VOLUME,
         }
     }
+}
+
+const fn default_maximum_polyphony() -> u16 {
+    DEFAULT_MAXIMUM_POLYPHONY
+}
+
+const fn default_master_volume() -> f32 {
+    DEFAULT_MASTER_VOLUME
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -74,7 +105,6 @@ pub(crate) enum SoundfontSynthError {
 pub(crate) struct SoundfontSynthSettings {
     pub sample_rate: i32,
     pub block_size: usize,
-    pub maximum_polyphony: usize,
 }
 
 impl SoundfontSynthSettings {
@@ -83,7 +113,6 @@ impl SoundfontSynthSettings {
         Self {
             sample_rate,
             block_size,
-            maximum_polyphony: 64,
         }
     }
 }
@@ -92,6 +121,7 @@ impl SoundfontSynthSettings {
 pub(crate) struct LoadedSoundfont {
     pub(crate) path: PathBuf,
     pub(crate) soundfont: Arc<SoundFont>,
+    pub(crate) presets: Arc<Vec<SoundfontPreset>>,
 }
 
 impl LoadedSoundfont {
@@ -106,47 +136,95 @@ impl LoadedSoundfont {
                 source,
             }
         })?;
+        let presets = soundfont_presets(&soundfont);
         Ok(Self {
             path: resource.path.clone(),
             soundfont: Arc::new(soundfont),
+            presets: Arc::new(presets),
         })
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SoundfontPreset {
+    bank: u16,
+    program: u8,
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+struct SoundfontCatalogEntry {
+    id: String,
+    name: String,
+    presets: Arc<Vec<SoundfontPreset>>,
+}
+
 #[derive(Debug)]
 pub(crate) struct SoundfontProcessor {
+    settings: SoundfontSynthSettings,
     synthesizer: Synthesizer,
     state: SoundfontProcessorState,
-    shared_program: Option<SharedSoundfontProgramState>,
+    shared_state: Option<SharedSoundfontState>,
     applied_shared_revision: u32,
     needs_render: bool,
     silent_blocks: u32,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SharedSoundfontProgramState {
-    inner: Arc<SharedSoundfontProgramStateInner>,
+pub(crate) struct SharedSoundfontState {
+    inner: Arc<SharedSoundfontStateInner>,
 }
 
 #[derive(Debug)]
-struct SharedSoundfontProgramStateInner {
+struct SharedSoundfontStateInner {
+    soundfont: ArcSwap<SoundFont>,
+    soundfont_id: ArcSwap<String>,
     bank: AtomicU16,
     program: AtomicU32,
+    follow_midi: AtomicBool,
+    maximum_polyphony: AtomicU32,
+    master_volume_bits: AtomicU32,
     revision: AtomicU32,
 }
 
-impl SharedSoundfontProgramState {
-    pub(crate) fn new(bank: u16, program: u8) -> Self {
+impl SharedSoundfontState {
+    pub(crate) fn new(state: &SoundfontProcessorState, soundfont: Arc<SoundFont>) -> Self {
         Self {
-            inner: Arc::new(SharedSoundfontProgramStateInner {
-                bank: AtomicU16::new(bank),
-                program: AtomicU32::new(u32::from(program)),
+            inner: Arc::new(SharedSoundfontStateInner {
+                soundfont: ArcSwap::from(soundfont),
+                soundfont_id: ArcSwap::from_pointee(state.soundfont_id.clone()),
+                bank: AtomicU16::new(state.bank),
+                program: AtomicU32::new(u32::from(state.program)),
+                follow_midi: AtomicBool::new(state.follow_midi),
+                maximum_polyphony: AtomicU32::new(u32::from(state.maximum_polyphony)),
+                master_volume_bits: AtomicU32::new(state.master_volume.to_bits()),
                 revision: AtomicU32::new(1),
             }),
         }
     }
 
-    pub(crate) fn update(&self, bank: u16, program: u8) {
+    pub(crate) fn update(&self, state: &SoundfontProcessorState, soundfont: Arc<SoundFont>) {
+        self.inner.soundfont.store(soundfont);
+        self.inner
+            .soundfont_id
+            .store(Arc::new(state.soundfont_id.clone()));
+        self.inner.bank.store(state.bank, Ordering::Relaxed);
+        self.inner
+            .program
+            .store(u32::from(state.program), Ordering::Relaxed);
+        self.inner
+            .follow_midi
+            .store(state.follow_midi, Ordering::Relaxed);
+        self.inner
+            .maximum_polyphony
+            .store(u32::from(state.maximum_polyphony), Ordering::Relaxed);
+        self.inner
+            .master_volume_bits
+            .store(state.master_volume.to_bits(), Ordering::Relaxed);
+        self.inner.revision.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn update_bank_program(&self, bank: u16, program: u8) {
         self.inner.bank.store(bank, Ordering::Relaxed);
         self.inner
             .program
@@ -154,12 +232,24 @@ impl SharedSoundfontProgramState {
         self.inner.revision.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn snapshot(&self) -> (u16, u8, u32) {
+    pub(crate) fn snapshot(&self) -> (SoundfontProcessorState, u32) {
         (
-            self.inner.bank.load(Ordering::Relaxed),
-            self.inner.program.load(Ordering::Relaxed) as u8,
+            SoundfontProcessorState {
+                soundfont_id: self.inner.soundfont_id.load().as_ref().clone(),
+                bank: self.inner.bank.load(Ordering::Relaxed),
+                program: self.inner.program.load(Ordering::Relaxed) as u8,
+                follow_midi: self.inner.follow_midi.load(Ordering::Relaxed),
+                maximum_polyphony: self.inner.maximum_polyphony.load(Ordering::Relaxed) as u16,
+                master_volume: f32::from_bits(
+                    self.inner.master_volume_bits.load(Ordering::Relaxed),
+                ),
+            },
             self.inner.revision.load(Ordering::Relaxed),
         )
+    }
+
+    fn soundfont(&self) -> Arc<SoundFont> {
+        self.inner.soundfont.load_full()
     }
 }
 
@@ -174,12 +264,37 @@ const SOUNDFONT_PARAMS: &[ParameterDescriptor] = &[
         name: "Program",
         default: 0.0,
     },
+    ParameterDescriptor {
+        id: "follow_midi",
+        name: "Follow MIDI",
+        default: 0.0,
+    },
+    ParameterDescriptor {
+        id: "maximum_polyphony",
+        name: "Polyphony",
+        default: 0.225_806_44,
+    },
+    ParameterDescriptor {
+        id: "master_volume",
+        name: "Master Volume",
+        default: DEFAULT_MASTER_VOLUME,
+    },
 ];
 
 pub(crate) const DESCRIPTOR: &ProcessorDescriptor = &ProcessorDescriptor {
     name: "SoundFont",
     params: SOUNDFONT_PARAMS,
-    editor: None,
+    editor: Some(EditorDescriptor {
+        default_size: EditorSize {
+            width: 440,
+            height: 360,
+        },
+        min_size: Some(EditorSize {
+            width: 360,
+            height: 320,
+        }),
+        resizable: true,
+    }),
 };
 
 pub(crate) fn descriptor() -> &'static ProcessorDescriptor {
@@ -187,16 +302,34 @@ pub(crate) fn descriptor() -> &'static ProcessorDescriptor {
 }
 
 #[derive(Debug, Clone)]
+struct SharedSoundfontBinding {
+    catalog: Arc<Vec<SoundfontCatalogEntry>>,
+    available_soundfonts: Arc<std::collections::HashMap<String, Arc<SoundFont>>>,
+    state: SharedSoundfontState,
+}
+
+impl SharedSoundfontBinding {
+    fn apply_state(&self, state: SoundfontProcessorState) -> Result<(), ControllerError> {
+        let Some(soundfont) = self.available_soundfonts.get(&state.soundfont_id) else {
+            return Err(ControllerError::Backend(format!(
+                "soundfont resource `{}` is unavailable",
+                state.soundfont_id
+            )));
+        };
+        self.state.update(&state, Arc::clone(soundfont));
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
 struct SoundfontBinding {
-    soundfont_id: String,
-    program: SharedSoundfontProgramState,
+    shared: Arc<SharedSoundfontBinding>,
 }
 
 impl RuntimeBinding for SoundfontBinding {
     fn controller(&self) -> Box<dyn Controller> {
         Box::new(SoundfontController {
-            soundfont_id: self.soundfont_id.clone(),
-            program: self.program.clone(),
+            shared: Arc::clone(&self.shared),
         })
     }
 
@@ -204,17 +337,12 @@ impl RuntimeBinding for SoundfontBinding {
         let Some(state) = slot.decode_built_in(BUILTIN_SOUNDFONT_ID, decode_state)? else {
             return Ok(false);
         };
-        if state.soundfont_id != self.soundfont_id {
-            return Ok(false);
-        }
-        self.program.update(state.bank, state.program);
-        Ok(true)
+        Ok(self.shared.apply_state(state).is_ok())
     }
 }
 
 struct SoundfontController {
-    soundfont_id: String,
-    program: SharedSoundfontProgramState,
+    shared: Arc<SharedSoundfontBinding>,
 }
 
 impl Controller for SoundfontController {
@@ -223,48 +351,384 @@ impl Controller for SoundfontController {
     }
 
     fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
-        let (bank, program, _) = self.program.snapshot();
+        let (state, _) = self.shared.state.snapshot();
         match id {
-            "bank" => Ok(f32::from(bank) / f32::from(MIDI_14BIT_MAX)),
-            "program" => Ok(f32::from(program) / f32::from(MIDI_PROGRAM_MAX)),
+            "bank" => Ok(f32::from(state.bank) / f32::from(MIDI_14BIT_MAX)),
+            "program" => Ok(f32::from(state.program) / f32::from(MIDI_PROGRAM_MAX)),
+            "follow_midi" => Ok(if state.follow_midi { 1.0 } else { 0.0 }),
+            "maximum_polyphony" => Ok(normalize_polyphony(state.maximum_polyphony)),
+            "master_volume" => Ok(state.master_volume.clamp(0.0, 1.0)),
             _ => Err(ControllerError::UnknownParameter(id.to_string())),
         }
     }
 
     fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError> {
-        let (mut bank, mut program, _) = self.program.snapshot();
+        let (mut state, _) = self.shared.state.snapshot();
         match id {
             "bank" => {
-                bank = (normalized.clamp(0.0, 1.0) * f32::from(MIDI_14BIT_MAX)).round() as u16;
+                state.bank =
+                    (normalized.clamp(0.0, 1.0) * f32::from(MIDI_14BIT_MAX)).round() as u16;
             }
             "program" => {
-                program = (normalized.clamp(0.0, 1.0) * f32::from(MIDI_PROGRAM_MAX)).round() as u8;
+                state.program =
+                    (normalized.clamp(0.0, 1.0) * f32::from(MIDI_PROGRAM_MAX)).round() as u8;
             }
+            "follow_midi" => state.follow_midi = normalized >= 0.5,
+            "maximum_polyphony" => {
+                state.maximum_polyphony = denormalize_polyphony(normalized);
+            }
+            "master_volume" => state.master_volume = normalized.clamp(0.0, 1.0),
             _ => return Err(ControllerError::UnknownParameter(id.to_string())),
         }
-        self.program.update(bank, program);
-        Ok(())
+        self.shared.apply_state(state)
     }
 
     fn save_state(&self) -> Result<ProcessorState, ControllerError> {
-        let (bank, program, _) = self.program.snapshot();
-        Ok(encode_state(&SoundfontProcessorState {
-            soundfont_id: self.soundfont_id.clone(),
-            bank,
-            program,
-        }))
+        let (state, _) = self.shared.state.snapshot();
+        Ok(encode_state(&state))
     }
 
     fn load_state(&self, state: &ProcessorState) -> Result<(), ControllerError> {
         let state =
             decode_state(state).map_err(|error| ControllerError::Backend(error.to_string()))?;
-        if state.soundfont_id != self.soundfont_id {
-            return Err(ControllerError::Backend(
-                "changing soundfont resource requires slot rebuild".to_string(),
-            ));
+        self.shared.apply_state(state)
+    }
+
+    fn create_editor_session(&self) -> Result<Option<Box<dyn EditorSession>>, EditorError> {
+        Ok(Some(Box::new(SoundfontEditorSession::new(
+            Arc::clone(&self.shared),
+        ))))
+    }
+}
+
+struct SoundfontEditorSession {
+    shared: Arc<SharedSoundfontBinding>,
+    window: Option<ViziaWindowHandle>,
+}
+
+impl SoundfontEditorSession {
+    fn new(shared: Arc<SharedSoundfontBinding>) -> Self {
+        Self {
+            shared,
+            window: None,
         }
-        self.program.update(state.bank, state.program);
+    }
+}
+
+impl EditorSession for SoundfontEditorSession {
+    fn attach(&mut self, parent: EditorParent) -> Result<(), EditorError> {
+        if self.window.is_some() {
+            self.detach()?;
+        }
+
+        let parent = parent_window(parent.window)?;
+        let shared = Arc::clone(&self.shared);
+        let window = ViziaApplication::new(move |cx| {
+            SoundfontEditorModel::build_editor(cx, Arc::clone(&shared));
+        })
+        .title("SoundFont")
+        .inner_size((440, 360))
+        .with_scale_policy(WindowScalePolicy::SystemScaleFactor)
+        .open_parented(&parent);
+
+        self.window = Some(window);
         Ok(())
+    }
+
+    fn detach(&mut self) -> Result<(), EditorError> {
+        if let Some(mut window) = self.window.take()
+            && window.is_open()
+        {
+            window.close();
+        }
+        Ok(())
+    }
+
+    fn set_visible(&mut self, _visible: bool) -> Result<(), EditorError> {
+        Ok(())
+    }
+
+    fn resize(&mut self, _size: EditorSize) -> Result<(), EditorError> {
+        Ok(())
+    }
+}
+
+impl Drop for SoundfontEditorSession {
+    fn drop(&mut self) {
+        let _ = self.detach();
+    }
+}
+
+#[derive(Clone)]
+enum SoundfontEditorEvent {
+    SelectSoundfont(usize),
+    SelectPreset(usize),
+    ToggleFollowMidi,
+    SetPolyphony(f64),
+    SetMasterVolume(f32),
+}
+
+#[derive(Clone, Copy)]
+struct SoundfontEditorView {
+    soundfont_names: Signal<Vec<String>>,
+    selected_soundfont: Signal<usize>,
+    preset_names: Signal<Vec<String>>,
+    selected_preset: Signal<usize>,
+    follow_midi: Signal<bool>,
+    maximum_polyphony: Signal<f64>,
+    master_volume: Signal<f32>,
+}
+
+struct SoundfontEditorModel {
+    shared: Arc<SharedSoundfontBinding>,
+    selected_soundfont: Signal<usize>,
+    preset_names: Signal<Vec<String>>,
+    selected_preset: Signal<usize>,
+    follow_midi: Signal<bool>,
+    maximum_polyphony: Signal<f64>,
+    master_volume: Signal<f32>,
+}
+
+impl SoundfontEditorModel {
+    fn build_editor(cx: &mut Context, shared: Arc<SharedSoundfontBinding>) {
+        let (snapshot, _) = shared.state.snapshot();
+        let soundfont_names = Signal::new(
+            shared
+                .catalog
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect::<Vec<_>>(),
+        );
+        let selected_soundfont = selected_soundfont_index(&shared.catalog, &snapshot.soundfont_id);
+        let preset_names = Signal::new(preset_names(&shared.catalog, selected_soundfont));
+        let selected_preset = selected_preset_index(
+            &shared.catalog,
+            selected_soundfont,
+            snapshot.bank,
+            snapshot.program,
+        );
+        let selected_soundfont_signal = Signal::new(selected_soundfont);
+        let selected_preset_signal = Signal::new(selected_preset);
+        let follow_midi = Signal::new(snapshot.follow_midi);
+        let maximum_polyphony = Signal::new(f64::from(snapshot.maximum_polyphony));
+        let master_volume = Signal::new(snapshot.master_volume.clamp(0.0, 1.0));
+        let view = SoundfontEditorView {
+            soundfont_names,
+            selected_soundfont: selected_soundfont_signal,
+            preset_names,
+            selected_preset: selected_preset_signal,
+            follow_midi,
+            maximum_polyphony,
+            master_volume,
+        };
+
+        Self {
+            shared,
+            selected_soundfont: view.selected_soundfont,
+            preset_names: view.preset_names,
+            selected_preset: view.selected_preset,
+            follow_midi: view.follow_midi,
+            maximum_polyphony: view.maximum_polyphony,
+            master_volume: view.master_volume,
+        }
+        .build(cx);
+
+        build_soundfont_editor(cx, view);
+    }
+
+    fn refresh_presets(&mut self, soundfont_index: usize, bank: u16, program: u8) {
+        self.preset_names
+            .set(preset_names(&self.shared.catalog, soundfont_index));
+        self.selected_preset.set(selected_preset_index(
+            &self.shared.catalog,
+            soundfont_index,
+            bank,
+            program,
+        ));
+    }
+}
+
+impl Model for SoundfontEditorModel {
+    fn event(&mut self, _cx: &mut EventContext<'_>, event: &mut Event) {
+        event.map(|app_event, _| match app_event {
+            SoundfontEditorEvent::SelectSoundfont(index) => {
+                let Some(entry) = self.shared.catalog.get(*index) else {
+                    return;
+                };
+                self.selected_soundfont.set(*index);
+
+                let (mut state, _) = self.shared.state.snapshot();
+                state.soundfont_id = entry.id.clone();
+                if let Some(preset) = entry
+                    .presets
+                    .iter()
+                    .find(|preset| preset.bank == state.bank && preset.program == state.program)
+                    .or_else(|| entry.presets.first())
+                {
+                    state.bank = preset.bank;
+                    state.program = preset.program;
+                }
+
+                self.refresh_presets(*index, state.bank, state.program);
+                let _ = self.shared.apply_state(state);
+            }
+            SoundfontEditorEvent::SelectPreset(index) => {
+                let soundfont_index = self.selected_soundfont.get();
+                let Some(entry) = self.shared.catalog.get(soundfont_index) else {
+                    return;
+                };
+                let Some(preset) = entry.presets.get(*index) else {
+                    return;
+                };
+
+                self.selected_preset.set(*index);
+                let (mut state, _) = self.shared.state.snapshot();
+                state.bank = preset.bank;
+                state.program = preset.program;
+                let _ = self.shared.apply_state(state);
+            }
+            SoundfontEditorEvent::ToggleFollowMidi => {
+                let next = !self.follow_midi.get();
+                self.follow_midi.set(next);
+                let (mut state, _) = self.shared.state.snapshot();
+                state.follow_midi = next;
+                let _ = self.shared.apply_state(state);
+            }
+            SoundfontEditorEvent::SetPolyphony(value) => {
+                let polyphony =
+                    value.round().clamp(f64::from(MINIMUM_POLYPHONY), f64::from(MAXIMUM_POLYPHONY))
+                        as u16;
+                self.maximum_polyphony.set(f64::from(polyphony));
+                let (mut state, _) = self.shared.state.snapshot();
+                state.maximum_polyphony = polyphony;
+                let _ = self.shared.apply_state(state);
+            }
+            SoundfontEditorEvent::SetMasterVolume(value) => {
+                let volume = value.clamp(0.0, 1.0);
+                self.master_volume.set(volume);
+                let (mut state, _) = self.shared.state.snapshot();
+                state.master_volume = volume;
+                let _ = self.shared.apply_state(state);
+            }
+        });
+    }
+}
+
+fn build_soundfont_editor(cx: &mut Context, view: SoundfontEditorView) {
+    VStack::new(cx, |cx| {
+        editor_row(cx, "SoundFont", |cx| {
+            ComboBox::new(cx, view.soundfont_names, view.selected_soundfont)
+                .on_select(|cx, index| cx.emit(SoundfontEditorEvent::SelectSoundfont(index)))
+                .width(Stretch(1.0));
+        });
+
+        editor_row(cx, "Program", |cx| {
+            ComboBox::new(cx, view.preset_names, view.selected_preset)
+                .on_select(|cx, index| cx.emit(SoundfontEditorEvent::SelectPreset(index)))
+                .width(Stretch(1.0));
+        });
+
+        HStack::new(cx, |cx| {
+            Checkbox::new(cx, view.follow_midi)
+                .on_toggle(|cx| cx.emit(SoundfontEditorEvent::ToggleFollowMidi))
+                .id("soundfont-follow-midi");
+            Label::new(cx, "Follow MIDI bank/program").describing("soundfont-follow-midi");
+        })
+        .horizontal_gap(Pixels(8.0))
+        .alignment(Alignment::Left)
+        .size(Auto);
+
+        editor_row(cx, "Polyphony", |cx| {
+            Spinbox::new(cx, view.maximum_polyphony)
+                .min(f64::from(MINIMUM_POLYPHONY))
+                .max(f64::from(MAXIMUM_POLYPHONY))
+                .on_change(|cx, value| cx.emit(SoundfontEditorEvent::SetPolyphony(value)))
+                .width(Pixels(120.0));
+        });
+
+        editor_row(cx, "Master Volume", |cx| {
+            HStack::new(cx, |cx| {
+                Slider::new(cx, view.master_volume)
+                    .range(0.0..1.0)
+                    .on_change(|cx, value| cx.emit(SoundfontEditorEvent::SetMasterVolume(value)))
+                    .width(Stretch(1.0));
+                Label::new(
+                    cx,
+                    Memo::new(move |_| format!("{:.0}%", view.master_volume.get() * 100.0)),
+                )
+                .width(Pixels(52.0));
+            })
+            .horizontal_gap(Pixels(12.0))
+            .alignment(Alignment::Center);
+        });
+    })
+    .vertical_gap(Pixels(12.0))
+    .padding(Pixels(16.0))
+    .width(Stretch(1.0))
+    .height(Stretch(1.0));
+}
+
+fn editor_row<F>(cx: &mut Context, label: &'static str, content: F)
+where
+    F: FnOnce(&mut Context),
+{
+    HStack::new(cx, |cx| {
+        Label::new(cx, label).width(Pixels(104.0));
+        content(cx);
+    })
+    .alignment(Alignment::Center)
+    .horizontal_gap(Pixels(12.0))
+    .width(Stretch(1.0))
+    .height(Auto);
+}
+
+fn preset_names(catalog: &[SoundfontCatalogEntry], soundfont_index: usize) -> Vec<String> {
+    catalog
+        .get(soundfont_index)
+        .map(|entry| {
+            entry
+                .presets
+                .iter()
+                .map(|preset| format!("{:03}:{:03} {}", preset.bank, preset.program, preset.name))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn selected_soundfont_index(catalog: &[SoundfontCatalogEntry], soundfont_id: &str) -> usize {
+    catalog
+        .iter()
+        .position(|entry| entry.id == soundfont_id)
+        .unwrap_or(0)
+}
+
+fn selected_preset_index(
+    catalog: &[SoundfontCatalogEntry],
+    soundfont_index: usize,
+    bank: u16,
+    program: u8,
+) -> usize {
+    catalog
+        .get(soundfont_index)
+        .and_then(|entry| {
+            entry
+                .presets
+                .iter()
+                .position(|preset| preset.bank == bank && preset.program == program)
+        })
+        .unwrap_or(0)
+}
+
+fn parent_window(raw: RawWindowHandle) -> Result<ParentWindow, EditorError> {
+    match raw {
+        RawWindowHandle::AppKit(handle) => Ok(ParentWindow(handle.ns_view.as_ptr())),
+        RawWindowHandle::Win32(handle) => Ok(ParentWindow(handle.hwnd.get() as *mut _)),
+        RawWindowHandle::Xcb(handle) => Ok(ParentWindow(handle.window.get() as usize as *mut _)),
+        RawWindowHandle::Xlib(handle) => Ok(ParentWindow(handle.window as usize as *mut _)),
+        RawWindowHandle::Wayland(handle) => Ok(ParentWindow(handle.surface.as_ptr())),
+        other => Err(EditorError::HostUnavailable(format!(
+            "unsupported editor parent handle: {other:?}"
+        ))),
     }
 }
 
@@ -278,20 +742,45 @@ pub(crate) fn create_runtime(
     let Some(loaded) = context.soundfonts.get(&state.soundfont_id) else {
         return Ok(None);
     };
-    let shared_program = SharedSoundfontProgramState::new(state.bank, state.program);
-    let soundfont_id = state.soundfont_id.clone();
+    let shared_state = SharedSoundfontState::new(&state, Arc::clone(&loaded.soundfont));
+    let available_soundfonts = Arc::new(
+        context
+            .soundfonts
+            .iter()
+            .map(|(id, loaded)| (id.clone(), Arc::clone(&loaded.soundfont)))
+            .collect(),
+    );
+    let catalog = Arc::new(
+        context
+            .soundfont_resources
+            .iter()
+            .filter_map(|resource| {
+                context
+                    .soundfonts
+                    .get(&resource.id)
+                    .map(|loaded| SoundfontCatalogEntry {
+                        id: resource.id.clone(),
+                        name: resource.name.clone(),
+                        presets: Arc::clone(&loaded.presets),
+                    })
+            })
+            .collect(),
+    );
     let processor = SoundfontProcessor::new_with_shared_program(
         &loaded.soundfont,
         context.soundfont_settings,
         state,
-        Some(shared_program.clone()),
+        Some(shared_state.clone()),
     )
     .map_err(|error| RuntimeFactoryError::Backend(error.to_string()))?;
     Ok(Some(InstrumentRuntimeSpec {
         processor: Box::new(processor),
         binding: Box::new(SoundfontBinding {
-            soundfont_id,
-            program: shared_program,
+            shared: Arc::new(SharedSoundfontBinding {
+                catalog,
+                available_soundfonts,
+                state: shared_state,
+            }),
         }),
     }))
 }
@@ -309,6 +798,7 @@ pub fn state(soundfont_id: impl Into<String>, bank: u16, program: u8) -> Process
         soundfont_id: soundfont_id.into(),
         bank,
         program,
+        ..SoundfontProcessorState::default()
     })
 }
 
@@ -335,25 +825,18 @@ impl SoundfontProcessor {
         soundfont: &Arc<SoundFont>,
         settings: SoundfontSynthSettings,
         state: SoundfontProcessorState,
-        shared_program: Option<SharedSoundfontProgramState>,
+        shared_state: Option<SharedSoundfontState>,
     ) -> Result<Self, SoundfontSynthError> {
-        let mut synth_settings = SynthesizerSettings::new(settings.sample_rate);
-        synth_settings.block_size = settings.block_size;
-        synth_settings.maximum_polyphony = settings.maximum_polyphony;
-        synth_settings.enable_reverb_and_chorus = false;
-        let synthesizer = Synthesizer::new(soundfont, &synth_settings).map_err(|source| {
-            SoundfontSynthError::CreateSynth {
-                id: state.soundfont_id.clone(),
-                source,
-            }
-        })?;
-        let applied_shared_revision = shared_program
+        let mut synthesizer = build_synthesizer(soundfont, settings, &state)?;
+        synthesizer.set_master_volume(state.master_volume.clamp(0.0, 1.0));
+        let applied_shared_revision = shared_state
             .as_ref()
-            .map_or(0, |shared| shared.snapshot().2);
+            .map_or(0, |shared| shared.snapshot().1);
         let mut processor = Self {
+            settings,
             synthesizer,
             state,
-            shared_program,
+            shared_state,
             applied_shared_revision,
             needs_render: false,
             silent_blocks: 0,
@@ -366,8 +849,24 @@ impl SoundfontProcessor {
     pub fn decode_state(
         state: &ProcessorState,
     ) -> Result<SoundfontProcessorState, ProcessorStateError> {
-        bincode::deserialize(&state.0)
-            .map_err(|error| ProcessorStateError::Decode(error.to_string()))
+        bincode::deserialize(&state.0).or_else(|_| {
+            #[derive(Deserialize)]
+            struct LegacySoundfontProcessorState {
+                soundfont_id: String,
+                bank: u16,
+                program: u8,
+            }
+
+            bincode::deserialize::<LegacySoundfontProcessorState>(&state.0).map(|legacy| {
+                SoundfontProcessorState {
+                    soundfont_id: legacy.soundfont_id,
+                    bank: legacy.bank,
+                    program: legacy.program,
+                    ..SoundfontProcessorState::default()
+                }
+            })
+        })
+        .map_err(|error| ProcessorStateError::Decode(error.to_string()))
     }
 
     fn apply_program(&mut self) {
@@ -385,22 +884,50 @@ impl SoundfontProcessor {
             i32::from(self.state.program),
             0,
         );
+        self.synthesizer
+            .set_master_volume(self.state.master_volume.clamp(0.0, 1.0));
         self.needs_render = false;
         self.silent_blocks = 0;
     }
 
-    fn sync_shared_program(&mut self) {
-        let Some(shared) = &self.shared_program else {
+    fn rebuild_synth(&mut self) {
+        let Some(shared) = &self.shared_state else {
             return;
         };
-        let (bank, program, revision) = shared.snapshot();
+        let soundfont = shared.soundfont();
+        if let Ok(synthesizer) = build_synthesizer(&soundfont, self.settings, &self.state) {
+            self.synthesizer = synthesizer;
+        }
+        self.apply_program();
+    }
+
+    fn sync_shared_state(&mut self) {
+        let Some(shared) = &self.shared_state else {
+            return;
+        };
+        let (state, revision) = shared.snapshot();
         if revision == self.applied_shared_revision {
             return;
         }
-        self.state.bank = bank;
-        self.state.program = program;
+        let rebuild_needed = state.soundfont_id != self.state.soundfont_id
+            || state.maximum_polyphony != self.state.maximum_polyphony;
+        let program_changed = state.bank != self.state.bank || state.program != self.state.program;
+        let follow_changed = state.follow_midi != self.state.follow_midi;
+        let volume_changed = (state.master_volume - self.state.master_volume).abs() > f32::EPSILON;
+        self.state = state;
         self.applied_shared_revision = revision;
-        self.apply_program();
+        if rebuild_needed {
+            self.rebuild_synth();
+            return;
+        }
+        if program_changed || follow_changed {
+            self.apply_program();
+            return;
+        }
+        if volume_changed {
+            self.synthesizer
+                .set_master_volume(self.state.master_volume.clamp(0.0, 1.0));
+        }
     }
 }
 
@@ -422,6 +949,20 @@ impl Processor for SoundfontProcessor {
                 self.apply_program();
                 true
             }
+            "follow_midi" => {
+                self.state.follow_midi = normalized >= 0.5;
+                true
+            }
+            "maximum_polyphony" => {
+                self.state.maximum_polyphony = denormalize_polyphony(normalized);
+                self.rebuild_synth();
+                true
+            }
+            "master_volume" => {
+                self.state.master_volume = normalized.clamp(0.0, 1.0);
+                self.synthesizer.set_master_volume(self.state.master_volume);
+                true
+            }
             _ => false,
         }
     }
@@ -430,6 +971,9 @@ impl Processor for SoundfontProcessor {
         match id {
             "bank" => Some(f32::from(self.state.bank) / f32::from(MIDI_14BIT_MAX)),
             "program" => Some(f32::from(self.state.program) / f32::from(MIDI_PROGRAM_MAX)),
+            "follow_midi" => Some(if self.state.follow_midi { 1.0 } else { 0.0 }),
+            "maximum_polyphony" => Some(normalize_polyphony(self.state.maximum_polyphony)),
+            "master_volume" => Some(self.state.master_volume.clamp(0.0, 1.0)),
             _ => None,
         }
     }
@@ -440,7 +984,7 @@ impl Processor for SoundfontProcessor {
 
     fn load_state(&mut self, state: &ProcessorState) -> Result<(), ProcessorStateError> {
         self.state = Self::decode_state(state)?;
-        self.apply_program();
+        self.rebuild_synth();
         Ok(())
     }
 
@@ -451,7 +995,7 @@ impl Processor for SoundfontProcessor {
 
 impl InstrumentProcessor for SoundfontProcessor {
     fn handle_midi(&mut self, event: MidiEvent) {
-        self.sync_shared_program();
+        self.sync_shared_state();
         match event {
             MidiEvent::NoteOn { note, velocity, .. } => {
                 if velocity > 0 {
@@ -470,7 +1014,15 @@ impl InstrumentProcessor for SoundfontProcessor {
             MidiEvent::ControlChange {
                 controller, value, ..
             } => {
-                if !matches!(controller, 0 | 32) {
+                if self.state.follow_midi && controller == 0 {
+                    self.state.bank = u16::from(value);
+                    if let Some(shared) = &self.shared_state {
+                        shared.update_bank_program(self.state.bank, self.state.program);
+                        self.applied_shared_revision = shared.snapshot().1;
+                    }
+                    self.apply_program();
+                }
+                if !matches!(controller, 32) {
                     self.synthesizer.process_midi_message(
                         Self::TRACK_CHANNEL,
                         0xB0,
@@ -479,7 +1031,16 @@ impl InstrumentProcessor for SoundfontProcessor {
                     );
                 }
             }
-            MidiEvent::ProgramChange { .. } => {}
+            MidiEvent::ProgramChange { program, .. } => {
+                if self.state.follow_midi {
+                    self.state.program = program;
+                    if let Some(shared) = &self.shared_state {
+                        shared.update_bank_program(self.state.bank, self.state.program);
+                        self.applied_shared_revision = shared.snapshot().1;
+                    }
+                    self.apply_program();
+                }
+            }
             MidiEvent::ChannelPressure { pressure, .. } => self.synthesizer.process_midi_message(
                 Self::TRACK_CHANNEL,
                 0xD0,
@@ -520,7 +1081,7 @@ impl InstrumentProcessor for SoundfontProcessor {
     }
 
     fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
-        self.sync_shared_program();
+        self.sync_shared_state();
         if !self.needs_render {
             left.fill(0.0);
             right.fill(0.0);
@@ -551,13 +1112,63 @@ pub(crate) fn encode_soundfont_state(state: &SoundfontProcessorState) -> Process
     ProcessorState(bincode::serialize(state).unwrap_or_default())
 }
 
+fn normalize_polyphony(value: u16) -> f32 {
+    let span = f32::from(MAXIMUM_POLYPHONY - MINIMUM_POLYPHONY);
+    f32::from(value.clamp(MINIMUM_POLYPHONY, MAXIMUM_POLYPHONY) - MINIMUM_POLYPHONY) / span
+}
+
+fn denormalize_polyphony(normalized: f32) -> u16 {
+    let span = f32::from(MAXIMUM_POLYPHONY - MINIMUM_POLYPHONY);
+    MINIMUM_POLYPHONY
+        + (normalized.clamp(0.0, 1.0) * span).round() as u16
+}
+
+fn build_synthesizer(
+    soundfont: &Arc<SoundFont>,
+    settings: SoundfontSynthSettings,
+    state: &SoundfontProcessorState,
+) -> Result<Synthesizer, SoundfontSynthError> {
+    let mut synth_settings = SynthesizerSettings::new(settings.sample_rate);
+    synth_settings.block_size = settings.block_size;
+    synth_settings.maximum_polyphony = usize::from(
+        state
+            .maximum_polyphony
+            .clamp(MINIMUM_POLYPHONY, MAXIMUM_POLYPHONY),
+    );
+    synth_settings.enable_reverb_and_chorus = false;
+    Synthesizer::new(soundfont, &synth_settings).map_err(|source| {
+        SoundfontSynthError::CreateSynth {
+            id: state.soundfont_id.clone(),
+            source,
+        }
+    })
+}
+
+fn soundfont_presets(soundfont: &SoundFont) -> Vec<SoundfontPreset> {
+    soundfont
+        .get_presets()
+        .iter()
+        .filter_map(|preset| {
+            let bank = u16::try_from(preset.get_bank_number()).ok()?;
+            let program = u8::try_from(preset.get_patch_number()).ok()?;
+            Some(SoundfontPreset {
+                bank,
+                program,
+                name: preset.get_name().trim().to_string(),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::time::Instant;
 
+    use crate::instrument::{InstrumentRuntimeContext, SlotState};
     use super::{
         LoadedSoundfont, SoundfontProcessor, SoundfontProcessorState, SoundfontSynthSettings,
+        create_runtime, decode_state, encode_state,
     };
     use crate::instrument::{InstrumentProcessor, MidiEvent, Processor};
     use crate::test_utils::test_soundfont_resource;
@@ -738,6 +1349,7 @@ mod tests {
                 soundfont_id: "default".to_string(),
                 bank: 0,
                 program: 40,
+                ..SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");
@@ -748,6 +1360,7 @@ mod tests {
                 soundfont_id: "default".to_string(),
                 bank: 0,
                 program: 40,
+                ..SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");
@@ -793,6 +1406,138 @@ mod tests {
     }
 
     #[test]
+    fn soundfont_processor_follows_midi_program_and_bank_when_enabled() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let settings = SoundfontSynthSettings::new(44_100, 64);
+        let mut selected_program = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            settings,
+            SoundfontProcessorState {
+                soundfont_id: "default".to_string(),
+                bank: 0,
+                program: 40,
+                follow_midi: true,
+                maximum_polyphony: 64,
+                master_volume: 0.5,
+            },
+        )
+        .expect("processor should initialize");
+        let mut overridden_program = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            settings,
+            SoundfontProcessorState {
+                soundfont_id: "default".to_string(),
+                bank: 0,
+                program: 40,
+                follow_midi: true,
+                maximum_polyphony: 64,
+                master_volume: 0.5,
+            },
+        )
+        .expect("processor should initialize");
+
+        overridden_program.handle_midi(MidiEvent::ControlChange {
+            channel: 0,
+            controller: 0,
+            value: 0,
+        });
+        overridden_program.handle_midi(MidiEvent::ProgramChange {
+            channel: 0,
+            program: 0,
+        });
+
+        selected_program.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+        overridden_program.handle_midi(MidiEvent::NoteOn {
+            channel: 0,
+            note: 60,
+            velocity: 100,
+        });
+
+        let mut selected_left = vec![0.0; 512];
+        let mut selected_right = vec![0.0; 512];
+        let mut overridden_left = vec![0.0; 512];
+        let mut overridden_right = vec![0.0; 512];
+
+        for _ in 0..8 {
+            selected_program.render(&mut selected_left, &mut selected_right);
+            overridden_program.render(&mut overridden_left, &mut overridden_right);
+        }
+
+        assert!(
+            selected_left
+                .iter()
+                .zip(overridden_left.iter())
+                .chain(selected_right.iter().zip(overridden_right.iter()))
+                .any(|(a, b)| (a - b).abs() > 1.0e-6),
+            "midi-selected program should change the rendered signal when follow_midi is enabled"
+        );
+    }
+
+    #[test]
+    fn soundfont_state_decodes_previous_project_format_with_defaults() {
+        #[derive(serde::Serialize)]
+        struct LegacySoundfontProcessorState {
+            soundfont_id: String,
+            bank: u16,
+            program: u8,
+        }
+
+        let legacy = crate::instrument::ProcessorState(
+            bincode::serialize(&LegacySoundfontProcessorState {
+                soundfont_id: "default".to_string(),
+                bank: 2,
+                program: 40,
+            })
+            .expect("legacy state should encode"),
+        );
+
+        let decoded = decode_state(&legacy).expect("legacy state should decode");
+
+        assert_eq!(decoded.soundfont_id, "default");
+        assert_eq!(decoded.bank, 2);
+        assert_eq!(decoded.program, 40);
+        assert!(!decoded.follow_midi);
+        assert_eq!(decoded.maximum_polyphony, 64);
+        assert!((decoded.master_volume - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn soundfont_controller_exposes_editor_session() {
+        let resource = test_soundfont_resource();
+        let loaded = LoadedSoundfont::load(&resource).expect("test SoundFont should load");
+        let mut soundfonts = std::collections::HashMap::new();
+        soundfonts.insert(resource.id.clone(), loaded);
+        let resources = vec![resource];
+        let slot = SlotState::built_in(
+            crate::instrument::BUILTIN_SOUNDFONT_ID,
+            encode_state(&SoundfontProcessorState::default()),
+        );
+        let context = InstrumentRuntimeContext {
+            soundfonts: &soundfonts,
+            soundfont_resources: &resources,
+            soundfont_settings: SoundfontSynthSettings::new(44_100, 64),
+        };
+
+        let runtime = create_runtime(&slot, &context)
+            .expect("runtime should build")
+            .expect("soundfont runtime should exist");
+        let controller = runtime.binding.controller();
+
+        assert!(controller.descriptor().editor.is_some());
+        assert!(
+            controller
+                .create_editor_session()
+                .expect("editor creation should succeed")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn soundfont_processor_selected_program_changes_rendered_signal() {
         let loaded =
             LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
@@ -804,6 +1549,7 @@ mod tests {
                 soundfont_id: "default".to_string(),
                 bank: 0,
                 program: 0,
+                ..SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");
@@ -814,6 +1560,7 @@ mod tests {
                 soundfont_id: "default".to_string(),
                 bank: 0,
                 program: 40,
+                ..SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");
@@ -861,6 +1608,7 @@ mod tests {
                 soundfont_id: "default".to_string(),
                 bank: 0,
                 program: 40,
+                ..SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");
@@ -871,6 +1619,7 @@ mod tests {
                 soundfont_id: "default".to_string(),
                 bank: 0,
                 program: 0,
+                ..SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");

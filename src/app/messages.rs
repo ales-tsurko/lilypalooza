@@ -10,6 +10,7 @@ use iced_core::image;
 use super::{
     EditorFileMenuSection, EditorHeaderMenuSection, ProjectMenuSection, WorkspacePaneKind,
 };
+use crate::app::processor_editor_windows::EditorParentSnapshot;
 
 #[derive(Debug, Clone)]
 pub(super) enum Message {
@@ -27,6 +28,10 @@ pub(super) enum Message {
     Logger(LoggerMessage),
     Shortcuts(ShortcutsMessage),
     Prompt(PromptMessage),
+    ProcessorEditorAttached {
+        window_token: u64,
+        parent: Result<EditorParentSnapshot, String>,
+    },
     KeyPressed(KeyPress),
     TrackRenameFocusChanged(bool),
     ModifiersChanged(keyboard::Modifiers),

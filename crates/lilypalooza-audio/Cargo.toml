@@ -13,10 +13,11 @@ bincode = "1.3.3"
 crossbeam-channel = "0.5.15"
 knyst = { git = "https://github.com/ales-tsurko/knyst", rev = "be8df5331539c922ab362b57621563186e789c89", default-features = false, features = ["cpal"] }
 midly = "0.5.3"
-rustysynth = "1.3.6"
 raw-window-handle = "0.6"
+rustysynth = "1.3.6"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0.18"
+vizia = { git = "https://github.com/vizia/vizia", rev = "7cc2a487191eecb3260dc6ee6d30b6b7a6841fb5", default-features = false, features = ["baseview"] }
 wide = "1.3.0"
 
 [dev-dependencies]

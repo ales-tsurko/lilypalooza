@@ -67,6 +67,10 @@ pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
         Message::Logger(message) => app.handle_logger_message(message),
         Message::Shortcuts(message) => app.handle_shortcuts_message(message),
         Message::Prompt(message) => app.handle_prompt_message(message),
+        Message::ProcessorEditorAttached {
+            window_token,
+            parent,
+        } => app.handle_processor_editor_attached(window_token, parent),
         Message::KeyPressed(key_press) => app.handle_key_pressed(key_press),
         Message::TrackRenameFocusChanged(focused) => app.handle_track_rename_focus_changed(focused),
         Message::ModifiersChanged(modifiers) => app.handle_modifiers_changed(modifiers),

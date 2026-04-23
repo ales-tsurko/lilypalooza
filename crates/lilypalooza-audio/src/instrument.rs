@@ -153,6 +153,7 @@ pub(crate) struct EffectRuntimeSpec {
 
 pub(crate) struct InstrumentRuntimeContext<'a> {
     pub(crate) soundfonts: &'a HashMap<String, soundfont_synth::LoadedSoundfont>,
+    pub(crate) soundfont_resources: &'a [soundfont_synth::SoundfontResource],
     pub(crate) soundfont_settings: soundfont_synth::SoundfontSynthSettings,
 }
 
@@ -165,7 +166,7 @@ pub(crate) enum RuntimeFactoryError {
 }
 
 /// Live processor editor session.
-pub trait EditorSession: Send {
+pub trait EditorSession {
     /// Attaches the editor view to the host parent.
     fn attach(&mut self, parent: EditorParent) -> Result<(), EditorError>;
     /// Detaches the editor view from the host parent.
@@ -1345,6 +1346,7 @@ mod tests {
                 soundfont_id: resource.id,
                 bank: 0,
                 program: 64,
+                ..SoundfontProcessorState::default()
             },
         )
         .expect("soundfont processor should initialize");

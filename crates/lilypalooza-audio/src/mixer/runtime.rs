@@ -461,6 +461,7 @@ impl MixerRuntime {
                             mixer,
                             master_input: runtime.master.input_node(),
                             bus_inputs: &bus_inputs,
+                            soundfont_resources: mixer.soundfonts(),
                             soundfonts: &runtime.soundfonts,
                             soundfont_settings: runtime.soundfont_settings,
                         },
@@ -587,6 +588,7 @@ impl MixerRuntime {
                 context,
                 commands,
                 track,
+                mixer.soundfonts(),
                 &self.soundfonts,
                 self.soundfont_settings,
             )? {
@@ -602,6 +604,7 @@ impl MixerRuntime {
                     mixer,
                     master_input,
                     bus_inputs: &bus_inputs,
+                    soundfont_resources: mixer.soundfonts(),
                     soundfonts: &self.soundfonts,
                     soundfont_settings: self.soundfont_settings,
                 },
@@ -645,6 +648,7 @@ impl MixerRuntime {
                         mixer,
                         master_input,
                         bus_inputs: &bus_inputs,
+                        soundfont_resources: mixer.soundfonts(),
                         soundfonts: &self.soundfonts,
                         soundfont_settings: self.soundfont_settings,
                     },
@@ -660,6 +664,7 @@ impl MixerRuntime {
                     mixer,
                     master_input,
                     bus_inputs: &bus_inputs,
+                    soundfont_resources: mixer.soundfonts(),
                     soundfonts: &self.soundfonts,
                     soundfont_settings: self.soundfont_settings,
                 },
@@ -1003,6 +1008,7 @@ struct TrackRuntimeBuildContext<'a> {
     mixer: &'a MixerState,
     master_input: NodeId,
     bus_inputs: &'a HashMap<BusId, NodeId>,
+    soundfont_resources: &'a [crate::instrument::soundfont_synth::SoundfontResource],
     soundfonts: &'a HashMap<String, LoadedSoundfont>,
     soundfont_settings: SoundfontSynthSettings,
 }
@@ -1046,6 +1052,7 @@ impl TrackRuntime {
             if let Some(created_instrument) = create_track_instrument(
                 context,
                 track,
+                build.soundfont_resources,
                 build.soundfonts,
                 build.soundfont_settings,
                 Some((level.clone(), meter.clone())),
@@ -1083,6 +1090,7 @@ impl TrackRuntime {
                 context,
                 commands,
                 track,
+                build.soundfont_resources,
                 build.soundfonts,
                 build.soundfont_settings,
             )?;
@@ -1103,6 +1111,7 @@ impl TrackRuntime {
         context: &KnystContext,
         _commands: &mut MultiThreadedKnystCommands,
         track: &Track,
+        soundfont_resources: &[crate::instrument::soundfont_synth::SoundfontResource],
         soundfonts: &HashMap<String, LoadedSoundfont>,
         soundfont_settings: SoundfontSynthSettings,
     ) -> Result<bool, MixerRuntimeError> {
@@ -1120,6 +1129,7 @@ impl TrackRuntime {
             let Some(instrument) = create_track_instrument(
                 context,
                 track,
+                soundfont_resources,
                 soundfonts,
                 soundfont_settings,
                 Some((self.level.clone(), self.meter.clone())),
@@ -1146,8 +1156,14 @@ impl TrackRuntime {
             knyst_commands().disconnect(Connection::clear_from_nodes(self.pre_send_source_node()));
         });
 
-        let Some(instrument) =
-            create_track_instrument(context, track, soundfonts, soundfont_settings, None)?
+        let Some(instrument) = create_track_instrument(
+            context,
+            track,
+            soundfont_resources,
+            soundfonts,
+            soundfont_settings,
+            None,
+        )?
         else {
             return Ok(false);
         };
@@ -1573,6 +1589,7 @@ fn create_track_strip(
 fn create_track_instrument(
     context: &KnystContext,
     track: &Track,
+    soundfont_resources: &[crate::instrument::soundfont_synth::SoundfontResource],
     soundfonts: &HashMap<String, LoadedSoundfont>,
     soundfont_settings: SoundfontSynthSettings,
     inline_strip: Option<(SharedStripLevel, SharedStripMeter)>,
@@ -1584,6 +1601,7 @@ fn create_track_instrument(
         slot,
         &InstrumentRuntimeContext {
             soundfonts,
+            soundfont_resources,
             soundfont_settings,
         },
     )?
@@ -2740,6 +2758,7 @@ mod tests {
                 soundfont_id: "default".to_string(),
                 bank: 0,
                 program: 40,
+                ..soundfont_synth::SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");
@@ -2795,6 +2814,7 @@ mod tests {
                 soundfont_id: "default".to_string(),
                 bank: 0,
                 program: 40,
+                ..soundfont_synth::SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");
@@ -2857,6 +2877,7 @@ mod tests {
                 soundfont_id: "default".to_string(),
                 bank: 0,
                 program: 40,
+                ..soundfont_synth::SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");
@@ -2913,6 +2934,7 @@ mod tests {
                 soundfont_id: "default".to_string(),
                 bank: 0,
                 program: 40,
+                ..soundfont_synth::SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");
