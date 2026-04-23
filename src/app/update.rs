@@ -55,7 +55,13 @@ pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
     match message {
         Message::Noop => Task::none(),
         Message::StartupChecked(result) => app.handle_startup_checked(result),
-        Message::BrowserHistoryCleanupFinished(_result) => Task::none(),
+        Message::BrowserHistoryCleanupFinished(result) => {
+            if let Err(error) = result {
+                app.logger
+                    .push(format!("Browser history cleanup failed: {error}"));
+            }
+            Task::none()
+        }
         Message::Pane(message) => app.handle_pane_message(message),
         Message::File(message) => app.handle_file_message(message),
         Message::Viewer(message) => app.handle_viewer_message(message),

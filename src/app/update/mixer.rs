@@ -8,12 +8,19 @@ use crate::app::processor_editor_windows::{EditorTarget, snapshot_into_editor_pa
 use iced::window;
 
 impl Lilypalooza {
+    fn log_processor_editor_error(&mut self, action: &str, error: impl std::fmt::Display) {
+        self.logger
+            .push(format!("Processor editor {action} failed: {error}"));
+    }
+
     pub(in crate::app) fn destroy_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
         let Some((window_id, mut session)) = self.processor_editor_windows.remove_target(target)
         else {
             return Task::none();
         };
-        let _ = session.detach();
+        if let Err(error) = session.detach() {
+            self.log_processor_editor_error("detach", error);
+        }
         window::close(window_id)
     }
 
@@ -23,20 +30,26 @@ impl Lilypalooza {
             return Task::none();
         }
 
-        Task::batch(removed.into_iter().map(|(window_id, mut session)| {
-            let _ = session.detach();
-            window::close(window_id)
-        }))
+        let mut tasks = Vec::with_capacity(removed.len());
+        for (window_id, mut session) in removed {
+            if let Err(error) = session.detach() {
+                self.log_processor_editor_error("detach", error);
+            }
+            tasks.push(window::close(window_id));
+        }
+        Task::batch(tasks)
     }
 
     pub(in crate::app) fn hide_all_editor_windows(&mut self) -> Task<Message> {
-        for host_snapshot in self
-            .processor_editor_windows
-            .hide_all_windows()
-            .into_iter()
-            .flatten()
-        {
-            let _ = set_host_window_visible(&host_snapshot, false);
+        for (host_snapshot, visibility) in self.processor_editor_windows.hide_all_windows() {
+            if let Err(error) = visibility {
+                self.log_processor_editor_error("hide", error);
+            }
+            if let Some(host_snapshot) = host_snapshot
+                && let Err(error) = set_host_window_visible(&host_snapshot, false)
+            {
+                self.log_processor_editor_error("hide host window", error);
+            }
         }
         Task::none()
     }
@@ -109,8 +122,9 @@ impl Lilypalooza {
 
     pub(in crate::app) fn handle_window_closed(&mut self, window_id: window::Id) -> Task<Message> {
         if let Some((_target, mut session)) = self.processor_editor_windows.remove_window(window_id)
+            && let Err(error) = session.detach()
         {
-            let _ = session.detach();
+            self.log_processor_editor_error("detach", error);
         }
         Task::none()
     }
@@ -126,15 +140,26 @@ impl Lilypalooza {
             return Task::none();
         }
 
-        let Ok(host) = host else {
-            return Task::none();
+        let host = match host {
+            Ok(host) => host,
+            Err(error) => {
+                self.log_processor_editor_error("capture host window", error);
+                return Task::none();
+            }
         };
-        let Ok(parent) = parent.and_then(snapshot_into_editor_parent) else {
-            return Task::none();
+        let parent = match parent.and_then(snapshot_into_editor_parent) {
+            Ok(parent) => parent,
+            Err(error) => {
+                self.log_processor_editor_error("capture content window", error);
+                return Task::none();
+            }
         };
-        let _ = self
+        if let Err(error) = self
             .processor_editor_windows
-            .attach(window_id, Some(host), parent);
+            .attach(window_id, Some(host), parent)
+        {
+            self.log_processor_editor_error("attach", error);
+        }
         Task::none()
     }
 
@@ -147,9 +172,13 @@ impl Lilypalooza {
         else {
             return Task::none();
         };
-        let _ = session.set_visible(false);
-        if let Some(host_snapshot) = host_snapshot {
-            let _ = set_host_window_visible(&host_snapshot, false);
+        if let Err(error) = session.set_visible(false) {
+            self.log_processor_editor_error("hide", error);
+        }
+        if let Some(host_snapshot) = host_snapshot
+            && let Err(error) = set_host_window_visible(&host_snapshot, false)
+        {
+            self.log_processor_editor_error("hide host window", error);
         }
         Task::none()
     }
@@ -181,7 +210,11 @@ impl Lilypalooza {
         let mut mixer = playback.mixer();
         if mixer.replace_state(previous).is_ok() {
             self.mixer_redo_stack.push(current);
-            sync_piano_roll_mix_from_mixer_state(&mut self.piano_roll, &restored_state);
+            if let Err(error) =
+                sync_piano_roll_mix_from_mixer_state(&mut self.piano_roll, &restored_state)
+            {
+                self.logger.push(format!("Piano roll sync failed: {error}"));
+            }
         }
         close_editors
     }
@@ -201,7 +234,11 @@ impl Lilypalooza {
         let mut mixer = playback.mixer();
         if mixer.replace_state(next).is_ok() {
             self.mixer_undo_stack.push(current);
-            sync_piano_roll_mix_from_mixer_state(&mut self.piano_roll, &restored_state);
+            if let Err(error) =
+                sync_piano_roll_mix_from_mixer_state(&mut self.piano_roll, &restored_state)
+            {
+                self.logger.push(format!("Piano roll sync failed: {error}"));
+            }
         }
         close_editors
     }
@@ -333,120 +370,157 @@ impl Lilypalooza {
         let Some(playback) = self.playback.as_mut() else {
             return editor_cleanup;
         };
-        let mut mixer = playback.mixer();
         let mut editor_target_to_open = None;
+        let mut mixer_error = None;
 
-        match message {
-            MixerMessage::AddBus => {
-                let _ = mixer.add_bus(format!("Bus {}", mixer.bus_count() + 1));
-            }
-            MixerMessage::RemoveBus(id) => {
-                let _ = mixer.remove_bus(BusId(id));
-                self.piano_roll
-                    .set_global_solo_active(mixer_has_any_solo(&mixer));
-            }
-            MixerMessage::InstrumentViewportScrolled(viewport) => {
-                self.mixer_instrument_scroll_x = viewport.absolute_offset().x;
-                self.mixer_instrument_viewport_width = viewport.bounds().width;
-            }
-            MixerMessage::BusViewportScrolled(viewport) => {
-                self.mixer_bus_scroll_x = viewport.absolute_offset().x;
-                self.mixer_bus_viewport_width = viewport.bounds().width;
-            }
-            MixerMessage::ResetMasterMeter => mixer.reset_master_meter(),
-            MixerMessage::SetMasterGain(gain) => mixer.set_master_gain_db(gain),
-            MixerMessage::SetMasterPan(pan) => mixer.set_master_pan(pan),
-            MixerMessage::ResetTrackMeter(index) => {
-                let _ = mixer.reset_track_meter(TrackId(index as u16));
-            }
-            MixerMessage::SetTrackGain(index, gain) => {
-                let _ = mixer.set_track_gain_db(TrackId(index as u16), gain);
-            }
-            MixerMessage::SetTrackPan(index, pan) => {
-                let _ = mixer.set_track_pan(TrackId(index as u16), pan);
-            }
-            MixerMessage::ToggleTrackMute(index) => {
-                let next = mixer
-                    .track(TrackId(index as u16))
-                    .map(|track| !track.state.muted)
-                    .unwrap_or(false);
-                let _ = mixer.set_track_muted(TrackId(index as u16), next);
-                self.piano_roll.set_track_muted(index, next);
-            }
-            MixerMessage::ToggleTrackSolo(index) => {
-                let next = mixer
-                    .track(TrackId(index as u16))
-                    .map(|track| !track.state.soloed)
-                    .unwrap_or(false);
-                let _ = mixer.set_track_soloed(TrackId(index as u16), next);
-                self.piano_roll.set_track_soloed(index, next);
-                self.piano_roll
-                    .set_global_solo_active(mixer_has_any_solo(&mixer));
-            }
-            MixerMessage::SelectTrackInstrument(index, choice) => {
-                let open_editor_after_select = matches!(
-                    &choice,
-                    super::super::mixer::InstrumentChoice::Processor { .. }
-                );
-                let slot = match choice {
-                    super::super::mixer::InstrumentChoice::None => SlotState::default(),
-                    super::super::mixer::InstrumentChoice::Processor {
-                        ref processor_id, ..
-                    } => default_track_instrument_slot(
-                        &mixer,
-                        TrackId(index as u16),
-                        processor_id.as_str(),
-                    ),
-                };
-                let _ = mixer.set_track_instrument(TrackId(index as u16), slot);
-                if open_editor_after_select {
-                    editor_target_to_open = Some(EditorTarget {
-                        strip_index: index + 1,
-                        slot_index: 0,
-                    });
+        {
+            let mut mixer = playback.mixer();
+
+            match message {
+                MixerMessage::AddBus => {
+                    if let Err(error) = mixer.add_bus(format!("Bus {}", mixer.bus_count() + 1)) {
+                        mixer_error = Some(error.to_string());
+                    }
                 }
+                MixerMessage::RemoveBus(id) => {
+                    if let Err(error) = mixer.remove_bus(BusId(id)) {
+                        mixer_error = Some(error.to_string());
+                    } else {
+                        self.piano_roll
+                            .set_global_solo_active(mixer_has_any_solo(&mixer));
+                    }
+                }
+                MixerMessage::InstrumentViewportScrolled(viewport) => {
+                    self.mixer_instrument_scroll_x = viewport.absolute_offset().x;
+                    self.mixer_instrument_viewport_width = viewport.bounds().width;
+                }
+                MixerMessage::BusViewportScrolled(viewport) => {
+                    self.mixer_bus_scroll_x = viewport.absolute_offset().x;
+                    self.mixer_bus_viewport_width = viewport.bounds().width;
+                }
+                MixerMessage::ResetMasterMeter => mixer.reset_master_meter(),
+                MixerMessage::SetMasterGain(gain) => mixer.set_master_gain_db(gain),
+                MixerMessage::SetMasterPan(pan) => mixer.set_master_pan(pan),
+                MixerMessage::ResetTrackMeter(index) => {
+                    if let Err(error) = mixer.reset_track_meter(TrackId(index as u16)) {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
+                MixerMessage::SetTrackGain(index, gain) => {
+                    if let Err(error) = mixer.set_track_gain_db(TrackId(index as u16), gain) {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
+                MixerMessage::SetTrackPan(index, pan) => {
+                    if let Err(error) = mixer.set_track_pan(TrackId(index as u16), pan) {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
+                MixerMessage::ToggleTrackMute(index) => {
+                    let next = mixer
+                        .track(TrackId(index as u16))
+                        .map(|track| !track.state.muted)
+                        .unwrap_or(false);
+                    if let Err(error) = mixer.set_track_muted(TrackId(index as u16), next) {
+                        mixer_error = Some(error.to_string());
+                    } else {
+                        self.piano_roll.set_track_muted(index, next);
+                    }
+                }
+                MixerMessage::ToggleTrackSolo(index) => {
+                    let next = mixer
+                        .track(TrackId(index as u16))
+                        .map(|track| !track.state.soloed)
+                        .unwrap_or(false);
+                    if let Err(error) = mixer.set_track_soloed(TrackId(index as u16), next) {
+                        mixer_error = Some(error.to_string());
+                    } else {
+                        self.piano_roll.set_track_soloed(index, next);
+                        self.piano_roll
+                            .set_global_solo_active(mixer_has_any_solo(&mixer));
+                    }
+                }
+                MixerMessage::SelectTrackInstrument(index, choice) => {
+                    let open_editor_after_select = matches!(
+                        &choice,
+                        super::super::mixer::InstrumentChoice::Processor { .. }
+                    );
+                    let slot = match choice {
+                        super::super::mixer::InstrumentChoice::None => SlotState::default(),
+                        super::super::mixer::InstrumentChoice::Processor {
+                            ref processor_id,
+                            ..
+                        } => default_track_instrument_slot(
+                            &mixer,
+                            TrackId(index as u16),
+                            processor_id.as_str(),
+                        ),
+                    };
+                    if let Err(error) = mixer.set_track_instrument(TrackId(index as u16), slot) {
+                        mixer_error = Some(error.to_string());
+                    } else if open_editor_after_select {
+                        editor_target_to_open = Some(EditorTarget {
+                            strip_index: index + 1,
+                            slot_index: 0,
+                        });
+                    }
+                }
+                MixerMessage::ResetBusMeter(id) => {
+                    if let Err(error) = mixer.reset_bus_meter(BusId(id)) {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
+                MixerMessage::SetBusGain(id, gain) => {
+                    if let Err(error) = mixer.set_bus_gain_db(BusId(id), gain) {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
+                MixerMessage::SetBusPan(id, pan) => {
+                    if let Err(error) = mixer.set_bus_pan(BusId(id), pan) {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
+                MixerMessage::ToggleBusMute(id) => {
+                    let next = mixer
+                        .bus(BusId(id))
+                        .map(|bus| !bus.state.muted)
+                        .unwrap_or(false);
+                    if let Err(error) = mixer.set_bus_muted(BusId(id), next) {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
+                MixerMessage::ToggleBusSolo(id) => {
+                    let next = mixer
+                        .bus(BusId(id))
+                        .map(|bus| !bus.state.soloed)
+                        .unwrap_or(false);
+                    if let Err(error) = mixer.set_bus_soloed(BusId(id), next) {
+                        mixer_error = Some(error.to_string());
+                    } else {
+                        self.piano_roll
+                            .set_global_solo_active(mixer_has_any_solo(&mixer));
+                    }
+                }
+                MixerMessage::SelectTrack(_) => {}
+                MixerMessage::StartTrackRename(_)
+                | MixerMessage::ToggleTrackInstrumentBrowser(_)
+                | MixerMessage::CloseTrackInstrumentBrowser
+                | MixerMessage::InstrumentBrowserSearchChanged(_)
+                | MixerMessage::SelectInstrumentBrowserBackend(_)
+                | MixerMessage::StartBusRename(_)
+                | MixerMessage::OpenEditor(_)
+                | MixerMessage::TrackRenameInputChanged(_)
+                | MixerMessage::OpenTrackColorPicker
+                | MixerMessage::SubmitTrackColor(_)
+                | MixerMessage::PreviewTrackColor(_)
+                | MixerMessage::CommitTrackRename => {}
+                MixerMessage::CancelTrackRename => {}
             }
-            MixerMessage::ResetBusMeter(id) => {
-                let _ = mixer.reset_bus_meter(BusId(id));
-            }
-            MixerMessage::SetBusGain(id, gain) => {
-                let _ = mixer.set_bus_gain_db(BusId(id), gain);
-            }
-            MixerMessage::SetBusPan(id, pan) => {
-                let _ = mixer.set_bus_pan(BusId(id), pan);
-            }
-            MixerMessage::ToggleBusMute(id) => {
-                let next = mixer
-                    .bus(BusId(id))
-                    .map(|bus| !bus.state.muted)
-                    .unwrap_or(false);
-                let _ = mixer.set_bus_muted(BusId(id), next);
-            }
-            MixerMessage::ToggleBusSolo(id) => {
-                let next = mixer
-                    .bus(BusId(id))
-                    .map(|bus| !bus.state.soloed)
-                    .unwrap_or(false);
-                let _ = mixer.set_bus_soloed(BusId(id), next);
-                self.piano_roll
-                    .set_global_solo_active(mixer_has_any_solo(&mixer));
-            }
-            MixerMessage::SelectTrack(_) => {}
-            MixerMessage::StartTrackRename(_)
-            | MixerMessage::ToggleTrackInstrumentBrowser(_)
-            | MixerMessage::CloseTrackInstrumentBrowser
-            | MixerMessage::InstrumentBrowserSearchChanged(_)
-            | MixerMessage::SelectInstrumentBrowserBackend(_)
-            | MixerMessage::StartBusRename(_)
-            | MixerMessage::OpenEditor(_)
-            | MixerMessage::TrackRenameInputChanged(_)
-            | MixerMessage::OpenTrackColorPicker
-            | MixerMessage::SubmitTrackColor(_)
-            | MixerMessage::PreviewTrackColor(_)
-            | MixerMessage::CommitTrackRename => {}
-            MixerMessage::CancelTrackRename => {}
         }
 
+        if let Some(error) = mixer_error {
+            self.logger.push(format!("Mixer update failed: {error}"));
+        }
         self.project_mixer_state = playback.mixer_state().clone();
         if let Some(target) = editor_target_to_open {
             return Task::batch([editor_cleanup, self.open_editor_target(target)]);
@@ -547,11 +621,14 @@ impl Lilypalooza {
             } else {
                 if let Some(host_snapshot) =
                     self.processor_editor_windows.host_snapshot_for(window_id)
+                    && let Err(error) = set_host_window_visible(&host_snapshot, true)
                 {
-                    let _ = set_host_window_visible(&host_snapshot, true);
+                    self.log_processor_editor_error("show host window", error);
                 }
-                if let Some(session) = self.processor_editor_windows.session_mut(window_id) {
-                    let _ = session.set_visible(true);
+                if let Some(session) = self.processor_editor_windows.session_mut(window_id)
+                    && let Err(error) = session.set_visible(true)
+                {
+                    self.log_processor_editor_error("show", error);
                 }
                 window::gain_focus(window_id)
             };
@@ -667,16 +744,21 @@ fn default_track_instrument_slot(
 fn sync_piano_roll_mix_from_mixer_state(
     piano_roll: &mut super::super::piano_roll::PianoRollState,
     mixer: &lilypalooza_audio::MixerState,
-) {
+) -> Result<(), String> {
     for (track_id, track) in mixer.tracks_with_ids() {
         let index = track_id.index();
-        let _ = piano_roll.set_track_muted(index, track.state.muted);
-        let _ = piano_roll.set_track_soloed(index, track.state.soloed);
+        piano_roll
+            .set_track_muted(index, track.state.muted)
+            .ok_or_else(|| format!("track {index} is missing"))?;
+        piano_roll
+            .set_track_soloed(index, track.state.soloed)
+            .ok_or_else(|| format!("track {index} is missing"))?;
     }
     piano_roll.set_global_solo_active(
         mixer.tracks().iter().any(|track| track.state.soloed)
             || mixer.buses().iter().any(|bus| bus.state.soloed),
     );
+    Ok(())
 }
 
 #[cfg(test)]

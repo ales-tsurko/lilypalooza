@@ -203,8 +203,8 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct PlaybackSettings {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) soundfont: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) soundfonts: Vec<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) device: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -639,14 +639,18 @@ fn render_settings_file(settings: &AppSettings) -> Result<String, toml::ser::Err
     );
 
     out.push_str("\n[playback]\n");
-    out.push_str("# Default startup SoundFont file.\n");
+    out.push_str("# Default startup SoundFont files.\n");
     out.push_str("# Example:\n");
-    if let Some(soundfont) = &settings.playback.soundfont {
-        out.push_str("soundfont = ");
-        out.push_str(&format!("{:?}", soundfont.display().to_string()));
-        out.push('\n');
+    if settings.playback.soundfonts.is_empty() {
+        out.push_str("# soundfonts = [\"/absolute/path/to/file.sf2\"]\n");
     } else {
-        out.push_str("# soundfont = \"/absolute/path/to/file.sf2\"\n");
+        out.push_str("soundfonts = [\n");
+        for soundfont in &settings.playback.soundfonts {
+            out.push_str("    ");
+            out.push_str(&format!("{:?}", soundfont.display().to_string()));
+            out.push_str(",\n");
+        }
+        out.push_str("]\n");
     }
     out.push('\n');
     out.push_str(
@@ -997,7 +1001,7 @@ mod tests {
             render_settings_file(&AppSettings::default()).expect("default settings should render");
 
         assert!(contents.contains("[playback]"));
-        assert!(contents.contains("# soundfont = \"/absolute/path/to/file.sf2\""));
+        assert!(contents.contains("# soundfonts = [\"/absolute/path/to/file.sf2\"]"));
         assert!(contents.contains("# device = \"default\""));
         assert!(contents.contains("# sample_rate = 48000"));
         assert!(contents.contains("# block_size = 64"));
@@ -1008,7 +1012,10 @@ mod tests {
     fn settings_roundtrip_parses_playback_settings() {
         let settings = AppSettings {
             playback: PlaybackSettings {
-                soundfont: Some(PathBuf::from("/tmp/test.sf2")),
+                soundfonts: vec![
+                    PathBuf::from("/tmp/test.sf2"),
+                    PathBuf::from("/tmp/other.sf2"),
+                ],
                 device: Some("Built-in Output".into()),
                 sample_rate: Some(48_000),
                 block_size: Some(128),
@@ -1023,8 +1030,11 @@ mod tests {
             toml::from_str(&contents).expect("rendered settings should parse back");
 
         assert_eq!(
-            parsed.playback.soundfont,
-            Some(PathBuf::from("/tmp/test.sf2"))
+            parsed.playback.soundfonts,
+            vec![
+                PathBuf::from("/tmp/test.sf2"),
+                PathBuf::from("/tmp/other.sf2")
+            ]
         );
         assert_eq!(parsed.playback.device.as_deref(), Some("Built-in Output"));
         assert_eq!(parsed.playback.sample_rate, Some(48_000));

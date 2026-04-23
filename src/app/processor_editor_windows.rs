@@ -203,13 +203,15 @@ impl EditorWindowManager {
         Some((target, snapshot, window.session.as_mut()))
     }
 
-    pub(super) fn hide_all_windows(&mut self) -> Vec<Option<WindowSnapshot>> {
+    pub(super) fn hide_all_windows(
+        &mut self,
+    ) -> Vec<(Option<WindowSnapshot>, Result<(), EditorError>)> {
         self.focused = None;
         self.windows
             .values_mut()
             .map(|window| {
-                let _ = window.session.set_visible(false);
-                window.host_snapshot
+                let visibility = window.session.set_visible(false);
+                (window.host_snapshot, visibility)
             })
             .collect()
     }

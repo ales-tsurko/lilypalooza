@@ -560,7 +560,7 @@ fn new(
     startup_score: Option<PathBuf>,
     audio_enabled: bool,
 ) -> (Lilypalooza, Task<Message>) {
-    let _ = auxiliary_window::prepare_process();
+    let auxiliary_window_error = auxiliary_window::prepare_process().err();
     let (main_window_id, open_main_window) = window::open(main_window_settings());
     let default_settings = settings::AppSettings::default();
     let default_global_state = GlobalState::default();
@@ -572,8 +572,10 @@ fn new(
         Ok(settings) => (settings, None),
         Err(error) => (default_settings.clone(), Some(error)),
     };
-    let startup_soundfont =
-        startup_soundfont.or_else(|| stored_settings.playback.soundfont.clone());
+    let startup_soundfonts = match startup_soundfont {
+        Some(path) => vec![path],
+        None => stored_settings.playback.soundfonts.clone(),
+    };
     let (mut stored_state, state_error) = match state::load_global() {
         Ok(state) => (state, None),
         Err(error) => (default_global_state.clone(), Some(error)),
@@ -792,7 +794,7 @@ fn new(
     if !audio_enabled {
         app.logger.push("Audio engine disabled by --no-audio");
     }
-    if let Some(path) = startup_soundfont.as_ref() {
+    for path in &startup_soundfonts {
         app.logger
             .push(format!("Startup soundfont requested: {}", path.display()));
     }
@@ -809,6 +811,10 @@ fn new(
     if let Some(error) = playback_init_error {
         app.logger
             .push(format!("Playback engine startup failed: {error}"));
+    }
+    if let Some(error) = auxiliary_window_error {
+        app.logger
+            .push(format!("Auxiliary window setup failed: {error}"));
     }
 
     app.restore_editor_session(
@@ -833,8 +839,8 @@ fn new(
         Message::BrowserHistoryCleanupFinished,
     ));
 
-    if audio_enabled && let Some(path) = startup_soundfont {
-        app.initialize_playback(path);
+    if audio_enabled && !startup_soundfonts.is_empty() {
+        app.initialize_playback_soundfonts(startup_soundfonts);
     }
     app.saved_project_state = Some(app.current_project_state());
     if let Some(path) = startup_score.or(stored_state.main_score.clone()) {
@@ -907,7 +913,12 @@ async fn cleanup_stale_browser_history_dirs(current_dir: Option<PathBuf>) -> Res
         if let Ok(file_type) = entry.file_type()
             && file_type.is_dir()
         {
-            let _ = fs::remove_dir_all(&path);
+            fs::remove_dir_all(&path).map_err(|error| {
+                format!(
+                    "Failed to remove stale browser history directory {}: {error}",
+                    path.display()
+                )
+            })?;
         }
     }
 

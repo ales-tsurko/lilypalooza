@@ -1259,11 +1259,11 @@ impl Lilypalooza {
             || loaded.playback.chase_notes_on_seek != previous_playback.chase_notes_on_seek;
         if restart_playback {
             self.restart_playback_engine();
-        } else if let Some(path) = loaded.playback.soundfont {
-            self.initialize_playback(path);
-        } else {
+        } else if loaded.playback.soundfonts.is_empty() {
             self.soundfont_status = SoundfontStatus::NotSelected;
             self.unload_playback_file();
+        } else {
+            self.initialize_playback_soundfonts(loaded.playback.soundfonts);
         }
         self.shortcut_settings = loaded.shortcuts;
         self.sync_editor_viewport_from_layout();

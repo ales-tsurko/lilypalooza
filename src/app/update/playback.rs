@@ -59,13 +59,20 @@ impl Lilypalooza {
         self.score_cursor_overlay = Some(placement);
     }
 
-    pub(in crate::app) fn initialize_playback(&mut self, soundfont_path: PathBuf) {
-        self.playback_settings.soundfont = Some(soundfont_path.clone());
-        self.soundfont_status = SoundfontStatus::Ready(soundfont_path.clone());
-        self.logger.push(format!(
-            "Selected playback soundfont {}",
-            soundfont_path.display()
-        ));
+    pub(in crate::app) fn initialize_playback_soundfonts(&mut self, soundfont_paths: Vec<PathBuf>) {
+        self.playback_settings.soundfonts = soundfont_paths.clone();
+        let Some(primary_soundfont) = soundfont_paths.first().cloned() else {
+            self.soundfont_status = SoundfontStatus::NotSelected;
+            self.unload_playback_file();
+            return;
+        };
+        self.soundfont_status = SoundfontStatus::Ready(primary_soundfont);
+        for soundfont_path in &soundfont_paths {
+            self.logger.push(format!(
+                "Selected playback soundfont {}",
+                soundfont_path.display()
+            ));
+        }
 
         if self.playback.is_none() {
             self.logger
@@ -73,11 +80,17 @@ impl Lilypalooza {
             return;
         }
 
-        if let Some(playback) = self.playback.as_mut()
-            && let Err(error) = load_soundfont_resource(playback, &soundfont_path)
-        {
-            self.soundfont_status = SoundfontStatus::Error;
-            self.logger.push(error.clone());
+        if let Some(playback) = self.playback.as_mut() {
+            for (index, soundfont_path) in soundfont_paths.iter().enumerate() {
+                if let Err(error) = load_soundfont_resource(
+                    playback,
+                    &soundfont_resource_id(index, soundfont_path),
+                    soundfont_path,
+                ) {
+                    self.soundfont_status = SoundfontStatus::Error;
+                    self.logger.push(error);
+                }
+            }
         }
 
         self.apply_metronome_state_to_playback();
@@ -98,11 +111,12 @@ impl Lilypalooza {
                 drop(previous_engine);
                 self.playback = Some(engine);
                 self.apply_metronome_state_to_playback();
-                if let Some(soundfont_path) = self.playback_settings.soundfont.clone() {
-                    self.initialize_playback(soundfont_path);
-                } else {
+                let soundfonts = self.playback_settings.soundfonts.clone();
+                if soundfonts.is_empty() {
                     self.soundfont_status = SoundfontStatus::NotSelected;
                     self.unload_playback_file();
+                } else {
+                    self.initialize_playback_soundfonts(soundfonts);
                 }
                 self.sync_project_mixer_state_from_playback();
             }
@@ -205,17 +219,29 @@ impl Lilypalooza {
             return;
         }
 
-        {
+        let mix_error = {
             let mut mixer = playback.mixer();
+            let mut mix_error = None;
             for (track_index, state) in track_mix.into_iter().enumerate() {
                 if track_index >= INSTRUMENT_TRACK_COUNT {
                     continue;
                 }
 
                 let track_id = TrackId(track_index as u16);
-                let _ = mixer.set_track_muted(track_id, state.muted);
-                let _ = mixer.set_track_soloed(track_id, state.soloed);
+                if let Err(error) = mixer.set_track_muted(track_id, state.muted) {
+                    mix_error = Some(error.to_string());
+                    break;
+                }
+                if let Err(error) = mixer.set_track_soloed(track_id, state.soloed) {
+                    mix_error = Some(error.to_string());
+                    break;
+                }
             }
+            mix_error
+        };
+        if let Some(error) = mix_error {
+            self.logger
+                .push(format!("Playback track mix sync failed: {error}"));
         }
         self.sync_project_mixer_state_from_playback();
     }
@@ -296,10 +322,11 @@ impl Lilypalooza {
 
 fn load_soundfont_resource(
     playback: &mut AudioEngine,
+    soundfont_id: &str,
     soundfont_path: &Path,
 ) -> Result<(), String> {
     let soundfont = SoundfontResource {
-        id: DEFAULT_SOUNDFONT_ID.to_string(),
+        id: soundfont_id.to_string(),
         name: soundfont_name(soundfont_path),
         path: soundfont_path.to_path_buf(),
     };
@@ -310,6 +337,14 @@ fn load_soundfont_resource(
         .map_err(|error| error.to_string())?;
 
     Ok(())
+}
+
+fn soundfont_resource_id(index: usize, path: &Path) -> String {
+    if index == 0 {
+        DEFAULT_SOUNDFONT_ID.to_string()
+    } else {
+        format!("soundfont:{}", path.display())
+    }
 }
 
 fn sync_playback_engine(
@@ -327,7 +362,9 @@ fn sync_playback_engine(
                 .get(track_index)
                 .cloned()
                 .unwrap_or_else(|| format!("Track {}", track_index + 1));
-            let _ = mixer.set_track_name(TrackId(track_index as u16), label.clone());
+            mixer
+                .set_track_name(TrackId(track_index as u16), label.clone())
+                .map_err(|error| error.to_string())?;
         }
     }
     Ok(())

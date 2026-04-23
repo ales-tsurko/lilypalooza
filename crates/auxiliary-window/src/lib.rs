@@ -247,35 +247,42 @@ pub fn prepare_process() -> Result<(), Error> {
     }
 }
 
+#[cfg(target_os = "macos")]
 pub fn install_editor_host(
     host: &WindowSnapshot,
     owner: Option<&WindowSnapshot>,
     options: &HostOptions,
 ) -> Result<InstalledHost, Error> {
-    #[cfg(target_os = "macos")]
-    {
-        macos::install_editor_host(host, owner, options)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = owner;
-        let _ = options;
-        Ok(InstalledHost { content: *host })
-    }
+    macos::install_editor_host(host, owner, options)
 }
 
-pub fn set_host_window_visible(host: &WindowSnapshot, visible: bool) -> Result<(), Error> {
-    #[cfg(target_os = "macos")]
-    {
-        macos::set_host_window_visible(host, visible)
+#[cfg(not(target_os = "macos"))]
+pub fn install_editor_host(
+    host: &WindowSnapshot,
+    owner: Option<&WindowSnapshot>,
+    options: &HostOptions,
+) -> Result<InstalledHost, Error> {
+    if options.title.contains('\0') {
+        return Err(Error::Message("host title contains a NUL byte".to_string()));
     }
+    if let Some(owner) = owner {
+        owner.raw_window_handle()?;
+    }
+    Ok(InstalledHost { content: *host })
+}
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (host, visible);
-        Ok(())
+#[cfg(target_os = "macos")]
+pub fn set_host_window_visible(host: &WindowSnapshot, visible: bool) -> Result<(), Error> {
+    macos::set_host_window_visible(host, visible)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_host_window_visible(host: &WindowSnapshot, visible: bool) -> Result<(), Error> {
+    host.raw_window_handle()?;
+    if visible {
+        return Ok(());
     }
+    Ok(())
 }
 
 fn non_null_ptr(value: usize, name: &str) -> Result<NonNull<c_void>, Error> {

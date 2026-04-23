@@ -413,6 +413,12 @@ impl SoundfontEditorSession {
             window: None,
         }
     }
+
+    fn close_window(&mut self) {
+        if let Some(mut window) = self.window.take() {
+            window.close();
+        }
+    }
 }
 
 impl EditorSession for SoundfontEditorSession {
@@ -436,9 +442,7 @@ impl EditorSession for SoundfontEditorSession {
     }
 
     fn detach(&mut self) -> Result<(), EditorError> {
-        if let Some(mut window) = self.window.take() {
-            window.close();
-        }
+        self.close_window();
         Ok(())
     }
 
@@ -453,7 +457,7 @@ impl EditorSession for SoundfontEditorSession {
 
 impl Drop for SoundfontEditorSession {
     fn drop(&mut self) {
-        let _ = self.detach();
+        self.close_window();
     }
 }
 
@@ -544,6 +548,12 @@ impl SoundfontEditorModel {
             program,
         ));
     }
+
+    fn apply_state(&self, state: SoundfontProcessorState) {
+        if let Err(error) = self.shared.apply_state(state) {
+            eprintln!("SoundFont editor state update failed: {error}");
+        }
+    }
 }
 
 impl Model for SoundfontEditorModel {
@@ -568,7 +578,7 @@ impl Model for SoundfontEditorModel {
                 }
 
                 self.refresh_presets(*index, state.bank, state.program);
-                let _ = self.shared.apply_state(state);
+                self.apply_state(state);
             }
             SoundfontEditorEvent::SelectPreset(index) => {
                 let soundfont_index = self.selected_soundfont.get();
@@ -583,14 +593,14 @@ impl Model for SoundfontEditorModel {
                 let (mut state, _) = self.shared.state.snapshot();
                 state.bank = preset.bank;
                 state.program = preset.program;
-                let _ = self.shared.apply_state(state);
+                self.apply_state(state);
             }
             SoundfontEditorEvent::ToggleFollowMidi => {
                 let next = !self.follow_midi.get();
                 self.follow_midi.set(next);
                 let (mut state, _) = self.shared.state.snapshot();
                 state.follow_midi = next;
-                let _ = self.shared.apply_state(state);
+                self.apply_state(state);
             }
             SoundfontEditorEvent::SetPolyphony(value) => {
                 let polyphony = value
@@ -600,14 +610,14 @@ impl Model for SoundfontEditorModel {
                 self.maximum_polyphony.set(f64::from(polyphony));
                 let (mut state, _) = self.shared.state.snapshot();
                 state.maximum_polyphony = polyphony;
-                let _ = self.shared.apply_state(state);
+                self.apply_state(state);
             }
             SoundfontEditorEvent::SetMasterVolume(value) => {
                 let volume = value.clamp(0.0, 1.0);
                 self.master_volume.set(volume);
                 let (mut state, _) = self.shared.state.snapshot();
                 state.master_volume = volume;
-                let _ = self.shared.apply_state(state);
+                self.apply_state(state);
             }
         });
     }
