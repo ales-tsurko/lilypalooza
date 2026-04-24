@@ -87,7 +87,6 @@ impl Lilypalooza {
             return Task::none();
         }
 
-        let owner = self.main_window_snapshot;
         let title = self
             .processor_editor_windows
             .window_title(window_id)
@@ -111,7 +110,6 @@ impl Lilypalooza {
             let parent = match &host {
                 Ok(host_snapshot) => install_editor_host(
                     host_snapshot,
-                    owner.as_ref(),
                     &HostOptions::new(title).with_resizable(resizable),
                 )
                 .map(|installed| installed.content)

@@ -261,23 +261,18 @@ pub fn route_app_quit_to_window_close(window: &WindowSnapshot) -> Result<(), Err
 #[cfg(target_os = "macos")]
 pub fn install_editor_host(
     host: &WindowSnapshot,
-    owner: Option<&WindowSnapshot>,
     options: &HostOptions,
 ) -> Result<InstalledHost, Error> {
-    macos::install_editor_host(host, owner, options)
+    macos::install_editor_host(host, options)
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn install_editor_host(
     host: &WindowSnapshot,
-    owner: Option<&WindowSnapshot>,
     options: &HostOptions,
 ) -> Result<InstalledHost, Error> {
     if options.title.contains('\0') {
         return Err(Error::Message("host title contains a NUL byte".to_string()));
-    }
-    if let Some(owner) = owner {
-        owner.raw_window_handle()?;
     }
     Ok(InstalledHost { content: *host })
 }

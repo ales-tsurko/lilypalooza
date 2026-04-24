@@ -20,14 +20,19 @@ use serde::{Deserialize, Serialize};
 pub const MIDI_14BIT_MAX: u16 = 16_383;
 const MIDI_PROGRAM_MAX: u8 = 127;
 const MIDI_CONTROL_MAX: f32 = 127.0;
-const MIDI_CC_REVERB_SEND: i32 = 91;
-const MIDI_CC_CHORUS_SEND: i32 = 93;
+const MIDI_CC_REVERB_WET: i32 = 91;
+const MIDI_CC_CHORUS_WET: i32 = 93;
 const MINIMUM_POLYPHONY: u16 = 8;
 const MAXIMUM_POLYPHONY: u16 = 256;
-const DEFAULT_MASTER_VOLUME: f32 = 0.5;
+const MIN_OUTPUT_GAIN_DB: f32 = -24.0;
+const MAX_OUTPUT_GAIN_DB: f32 = 12.0;
+const DEFAULT_OUTPUT_GAIN: f32 = 1.0;
+const DEFAULT_OUTPUT_GAIN_NORMALIZED: f32 = 2.0 / 3.0;
 const DEFAULT_MAXIMUM_POLYPHONY: u16 = 64;
-const DEFAULT_REVERB_SEND: f32 = 40.0 / 127.0;
-const DEFAULT_CHORUS_SEND: f32 = 0.0;
+const DEFAULT_REVERB_WET: f32 = 40.0 / 127.0;
+const DEFAULT_CHORUS_WET: f32 = 0.0;
+const EDITOR_WIDTH: u32 = 440;
+const EDITOR_HEIGHT: u32 = 304;
 
 /// Persisted state for the built-in SoundFont instrument.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,15 +49,15 @@ pub struct SoundfontProcessorState {
     /// Maximum voice count for the synthesizer instance.
     #[serde(default = "default_maximum_polyphony")]
     pub maximum_polyphony: u16,
-    /// Linear master output volume.
-    #[serde(default = "default_master_volume")]
-    pub master_volume: f32,
-    /// MIDI reverb send amount.
-    #[serde(default = "default_reverb_send")]
-    pub reverb_send: f32,
-    /// MIDI chorus send amount.
-    #[serde(default = "default_chorus_send")]
-    pub chorus_send: f32,
+    /// Linear output gain.
+    #[serde(default = "default_output_gain")]
+    pub output_gain: f32,
+    /// Reverb wet mix amount.
+    #[serde(default = "default_reverb_wet")]
+    pub reverb_wet: f32,
+    /// Chorus wet mix amount.
+    #[serde(default = "default_chorus_wet")]
+    pub chorus_wet: f32,
 }
 
 impl Default for SoundfontProcessorState {
@@ -63,9 +68,9 @@ impl Default for SoundfontProcessorState {
             program: 0,
             follow_midi: false,
             maximum_polyphony: DEFAULT_MAXIMUM_POLYPHONY,
-            master_volume: DEFAULT_MASTER_VOLUME,
-            reverb_send: DEFAULT_REVERB_SEND,
-            chorus_send: DEFAULT_CHORUS_SEND,
+            output_gain: DEFAULT_OUTPUT_GAIN,
+            reverb_wet: DEFAULT_REVERB_WET,
+            chorus_wet: DEFAULT_CHORUS_WET,
         }
     }
 }
@@ -74,16 +79,16 @@ const fn default_maximum_polyphony() -> u16 {
     DEFAULT_MAXIMUM_POLYPHONY
 }
 
-const fn default_master_volume() -> f32 {
-    DEFAULT_MASTER_VOLUME
+const fn default_output_gain() -> f32 {
+    DEFAULT_OUTPUT_GAIN
 }
 
-const fn default_reverb_send() -> f32 {
-    DEFAULT_REVERB_SEND
+const fn default_reverb_wet() -> f32 {
+    DEFAULT_REVERB_WET
 }
 
-const fn default_chorus_send() -> f32 {
-    DEFAULT_CHORUS_SEND
+const fn default_chorus_wet() -> f32 {
+    DEFAULT_CHORUS_WET
 }
 
 /// Decodes typed SoundFont state from the processor state blob stored in slots.
@@ -157,9 +162,9 @@ struct SharedSoundfontStateInner {
     program: AtomicU32,
     follow_midi: AtomicBool,
     maximum_polyphony: AtomicU32,
-    master_volume_bits: AtomicU32,
-    reverb_send_bits: AtomicU32,
-    chorus_send_bits: AtomicU32,
+    output_gain_bits: AtomicU32,
+    reverb_wet_bits: AtomicU32,
+    chorus_wet_bits: AtomicU32,
     revision: AtomicU32,
 }
 
@@ -173,9 +178,9 @@ impl SharedSoundfontState {
                 program: AtomicU32::new(u32::from(state.program)),
                 follow_midi: AtomicBool::new(state.follow_midi),
                 maximum_polyphony: AtomicU32::new(u32::from(state.maximum_polyphony)),
-                master_volume_bits: AtomicU32::new(state.master_volume.to_bits()),
-                reverb_send_bits: AtomicU32::new(state.reverb_send.to_bits()),
-                chorus_send_bits: AtomicU32::new(state.chorus_send.to_bits()),
+                output_gain_bits: AtomicU32::new(state.output_gain.to_bits()),
+                reverb_wet_bits: AtomicU32::new(state.reverb_wet.to_bits()),
+                chorus_wet_bits: AtomicU32::new(state.chorus_wet.to_bits()),
                 revision: AtomicU32::new(1),
             }),
         }
@@ -197,14 +202,14 @@ impl SharedSoundfontState {
             .maximum_polyphony
             .store(u32::from(state.maximum_polyphony), Ordering::Relaxed);
         self.inner
-            .master_volume_bits
-            .store(state.master_volume.to_bits(), Ordering::Relaxed);
+            .output_gain_bits
+            .store(state.output_gain.to_bits(), Ordering::Relaxed);
         self.inner
-            .reverb_send_bits
-            .store(state.reverb_send.to_bits(), Ordering::Relaxed);
+            .reverb_wet_bits
+            .store(state.reverb_wet.to_bits(), Ordering::Relaxed);
         self.inner
-            .chorus_send_bits
-            .store(state.chorus_send.to_bits(), Ordering::Relaxed);
+            .chorus_wet_bits
+            .store(state.chorus_wet.to_bits(), Ordering::Relaxed);
         self.inner.revision.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -224,11 +229,9 @@ impl SharedSoundfontState {
                 program: self.inner.program.load(Ordering::Relaxed) as u8,
                 follow_midi: self.inner.follow_midi.load(Ordering::Relaxed),
                 maximum_polyphony: self.inner.maximum_polyphony.load(Ordering::Relaxed) as u16,
-                master_volume: f32::from_bits(
-                    self.inner.master_volume_bits.load(Ordering::Relaxed),
-                ),
-                reverb_send: f32::from_bits(self.inner.reverb_send_bits.load(Ordering::Relaxed)),
-                chorus_send: f32::from_bits(self.inner.chorus_send_bits.load(Ordering::Relaxed)),
+                output_gain: f32::from_bits(self.inner.output_gain_bits.load(Ordering::Relaxed)),
+                reverb_wet: f32::from_bits(self.inner.reverb_wet_bits.load(Ordering::Relaxed)),
+                chorus_wet: f32::from_bits(self.inner.chorus_wet_bits.load(Ordering::Relaxed)),
             },
             self.inner.revision.load(Ordering::Relaxed),
         )
@@ -261,19 +264,19 @@ const SOUNDFONT_PARAMS: &[ParameterDescriptor] = &[
         default: 0.225_806_44,
     },
     ParameterDescriptor {
-        id: "master_volume",
-        name: "Master Volume",
-        default: DEFAULT_MASTER_VOLUME,
+        id: "output_gain",
+        name: "Output Gain",
+        default: DEFAULT_OUTPUT_GAIN_NORMALIZED,
     },
     ParameterDescriptor {
-        id: "reverb_send",
-        name: "Reverb Send",
-        default: 40.0 / MIDI_CONTROL_MAX,
+        id: "reverb_wet",
+        name: "Reverb Dry/Wet",
+        default: DEFAULT_REVERB_WET,
     },
     ParameterDescriptor {
-        id: "chorus_send",
-        name: "Chorus Send",
-        default: 0.0,
+        id: "chorus_wet",
+        name: "Chorus Dry/Wet",
+        default: DEFAULT_CHORUS_WET,
     },
 ];
 
@@ -282,12 +285,12 @@ pub(crate) const DESCRIPTOR: &ProcessorDescriptor = &ProcessorDescriptor {
     params: SOUNDFONT_PARAMS,
     editor: Some(EditorDescriptor {
         default_size: EditorSize {
-            width: 440,
-            height: 424,
+            width: EDITOR_WIDTH,
+            height: EDITOR_HEIGHT,
         },
         min_size: Some(EditorSize {
-            width: 360,
-            height: 400,
+            width: EDITOR_WIDTH,
+            height: EDITOR_HEIGHT,
         }),
         resizable: false,
     }),
@@ -353,9 +356,9 @@ impl Controller for SoundfontController {
             "program" => Ok(f32::from(state.program) / f32::from(MIDI_PROGRAM_MAX)),
             "follow_midi" => Ok(if state.follow_midi { 1.0 } else { 0.0 }),
             "maximum_polyphony" => Ok(normalize_polyphony(state.maximum_polyphony)),
-            "master_volume" => Ok(state.master_volume.clamp(0.0, 1.0)),
-            "reverb_send" => Ok(state.reverb_send.clamp(0.0, 1.0)),
-            "chorus_send" => Ok(state.chorus_send.clamp(0.0, 1.0)),
+            "output_gain" => Ok(normalize_output_gain(state.output_gain)),
+            "reverb_wet" => Ok(state.reverb_wet.clamp(0.0, 1.0)),
+            "chorus_wet" => Ok(state.chorus_wet.clamp(0.0, 1.0)),
             _ => Err(ControllerError::UnknownParameter(id.to_string())),
         }
     }
@@ -375,9 +378,9 @@ impl Controller for SoundfontController {
             "maximum_polyphony" => {
                 state.maximum_polyphony = denormalize_polyphony(normalized);
             }
-            "master_volume" => state.master_volume = normalized.clamp(0.0, 1.0),
-            "reverb_send" => state.reverb_send = normalized.clamp(0.0, 1.0),
-            "chorus_send" => state.chorus_send = normalized.clamp(0.0, 1.0),
+            "output_gain" => state.output_gain = denormalize_output_gain(normalized),
+            "reverb_wet" => state.reverb_wet = normalized.clamp(0.0, 1.0),
+            "chorus_wet" => state.chorus_wet = normalized.clamp(0.0, 1.0),
             _ => return Err(ControllerError::UnknownParameter(id.to_string())),
         }
         self.shared.apply_state(state)
@@ -432,8 +435,8 @@ impl EditorSession for SoundfontEditorSession {
             parent.window,
             EguiWindowOptions {
                 title: "SoundFont".to_string(),
-                width: 440.0,
-                height: 360.0,
+                width: f64::from(EDITOR_WIDTH),
+                height: f64::from(EDITOR_HEIGHT),
             },
             move || SoundfontEditorApp { shared },
         )
@@ -492,13 +495,10 @@ impl EguiApp for SoundfontEditorApp {
                 .collect::<Vec<_>>();
             let selected_soundfont =
                 selected_soundfont_index(&self.shared.catalog, &snapshot.soundfont_id);
-            let preset_names = preset_names(&self.shared.catalog, selected_soundfont);
-            let selected_preset = selected_preset_index(
-                &self.shared.catalog,
-                selected_soundfont,
-                snapshot.bank,
-                snapshot.program,
-            );
+            let banks = bank_numbers(&self.shared.catalog, selected_soundfont);
+            let bank_index = selected_bank_index(&banks, snapshot.bank);
+            let programs = program_choices(&self.shared.catalog, selected_soundfont, snapshot.bank);
+            let program_index = selected_program_index(&programs, snapshot.program);
 
             editor_row(ui, "SoundFont", |ui| {
                 let selected = soundfont_names
@@ -519,10 +519,29 @@ impl EguiApp for SoundfontEditorApp {
                     });
             });
 
+            editor_row(ui, "Bank", |ui| {
+                let selected = banks
+                    .get(bank_index)
+                    .map_or_else(|| "No banks".to_string(), |bank| format!("Bank {bank}"));
+                egui::ComboBox::from_id_salt("soundfont-bank")
+                    .selected_text(selected)
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        for (index, bank) in banks.iter().enumerate() {
+                            if ui
+                                .selectable_label(index == bank_index, format!("Bank {bank}"))
+                                .clicked()
+                            {
+                                self.select_bank(*bank);
+                            }
+                        }
+                    });
+            });
+
             editor_row(ui, "Program", |ui| {
-                let selected = preset_names
-                    .get(selected_preset)
-                    .map_or("No programs", String::as_str);
+                let selected = programs
+                    .get(program_index)
+                    .map_or("No programs", |program| program.label.as_str());
                 egui::ComboBox::from_id_salt("soundfont-program")
                     .selected_text(selected)
                     .width(ui.available_width())
@@ -530,12 +549,12 @@ impl EguiApp for SoundfontEditorApp {
                         egui::ScrollArea::vertical()
                             .max_height(224.0)
                             .show(ui, |ui| {
-                                for (index, name) in preset_names.iter().enumerate() {
+                                for (index, program) in programs.iter().enumerate() {
                                     if ui
-                                        .selectable_label(index == selected_preset, name)
+                                        .selectable_label(index == program_index, &program.label)
                                         .clicked()
                                     {
-                                        self.select_preset(index);
+                                        self.select_program(program.program);
                                         ui.close();
                                     }
                                 }
@@ -571,45 +590,47 @@ impl EguiApp for SoundfontEditorApp {
                 }
             });
 
-            editor_row(ui, "Master Volume", |ui| {
-                let mut volume = snapshot.master_volume.clamp(0.0, 1.0);
+            editor_row(ui, "Output Gain", |ui| {
+                let mut gain_db = output_gain_to_db(snapshot.output_gain);
                 ui.horizontal(|ui| {
-                    let slider = egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false);
-                    let width = (ui.available_width() - 56.0).max(80.0);
+                    let slider =
+                        egui::Slider::new(&mut gain_db, MIN_OUTPUT_GAIN_DB..=MAX_OUTPUT_GAIN_DB)
+                            .show_value(false);
+                    let width = (ui.available_width() - 72.0).max(80.0);
                     if ui.add_sized([width, 20.0], slider).changed() {
                         let mut state = snapshot.clone();
-                        state.master_volume = volume;
+                        state.output_gain = output_gain_from_db(gain_db);
                         self.apply_state(state);
                     }
-                    ui.label(format!("{:.0}%", volume * 100.0));
+                    ui.label(format_output_gain_db(gain_db));
                 });
             });
 
-            editor_row(ui, "Reverb Send", |ui| {
-                let mut reverb_send = snapshot.reverb_send.clamp(0.0, 1.0);
+            editor_row(ui, "Reverb Dry/Wet", |ui| {
+                let mut reverb_wet = snapshot.reverb_wet.clamp(0.0, 1.0);
                 ui.horizontal(|ui| {
-                    let slider = egui::Slider::new(&mut reverb_send, 0.0..=1.0).show_value(false);
+                    let slider = egui::Slider::new(&mut reverb_wet, 0.0..=1.0).show_value(false);
                     let width = (ui.available_width() - 56.0).max(80.0);
                     if ui.add_sized([width, 20.0], slider).changed() {
                         let mut state = snapshot.clone();
-                        state.reverb_send = reverb_send;
+                        state.reverb_wet = reverb_wet;
                         self.apply_state(state);
                     }
-                    ui.label(format!("{:.0}%", reverb_send * 100.0));
+                    ui.label(format!("{:.0}%", reverb_wet * 100.0));
                 });
             });
 
-            editor_row(ui, "Chorus Send", |ui| {
-                let mut chorus_send = snapshot.chorus_send.clamp(0.0, 1.0);
+            editor_row(ui, "Chorus Dry/Wet", |ui| {
+                let mut chorus_wet = snapshot.chorus_wet.clamp(0.0, 1.0);
                 ui.horizontal(|ui| {
-                    let slider = egui::Slider::new(&mut chorus_send, 0.0..=1.0).show_value(false);
+                    let slider = egui::Slider::new(&mut chorus_wet, 0.0..=1.0).show_value(false);
                     let width = (ui.available_width() - 56.0).max(80.0);
                     if ui.add_sized([width, 20.0], slider).changed() {
                         let mut state = snapshot.clone();
-                        state.chorus_send = chorus_send;
+                        state.chorus_wet = chorus_wet;
                         self.apply_state(state);
                     }
-                    ui.label(format!("{:.0}%", chorus_send * 100.0));
+                    ui.label(format!("{:.0}%", chorus_wet * 100.0));
                 });
             });
         });
@@ -636,14 +657,40 @@ impl SoundfontEditorApp {
         self.apply_state(state);
     }
 
-    fn select_preset(&self, index: usize) {
+    fn select_bank(&self, bank: u16) {
         let (snapshot, _) = self.shared.state.snapshot();
         let soundfont_index =
             selected_soundfont_index(&self.shared.catalog, &snapshot.soundfont_id);
         let Some(entry) = self.shared.catalog.get(soundfont_index) else {
             return;
         };
-        let Some(preset) = entry.presets.get(index) else {
+        let Some(preset) = entry
+            .presets
+            .iter()
+            .find(|preset| preset.bank == bank && preset.program == snapshot.program)
+            .or_else(|| entry.presets.iter().find(|preset| preset.bank == bank))
+        else {
+            return;
+        };
+
+        let mut state = snapshot;
+        state.bank = preset.bank;
+        state.program = preset.program;
+        self.apply_state(state);
+    }
+
+    fn select_program(&self, program: u8) {
+        let (snapshot, _) = self.shared.state.snapshot();
+        let soundfont_index =
+            selected_soundfont_index(&self.shared.catalog, &snapshot.soundfont_id);
+        let Some(entry) = self.shared.catalog.get(soundfont_index) else {
+            return;
+        };
+        let Some(preset) = entry
+            .presets
+            .iter()
+            .find(|preset| preset.bank == snapshot.bank && preset.program == program)
+        else {
             return;
         };
 
@@ -666,20 +713,54 @@ where
 {
     ui.horizontal(|ui| {
         ui.set_width(ui.available_width());
-        ui.add_sized([104.0, 20.0], egui::Label::new(label));
+        ui.allocate_ui_with_layout(
+            egui::vec2(104.0, 20.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(label);
+            },
+        );
         ui.add_space(12.0);
         content(ui);
     });
 }
 
-fn preset_names(catalog: &[SoundfontCatalogEntry], soundfont_index: usize) -> Vec<String> {
+struct ProgramChoice {
+    program: u8,
+    label: String,
+}
+
+fn bank_numbers(catalog: &[SoundfontCatalogEntry], soundfont_index: usize) -> Vec<u16> {
+    catalog
+        .get(soundfont_index)
+        .map(|entry| {
+            let mut banks = entry
+                .presets
+                .iter()
+                .map(|preset| preset.bank)
+                .collect::<Vec<_>>();
+            banks.dedup();
+            banks
+        })
+        .unwrap_or_default()
+}
+
+fn program_choices(
+    catalog: &[SoundfontCatalogEntry],
+    soundfont_index: usize,
+    bank: u16,
+) -> Vec<ProgramChoice> {
     catalog
         .get(soundfont_index)
         .map(|entry| {
             entry
                 .presets
                 .iter()
-                .map(|preset| format!("{:03}:{:03} {}", preset.bank, preset.program, preset.name))
+                .filter(|preset| preset.bank == bank)
+                .map(|preset| ProgramChoice {
+                    program: preset.program,
+                    label: format!("{:03} {}", preset.program, preset.name),
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -692,20 +773,17 @@ fn selected_soundfont_index(catalog: &[SoundfontCatalogEntry], soundfont_id: &st
         .unwrap_or(0)
 }
 
-fn selected_preset_index(
-    catalog: &[SoundfontCatalogEntry],
-    soundfont_index: usize,
-    bank: u16,
-    program: u8,
-) -> usize {
-    catalog
-        .get(soundfont_index)
-        .and_then(|entry| {
-            entry
-                .presets
-                .iter()
-                .position(|preset| preset.bank == bank && preset.program == program)
-        })
+fn selected_bank_index(banks: &[u16], bank: u16) -> usize {
+    banks
+        .iter()
+        .position(|candidate| *candidate == bank)
+        .unwrap_or(0)
+}
+
+fn selected_program_index(programs: &[ProgramChoice], program: u8) -> usize {
+    programs
+        .iter()
+        .position(|candidate| candidate.program == program)
         .unwrap_or(0)
 }
 
@@ -781,7 +859,7 @@ impl SoundfontProcessor {
         shared_state: Option<SharedSoundfontState>,
     ) -> Result<Self, SoundfontSynthError> {
         let mut synthesizer = build_synthesizer(soundfont, settings, &state)?;
-        synthesizer.set_master_volume(state.master_volume.clamp(0.0, 1.0));
+        synthesizer.set_master_volume(state.output_gain);
         let applied_shared_revision = shared_state
             .as_ref()
             .map_or(0, |shared| shared.snapshot().1);
@@ -820,25 +898,24 @@ impl SoundfontProcessor {
             i32::from(self.state.program),
             0,
         );
-        self.synthesizer
-            .set_master_volume(self.state.master_volume.clamp(0.0, 1.0));
-        self.apply_effect_sends();
+        self.synthesizer.set_master_volume(self.state.output_gain);
+        self.apply_effect_mix();
         self.needs_render = false;
         self.silent_blocks = 0;
     }
 
-    fn apply_effect_sends(&mut self) {
+    fn apply_effect_mix(&mut self) {
         self.synthesizer.process_midi_message(
             Self::TRACK_CHANNEL,
             0xB0,
-            MIDI_CC_REVERB_SEND,
-            midi_control_value(self.state.reverb_send),
+            MIDI_CC_REVERB_WET,
+            midi_control_value(self.state.reverb_wet),
         );
         self.synthesizer.process_midi_message(
             Self::TRACK_CHANNEL,
             0xB0,
-            MIDI_CC_CHORUS_SEND,
-            midi_control_value(self.state.chorus_send),
+            MIDI_CC_CHORUS_WET,
+            midi_control_value(self.state.chorus_wet),
         );
     }
 
@@ -865,9 +942,9 @@ impl SoundfontProcessor {
             || state.maximum_polyphony != self.state.maximum_polyphony;
         let program_changed = state.bank != self.state.bank || state.program != self.state.program;
         let follow_changed = state.follow_midi != self.state.follow_midi;
-        let volume_changed = (state.master_volume - self.state.master_volume).abs() > f32::EPSILON;
-        let sends_changed = (state.reverb_send - self.state.reverb_send).abs() > f32::EPSILON
-            || (state.chorus_send - self.state.chorus_send).abs() > f32::EPSILON;
+        let gain_changed = (state.output_gain - self.state.output_gain).abs() > f32::EPSILON;
+        let mix_changed = (state.reverb_wet - self.state.reverb_wet).abs() > f32::EPSILON
+            || (state.chorus_wet - self.state.chorus_wet).abs() > f32::EPSILON;
         self.state = state;
         self.applied_shared_revision = revision;
         if rebuild_needed {
@@ -878,12 +955,11 @@ impl SoundfontProcessor {
             self.apply_program();
             return;
         }
-        if volume_changed {
-            self.synthesizer
-                .set_master_volume(self.state.master_volume.clamp(0.0, 1.0));
+        if gain_changed {
+            self.synthesizer.set_master_volume(self.state.output_gain);
         }
-        if sends_changed {
-            self.apply_effect_sends();
+        if mix_changed {
+            self.apply_effect_mix();
         }
     }
 }
@@ -915,19 +991,19 @@ impl Processor for SoundfontProcessor {
                 self.rebuild_synth();
                 true
             }
-            "master_volume" => {
-                self.state.master_volume = normalized.clamp(0.0, 1.0);
-                self.synthesizer.set_master_volume(self.state.master_volume);
+            "output_gain" => {
+                self.state.output_gain = denormalize_output_gain(normalized);
+                self.synthesizer.set_master_volume(self.state.output_gain);
                 true
             }
-            "reverb_send" => {
-                self.state.reverb_send = normalized.clamp(0.0, 1.0);
-                self.apply_effect_sends();
+            "reverb_wet" => {
+                self.state.reverb_wet = normalized.clamp(0.0, 1.0);
+                self.apply_effect_mix();
                 true
             }
-            "chorus_send" => {
-                self.state.chorus_send = normalized.clamp(0.0, 1.0);
-                self.apply_effect_sends();
+            "chorus_wet" => {
+                self.state.chorus_wet = normalized.clamp(0.0, 1.0);
+                self.apply_effect_mix();
                 true
             }
             _ => false,
@@ -940,9 +1016,9 @@ impl Processor for SoundfontProcessor {
             "program" => Some(f32::from(self.state.program) / f32::from(MIDI_PROGRAM_MAX)),
             "follow_midi" => Some(if self.state.follow_midi { 1.0 } else { 0.0 }),
             "maximum_polyphony" => Some(normalize_polyphony(self.state.maximum_polyphony)),
-            "master_volume" => Some(self.state.master_volume.clamp(0.0, 1.0)),
-            "reverb_send" => Some(self.state.reverb_send.clamp(0.0, 1.0)),
-            "chorus_send" => Some(self.state.chorus_send.clamp(0.0, 1.0)),
+            "output_gain" => Some(normalize_output_gain(self.state.output_gain)),
+            "reverb_wet" => Some(self.state.reverb_wet.clamp(0.0, 1.0)),
+            "chorus_wet" => Some(self.state.chorus_wet.clamp(0.0, 1.0)),
             _ => None,
         }
     }
@@ -1091,6 +1167,32 @@ fn midi_control_value(normalized: f32) -> i32 {
     (normalized.clamp(0.0, 1.0) * MIDI_CONTROL_MAX).round() as i32
 }
 
+fn output_gain_to_db(linear: f32) -> f32 {
+    (20.0 * linear.max(0.0).log10()).clamp(MIN_OUTPUT_GAIN_DB, MAX_OUTPUT_GAIN_DB)
+}
+
+fn output_gain_from_db(db: f32) -> f32 {
+    10.0_f32.powf(db.clamp(MIN_OUTPUT_GAIN_DB, MAX_OUTPUT_GAIN_DB) / 20.0)
+}
+
+fn normalize_output_gain(linear: f32) -> f32 {
+    (output_gain_to_db(linear) - MIN_OUTPUT_GAIN_DB) / (MAX_OUTPUT_GAIN_DB - MIN_OUTPUT_GAIN_DB)
+}
+
+fn denormalize_output_gain(normalized: f32) -> f32 {
+    let db =
+        MIN_OUTPUT_GAIN_DB + normalized.clamp(0.0, 1.0) * (MAX_OUTPUT_GAIN_DB - MIN_OUTPUT_GAIN_DB);
+    output_gain_from_db(db)
+}
+
+fn format_output_gain_db(db: f32) -> String {
+    if db > 0.0 {
+        format!("+{db:.1} dB")
+    } else {
+        format!("{db:.1} dB")
+    }
+}
+
 fn build_synthesizer(
     soundfont: &Arc<SoundFont>,
     settings: SoundfontSynthSettings,
@@ -1144,7 +1246,7 @@ mod tests {
 
     use super::{SoundfontProcessor, SoundfontProcessorState, create_runtime, encode_state};
     use lilypalooza_audio::instrument::{
-        InstrumentProcessor, InstrumentRuntimeContext, MidiEvent, Processor,
+        EditorSize, InstrumentProcessor, InstrumentRuntimeContext, MidiEvent, Processor,
     };
     use lilypalooza_audio::soundfont::{
         LoadedSoundfont, SoundfontResource, SoundfontSynthSettings,
@@ -1423,7 +1525,7 @@ mod tests {
                 program: 40,
                 follow_midi: true,
                 maximum_polyphony: 64,
-                master_volume: 0.5,
+                output_gain: 0.5,
                 ..SoundfontProcessorState::default()
             },
         )
@@ -1437,7 +1539,7 @@ mod tests {
                 program: 40,
                 follow_midi: true,
                 maximum_polyphony: 64,
-                master_volume: 0.5,
+                output_gain: 0.5,
                 ..SoundfontProcessorState::default()
             },
         )
@@ -1485,31 +1587,74 @@ mod tests {
     }
 
     #[test]
-    fn soundfont_send_params_roundtrip_and_enable_internal_effects() {
+    fn soundfont_wet_params_roundtrip_and_enable_internal_effects() {
         let loaded =
             LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
         let mut processor = SoundfontProcessor::new(
             &Arc::clone(&loaded.soundfont),
             SoundfontSynthSettings::new(44_100, 64),
             SoundfontProcessorState {
-                reverb_send: 0.25,
-                chorus_send: 0.75,
+                reverb_wet: 0.25,
+                chorus_wet: 0.75,
                 ..SoundfontProcessorState::default()
             },
         )
         .expect("processor should initialize");
 
         assert!(processor.synthesizer.get_enable_reverb_and_chorus());
-        assert_eq!(processor.get_param("reverb_send"), Some(0.25));
-        assert_eq!(processor.get_param("chorus_send"), Some(0.75));
+        assert_eq!(processor.get_param("reverb_wet"), Some(0.25));
+        assert_eq!(processor.get_param("chorus_wet"), Some(0.75));
 
-        assert!(processor.set_param("reverb_send", 0.5));
-        assert!(processor.set_param("chorus_send", 0.125));
+        assert!(processor.set_param("reverb_wet", 0.5));
+        assert!(processor.set_param("chorus_wet", 0.125));
         let decoded =
             SoundfontProcessor::decode_state(&processor.save_state()).expect("state should decode");
 
-        assert_eq!(decoded.reverb_send, 0.5);
-        assert_eq!(decoded.chorus_send, 0.125);
+        assert_eq!(decoded.reverb_wet, 0.5);
+        assert_eq!(decoded.chorus_wet, 0.125);
+    }
+
+    #[test]
+    fn soundfont_output_gain_param_uses_trim_db_scale() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut processor = SoundfontProcessor::new(
+            &Arc::clone(&loaded.soundfont),
+            SoundfontSynthSettings::new(44_100, 64),
+            SoundfontProcessorState::default(),
+        )
+        .expect("processor should initialize");
+
+        assert_eq!(
+            super::DESCRIPTOR
+                .params
+                .iter()
+                .find(|param| param.id == "output_gain")
+                .expect("output gain param should exist")
+                .default,
+            2.0 / 3.0
+        );
+        assert_eq!(processor.get_param("output_gain"), Some(2.0 / 3.0));
+
+        assert!(processor.set_param("output_gain", 1.0));
+        assert_eq!(
+            processor.state.output_gain,
+            super::output_gain_from_db(12.0)
+        );
+
+        assert!(processor.set_param("output_gain", 0.0));
+        assert!((processor.state.output_gain - super::output_gain_from_db(-24.0)).abs() < 1.0e-6);
+
+        assert!(processor.set_param("output_gain", 0.5));
+        let expected = super::output_gain_from_db(-6.0);
+        assert!((processor.state.output_gain - expected).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn soundfont_output_gain_db_format_shows_signed_gain() {
+        assert_eq!(super::format_output_gain_db(12.0), "+12.0 dB");
+        assert_eq!(super::format_output_gain_db(-6.0), "-6.0 dB");
+        assert_eq!(super::format_output_gain_db(0.0), "0.0 dB");
     }
 
     #[test]
@@ -1549,6 +1694,22 @@ mod tests {
             super::descriptor().editor.map(|editor| editor.resizable),
             Some(false)
         );
+    }
+
+    #[test]
+    fn soundfont_editor_uses_compact_fixed_size() {
+        let editor = super::descriptor()
+            .editor
+            .expect("soundfont editor descriptor should exist");
+
+        assert_eq!(
+            editor.default_size,
+            EditorSize {
+                width: super::EDITOR_WIDTH,
+                height: super::EDITOR_HEIGHT,
+            }
+        );
+        assert_eq!(editor.min_size, Some(editor.default_size));
     }
 
     #[test]

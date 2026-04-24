@@ -7,7 +7,7 @@ use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBezelStyle, NSButton, NSButtonType, NSColor,
     NSTextField, NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
-    NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode,
+    NSWindowStyleMask, NSWindowTabbingMode,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::CALayer;
@@ -33,7 +33,6 @@ pub fn prepare_process() -> Result<(), Error> {
 
 pub fn install_editor_host(
     host: &WindowSnapshot,
-    owner: Option<&WindowSnapshot>,
     options: &HostOptions,
 ) -> Result<InstalledHost, Error> {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -48,10 +47,6 @@ pub fn install_editor_host(
         .ok_or_else(|| Error::Message("host window is missing".to_string()))?;
 
     configure_window(&host_window, options, mtm);
-
-    if let Some(owner) = owner {
-        attach_owner_window(owner, &host_window)?;
-    }
 
     let requested_bounds = host_view.bounds();
     let layout = host_layout(
@@ -195,21 +190,6 @@ fn resize_host_window(window: &NSWindow, width: f64, height: f64) {
     frame.origin.y -= delta_height;
     frame.size = NSSize::new(width, height);
     window.setFrame_display(frame, false);
-}
-
-fn attach_owner_window(owner: &WindowSnapshot, child_window: &NSWindow) -> Result<(), Error> {
-    let owner_view = ns_view_from_snapshot(owner)?;
-    let owner_window = owner_view
-        .window()
-        .ok_or_else(|| Error::Message("owner window is missing".to_string()))?;
-
-    // SAFETY: Both windows are live AppKit windows on the main thread. AppKit requires
-    // `addChildWindow:ordered:` to run on the main thread and the child is owned by the current
-    // process.
-    unsafe {
-        owner_window.addChildWindow_ordered(child_window, NSWindowOrderingMode::Above);
-    }
-    Ok(())
 }
 
 fn build_titlebar(
