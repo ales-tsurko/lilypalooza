@@ -4,9 +4,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::engine::AudioEngineSettings;
 use crate::instrument::metronome_synth::{MetronomeProcessor, SharedMetronomeState};
-use crate::instrument::soundfont_synth::{
-    LoadedSoundfont, SoundfontSynthError, SoundfontSynthSettings,
-};
 use crate::instrument::{
     Controller, EffectProcessorNode, EffectRuntimeHandle, InstrumentProcessor,
     InstrumentProcessorNode, InstrumentRuntimeContext, InstrumentRuntimeHandle,
@@ -19,6 +16,9 @@ use crate::mixer::{
     BusId, BusSend, ChannelMeterSnapshot, MixerError, MixerMeterSnapshot, MixerMeterSnapshotWindow,
     MixerState, STRIP_METER_MAX_DB, STRIP_METER_MIN_DB, SlotAddress, StripMeterSnapshot, Track,
     TrackId, TrackRoute,
+};
+use crate::soundfont::{
+    LoadedSoundfont, SoundfontResource, SoundfontSynthError, SoundfontSynthSettings,
 };
 use knyst::graph::GenOrGraph;
 use knyst::graph::connection::InputBundle;
@@ -472,7 +472,7 @@ impl MixerRuntime {
             }
             runtime.tracks = tracks;
             runtime.sync_all_routing(context, commands, mixer)?;
-            runtime.sync_all_levels(commands, mixer);
+            runtime.sync_all_levels(mixer);
             Ok(runtime)
         })
     }
@@ -500,30 +500,20 @@ impl MixerRuntime {
         Ok(())
     }
 
-    pub(crate) fn sync_tracks_for_soundfont(
+    pub(crate) fn sync_tracks_after_soundfonts_changed(
         &mut self,
         context: &KnystContext,
         commands: &mut MultiThreadedKnystCommands,
         mixer: &MixerState,
-        soundfont_id: &str,
     ) -> Result<(), MixerRuntimeError> {
         for (track_id, track) in mixer.tracks_with_ids() {
-            let Some(slot) = track.instrument_slot() else {
+            if track.instrument_slot().is_none() {
                 continue;
-            };
-            let Ok(Some(state)) = slot.decode_built_in(
-                crate::instrument::BUILTIN_SOUNDFONT_ID,
-                crate::instrument::soundfont_synth::decode_state,
-            ) else {
-                continue;
-            };
-            let track_soundfont_id = state.soundfont_id;
-            if track_soundfont_id == soundfont_id
-                && matches!(
-                    self.sync_track_instrument(context, commands, mixer, track_id)?,
-                    TrackInstrumentSync::GraphChanged
-                )
-            {
+            }
+            if matches!(
+                self.sync_track_instrument(context, commands, mixer, track_id)?,
+                TrackInstrumentSync::GraphChanged
+            ) {
                 self.sync_track_routing(context, commands, mixer, track_id)?;
             }
         }
@@ -545,7 +535,7 @@ impl MixerRuntime {
             );
         });
         self.sync_bus_routing(context, commands, mixer, bus_id)?;
-        self.sync_all_levels(commands, mixer);
+        self.sync_all_levels(mixer);
         Ok(())
     }
 
@@ -559,7 +549,7 @@ impl MixerRuntime {
             runtime.free();
         }
         self.sync_all_routing_no_create(commands, mixer)?;
-        self.sync_all_levels(commands, mixer);
+        self.sync_all_levels(mixer);
         Ok(())
     }
 
@@ -675,7 +665,6 @@ impl MixerRuntime {
 
     pub(crate) fn sync_track_strip(
         &mut self,
-        commands: &mut MultiThreadedKnystCommands,
         mixer: &MixerState,
         track_id: TrackId,
     ) -> Result<(), MixerRuntimeError> {
@@ -686,14 +675,13 @@ impl MixerRuntime {
             .get_mut(track_id.index())
             .ok_or(MixerError::InvalidTrackId(track_id))?;
         if let Some(runtime) = runtime.as_mut() {
-            runtime.apply_strip(commands, track, amplitude);
+            runtime.apply_strip(track, amplitude);
         }
         Ok(())
     }
 
     pub(crate) fn sync_bus_strip(
         &mut self,
-        commands: &mut MultiThreadedKnystCommands,
         mixer: &MixerState,
         bus_id: BusId,
     ) -> Result<(), MixerRuntimeError> {
@@ -703,7 +691,7 @@ impl MixerRuntime {
             .buses
             .get_mut(&bus_id)
             .ok_or(MixerError::InvalidBusId(bus_id))?;
-        runtime.apply_strip(commands, bus, amplitude);
+        runtime.apply_strip(bus, amplitude);
         Ok(())
     }
 
@@ -797,7 +785,7 @@ impl MixerRuntime {
         for bus_id in bus_ids {
             self.sync_bus_routing(context, commands, mixer, bus_id)?;
         }
-        self.sync_all_levels(commands, mixer);
+        self.sync_all_levels(mixer);
         Ok(())
     }
 
@@ -836,13 +824,8 @@ impl MixerRuntime {
         Ok(())
     }
 
-    pub(crate) fn sync_all_levels(
-        &mut self,
-        commands: &mut MultiThreadedKnystCommands,
-        mixer: &MixerState,
-    ) {
+    pub(crate) fn sync_all_levels(&mut self, mixer: &MixerState) {
         self.master.set_level(
-            commands,
             db_to_amplitude(mixer.master().state.gain_db),
             mixer.master().state.pan,
         );
@@ -857,12 +840,12 @@ impl MixerRuntime {
             .zip(mixer.tracks().iter().zip(track_amplitudes.into_iter()))
         {
             if let Some(runtime) = runtime.as_mut() {
-                runtime.apply_strip(commands, track, amplitude);
+                runtime.apply_strip(track, amplitude);
             }
         }
         for (bus_id, bus) in mixer.buses_with_ids() {
             if let Some(runtime) = self.buses.get_mut(&bus_id) {
-                runtime.apply_strip(commands, bus, bus_effective_amplitude(bus));
+                runtime.apply_strip(bus, bus_effective_amplitude(bus));
             }
         }
     }
@@ -950,8 +933,7 @@ impl MasterRuntime {
         node_id_of(self.input)
     }
 
-    fn set_level(&mut self, commands: &mut MultiThreadedKnystCommands, gain: f32, pan: f32) {
-        let _ = commands;
+    fn set_level(&mut self, gain: f32, pan: f32) {
         self.level.set(gain, pan);
     }
 
@@ -1008,7 +990,7 @@ struct TrackRuntimeBuildContext<'a> {
     mixer: &'a MixerState,
     master_input: NodeId,
     bus_inputs: &'a HashMap<BusId, NodeId>,
-    soundfont_resources: &'a [crate::instrument::soundfont_synth::SoundfontResource],
+    soundfont_resources: &'a [SoundfontResource],
     soundfonts: &'a HashMap<String, LoadedSoundfont>,
     soundfont_settings: SoundfontSynthSettings,
 }
@@ -1111,7 +1093,7 @@ impl TrackRuntime {
         context: &KnystContext,
         _commands: &mut MultiThreadedKnystCommands,
         track: &Track,
-        soundfont_resources: &[crate::instrument::soundfont_synth::SoundfontResource],
+        soundfont_resources: &[SoundfontResource],
         soundfonts: &HashMap<String, LoadedSoundfont>,
         soundfont_settings: SoundfontSynthSettings,
     ) -> Result<bool, MixerRuntimeError> {
@@ -1203,8 +1185,7 @@ impl TrackRuntime {
         true
     }
 
-    fn apply_strip(&mut self, commands: &mut MultiThreadedKnystCommands, track: &Track, gain: f32) {
-        let _ = commands;
+    fn apply_strip(&mut self, track: &Track, gain: f32) {
         self.level.set(gain, track.state.pan);
     }
 
@@ -1437,13 +1418,7 @@ impl BusRuntime {
         node_id_of(self.input)
     }
 
-    fn apply_strip(
-        &mut self,
-        commands: &mut MultiThreadedKnystCommands,
-        bus_track: &Track,
-        gain: f32,
-    ) {
-        let _ = commands;
+    fn apply_strip(&mut self, bus_track: &Track, gain: f32) {
         self.level.set(gain, bus_track.state.pan);
     }
 
@@ -1589,7 +1564,7 @@ fn create_track_strip(
 fn create_track_instrument(
     context: &KnystContext,
     track: &Track,
-    soundfont_resources: &[crate::instrument::soundfont_synth::SoundfontResource],
+    soundfont_resources: &[SoundfontResource],
     soundfonts: &HashMap<String, LoadedSoundfont>,
     soundfont_settings: SoundfontSynthSettings,
     inline_strip: Option<(SharedStripLevel, SharedStripMeter)>,
@@ -2091,13 +2066,15 @@ mod tests {
     use wide::f32x4;
 
     use super::{
-        InstrumentProcessorNode, InstrumentRuntimeHandle, LoadedSoundfont, MasterRuntime, MeterTap,
-        MixerRuntimeError, SharedInstrumentResetState, SharedStripMeter, SoundfontSynthSettings,
+        InstrumentProcessorNode, InstrumentRuntimeHandle, MasterRuntime, MeterTap,
+        MixerRuntimeError, RuntimeFactoryError, SharedInstrumentResetState, SharedStripMeter,
         connect_stereo, db_to_amplitude, node_id_of, normalize_meter_level,
     };
+    use crate::instrument::registry::Entry;
     use crate::instrument::{
-        BUILTIN_SOUNDFONT_ID, MidiEvent, ProcessorKind, ProcessorState, SlotState,
-        soundfont_synth::{self, SoundfontProcessor},
+        BUILTIN_SOUNDFONT_ID, Controller, ControllerError, InstrumentProcessor,
+        InstrumentRuntimeContext, InstrumentRuntimeSpec, MidiEvent, Processor, ProcessorDescriptor,
+        ProcessorKind, ProcessorState, ProcessorStateError, RuntimeBinding, SlotState, registry,
     };
     use crate::mixer::{Mixer, MixerState, TrackId};
     use crate::test_utils::{OfflineHarness, test_soundfont_resource};
@@ -2127,10 +2104,151 @@ mod tests {
     }
 
     fn soundfont_slot(program: u8) -> SlotState {
-        SlotState::built_in(
+        register_test_soundfont_builtin();
+        SlotState::built_in(BUILTIN_SOUNDFONT_ID, ProcessorState(vec![program]))
+    }
+
+    fn register_test_soundfont_builtin() {
+        registry::register([Entry::builtin_instrument(
             BUILTIN_SOUNDFONT_ID,
-            soundfont_synth::state("default", 0, program),
-        )
+            "SoundFont",
+            test_instrument_descriptor(),
+            create_test_soundfont_runtime,
+        )]);
+    }
+
+    fn test_instrument_descriptor() -> &'static ProcessorDescriptor {
+        static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+            name: "Test Instrument",
+            params: &[],
+            editor: None,
+        };
+        &DESCRIPTOR
+    }
+
+    fn create_test_soundfont_runtime(
+        slot: &SlotState,
+        context: &InstrumentRuntimeContext<'_>,
+    ) -> Result<Option<InstrumentRuntimeSpec>, RuntimeFactoryError> {
+        if !matches!(
+            slot.kind,
+            ProcessorKind::BuiltIn { ref processor_id } if processor_id == BUILTIN_SOUNDFONT_ID
+        ) || context.soundfonts.is_empty()
+        {
+            return Ok(None);
+        }
+        Ok(Some(InstrumentRuntimeSpec {
+            processor: Box::<TestInstrumentProcessor>::default(),
+            binding: Box::new(TestInstrumentBinding),
+        }))
+    }
+
+    #[derive(Default)]
+    struct TestInstrumentProcessor {
+        active: bool,
+    }
+
+    impl Processor for TestInstrumentProcessor {
+        fn descriptor(&self) -> &'static ProcessorDescriptor {
+            test_instrument_descriptor()
+        }
+
+        fn set_param(&mut self, id: &str, normalized: f32) -> bool {
+            id.is_empty() && normalized == 0.0
+        }
+
+        fn get_param(&self, id: &str) -> Option<f32> {
+            (id.is_empty()).then_some(0.0)
+        }
+
+        fn save_state(&self) -> ProcessorState {
+            ProcessorState::default()
+        }
+
+        fn load_state(&mut self, state: &ProcessorState) -> Result<(), ProcessorStateError> {
+            if state.0.is_empty() {
+                Ok(())
+            } else {
+                Err(ProcessorStateError::Decode(
+                    "test instrument state must be empty".to_string(),
+                ))
+            }
+        }
+
+        fn reset(&mut self) {
+            self.active = false;
+        }
+    }
+
+    impl InstrumentProcessor for TestInstrumentProcessor {
+        fn handle_midi(&mut self, event: MidiEvent) {
+            match event {
+                MidiEvent::NoteOn { velocity, .. } if velocity > 0 => self.active = true,
+                MidiEvent::NoteOff { .. }
+                | MidiEvent::AllNotesOff { .. }
+                | MidiEvent::AllSoundOff { .. } => self.active = false,
+                _ => {}
+            }
+        }
+
+        fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+            let value = if self.active { 0.25 } else { 0.0 };
+            left.fill(value);
+            right.fill(value);
+        }
+
+        fn is_sleeping(&self) -> bool {
+            !self.active
+        }
+    }
+
+    struct TestInstrumentBinding;
+
+    impl RuntimeBinding for TestInstrumentBinding {
+        fn controller(&self) -> Box<dyn Controller> {
+            Box::new(TestInstrumentController)
+        }
+
+        fn update_in_place(&self, slot: &SlotState) -> Result<bool, ProcessorStateError> {
+            Ok(matches!(
+                slot.kind,
+                ProcessorKind::BuiltIn { ref processor_id } if processor_id == BUILTIN_SOUNDFONT_ID
+            ))
+        }
+    }
+
+    struct TestInstrumentController;
+
+    impl Controller for TestInstrumentController {
+        fn descriptor(&self) -> &'static ProcessorDescriptor {
+            test_instrument_descriptor()
+        }
+
+        fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
+            Err(ControllerError::UnknownParameter(id.to_string()))
+        }
+
+        fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError> {
+            if id.is_empty() && normalized == 0.0 {
+                Ok(())
+            } else {
+                Err(ControllerError::UnknownParameter(id.to_string()))
+            }
+        }
+
+        fn save_state(&self) -> Result<ProcessorState, ControllerError> {
+            Ok(ProcessorState::default())
+        }
+
+        fn load_state(&self, state: &ProcessorState) -> Result<(), ControllerError> {
+            if state.0.is_empty() {
+                Ok(())
+            } else {
+                Err(ControllerError::Backend(
+                    "test instrument state must be empty".to_string(),
+                ))
+            }
+        }
     }
 
     #[test]
@@ -2749,19 +2867,7 @@ mod tests {
             .transport_seek_to_beats(Beats::from_beats_f64(1.0));
         harness.wait_for_transport_settled();
 
-        let loaded =
-            LoadedSoundfont::load(&test_soundfont_resource()).expect("soundfont should load");
-        let processor = SoundfontProcessor::new(
-            &loaded.soundfont,
-            SoundfontSynthSettings::new(44_100, 64),
-            soundfont_synth::SoundfontProcessorState {
-                soundfont_id: "default".to_string(),
-                bank: 0,
-                program: 40,
-                ..soundfont_synth::SoundfontProcessorState::default()
-            },
-        )
-        .expect("processor should initialize");
+        let processor = TestInstrumentProcessor::default();
 
         let strip = super::handle_with_inputs(
             harness.commands(),
@@ -2805,19 +2911,7 @@ mod tests {
             .transport_seek_to_beats(Beats::from_beats_f64(1.0));
         harness.wait_for_transport_settled();
 
-        let loaded =
-            LoadedSoundfont::load(&test_soundfont_resource()).expect("soundfont should load");
-        let processor = SoundfontProcessor::new(
-            &loaded.soundfont,
-            SoundfontSynthSettings::new(44_100, 64),
-            soundfont_synth::SoundfontProcessorState {
-                soundfont_id: "default".to_string(),
-                bank: 0,
-                program: 40,
-                ..soundfont_synth::SoundfontProcessorState::default()
-            },
-        )
-        .expect("processor should initialize");
+        let processor = TestInstrumentProcessor::default();
 
         let strip = super::handle_with_inputs(
             harness.commands(),
@@ -2868,19 +2962,7 @@ mod tests {
         let settings = harness.settings();
         let master = MasterRuntime::new(&context, harness.commands(), &settings, &mixer_state);
 
-        let loaded =
-            LoadedSoundfont::load(&test_soundfont_resource()).expect("soundfont should load");
-        let processor = SoundfontProcessor::new(
-            &loaded.soundfont,
-            SoundfontSynthSettings::new(44_100, 64),
-            soundfont_synth::SoundfontProcessorState {
-                soundfont_id: "default".to_string(),
-                bank: 0,
-                program: 40,
-                ..soundfont_synth::SoundfontProcessorState::default()
-            },
-        )
-        .expect("processor should initialize");
+        let processor = TestInstrumentProcessor::default();
 
         let strip = super::handle_with_inputs(
             harness.commands(),
@@ -2925,19 +3007,7 @@ mod tests {
         let settings = harness.settings();
         let master = MasterRuntime::new(&context, harness.commands(), &settings, &mixer_state);
 
-        let loaded =
-            LoadedSoundfont::load(&test_soundfont_resource()).expect("soundfont should load");
-        let processor = SoundfontProcessor::new(
-            &loaded.soundfont,
-            SoundfontSynthSettings::new(44_100, 64),
-            soundfont_synth::SoundfontProcessorState {
-                soundfont_id: "default".to_string(),
-                bank: 0,
-                program: 40,
-                ..soundfont_synth::SoundfontProcessorState::default()
-            },
-        )
-        .expect("processor should initialize");
+        let processor = TestInstrumentProcessor::default();
 
         let strip = super::handle_with_inputs(
             harness.commands(),

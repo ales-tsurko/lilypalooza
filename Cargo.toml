@@ -8,6 +8,8 @@ members = [
     "crates/auxiliary-window",
     "crates/iced-code-editor",
     "crates/lilypalooza-audio",
+    "crates/lilypalooza-builtins",
+    "crates/lilypalooza-egui-baseview",
 ]
 
 [workspace.dependencies]
@@ -23,6 +25,7 @@ iced_aw = { path = "vendor/iced_aw", default-features = false, features = ["colo
 iced_core = { workspace = true }
 iced-code-editor = { path = "crates/iced-code-editor" }
 lilypalooza-audio = { path = "crates/lilypalooza-audio" }
+lilypalooza-builtins = { path = "crates/lilypalooza-builtins" }
 notify = "8.2.0"
 resvg = "0.45.1"
 ron = "0.8.1"
@@ -31,11 +34,6 @@ serde = { version = "1.0", features = ["derive"] }
 tempfile = "3.25.0"
 thiserror = "2.0.18"
 toml = "0.8"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6.3"
-objc2-app-kit = "0.3.2"
-objc2-foundation = "0.3.2"
 
 [dev-dependencies]
 iced_test = "0.14.0"

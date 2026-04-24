@@ -10,11 +10,11 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use lilypalooza_audio::instrument::soundfont_synth;
 use lilypalooza_audio::{
     AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, MixerState, SlotState,
     SoundfontResource, TrackId,
 };
+use lilypalooza_builtins::soundfont_synth;
 use midly::num::{u4, u7, u15, u24, u28};
 use midly::{
     Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
@@ -28,6 +28,8 @@ fn soundfont_slot(soundfont_id: &str, program: u8) -> SlotState {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    lilypalooza_builtins::register_all();
+
     let options = options_from_iter(env::args_os().skip(1));
     let mut engine = AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())?;
 

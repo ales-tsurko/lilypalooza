@@ -26,6 +26,7 @@ mod track_names;
 mod ui_style;
 
 fn main() -> iced::Result {
+    lilypalooza_builtins::register_all();
     let startup = startup_options();
     app::run(startup.soundfont, startup.score, startup.audio_enabled)
 }

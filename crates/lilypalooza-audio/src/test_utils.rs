@@ -19,7 +19,7 @@ use midly::{
 };
 
 use crate::engine::AudioEngineSettings;
-use crate::instrument::soundfont_synth::SoundfontResource;
+use crate::soundfont::SoundfontResource;
 
 pub(crate) struct OfflineHarness {
     backend: TestBackend,

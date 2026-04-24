@@ -9,6 +9,8 @@ pub mod engine;
 pub mod instrument;
 pub mod mixer;
 pub mod sequencer;
+/// Shared SoundFont resource loading and metadata.
+pub mod soundfont;
 pub mod transport;
 
 #[cfg(test)]
@@ -23,7 +25,7 @@ pub use instrument::{
     ControllerError, EditorDescriptor, EditorError, EditorParent, EditorSession, EditorSize,
     EffectProcessor, EffectRuntimeHandle, InstrumentProcessor, InstrumentRuntimeHandle, MidiEvent,
     ParameterDescriptor, Processor, ProcessorDescriptor, ProcessorKind, ProcessorState,
-    ProcessorStateError, SlotState, SoundfontProcessorState, SoundfontResource,
+    ProcessorStateError, SlotState,
 };
 pub use mixer::{
     BusId, BusSend, INSTRUMENT_TRACK_COUNT, SlotAddress, Track, TrackId, TrackRoute, TrackRouting,
@@ -31,4 +33,5 @@ pub use mixer::{
 };
 pub use mixer::{MixerError, MixerHandle, MixerState};
 pub use sequencer::{Sequencer, SequencerError, SequencerHandle};
+pub use soundfont::{LoadedSoundfont, SoundfontPreset, SoundfontResource, SoundfontSynthSettings};
 pub use transport::{PlaybackState, Transport, TransportError, TransportSnapshot};

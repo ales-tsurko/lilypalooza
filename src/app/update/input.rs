@@ -906,7 +906,6 @@ impl Lilypalooza {
 
         self.window_width = size.width.max(1.0);
         self.window_height = size.height.max(1.0);
-        self.patch_macos_quit_menu();
         self.sync_editor_viewport_from_layout();
 
         Task::none()

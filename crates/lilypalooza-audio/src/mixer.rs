@@ -13,8 +13,9 @@ use knyst::prelude::{Beats, MultiThreadedKnystCommands, TransportState};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{AudioEngineError, AudioEngineSettings};
-use crate::instrument::{Controller, InstrumentRuntimeHandle, SlotState, SoundfontResource};
+use crate::instrument::{Controller, InstrumentRuntimeHandle, SlotState};
 use crate::sequencer::Sequencer;
+use crate::soundfont::SoundfontResource;
 use runtime::{MixerRuntime, MixerRuntimeError, TrackInstrumentSync};
 pub use track::{
     BusId, BusSend, INSTRUMENT_TRACK_COUNT, Track, TrackId, TrackRoute, TrackRouting, TrackState,
@@ -617,14 +618,12 @@ impl MixerHandle<'_> {
     }
 
     pub fn set_soundfont(&mut self, resource: SoundfontResource) -> Result<(), AudioEngineError> {
-        let soundfont_id = resource.id.clone();
         self.mixer.state.set_soundfont(resource);
         self.mixer.runtime.sync_soundfonts(&self.mixer.state)?;
-        self.mixer.runtime.sync_tracks_for_soundfont(
+        self.mixer.runtime.sync_tracks_after_soundfonts_changed(
             self.context,
             self.commands,
             &self.mixer.state,
-            &soundfont_id,
         )?;
         settle_graph_mutation(self.commands);
         for (track_id, _) in self.mixer.state.tracks_with_ids() {
@@ -640,11 +639,10 @@ impl MixerHandle<'_> {
     pub fn remove_soundfont(&mut self, id: &str) -> Result<SoundfontResource, AudioEngineError> {
         let removed = self.mixer.state.remove_soundfont(id)?;
         self.mixer.runtime.sync_soundfonts(&self.mixer.state)?;
-        self.mixer.runtime.sync_tracks_for_soundfont(
+        self.mixer.runtime.sync_tracks_after_soundfonts_changed(
             self.context,
             self.commands,
             &self.mixer.state,
-            &removed.id,
         )?;
         settle_graph_mutation(self.commands);
         for (track_id, _) in self.mixer.state.tracks_with_ids() {
@@ -750,33 +748,25 @@ impl MixerHandle<'_> {
 
     pub fn set_track_gain_db(&mut self, id: TrackId, gain_db: f32) -> Result<(), AudioEngineError> {
         self.mixer.state.track_mut(id)?.state.gain_db = gain_db;
-        self.mixer
-            .runtime
-            .sync_track_strip(self.commands, &self.mixer.state, id)?;
+        self.mixer.runtime.sync_track_strip(&self.mixer.state, id)?;
         Ok(())
     }
 
     pub fn set_track_pan(&mut self, id: TrackId, pan: f32) -> Result<(), AudioEngineError> {
         self.mixer.state.track_mut(id)?.state.pan = pan.clamp(-1.0, 1.0);
-        self.mixer
-            .runtime
-            .sync_track_strip(self.commands, &self.mixer.state, id)?;
+        self.mixer.runtime.sync_track_strip(&self.mixer.state, id)?;
         Ok(())
     }
 
     pub fn set_track_muted(&mut self, id: TrackId, muted: bool) -> Result<(), AudioEngineError> {
         self.mixer.state.track_mut(id)?.state.muted = muted;
-        self.mixer
-            .runtime
-            .sync_all_levels(self.commands, &self.mixer.state);
+        self.mixer.runtime.sync_all_levels(&self.mixer.state);
         Ok(())
     }
 
     pub fn set_track_soloed(&mut self, id: TrackId, soloed: bool) -> Result<(), AudioEngineError> {
         self.mixer.state.track_mut(id)?.state.soloed = soloed;
-        self.mixer
-            .runtime
-            .sync_all_levels(self.commands, &self.mixer.state);
+        self.mixer.runtime.sync_all_levels(&self.mixer.state);
         Ok(())
     }
 
@@ -859,9 +849,7 @@ impl MixerHandle<'_> {
 
     pub fn set_bus_gain_db(&mut self, id: BusId, gain_db: f32) -> Result<(), AudioEngineError> {
         self.mixer.state.bus_mut(id)?.state.gain_db = gain_db;
-        self.mixer
-            .runtime
-            .sync_bus_strip(self.commands, &self.mixer.state, id)?;
+        self.mixer.runtime.sync_bus_strip(&self.mixer.state, id)?;
         Ok(())
     }
 
@@ -880,25 +868,19 @@ impl MixerHandle<'_> {
 
     pub fn set_bus_pan(&mut self, id: BusId, pan: f32) -> Result<(), AudioEngineError> {
         self.mixer.state.bus_mut(id)?.state.pan = pan.clamp(-1.0, 1.0);
-        self.mixer
-            .runtime
-            .sync_bus_strip(self.commands, &self.mixer.state, id)?;
+        self.mixer.runtime.sync_bus_strip(&self.mixer.state, id)?;
         Ok(())
     }
 
     pub fn set_bus_muted(&mut self, id: BusId, muted: bool) -> Result<(), AudioEngineError> {
         self.mixer.state.bus_mut(id)?.state.muted = muted;
-        self.mixer
-            .runtime
-            .sync_all_levels(self.commands, &self.mixer.state);
+        self.mixer.runtime.sync_all_levels(&self.mixer.state);
         Ok(())
     }
 
     pub fn set_bus_soloed(&mut self, id: BusId, soloed: bool) -> Result<(), AudioEngineError> {
         self.mixer.state.bus_mut(id)?.state.soloed = soloed;
-        self.mixer
-            .runtime
-            .sync_all_levels(self.commands, &self.mixer.state);
+        self.mixer.runtime.sync_all_levels(&self.mixer.state);
         Ok(())
     }
 
@@ -962,16 +944,12 @@ impl MixerHandle<'_> {
 
     pub fn set_master_gain_db(&mut self, gain_db: f32) {
         self.mixer.state.master_mut().state.gain_db = gain_db;
-        self.mixer
-            .runtime
-            .sync_all_levels(self.commands, &self.mixer.state);
+        self.mixer.runtime.sync_all_levels(&self.mixer.state);
     }
 
     pub fn set_master_pan(&mut self, pan: f32) {
         self.mixer.state.master_mut().state.pan = pan.clamp(-1.0, 1.0);
-        self.mixer
-            .runtime
-            .sync_all_levels(self.commands, &self.mixer.state);
+        self.mixer.runtime.sync_all_levels(&self.mixer.state);
     }
 
     pub fn reset_master_meter(&mut self) {
@@ -1084,16 +1062,13 @@ mod tests {
     use super::{MixerError, MixerState};
     use crate::instrument::{
         BUILTIN_GAIN_ID, BUILTIN_SOUNDFONT_ID, ProcessorKind, ProcessorState, SlotState,
-        SoundfontResource, soundfont_synth,
     };
     use crate::mixer::{BusId, BusSend, INSTRUMENT_TRACK_COUNT, TrackId, TrackRoute};
+    use crate::soundfont::SoundfontResource;
     use std::path::PathBuf;
 
     fn soundfont_slot(program: u8) -> SlotState {
-        SlotState::built_in(
-            BUILTIN_SOUNDFONT_ID,
-            soundfont_synth::state("default", 0, program),
-        )
+        SlotState::built_in(BUILTIN_SOUNDFONT_ID, ProcessorState(vec![program]))
     }
 
     #[test]

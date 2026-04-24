@@ -2534,7 +2534,7 @@ mod tests {
             selected_instrument_choice(
                 Some(&SlotState::built_in(
                     BUILTIN_SOUNDFONT_ID,
-                    lilypalooza_audio::instrument::soundfont_synth::state("default", 0, 2),
+                    lilypalooza_builtins::soundfont_synth::state("default", 0, 2),
                 )),
                 &mixer
             ),

@@ -1,6 +1,9 @@
-use auxiliary_window::{HostOptions, WindowSnapshot, install_editor_host, set_host_window_visible};
-use lilypalooza_audio::instrument::soundfont_synth;
-use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, BusId, SlotState, SoundfontProcessorState, TrackId};
+use auxiliary_window::{
+    HostOptions, WindowSnapshot, install_editor_host, route_app_quit_to_window_close,
+    set_host_window_visible,
+};
+use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, BusId, SlotState, TrackId};
+use lilypalooza_builtins::soundfont_synth::{self, SoundfontProcessorState};
 
 use super::super::messages::MixerMessage;
 use super::*;
@@ -8,7 +11,11 @@ use crate::app::processor_editor_windows::{EditorTarget, snapshot_into_editor_pa
 use iced::window;
 
 impl Lilypalooza {
-    fn log_processor_editor_error(&mut self, action: &str, error: impl std::fmt::Display) {
+    pub(in crate::app) fn log_processor_editor_error(
+        &mut self,
+        action: &str,
+        error: impl std::fmt::Display,
+    ) {
         self.logger
             .push(format!("Processor editor {action} failed: {error}"));
     }
@@ -136,7 +143,18 @@ impl Lilypalooza {
         parent: Result<WindowSnapshot, String>,
     ) -> Task<Message> {
         if window_id == self.main_window_id {
-            self.main_window_snapshot = parent.ok();
+            match parent {
+                Ok(snapshot) => {
+                    if let Err(error) = route_app_quit_to_window_close(&snapshot) {
+                        self.log_processor_editor_error("route app quit", error);
+                    }
+                    self.main_window_snapshot = Some(snapshot);
+                }
+                Err(error) => {
+                    self.log_processor_editor_error("capture main window", error);
+                    self.main_window_snapshot = None;
+                }
+            }
             return Task::none();
         }
 

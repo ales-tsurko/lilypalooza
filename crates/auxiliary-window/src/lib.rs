@@ -248,6 +248,17 @@ pub fn prepare_process() -> Result<(), Error> {
 }
 
 #[cfg(target_os = "macos")]
+pub fn route_app_quit_to_window_close(window: &WindowSnapshot) -> Result<(), Error> {
+    macos::route_app_quit_to_window_close(window)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn route_app_quit_to_window_close(window: &WindowSnapshot) -> Result<(), Error> {
+    window.raw_window_handle()?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 pub fn install_editor_host(
     host: &WindowSnapshot,
     owner: Option<&WindowSnapshot>,

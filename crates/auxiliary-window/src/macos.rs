@@ -1,17 +1,13 @@
-use std::mem;
 use std::ptr::NonNull;
-use std::sync::Once;
 
-use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::sel;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBezelStyle, NSButton, NSButtonType, NSColor,
-    NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSTextField, NSView, NSWindow,
-    NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
-    NSWindowTabbingMode,
+    NSTextField, NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
+    NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::CALayer;
@@ -24,8 +20,6 @@ const TITLEBAR_BUTTON_LEFT: f64 = 10.0;
 const TITLEBAR_BUTTON_Y_OFFSET: f64 = 1.0;
 const TITLEBAR_LABEL_LEFT: f64 = 38.0;
 const TITLEBAR_LABEL_RIGHT: f64 = 12.0;
-const MACOS_Q_KEY_CODE: u16 = 12;
-static INSTALL_COMMAND_MONITOR: Once = Once::new();
 
 pub fn prepare_process() -> Result<(), Error> {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -34,7 +28,6 @@ pub fn prepare_process() -> Result<(), Error> {
         ));
     };
     NSWindow::setAllowsAutomaticWindowTabbing(false, mtm);
-    install_command_shortcut_monitor();
     Ok(())
 }
 
@@ -111,6 +104,43 @@ pub fn set_host_window_visible(host: &WindowSnapshot, visible: bool) -> Result<(
         host_window.makeKeyAndOrderFront(None);
     } else {
         host_window.orderOut(None);
+    }
+
+    Ok(())
+}
+
+pub fn route_app_quit_to_window_close(window: &WindowSnapshot) -> Result<(), Error> {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return Err(Error::Message(
+            "app quit routing must run on the main thread".to_string(),
+        ));
+    };
+    let view = ns_view_from_snapshot(window)?;
+    let window = view
+        .window()
+        .ok_or_else(|| Error::Message("main window is missing".to_string()))?;
+    let app = NSApplication::sharedApplication(mtm);
+    let Some(main_menu) = app.mainMenu() else {
+        return Err(Error::Message("app menu is missing".to_string()));
+    };
+    let Some(app_menu_item) = main_menu.itemAtIndex(0) else {
+        return Err(Error::Message("app menu item is missing".to_string()));
+    };
+    let Some(app_menu) = app_menu_item.submenu() else {
+        return Err(Error::Message("app submenu is missing".to_string()));
+    };
+    let item_count = app_menu.numberOfItems();
+    if item_count == 0 {
+        return Err(Error::Message("app submenu is empty".to_string()));
+    }
+    let Some(quit_item) = app_menu.itemAtIndex(item_count - 1) else {
+        return Err(Error::Message("quit menu item is missing".to_string()));
+    };
+
+    // SAFETY: The menu item and main window are live AppKit objects on the main thread.
+    unsafe {
+        quit_item.setTarget(Some(&window));
+        quit_item.setAction(Some(sel!(performClose:)));
     }
 
     Ok(())
@@ -340,134 +370,9 @@ fn style_view(
     view.setLayer(Some(&layer));
 }
 
-fn install_command_shortcut_monitor() {
-    INSTALL_COMMAND_MONITOR.call_once(|| {
-        let handler = RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
-            // SAFETY: AppKit passes a non-null NSEvent pointer to local event monitor blocks and
-            // the event remains valid for the duration of this callback.
-            let event_ref = unsafe { event.as_ref() };
-            if is_embedded_quit_shortcut(event_ref) {
-                // SAFETY: Local AppKit event monitors run on the main thread.
-                let mtm = unsafe { MainThreadMarker::new_unchecked() };
-                let app = NSApplication::sharedApplication(mtm);
-                request_app_close(&app);
-                return std::ptr::null_mut();
-            }
-
-            if !routes_command_shortcuts_to_host(event_ref) {
-                return event.as_ptr();
-            }
-
-            // SAFETY: Local AppKit event monitors run on the main thread.
-            let mtm = unsafe { MainThreadMarker::new_unchecked() };
-            let app = NSApplication::sharedApplication(mtm);
-            let handled = app
-                .mainMenu()
-                .as_deref()
-                .is_some_and(|menu| menu.performKeyEquivalent(event_ref));
-
-            if handled {
-                std::ptr::null_mut()
-            } else {
-                event.as_ptr()
-            }
-        });
-
-        // SAFETY: The block is retained by AppKit for the lifetime of the monitor.
-        let monitor = unsafe {
-            NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &handler)
-        };
-
-        mem::forget(handler);
-        if let Some(monitor) = monitor {
-            mem::forget(monitor);
-        }
-    });
-}
-
-fn routes_command_shortcuts_to_host(event: &NSEvent) -> bool {
-    let modifiers = event.modifierFlags() & NSEventModifierFlags::DeviceIndependentFlagsMask;
-    modifiers.contains(NSEventModifierFlags::Command)
-}
-
-fn is_embedded_quit_shortcut(event: &NSEvent) -> bool {
-    if event.r#type() != NSEventType::KeyDown {
-        return false;
-    }
-
-    let modifiers = event.modifierFlags() & NSEventModifierFlags::DeviceIndependentFlagsMask;
-    if !modifiers.contains(NSEventModifierFlags::Command) {
-        return false;
-    }
-
-    if !is_command_q_key(event.keyCode(), event.charactersIgnoringModifiers()) {
-        return false;
-    };
-
-    // SAFETY: This helper is only called from the AppKit local event monitor on the main thread.
-    let mtm = unsafe { MainThreadMarker::new_unchecked() };
-    let app = NSApplication::sharedApplication(mtm);
-    app.keyWindow()
-        .as_deref()
-        .is_some_and(is_auxiliary_editor_window)
-}
-
-fn request_app_close(app: &NSApplication) {
-    if let Some(window) = app
-        .mainWindow()
-        .filter(|window| !is_auxiliary_editor_window(window))
-    {
-        window.performClose(None);
-        return;
-    }
-
-    let windows = app.windows();
-    for index in 0..windows.count() {
-        let window = windows.objectAtIndex(index);
-        if !is_auxiliary_editor_window(&window) {
-            window.performClose(None);
-            return;
-        }
-    }
-}
-
-fn is_command_q_key(key_code: u16, chars: Option<Retained<NSString>>) -> bool {
-    key_code == MACOS_Q_KEY_CODE
-        || chars.is_some_and(|chars| chars.to_string().eq_ignore_ascii_case("q"))
-}
-
-fn is_auxiliary_editor_window(window: &NSWindow) -> bool {
-    window
-        .collectionBehavior()
-        .contains(NSWindowCollectionBehavior::Auxiliary)
-}
-
 fn ns_rect(frame: crate::Rect) -> NSRect {
     NSRect::new(
         NSPoint::new(frame.x, frame.y),
         NSSize::new(frame.width, frame.height),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_command_q_key;
-
-    #[test]
-    fn command_q_key_matches_q_only() {
-        assert!(is_command_q_key(12, None));
-        assert!(is_command_q_key(
-            0,
-            Some(objc2_foundation::NSString::from_str("q"))
-        ));
-        assert!(is_command_q_key(
-            0,
-            Some(objc2_foundation::NSString::from_str("Q"))
-        ));
-        assert!(!is_command_q_key(13, None));
-        assert!(!is_command_q_key(
-            0,
-            Some(objc2_foundation::NSString::from_str("w"))
-        ));
-    }
 }

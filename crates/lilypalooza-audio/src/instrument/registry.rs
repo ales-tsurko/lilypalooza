@@ -1,12 +1,10 @@
 //! Processor registry.
 
-use crate::instrument::gain_effect;
-use crate::instrument::metronome_synth;
-use crate::instrument::soundfont_synth;
+use std::sync::{OnceLock, RwLock};
+
 use crate::instrument::{
-    BUILTIN_GAIN_ID, BUILTIN_METRONOME_ID, BUILTIN_NONE_ID, BUILTIN_SOUNDFONT_ID,
-    EffectRuntimeSpec, InstrumentRuntimeContext, InstrumentRuntimeSpec, ProcessorDescriptor,
-    ProcessorKind, RuntimeFactoryError, SlotState,
+    BUILTIN_NONE_ID, EffectRuntimeSpec, InstrumentRuntimeContext, InstrumentRuntimeSpec,
+    ProcessorDescriptor, ProcessorKind, RuntimeFactoryError, SlotState,
 };
 
 /// Stable processor identifier type used by the registry catalog.
@@ -55,11 +53,101 @@ struct Factory {
     create_effect: Option<CreateEffect>,
 }
 
-type CreateInstrument = fn(
+/// Instrument runtime factory callback.
+pub type CreateInstrument = fn(
     &SlotState,
     &InstrumentRuntimeContext<'_>,
 ) -> Result<Option<InstrumentRuntimeSpec>, RuntimeFactoryError>;
-type CreateEffect = fn(&SlotState) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError>;
+/// Effect runtime factory callback.
+pub type CreateEffect = fn(&SlotState) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError>;
+
+impl Entry {
+    /// Creates an empty built-in instrument entry.
+    #[must_use]
+    pub const fn empty_builtin(
+        id: Id,
+        name: &'static str,
+        descriptor: &'static ProcessorDescriptor,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            role: Role::Instrument,
+            backend: Backend::BuiltIn,
+            descriptor,
+            factory: Factory {
+                is_empty: true,
+                create_instrument: None,
+                create_effect: None,
+            },
+        }
+    }
+
+    /// Creates a built-in instrument entry.
+    #[must_use]
+    pub const fn builtin_instrument(
+        id: Id,
+        name: &'static str,
+        descriptor: &'static ProcessorDescriptor,
+        create: CreateInstrument,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            role: Role::Instrument,
+            backend: Backend::BuiltIn,
+            descriptor,
+            factory: Factory {
+                is_empty: false,
+                create_instrument: Some(create),
+                create_effect: None,
+            },
+        }
+    }
+
+    /// Creates a built-in instrument catalog entry without a runtime factory.
+    #[must_use]
+    pub const fn builtin_instrument_descriptor(
+        id: Id,
+        name: &'static str,
+        descriptor: &'static ProcessorDescriptor,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            role: Role::Instrument,
+            backend: Backend::BuiltIn,
+            descriptor,
+            factory: Factory {
+                is_empty: false,
+                create_instrument: None,
+                create_effect: None,
+            },
+        }
+    }
+
+    /// Creates a built-in effect entry.
+    #[must_use]
+    pub const fn builtin_effect(
+        id: Id,
+        name: &'static str,
+        descriptor: &'static ProcessorDescriptor,
+        create: CreateEffect,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            role: Role::Effect,
+            backend: Backend::BuiltIn,
+            descriptor,
+            factory: Factory {
+                is_empty: false,
+                create_instrument: None,
+                create_effect: Some(create),
+            },
+        }
+    }
+}
 
 const NONE_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
     name: "None",
@@ -67,75 +155,56 @@ const NONE_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
     editor: None,
 };
 
-const NONE: Entry = Entry {
-    id: BUILTIN_NONE_ID,
-    name: "None",
-    role: Role::Instrument,
-    backend: Backend::BuiltIn,
-    descriptor: &NONE_DESCRIPTOR,
-    factory: Factory {
-        is_empty: true,
-        create_instrument: None,
-        create_effect: None,
-    },
-};
+const NONE: Entry = Entry::empty_builtin(BUILTIN_NONE_ID, "None", &NONE_DESCRIPTOR);
 
-const SOUNDFONT: Entry = Entry {
-    id: BUILTIN_SOUNDFONT_ID,
-    name: "SoundFont",
-    role: Role::Instrument,
-    backend: Backend::BuiltIn,
-    descriptor: soundfont_synth::DESCRIPTOR,
-    factory: Factory {
-        is_empty: false,
-        create_instrument: Some(soundfont_synth::create_runtime),
-        create_effect: None,
-    },
-};
+static ENTRIES: OnceLock<RwLock<Vec<Entry>>> = OnceLock::new();
 
-const GAIN: Entry = Entry {
-    id: BUILTIN_GAIN_ID,
-    name: "Gain",
-    role: Role::Effect,
-    backend: Backend::BuiltIn,
-    descriptor: gain_effect::DESCRIPTOR,
-    factory: Factory {
-        is_empty: false,
-        create_instrument: None,
-        create_effect: Some(gain_effect::create_runtime),
-    },
-};
+fn entries() -> &'static RwLock<Vec<Entry>> {
+    ENTRIES.get_or_init(|| RwLock::new(vec![NONE]))
+}
 
-const METRONOME: Entry = Entry {
-    id: BUILTIN_METRONOME_ID,
-    name: "Metronome",
-    role: Role::Instrument,
-    backend: Backend::BuiltIn,
-    descriptor: metronome_synth::DESCRIPTOR,
-    factory: Factory {
-        is_empty: false,
-        create_instrument: None,
-        create_effect: None,
-    },
-};
+fn registry_read() -> std::sync::RwLockReadGuard<'static, Vec<Entry>> {
+    entries()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
-const ENTRIES: &[Entry] = &[NONE, SOUNDFONT, GAIN, METRONOME];
+fn registry_write() -> std::sync::RwLockWriteGuard<'static, Vec<Entry>> {
+    entries()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Registers processor entries supplied by a statically linked backend.
+pub fn register(entries_to_register: impl IntoIterator<Item = Entry>) {
+    let mut registered = registry_write();
+    for entry in entries_to_register {
+        if let Some(existing) = registered
+            .iter_mut()
+            .find(|existing| existing.id == entry.id)
+        {
+            *existing = entry;
+        } else {
+            registered.push(entry);
+        }
+    }
+}
 
 /// Returns the full processor catalog.
 #[must_use]
-pub fn all() -> &'static [Entry] {
-    ENTRIES
+pub fn all() -> Vec<Entry> {
+    registry_read().clone()
 }
 
 /// Returns one catalog entry by stable id.
 #[must_use]
-pub fn entry(id: &str) -> Option<&'static Entry> {
-    ENTRIES.iter().find(|entry| entry.id == id)
+pub fn entry(id: &str) -> Option<Entry> {
+    registry_read().iter().find(|entry| entry.id == id).copied()
 }
 
 /// Resolves one persisted processor kind into a catalog entry.
 #[must_use]
-pub fn resolve(kind: &ProcessorKind) -> Option<&'static Entry> {
+pub fn resolve(kind: &ProcessorKind) -> Option<Entry> {
     match kind {
         ProcessorKind::BuiltIn { processor_id } => entry(processor_id),
         ProcessorKind::Plugin { .. } => None,
@@ -169,16 +238,27 @@ pub(crate) fn create_effect_runtime(
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, Role, all, entry, is_empty};
-    use crate::instrument::{BUILTIN_GAIN_ID, BUILTIN_SOUNDFONT_ID, ProcessorKind};
+    use super::{Backend, Entry, Role, all, entry, is_empty, register};
+    use crate::instrument::{
+        BUILTIN_GAIN_ID, ProcessorDescriptor, ProcessorKind, ProcessorState, SlotState,
+    };
+
+    const TEST_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+        name: "Test Gain",
+        params: &[],
+        editor: None,
+    };
 
     #[test]
-    fn builtins_are_registered_in_one_catalog() {
+    fn external_builtins_can_register_in_catalog() {
+        register([Entry::builtin_effect(
+            BUILTIN_GAIN_ID,
+            "Gain",
+            &TEST_DESCRIPTOR,
+            |_| Ok(None),
+        )]);
         let entries = all();
 
-        assert!(entries.iter().any(|entry| entry.id == BUILTIN_SOUNDFONT_ID
-            && entry.role == Role::Instrument
-            && entry.backend == Backend::BuiltIn));
         assert!(entries.iter().any(|entry| entry.id == BUILTIN_GAIN_ID
             && entry.role == Role::Effect
             && entry.backend == Backend::BuiltIn));
@@ -186,11 +266,25 @@ mod tests {
 
     #[test]
     fn built_in_lookup_resolves_from_kind() {
+        register([Entry::builtin_effect(
+            BUILTIN_GAIN_ID,
+            "Gain",
+            &TEST_DESCRIPTOR,
+            |_| Ok(None),
+        )]);
         let kind = ProcessorKind::BuiltIn {
             processor_id: BUILTIN_GAIN_ID.to_string(),
         };
 
         assert!(!is_empty(&kind));
         assert_eq!(entry(BUILTIN_GAIN_ID).map(|entry| entry.name), Some("Gain"));
+    }
+
+    #[test]
+    fn none_remains_the_builtin_empty_slot() {
+        let slot = SlotState::default();
+
+        assert!(slot.is_empty());
+        assert_eq!(slot.state, ProcessorState::default());
     }
 }

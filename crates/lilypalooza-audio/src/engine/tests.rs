@@ -1,4 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -9,9 +11,12 @@ use knyst::prelude::{Beats, BlockSize, GenState, Sample, graph_output, handle, i
 
 use super::{AudioEngine, AudioEngineOptions, wait_for_transport_reset_to};
 use crate::instrument::SlotState;
+use crate::instrument::registry::Entry;
 use crate::instrument::{
-    BUILTIN_SOUNDFONT_ID, InstrumentProcessor, InstrumentProcessorNode, MidiEvent, Processor,
-    ProcessorDescriptor, ProcessorState, ProcessorStateError, soundfont_synth,
+    BUILTIN_GAIN_ID, BUILTIN_SOUNDFONT_ID, Controller, ControllerError, EffectProcessor,
+    EffectRuntimeSpec, InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeContext,
+    InstrumentRuntimeSpec, MidiEvent, Processor, ProcessorDescriptor, ProcessorKind,
+    ProcessorState, ProcessorStateError, RuntimeBinding, RuntimeFactoryError, registry,
 };
 use crate::mixer::{INSTRUMENT_TRACK_COUNT, MixerState, SlotAddress, TrackId};
 use crate::test_utils::{
@@ -23,6 +28,21 @@ use crate::transport::Transport;
 struct ScheduledValueGen;
 struct TestNoteProcessor {
     active: bool,
+    program: Arc<AtomicU32>,
+}
+
+#[derive(Clone)]
+struct TestGainBinding {
+    normalized_bits: Arc<AtomicU32>,
+}
+
+struct TestSoundfontBinding {
+    program: Arc<AtomicU32>,
+}
+
+struct TestSoundfontState {
+    soundfont_id: String,
+    program: u8,
 }
 
 fn settle_backend(backend: &SharedTestBackendHandle) {
@@ -38,10 +58,110 @@ fn raw_transport_play(engine: &mut AudioEngine) {
 }
 
 fn soundfont_slot(program: u8) -> SlotState {
+    register_test_processors();
     SlotState::built_in(
         BUILTIN_SOUNDFONT_ID,
-        soundfont_synth::state("default", 0, program),
+        encode_test_soundfont_state("default", program),
     )
+}
+
+fn register_test_processors() {
+    registry::register([
+        Entry::builtin_instrument(
+            BUILTIN_SOUNDFONT_ID,
+            "SoundFont",
+            soundfont_descriptor(),
+            create_test_soundfont_runtime,
+        ),
+        Entry::builtin_effect(
+            BUILTIN_GAIN_ID,
+            "Gain",
+            gain_descriptor(),
+            create_test_gain_runtime,
+        ),
+    ]);
+}
+
+fn soundfont_descriptor() -> &'static ProcessorDescriptor {
+    static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+        name: "SoundFont",
+        params: &[],
+        editor: None,
+    };
+    &DESCRIPTOR
+}
+
+fn gain_descriptor() -> &'static ProcessorDescriptor {
+    static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+        name: "Gain",
+        params: &[],
+        editor: None,
+    };
+    &DESCRIPTOR
+}
+
+fn create_test_soundfont_runtime(
+    slot: &SlotState,
+    context: &InstrumentRuntimeContext<'_>,
+) -> Result<Option<InstrumentRuntimeSpec>, RuntimeFactoryError> {
+    let Some(state) = slot.decode_built_in(BUILTIN_SOUNDFONT_ID, decode_test_soundfont_state)?
+    else {
+        return Ok(None);
+    };
+    if !context.soundfonts.contains_key(&state.soundfont_id) {
+        return Ok(None);
+    }
+    let program = Arc::new(AtomicU32::new(u32::from(state.program)));
+    Ok(Some(InstrumentRuntimeSpec {
+        processor: Box::new(TestNoteProcessor {
+            active: false,
+            program: Arc::clone(&program),
+        }),
+        binding: Box::new(TestSoundfontBinding { program }),
+    }))
+}
+
+fn encode_test_soundfont_state(soundfont_id: &str, program: u8) -> ProcessorState {
+    let mut bytes = vec![program];
+    bytes.extend_from_slice(soundfont_id.as_bytes());
+    ProcessorState(bytes)
+}
+
+fn decode_test_soundfont_state(
+    state: &ProcessorState,
+) -> Result<TestSoundfontState, ProcessorStateError> {
+    let Some((&program, id_bytes)) = state.0.split_first() else {
+        return Err(ProcessorStateError::Decode(
+            "test SoundFont state is empty".to_string(),
+        ));
+    };
+    let soundfont_id = std::str::from_utf8(id_bytes)
+        .map_err(|error| ProcessorStateError::Decode(error.to_string()))?
+        .to_string();
+    Ok(TestSoundfontState {
+        soundfont_id,
+        program,
+    })
+}
+
+fn create_test_gain_runtime(
+    slot: &SlotState,
+) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError> {
+    if !matches!(
+        slot.kind,
+        ProcessorKind::BuiltIn { ref processor_id } if processor_id == BUILTIN_GAIN_ID
+    ) {
+        return Ok(None);
+    }
+    let binding = TestGainBinding {
+        normalized_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+    };
+    Ok(Some(EffectRuntimeSpec {
+        processor: Box::new(TestGainEffect {
+            binding: binding.clone(),
+        }),
+        binding: Some(Box::new(binding)),
+    }))
 }
 
 fn benchmark_blocks(backend: &SharedTestBackendHandle, blocks: usize) -> Duration {
@@ -128,6 +248,7 @@ fn controller_resolves_track_instrument_slot() {
 
 #[test]
 fn controller_resolves_track_gain_effect_slot() {
+    register_test_processors();
     let (backend, _backend_handle) = SharedTestBackend::new(44_100, 64, 2);
     let mut engine = AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
         .expect("engine should start");
@@ -165,6 +286,7 @@ fn controller_resolves_track_gain_effect_slot() {
 
 #[test]
 fn bypassed_track_gain_effect_still_exposes_controller() {
+    register_test_processors();
     let (backend, _backend_handle) = SharedTestBackend::new(44_100, 64, 2);
     let mut engine = AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
         .expect("engine should start");
@@ -326,9 +448,182 @@ impl InstrumentProcessor for TestNoteProcessor {
     }
 
     fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
-        let value = if self.active { 0.25 } else { 0.0 };
+        let program = self.program.load(Ordering::Relaxed) as f32 / 127.0;
+        let value = if self.active {
+            0.25 + program * 0.1
+        } else {
+            0.0
+        };
         left.fill(value);
         right.fill(value);
+    }
+}
+
+impl RuntimeBinding for TestSoundfontBinding {
+    fn controller(&self) -> Box<dyn Controller> {
+        Box::new(TestSoundfontController {
+            program: Arc::clone(&self.program),
+        })
+    }
+
+    fn update_in_place(&self, slot: &SlotState) -> Result<bool, ProcessorStateError> {
+        let Some(state) =
+            slot.decode_built_in(BUILTIN_SOUNDFONT_ID, decode_test_soundfont_state)?
+        else {
+            return Ok(false);
+        };
+        self.program
+            .store(u32::from(state.program), Ordering::Relaxed);
+        Ok(true)
+    }
+}
+
+struct TestSoundfontController {
+    program: Arc<AtomicU32>,
+}
+
+impl Controller for TestSoundfontController {
+    fn descriptor(&self) -> &'static ProcessorDescriptor {
+        soundfont_descriptor()
+    }
+
+    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
+        if id == "program" {
+            Ok(self.program.load(Ordering::Relaxed) as f32 / 127.0)
+        } else {
+            Err(ControllerError::UnknownParameter(id.to_string()))
+        }
+    }
+
+    fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError> {
+        if id == "program" && (0.0..=1.0).contains(&normalized) {
+            self.program
+                .store((normalized * 127.0).round() as u32, Ordering::Relaxed);
+            Ok(())
+        } else {
+            Err(ControllerError::UnknownParameter(id.to_string()))
+        }
+    }
+
+    fn save_state(&self) -> Result<ProcessorState, ControllerError> {
+        Ok(ProcessorState::default())
+    }
+
+    fn load_state(&self, state: &ProcessorState) -> Result<(), ControllerError> {
+        if state.0.is_empty() {
+            Ok(())
+        } else {
+            Err(ControllerError::Backend(
+                "test soundfont state must be empty".to_string(),
+            ))
+        }
+    }
+}
+
+struct TestGainEffect {
+    binding: TestGainBinding,
+}
+
+impl Processor for TestGainEffect {
+    fn descriptor(&self) -> &'static ProcessorDescriptor {
+        gain_descriptor()
+    }
+
+    fn set_param(&mut self, id: &str, normalized: f32) -> bool {
+        if id == "gain_db" {
+            self.binding
+                .normalized_bits
+                .store(normalized.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn get_param(&self, id: &str) -> Option<f32> {
+        (id == "gain_db")
+            .then(|| f32::from_bits(self.binding.normalized_bits.load(Ordering::Relaxed)))
+    }
+
+    fn save_state(&self) -> ProcessorState {
+        ProcessorState::default()
+    }
+
+    fn load_state(&mut self, state: &ProcessorState) -> Result<(), ProcessorStateError> {
+        if state.0.is_empty() {
+            Ok(())
+        } else {
+            Err(ProcessorStateError::Decode(
+                "test gain state must be empty".to_string(),
+            ))
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+impl EffectProcessor for TestGainEffect {
+    fn process(
+        &mut self,
+        left: &[f32],
+        right: &[f32],
+        left_out: &mut [f32],
+        right_out: &mut [f32],
+    ) {
+        left_out.copy_from_slice(left);
+        right_out.copy_from_slice(right);
+    }
+}
+
+impl RuntimeBinding for TestGainBinding {
+    fn controller(&self) -> Box<dyn Controller> {
+        Box::new(TestGainController {
+            binding: self.clone(),
+        })
+    }
+}
+
+struct TestGainController {
+    binding: TestGainBinding,
+}
+
+impl Controller for TestGainController {
+    fn descriptor(&self) -> &'static ProcessorDescriptor {
+        gain_descriptor()
+    }
+
+    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
+        if id == "gain_db" {
+            Ok(f32::from_bits(
+                self.binding.normalized_bits.load(Ordering::Relaxed),
+            ))
+        } else {
+            Err(ControllerError::UnknownParameter(id.to_string()))
+        }
+    }
+
+    fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError> {
+        if id != "gain_db" {
+            return Err(ControllerError::UnknownParameter(id.to_string()));
+        }
+        self.binding
+            .normalized_bits
+            .store(normalized.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn save_state(&self) -> Result<ProcessorState, ControllerError> {
+        Ok(ProcessorState::default())
+    }
+
+    fn load_state(&self, state: &ProcessorState) -> Result<(), ControllerError> {
+        if state.0.is_empty() {
+            Ok(())
+        } else {
+            Err(ControllerError::Backend(
+                "test gain state must be empty".to_string(),
+            ))
+        }
     }
 }
 
@@ -1843,7 +2138,10 @@ fn paused_seek_then_direct_midi_into_instrument_node_produces_signal() {
     let instrument = engine.context.with_activation(|| {
         let reset_state = crate::instrument::SharedInstrumentResetState::default();
         let node = handle(InstrumentProcessorNode::new(
-            Box::new(TestNoteProcessor { active: false }),
+            Box::new(TestNoteProcessor {
+                active: false,
+                program: Arc::new(AtomicU32::new(0)),
+            }),
             reset_state.clone(),
         ));
         graph_output(0, node.channels(2));
@@ -1893,7 +2191,10 @@ fn paused_seek_then_direct_scheduled_midi_into_instrument_node_produces_signal()
     let instrument = engine.context.with_activation(|| {
         let reset_state = crate::instrument::SharedInstrumentResetState::default();
         let node = handle(InstrumentProcessorNode::new(
-            Box::new(TestNoteProcessor { active: false }),
+            Box::new(TestNoteProcessor {
+                active: false,
+                program: Arc::new(AtomicU32::new(0)),
+            }),
             reset_state.clone(),
         ));
         graph_output(0, node.channels(2));

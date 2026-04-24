@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::instrument::{
-    BUILTIN_GAIN_ID, Controller, ControllerError, EffectProcessor, EffectRuntimeSpec,
-    ParameterDescriptor, Processor, ProcessorDescriptor, ProcessorKind, ProcessorState,
-    ProcessorStateError, RuntimeBinding, RuntimeFactoryError, SlotState,
+use lilypalooza_audio::instrument::{EffectRuntimeSpec, RuntimeBinding, RuntimeFactoryError};
+use lilypalooza_audio::{
+    BUILTIN_GAIN_ID, Controller, ControllerError, EffectProcessor, ParameterDescriptor, Processor,
+    ProcessorDescriptor, ProcessorKind, ProcessorState, ProcessorStateError, SlotState,
 };
 
 pub(crate) const MIN_GAIN_DB: f32 = -60.0;
@@ -26,7 +26,7 @@ pub(crate) const DESCRIPTOR: &ProcessorDescriptor = &ProcessorDescriptor {
     editor: None,
 };
 
-pub(crate) fn descriptor() -> &'static ProcessorDescriptor {
+fn descriptor() -> &'static ProcessorDescriptor {
     DESCRIPTOR
 }
 
@@ -79,7 +79,9 @@ impl Controller for GainController {
         let normalized = ((self.shared.gain_db() - MIN_GAIN_DB) / GAIN_RANGE_DB).clamp(0.0, 1.0);
         let mut processor = GainEffectProcessor::from_state(&ProcessorState::default())
             .map_err(|error| ControllerError::Backend(error.to_string()))?;
-        let _ = processor.set_param("gain_db", normalized);
+        if !processor.set_param("gain_db", normalized) {
+            return Err(ControllerError::UnknownParameter("gain_db".to_string()));
+        }
         Ok(processor.save_state())
     }
 
@@ -206,7 +208,13 @@ impl Processor for GainEffectProcessor {
     }
 
     fn save_state(&self) -> ProcessorState {
-        ProcessorState(bincode::serialize(&self.state).unwrap_or_default())
+        match bincode::serialize(&self.state) {
+            Ok(state) => ProcessorState(state),
+            Err(error) => {
+                eprintln!("Gain state serialization failed: {error}");
+                ProcessorState::default()
+            }
+        }
     }
 
     fn load_state(&mut self, state: &ProcessorState) -> Result<(), ProcessorStateError> {
@@ -240,7 +248,7 @@ impl EffectProcessor for GainEffectProcessor {
 #[cfg(test)]
 mod tests {
     use super::{GAIN_RANGE_DB, GainEffectProcessor, MIN_GAIN_DB};
-    use crate::instrument::{EffectProcessor, Processor, ProcessorState};
+    use lilypalooza_audio::{EffectProcessor, Processor, ProcessorState};
 
     #[test]
     fn gain_effect_scales_expected_signal() {

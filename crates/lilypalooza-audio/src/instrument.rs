@@ -1,20 +1,14 @@
 //! Instrument and effect processor abstractions.
 
-mod gain_effect;
 pub(crate) mod metronome_synth;
 /// Processor discovery and creation catalog.
 pub mod registry;
-/// Built-in SoundFont slot helpers used by the app and tests.
-pub mod soundfont_synth;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-#[allow(unused_imports)]
-#[cfg(test)]
-pub(crate) use gain_effect::{GAIN_RANGE_DB, GainEffectProcessor, MIN_GAIN_DB, SharedGainState};
 use knyst::r#gen::{Gen, GenContext};
 use knyst::graph::{EventChange, EventPayload, ResolvedNodeEventInput, SchedulerChange};
 use knyst::handles::{GenericHandle, Handle, HandleData};
@@ -24,10 +18,8 @@ use knyst::prelude::{
 };
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use serde::{Deserialize, Serialize};
-#[allow(unused_imports)]
-#[cfg(test)]
-pub(crate) use soundfont_synth::MIDI_14BIT_MAX;
-pub use soundfont_synth::{SoundfontProcessorState, SoundfontResource};
+
+use crate::soundfont::{LoadedSoundfont, SoundfontResource, SoundfontSynthSettings};
 
 /// Built-in empty instrument id.
 pub const BUILTIN_NONE_ID: &str = "org.lilypalooza.none";
@@ -133,34 +125,50 @@ pub trait Controller: Send {
     }
 }
 
-pub(crate) trait RuntimeBinding: Send {
+/// Live runtime binding that exposes a host controller.
+pub trait RuntimeBinding: Send {
+    /// Creates a controller for this runtime binding.
     fn controller(&self) -> Box<dyn Controller>;
 
+    /// Updates the runtime binding in place from a new slot state.
     fn update_in_place(&self, _slot: &SlotState) -> Result<bool, ProcessorStateError> {
         Ok(false)
     }
 }
 
-pub(crate) struct InstrumentRuntimeSpec {
-    pub(crate) processor: Box<dyn InstrumentProcessor>,
-    pub(crate) binding: Box<dyn RuntimeBinding>,
+/// Instrument runtime instance created by a processor factory.
+pub struct InstrumentRuntimeSpec {
+    /// Audio processor.
+    pub processor: Box<dyn InstrumentProcessor>,
+    /// Host controller binding.
+    pub binding: Box<dyn RuntimeBinding>,
 }
 
-pub(crate) struct EffectRuntimeSpec {
-    pub(crate) processor: Box<dyn EffectProcessor>,
-    pub(crate) binding: Option<Box<dyn RuntimeBinding>>,
+/// Effect runtime instance created by a processor factory.
+pub struct EffectRuntimeSpec {
+    /// Audio processor.
+    pub processor: Box<dyn EffectProcessor>,
+    /// Optional host controller binding.
+    pub binding: Option<Box<dyn RuntimeBinding>>,
 }
 
-pub(crate) struct InstrumentRuntimeContext<'a> {
-    pub(crate) soundfonts: &'a HashMap<String, soundfont_synth::LoadedSoundfont>,
-    pub(crate) soundfont_resources: &'a [soundfont_synth::SoundfontResource],
-    pub(crate) soundfont_settings: soundfont_synth::SoundfontSynthSettings,
+/// Runtime resources supplied by the host to instrument factories.
+pub struct InstrumentRuntimeContext<'a> {
+    /// Loaded SoundFont resources keyed by id.
+    pub soundfonts: &'a HashMap<String, LoadedSoundfont>,
+    /// User-visible SoundFont resource metadata.
+    pub soundfont_resources: &'a [SoundfontResource],
+    /// SoundFont synthesizer runtime settings.
+    pub soundfont_settings: SoundfontSynthSettings,
 }
 
 #[derive(thiserror::Error, Debug)]
-pub(crate) enum RuntimeFactoryError {
+/// Processor runtime factory error.
+pub enum RuntimeFactoryError {
+    /// Persisted processor state is invalid.
     #[error(transparent)]
     State(#[from] ProcessorStateError),
+    /// Backend-specific factory failure.
     #[error("{0}")]
     Backend(String),
 }
@@ -588,9 +596,14 @@ impl InstrumentRuntimeHandle {
         &mut self,
         commands: &mut MultiThreadedKnystCommands,
     ) {
-        let _ = commands
+        if let Err(error) = commands
             .request_graph_settled()
-            .recv_timeout(Self::SCHEDULER_TARGET_TIMEOUT);
+            .recv_timeout(Self::SCHEDULER_TARGET_TIMEOUT)
+        {
+            eprintln!(
+                "Timed out waiting for graph settlement before resolving scheduler target: {error}"
+            );
+        }
         let node_id = self.node_id();
         self.scheduler_event_target = commands
             .resolve_scheduler_event_input(node_id.event_input("event"))
@@ -902,20 +915,26 @@ mod tests {
     use knyst::prelude::{Beats, graph_output, handle};
 
     use super::{
-        BUILTIN_SOUNDFONT_ID, EffectProcessor, InstrumentProcessor, InstrumentProcessorNode,
+        BUILTIN_SOUNDFONT_ID, InstrumentProcessor, InstrumentProcessorNode,
         InstrumentRuntimeHandle, MidiEvent, Processor, ProcessorDescriptor, ProcessorState,
-        ProcessorStateError, SharedInstrumentResetState, SlotState, soundfont_synth,
-        soundfont_synth::{
-            LoadedSoundfont, SoundfontProcessor, SoundfontProcessorState, SoundfontSynthSettings,
-        },
+        ProcessorStateError, SharedInstrumentResetState, SlotState,
     };
-    use crate::test_utils::{OfflineHarness, test_soundfont_resource};
+    use crate::instrument::registry::{self, Entry};
+    use crate::test_utils::OfflineHarness;
 
     fn soundfont_slot(soundfont_id: &str, program: u8) -> SlotState {
-        SlotState::built_in(
+        registry::register([Entry::builtin_instrument_descriptor(
             BUILTIN_SOUNDFONT_ID,
-            soundfont_synth::state(soundfont_id, 0, program),
-        )
+            "SoundFont",
+            &ProcessorDescriptor {
+                name: "SoundFont",
+                params: &[],
+                editor: None,
+            },
+        )]);
+        let mut state = vec![program];
+        state.extend_from_slice(soundfont_id.as_bytes());
+        SlotState::built_in(BUILTIN_SOUNDFONT_ID, ProcessorState(state))
     }
 
     struct GateProcessor {
@@ -1068,158 +1087,6 @@ mod tests {
     }
 
     #[test]
-    fn immediate_reset_and_panic_silence_active_soundfont_node() {
-        let mut harness = OfflineHarness::new(44_100, 64);
-        let handle = harness.context().with_activation(|| {
-            let loaded = LoadedSoundfont::load(&test_soundfont_resource())
-                .expect("test soundfont should load");
-            let processor = SoundfontProcessor::new(
-                &loaded.soundfont,
-                SoundfontSynthSettings::new(44_100, 64),
-                SoundfontProcessorState::default(),
-            )
-            .expect("soundfont processor should initialize");
-            let reset_state = SharedInstrumentResetState::default();
-            let node = handle(InstrumentProcessorNode::new(
-                Box::new(processor),
-                reset_state.clone(),
-            ));
-            graph_output(0, node.channels(2));
-            InstrumentRuntimeHandle::new(node, reset_state)
-        });
-
-        harness.commands().transport_play();
-        handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
-
-        for _ in 0..256 {
-            harness.process_block();
-            if harness.output_has_signal() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-        assert!(harness.output_has_signal(), "note on should produce signal");
-
-        handle.send_reset(harness.commands(), 1);
-        handle.send_midi_immediate(
-            harness.commands(),
-            1,
-            MidiEvent::AllSoundOff { channel: 0 },
-            InstrumentRuntimeHandle::immediate_event_delay(1),
-        );
-
-        for _ in 0..256 {
-            harness.process_block();
-            if !harness.output_has_signal() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-
-        panic!("immediate reset and panic should silence active soundfont node");
-    }
-
-    #[test]
-    fn scheduled_midi_reaches_late_added_soundfont_node() {
-        let mut harness = OfflineHarness::new(44_100, 64);
-        harness.process_blocks(8);
-
-        let handle = harness.context().with_activation(|| {
-            let loaded = LoadedSoundfont::load(&test_soundfont_resource())
-                .expect("test soundfont should load");
-            let processor = SoundfontProcessor::new(
-                &loaded.soundfont,
-                SoundfontSynthSettings::new(44_100, 64),
-                SoundfontProcessorState::default(),
-            )
-            .expect("soundfont processor should initialize");
-            let reset_state = SharedInstrumentResetState::default();
-            let node = handle(InstrumentProcessorNode::new(
-                Box::new(processor),
-                reset_state.clone(),
-            ));
-            graph_output(0, node.channels(2));
-            InstrumentRuntimeHandle::new(node, reset_state)
-        });
-
-        harness.commands().transport_play();
-        handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
-
-        for _ in 0..256 {
-            harness.process_block();
-            if harness.output_has_signal() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-
-        panic!("scheduled MIDI did not reach late-added soundfont node");
-    }
-
-    #[test]
-    fn direct_midi_reaches_soundfont_node_added_after_transport_reset() {
-        let mut harness = OfflineHarness::new(44_100, 64);
-        harness.commands().transport_pause();
-        harness
-            .commands()
-            .transport_seek_to_beats(Beats::from_beats_f64(0.0));
-        harness.process_blocks(8);
-
-        let handle = harness.context().with_activation(|| {
-            let loaded = LoadedSoundfont::load(&test_soundfont_resource())
-                .expect("test soundfont should load");
-            let processor = SoundfontProcessor::new(
-                &loaded.soundfont,
-                SoundfontSynthSettings::new(44_100, 64),
-                SoundfontProcessorState::default(),
-            )
-            .expect("soundfont processor should initialize");
-            let reset_state = SharedInstrumentResetState::default();
-            let node = handle(InstrumentProcessorNode::new(
-                Box::new(processor),
-                reset_state.clone(),
-            ));
-            graph_output(0, node.channels(2));
-            InstrumentRuntimeHandle::new(node, reset_state)
-        });
-
-        harness.commands().transport_play();
-        harness.process_blocks(8);
-        handle.send_midi(
-            harness.commands(),
-            MidiEvent::NoteOn {
-                channel: 0,
-                note: 60,
-                velocity: 100,
-            },
-        );
-
-        for _ in 0..256 {
-            harness.process_block();
-            if harness.output_has_signal() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-
-        panic!("direct MIDI did not reach soundfont node added after transport reset");
-    }
-
-    #[test]
     fn stale_reset_generation_does_not_silence_newer_note() {
         let mut harness = OfflineHarness::new(44_100, 64);
         let handle = harness.context().with_activation(|| {
@@ -1301,6 +1168,16 @@ mod tests {
 
     #[test]
     fn gain_effect_slot_reports_processor_descriptor_and_no_editor_yet() {
+        registry::register([Entry::builtin_effect(
+            crate::instrument::BUILTIN_GAIN_ID,
+            "Gain",
+            &ProcessorDescriptor {
+                name: "Gain",
+                params: &[],
+                editor: None,
+            },
+            |_| Ok(None),
+        )]);
         let slot = crate::instrument::SlotState {
             kind: crate::instrument::ProcessorKind::BuiltIn {
                 processor_id: crate::instrument::BUILTIN_GAIN_ID.to_string(),
@@ -1315,48 +1192,5 @@ mod tests {
 
         assert_eq!(descriptor.name, "Gain");
         assert!(descriptor.editor.is_none());
-    }
-
-    #[test]
-    fn gain_descriptor_normalizes_zero_db_consistently() {
-        let mut processor = crate::instrument::GainEffectProcessor::from_state(
-            &crate::instrument::ProcessorState::default(),
-        )
-        .expect("gain processor should exist");
-        let normalized = processor
-            .get_param("gain_db")
-            .expect("gain should normalize");
-
-        processor.set_param("gain_db", normalized);
-        let mut left_out = [0.0; 1];
-        let mut right_out = [0.0; 1];
-        processor.process(&[1.0], &[1.0], &mut left_out, &mut right_out);
-        assert!((left_out[0] - 1.0).abs() < 1.0e-4);
-        assert!((right_out[0] - 1.0).abs() < 1.0e-4);
-    }
-
-    #[test]
-    fn soundfont_program_descriptor_roundtrips_normalized_value() {
-        let resource = test_soundfont_resource();
-        let loaded = LoadedSoundfont::load(&resource).expect("soundfont should load");
-        let mut processor = SoundfontProcessor::new(
-            &loaded.soundfont,
-            SoundfontSynthSettings::new(48_000, 64),
-            SoundfontProcessorState {
-                soundfont_id: resource.id,
-                bank: 0,
-                program: 64,
-                ..SoundfontProcessorState::default()
-            },
-        )
-        .expect("soundfont processor should initialize");
-        let normalized = processor
-            .get_param("program")
-            .expect("program should normalize");
-
-        processor.set_param("program", normalized);
-        let decoded = SoundfontProcessor::decode_state(&processor.save_state())
-            .expect("saved state should decode");
-        assert_eq!(decoded.program, 64);
     }
 }
