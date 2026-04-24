@@ -1462,7 +1462,7 @@ impl CodeEditor {
     ///
     /// # Returns
     ///
-    /// A `Task<Message>` (currently Task::none() as no scrolling is needed)
+    /// A `Task<Message>` that keeps the cursor centered when center-cursor mode is enabled.
     fn handle_mouse_click_msg(&mut self, point: iced::Point) -> Task<Message> {
         // Capture focus when clicked using the new focus method
         self.request_focus();
@@ -1474,17 +1474,42 @@ impl CodeEditor {
         // End grouping on mouse click
         self.end_grouping_if_active();
 
+        let previous_cursor = self.cursor;
         self.handle_mouse_click(point);
+        let clicked_cursor = self.cursor;
         self.reset_cursor_blink();
         // Clear selection on click
         self.clear_selection();
-        self.is_dragging = true;
-        self.selection_start = Some(self.cursor);
+        self.is_dragging = false;
 
         // Show cursor when focused
         self.show_cursor = true;
 
-        Task::none()
+        if !self.center_cursor || clicked_cursor == previous_cursor {
+            Task::none()
+        } else {
+            self.pending_center_cursor_scroll = Some(clicked_cursor);
+            self.scroll_clicked_cursor_to_center(clicked_cursor)
+        }
+    }
+
+    fn scroll_clicked_cursor_to_center(&self, cursor: (usize, usize)) -> Task<Message> {
+        iced::Task::batch([
+            iced::widget::operation::scroll_to(
+                self.scrollable_id.clone(),
+                iced::widget::scrollable::AbsoluteOffset {
+                    x: 0.0,
+                    y: self.target_vertical_scroll_offset_for_line(cursor.0, cursor.1),
+                },
+            ),
+            iced::widget::operation::scroll_to(
+                self.horizontal_scrollable_id.clone(),
+                iced::widget::scrollable::AbsoluteOffset {
+                    x: self.horizontal_scroll_offset,
+                    y: 0.0,
+                },
+            ),
+        ])
     }
 
     fn handle_mouse_double_click_msg(&mut self, point: iced::Point) -> Task<Message> {
@@ -2060,6 +2085,18 @@ impl CodeEditor {
         &mut self,
         viewport: iced::widget::scrollable::Viewport,
     ) -> Task<Message> {
+        let new_scroll = viewport.absolute_offset().y;
+        let new_height = viewport.bounds().height;
+        let new_width = viewport.bounds().width;
+        self.handle_vertical_scroll(new_scroll, new_width, new_height)
+    }
+
+    fn handle_vertical_scroll(
+        &mut self,
+        new_scroll: f32,
+        new_width: f32,
+        new_height: f32,
+    ) -> Task<Message> {
         // Virtual-scrolling cache window:
         // Instead of clearing the canvas cache for every small scroll,
         // we maintain a larger "render window" of visual lines around
@@ -2068,9 +2105,6 @@ impl CodeEditor {
         // size changes significantly. This prevents frequent re-highlighting
         // and layout recomputation for very large files while ensuring
         // the first scroll renders correctly without requiring a click.
-        let new_scroll = viewport.absolute_offset().y;
-        let new_height = viewport.bounds().height;
-        let new_width = viewport.bounds().width;
         let scroll_changed = (self.viewport_scroll - new_scroll).abs() > 0.1;
         let content_scroll = (new_scroll
             - if self.center_cursor {
@@ -2119,6 +2153,14 @@ impl CodeEditor {
         self.viewport_width = new_width;
 
         if self.center_cursor && scroll_changed {
+            if let Some(cursor) = self.pending_center_cursor_scroll.take() {
+                let expected_scroll =
+                    self.target_vertical_scroll_offset_for_line(cursor.0, cursor.1);
+                if (new_scroll - expected_scroll).abs() <= self.line_height * 0.5 {
+                    return self.clamp_horizontal_scroll_task();
+                }
+            }
+
             let visual_lines = self.visual_lines_cached(new_width);
             if !visual_lines.is_empty() {
                 let target_visual = ((new_scroll / self.line_height).round() as usize)
@@ -2135,6 +2177,10 @@ impl CodeEditor {
             }
         }
 
+        self.clamp_horizontal_scroll_task()
+    }
+
+    fn clamp_horizontal_scroll_task(&mut self) -> Task<Message> {
         if self.clamp_horizontal_scroll_offset() {
             return iced::widget::operation::scroll_to(
                 self.horizontal_scrollable_id.clone(),
@@ -3150,6 +3196,72 @@ mod tests {
 
         assert!(editor.has_canvas_focus);
         assert!(editor.show_cursor);
+    }
+
+    #[test]
+    fn mouse_click_with_center_cursor_scrolls_to_clicked_cursor() {
+        let content = (0..40)
+            .map(|index| format!("line {index} abcdefghijklmnopqrstuvwxyz"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut editor = CodeEditor::new(&content, "ly");
+        editor.set_center_cursor(true);
+        editor.set_viewport_size(800.0, 120.0);
+
+        let click_col = 6;
+        let click_x = editor.gutter_width() + 5.0 + editor.char_width() * click_col as f32 + 1.0;
+        let click_y = editor.line_height() * 4.0 + 1.0;
+        let expected_scroll = editor.target_vertical_scroll_offset_for_line(4, click_col);
+        let task = editor.update(&Message::MouseClick(iced::Point::new(click_x, click_y)));
+
+        assert_eq!(editor.cursor_position(), (4, click_col));
+        assert_eq!(editor.selection_start, None);
+        assert_eq!(editor.selection_end, None);
+        assert!(!editor.is_dragging);
+        assert_eq!(editor.viewport_scroll(), 0.0);
+        assert_eq!(expected_scroll, editor.line_height() * 4.0);
+        assert_eq!(task.units(), 2);
+    }
+
+    #[test]
+    fn center_cursor_scroll_events_do_not_override_recent_clicked_cursor() {
+        let content = (0..40)
+            .map(|index| format!("line {index} abcdefghijklmnopqrstuvwxyz"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut editor = CodeEditor::new(&content, "ly");
+        editor.set_center_cursor(true);
+        editor.set_viewport_size(800.0, 120.0);
+        let click_col = 8;
+        let click_x = editor.gutter_width() + 5.0 + editor.char_width() * click_col as f32 + 1.0;
+        let click_y = editor.line_height() * 4.0 + 1.0;
+
+        let _ = editor.update(&Message::MouseClick(iced::Point::new(click_x, click_y)));
+        let _ = editor.handle_vertical_scroll(editor.line_height() * 4.0, 800.0, 120.0);
+
+        assert_eq!(editor.cursor_position(), (4, click_col));
+        assert_eq!(editor.pending_center_cursor_scroll, None);
+        assert_eq!(editor.selection_start, None);
+        assert_eq!(editor.selection_end, None);
+    }
+
+    #[test]
+    fn user_scroll_with_center_cursor_moves_cursor_to_center_line() {
+        let content = (0..40)
+            .map(|index| format!("line {index} abcdefghijklmnopqrstuvwxyz"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut editor = CodeEditor::new(&content, "ly");
+        editor.set_center_cursor(true);
+        editor.set_viewport_size(800.0, 120.0);
+        editor.cursor = (4, 8);
+        editor.preferred_column = 8;
+
+        let _ = editor.handle_vertical_scroll(editor.line_height() * 10.0, 800.0, 120.0);
+
+        assert_eq!(editor.cursor_position(), (10, 8));
+        assert_eq!(editor.selection_start, None);
+        assert_eq!(editor.selection_end, None);
     }
 
     #[test]

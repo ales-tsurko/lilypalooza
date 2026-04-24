@@ -211,6 +211,8 @@ pub struct CodeEditor {
     pub(crate) viewport_width: f32,
     /// Whether the cursor should stay vertically centered while navigating.
     pub(crate) center_cursor: bool,
+    /// Cursor jump that requested a programmatic center-cursor scroll.
+    pub(crate) pending_center_cursor_scroll: Option<(usize, usize)>,
     /// Preferred logical column preserved across vertical navigation.
     pub(crate) preferred_column: usize,
     /// Command history for undo/redo
@@ -537,6 +539,7 @@ impl CodeEditor {
             viewport_height: 600.0, // Default, will be updated
             viewport_width: 800.0,  // Default, will be updated
             center_cursor: false,
+            pending_center_cursor_scroll: None,
             preferred_column: 0,
             history: CommandHistory::new(100),
             is_grouping: false,
@@ -727,6 +730,7 @@ impl CodeEditor {
         }
 
         self.center_cursor = enabled;
+        self.pending_center_cursor_scroll = None;
         self.content_cache.clear();
         self.overlay_cache.clear();
     }
@@ -1137,6 +1141,7 @@ impl CodeEditor {
         self.selection_end = None;
         self.is_dragging = false;
         self.viewport_scroll = 0.0;
+        self.pending_center_cursor_scroll = None;
         self.history = CommandHistory::new(100);
         self.is_grouping = false;
         self.completion_state = completion::CompletionState::default();

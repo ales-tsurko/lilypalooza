@@ -20,14 +20,17 @@ impl CodeEditor {
     }
 
     pub(crate) fn target_vertical_scroll_offset_for_cursor(&self) -> f32 {
+        self.target_vertical_scroll_offset_for_line(self.cursor.0, self.cursor.1)
+    }
+
+    pub(crate) fn target_vertical_scroll_offset_for_line(&self, line: usize, col: usize) -> f32 {
         let visual_lines = self.visual_lines_cached(self.viewport_width);
-        let cursor_visual =
-            WrappingCalculator::logical_to_visual(&visual_lines, self.cursor.0, self.cursor.1);
+        let cursor_visual = WrappingCalculator::logical_to_visual(&visual_lines, line, col);
 
         let cursor_y = if let Some(visual_idx) = cursor_visual {
             visual_idx as f32 * self.line_height
         } else {
-            self.cursor.0 as f32 * self.line_height
+            line as f32 * self.line_height
         };
 
         if self.center_cursor {
@@ -196,9 +199,7 @@ impl CodeEditor {
             return None; // Clicked in gutter
         }
 
-        // Calculate visual line number - point.y is already in canvas coordinates
-        let content_y = (point.y - self.centered_vertical_padding()).max(0.0);
-        let visual_line_idx = (content_y / self.line_height) as usize;
+        let visual_line_idx = (point.y.max(0.0) / self.line_height) as usize;
 
         // Reuse memoized wrapping result for hit-testing. This avoids recomputing
         // visual lines on every mouse move/drag.
