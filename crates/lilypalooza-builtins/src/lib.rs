@@ -13,7 +13,7 @@ pub fn register_all() {
     registry::register([
         Entry::builtin_instrument(
             BUILTIN_SOUNDFONT_ID,
-            "SoundFont",
+            "SF-01",
             soundfont_synth::DESCRIPTOR,
             soundfont_synth::create_runtime,
         ),
@@ -29,4 +29,18 @@ pub fn register_all() {
             metronome_synth::DESCRIPTOR,
         ),
     ]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn soundfont_builtin_registry_name_is_sf_01() {
+        register_all();
+        let entry = registry::entry(BUILTIN_SOUNDFONT_ID).expect("soundfont entry should exist");
+
+        assert_eq!(entry.name, "SF-01");
+        assert_eq!(entry.descriptor.name, "SF-01");
+    }
 }

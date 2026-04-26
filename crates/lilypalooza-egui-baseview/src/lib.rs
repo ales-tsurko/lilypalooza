@@ -10,6 +10,7 @@ use baseview::{
 use egui::{Pos2, RawInput, Rect, Vec2};
 use egui_glow::Painter;
 use glow::HasContext;
+use keyboard_types::{Key, KeyState, KeyboardEvent, Modifiers};
 use raw_window_handle::{
     AppKitWindowHandle, HasRawWindowHandle, RawWindowHandle, WaylandWindowHandle,
     Win32WindowHandle, XcbWindowHandle, XlibWindowHandle,
@@ -258,7 +259,12 @@ impl<App: EguiApp> WindowHandler for EguiWindow<App> {
             }
             Event::Window(baseview::WindowEvent::WillClose) => {}
             Event::Mouse(mouse_event) => self.handle_mouse(mouse_event),
-            Event::Keyboard(_) => return EventStatus::Ignored,
+            Event::Keyboard(key_event) => {
+                if is_command_quit(&key_event) {
+                    return EventStatus::Ignored;
+                }
+                self.handle_keyboard(key_event);
+            }
         }
         EventStatus::Captured
     }
@@ -314,6 +320,93 @@ impl<App: EguiApp> EguiWindow<App> {
             | MouseEvent::DragDropped { .. } => {}
         }
     }
+
+    fn handle_keyboard(&mut self, event: KeyboardEvent) {
+        let modifiers = egui_modifiers(event.modifiers);
+        self.input.modifiers = modifiers;
+        let pressed = event.state == KeyState::Down;
+
+        if pressed
+            && !event.is_composing
+            && !modifiers.command
+            && !modifiers.ctrl
+            && let Key::Character(text) = &event.key
+            && is_text_input(text)
+        {
+            self.push_event(egui::Event::Text(text.clone()));
+        }
+
+        if let Some(key) = egui_key(&event.key) {
+            self.push_event(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: event.repeat,
+                modifiers,
+            });
+        }
+    }
+}
+
+fn egui_modifiers(modifiers: Modifiers) -> egui::Modifiers {
+    egui::Modifiers {
+        alt: modifiers.alt(),
+        ctrl: modifiers.ctrl(),
+        shift: modifiers.shift(),
+        mac_cmd: modifiers.meta(),
+        command: if cfg!(target_os = "macos") {
+            modifiers.meta()
+        } else {
+            modifiers.ctrl()
+        },
+    }
+}
+
+fn is_command_quit(event: &KeyboardEvent) -> bool {
+    event.state == KeyState::Down
+        && event.modifiers.meta()
+        && matches!(&event.key, Key::Character(value) if value.eq_ignore_ascii_case("q"))
+}
+
+fn is_text_input(text: &str) -> bool {
+    !text.chars().any(char::is_control)
+}
+
+fn egui_key(key: &Key) -> Option<egui::Key> {
+    Some(match key {
+        Key::ArrowDown => egui::Key::ArrowDown,
+        Key::ArrowLeft => egui::Key::ArrowLeft,
+        Key::ArrowRight => egui::Key::ArrowRight,
+        Key::ArrowUp => egui::Key::ArrowUp,
+        Key::Escape => egui::Key::Escape,
+        Key::Tab => egui::Key::Tab,
+        Key::Backspace => egui::Key::Backspace,
+        Key::Enter => egui::Key::Enter,
+        Key::Delete => egui::Key::Delete,
+        Key::Home => egui::Key::Home,
+        Key::End => egui::Key::End,
+        Key::PageUp => egui::Key::PageUp,
+        Key::PageDown => egui::Key::PageDown,
+        Key::Character(value) if value.len() == 1 => match value.as_bytes()[0] {
+            b'0' => egui::Key::Num0,
+            b'1' => egui::Key::Num1,
+            b'2' => egui::Key::Num2,
+            b'3' => egui::Key::Num3,
+            b'4' => egui::Key::Num4,
+            b'5' => egui::Key::Num5,
+            b'6' => egui::Key::Num6,
+            b'7' => egui::Key::Num7,
+            b'8' => egui::Key::Num8,
+            b'9' => egui::Key::Num9,
+            b'a' | b'A' => egui::Key::A,
+            b'c' | b'C' => egui::Key::C,
+            b'v' | b'V' => egui::Key::V,
+            b'x' | b'X' => egui::Key::X,
+            b'z' | b'Z' => egui::Key::Z,
+            _ => return None,
+        },
+        _ => return None,
+    })
 }
 
 fn pointer_button(button: MouseButton) -> Option<egui::PointerButton> {

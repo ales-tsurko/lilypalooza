@@ -3112,7 +3112,9 @@ name = "lilypalooza-builtins"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "auxiliary-window",
  "bincode",
+ "iced",
  "knyst",
  "lilypalooza-audio",
  "lilypalooza-egui-baseview",

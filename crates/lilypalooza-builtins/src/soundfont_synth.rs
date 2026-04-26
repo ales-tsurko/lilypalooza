@@ -31,8 +31,11 @@ const DEFAULT_OUTPUT_GAIN_NORMALIZED: f32 = 2.0 / 3.0;
 const DEFAULT_MAXIMUM_POLYPHONY: u16 = 64;
 const DEFAULT_REVERB_WET: f32 = 40.0 / 127.0;
 const DEFAULT_CHORUS_WET: f32 = 0.0;
-const EDITOR_WIDTH: u32 = 440;
-const EDITOR_HEIGHT: u32 = 304;
+const PROGRAM_SCROLL_WHEEL_POINTS_PER_ROW: f32 = 48.0;
+const EDITOR_WIDTH: u32 = 820;
+const EDITOR_HEIGHT: u32 = 456;
+const RETRO_UI_FONT: &str = "retro-ui";
+const RETRO_DISPLAY_FONT: &str = "retro-display";
 
 /// Persisted state for the built-in SoundFont instrument.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -165,6 +168,7 @@ struct SharedSoundfontStateInner {
     output_gain_bits: AtomicU32,
     reverb_wet_bits: AtomicU32,
     chorus_wet_bits: AtomicU32,
+    midi_activity: AtomicU32,
     revision: AtomicU32,
 }
 
@@ -181,6 +185,7 @@ impl SharedSoundfontState {
                 output_gain_bits: AtomicU32::new(state.output_gain.to_bits()),
                 reverb_wet_bits: AtomicU32::new(state.reverb_wet.to_bits()),
                 chorus_wet_bits: AtomicU32::new(state.chorus_wet.to_bits()),
+                midi_activity: AtomicU32::new(0),
                 revision: AtomicU32::new(1),
             }),
         }
@@ -240,6 +245,14 @@ impl SharedSoundfontState {
     fn soundfont(&self) -> Arc<SoundFont> {
         self.inner.soundfont.load_full()
     }
+
+    fn mark_midi_activity(&self) {
+        self.inner.midi_activity.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn midi_activity(&self) -> u32 {
+        self.inner.midi_activity.load(Ordering::Relaxed)
+    }
 }
 
 const SOUNDFONT_PARAMS: &[ParameterDescriptor] = &[
@@ -281,7 +294,7 @@ const SOUNDFONT_PARAMS: &[ParameterDescriptor] = &[
 ];
 
 pub(crate) const DESCRIPTOR: &ProcessorDescriptor = &ProcessorDescriptor {
-    name: "SoundFont",
+    name: "SF-01",
     params: SOUNDFONT_PARAMS,
     editor: Some(EditorDescriptor {
         default_size: EditorSize {
@@ -434,11 +447,23 @@ impl EditorSession for SoundfontEditorSession {
         let window = open_parented(
             parent.window,
             EguiWindowOptions {
-                title: "SoundFont".to_string(),
+                title: "SF-01".to_string(),
                 width: f64::from(EDITOR_WIDTH),
                 height: f64::from(EDITOR_HEIGHT),
             },
-            move || SoundfontEditorApp { shared },
+            move || SoundfontEditorApp {
+                shared,
+                retro_style_installed: false,
+                bank_text: String::new(),
+                bank_text_focused: false,
+                polyphony_text: String::new(),
+                polyphony_text_focused: false,
+                program_scroll_first: 0,
+                program_scroll_remainder: 0.0,
+                soundfont_dropdown_open: false,
+                seen_midi_activity: 0,
+                midi_flash_frames: 0,
+            },
         )
         .map_err(|error| EditorError::Backend(error.to_string()))?;
 
@@ -478,162 +503,303 @@ impl Drop for SoundfontEditorSession {
 
 struct SoundfontEditorApp {
     shared: Arc<SharedSoundfontBinding>,
+    retro_style_installed: bool,
+    bank_text: String,
+    bank_text_focused: bool,
+    polyphony_text: String,
+    polyphony_text_focused: bool,
+    program_scroll_first: usize,
+    program_scroll_remainder: f32,
+    soundfont_dropdown_open: bool,
+    seen_midi_activity: u32,
+    midi_flash_frames: u8,
 }
 
 impl EguiApp for SoundfontEditorApp {
     fn update(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
-            ui.add_space(4.0);
+        if !self.retro_style_installed {
+            install_retro_style(ctx);
+            self.retro_style_installed = true;
+            ctx.request_repaint();
+            return;
+        }
 
-            let (snapshot, _) = self.shared.state.snapshot();
-            let soundfont_names = self
-                .shared
-                .catalog
-                .iter()
-                .map(|entry| entry.name.clone())
-                .collect::<Vec<_>>();
-            let selected_soundfont =
-                selected_soundfont_index(&self.shared.catalog, &snapshot.soundfont_id);
-            let banks = bank_numbers(&self.shared.catalog, selected_soundfont);
-            let bank_index = selected_bank_index(&banks, snapshot.bank);
-            let programs = program_choices(&self.shared.catalog, selected_soundfont, snapshot.bank);
-            let program_index = selected_program_index(&programs, snapshot.program);
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::default()
+                    .fill(retro::FACE)
+                    .inner_margin(egui::Margin::ZERO),
+            )
+            .show(ctx, |ui| {
+                let (snapshot, _) = self.shared.state.snapshot();
+                let soundfont_names = self
+                    .shared
+                    .catalog
+                    .iter()
+                    .map(|entry| entry.name.clone())
+                    .collect::<Vec<_>>();
+                let selected_soundfont =
+                    selected_soundfont_index(&self.shared.catalog, &snapshot.soundfont_id);
+                let banks = bank_numbers(&self.shared.catalog, selected_soundfont);
+                let bank_index = selected_bank_index(&banks, snapshot.bank);
+                let programs =
+                    program_choices(&self.shared.catalog, selected_soundfont, snapshot.bank);
+                let program_index = selected_program_index(&programs, snapshot.program);
+                if self.bank_text.is_empty() && !self.bank_text_focused {
+                    self.bank_text = snapshot.bank.to_string();
+                }
+                if self.polyphony_text.is_empty() && !self.polyphony_text_focused {
+                    self.polyphony_text = snapshot.maximum_polyphony.to_string();
+                }
 
-            editor_row(ui, "SoundFont", |ui| {
-                let selected = soundfont_names
-                    .get(selected_soundfont)
-                    .map_or("No SoundFonts", String::as_str);
-                egui::ComboBox::from_id_salt("soundfont-resource")
-                    .selected_text(selected)
-                    .width(ui.available_width())
-                    .show_ui(ui, |ui| {
-                        for (index, name) in soundfont_names.iter().enumerate() {
-                            if ui
-                                .selectable_label(index == selected_soundfont, name)
-                                .clicked()
-                            {
-                                self.select_soundfont(index);
-                            }
-                        }
-                    });
-            });
-
-            editor_row(ui, "Bank", |ui| {
-                let selected = banks
-                    .get(bank_index)
-                    .map_or_else(|| "No banks".to_string(), |bank| format!("Bank {bank}"));
-                egui::ComboBox::from_id_salt("soundfont-bank")
-                    .selected_text(selected)
-                    .width(ui.available_width())
-                    .show_ui(ui, |ui| {
-                        for (index, bank) in banks.iter().enumerate() {
-                            if ui
-                                .selectable_label(index == bank_index, format!("Bank {bank}"))
-                                .clicked()
-                            {
-                                self.select_bank(*bank);
-                            }
-                        }
-                    });
-            });
-
-            editor_row(ui, "Program", |ui| {
-                let selected = programs
-                    .get(program_index)
-                    .map_or("No programs", |program| program.label.as_str());
-                egui::ComboBox::from_id_salt("soundfont-program")
-                    .selected_text(selected)
-                    .width(ui.available_width())
-                    .show_ui(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .max_height(224.0)
-                            .show(ui, |ui| {
-                                for (index, program) in programs.iter().enumerate() {
-                                    if ui
-                                        .selectable_label(index == program_index, &program.label)
-                                        .clicked()
-                                    {
-                                        self.select_program(program.program);
-                                        ui.close();
-                                    }
-                                }
-                            });
-                    });
-            });
-
-            let mut follow_midi = snapshot.follow_midi;
-            if ui
-                .checkbox(&mut follow_midi, "Follow MIDI bank/program")
-                .changed()
-            {
+                let canvas = ui.max_rect();
+                draw_window_shell(ui, canvas);
                 let mut state = snapshot.clone();
-                state.follow_midi = follow_midi;
-                self.apply_state(state);
-            }
+                let mut changed = false;
 
-            editor_row(ui, "Polyphony", |ui| {
-                let mut polyphony = i32::from(snapshot.maximum_polyphony);
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut polyphony)
-                            .range(i32::from(MINIMUM_POLYPHONY)..=i32::from(MAXIMUM_POLYPHONY))
-                            .speed(1),
+                retro_group(ui, rect(18.0, 74.0, 390.0, 74.0), "SOUNDFONT", |ui| {
+                    let selected = soundfont_names
+                        .get(selected_soundfont)
+                        .map_or("No SoundFonts", String::as_str);
+                    if retro_select_box(ui, rect(0.0, 6.0, 350.0, 30.0), "soundfont", selected)
+                        .clicked()
+                        && !soundfont_names.is_empty()
+                    {
+                        self.soundfont_dropdown_open = !self.soundfont_dropdown_open;
+                    }
+                });
+
+                retro_group(ui, rect(424.0, 74.0, 154.0, 74.0), "BANK", |ui| {
+                    let bank_response = retro_number_field(
+                        ui,
+                        rect(0.0, 6.0, 92.0, 30.0),
+                        "bank-number",
+                        &mut self.bank_text,
+                        snapshot.bank,
+                        0,
+                        MIDI_14BIT_MAX,
+                    );
+                    self.bank_text_focused = bank_response.focused;
+                    if let Some(bank) = bank_response.value {
+                        state.bank = bank;
+                        changed = true;
+                    }
+                    if retro_step_button(ui, rect(98.0, 6.0, 28.0, 14.0), true).clicked()
+                        && !banks.is_empty()
+                    {
+                        let next = banks[(bank_index + 1) % banks.len()];
+                        self.bank_text = next.to_string();
+                        self.bank_text_focused = false;
+                        self.select_bank(next);
+                    }
+                    if retro_step_button(ui, rect(98.0, 22.0, 28.0, 14.0), false).clicked()
+                        && !banks.is_empty()
+                    {
+                        let next = banks[(bank_index + banks.len() - 1) % banks.len()];
+                        self.bank_text = next.to_string();
+                        self.bank_text_focused = false;
+                        self.select_bank(next);
+                    }
+                });
+
+                let midi_activity = self.shared.state.midi_activity();
+                if midi_activity != self.seen_midi_activity {
+                    self.seen_midi_activity = midi_activity;
+                    self.midi_flash_frames = 12;
+                }
+                let midi_active = self.midi_flash_frames > 0;
+                self.midi_flash_frames = self.midi_flash_frames.saturating_sub(1);
+
+                retro_group(ui, rect(604.0, 74.0, 196.0, 166.0), "MIDI", |ui| {
+                    if retro_checkbox(
+                        ui,
+                        rect(2.0, 20.0, 136.0, 24.0),
+                        snapshot.follow_midi,
+                        "Follow program",
                     )
-                    .changed()
+                    .clicked()
+                    {
+                        state.follow_midi = !snapshot.follow_midi;
+                        changed = true;
+                    }
+                    draw_led(
+                        ui,
+                        pos(10.0, 72.0),
+                        true,
+                        if midi_active {
+                            retro::GREEN
+                        } else {
+                            retro::LED_IDLE
+                        },
+                    );
+                    retro_text(ui, pos(32.0, 64.0), "MIDI IN", 18.0, retro::TEXT, false);
+                });
+
+                retro_group(ui, rect(18.0, 166.0, 390.0, 280.0), "PROGRAM", |ui| {
+                    draw_display_box(
+                        ui,
+                        rect(0.0, 16.0, 316.0, 30.0),
+                        programs
+                            .get(program_index)
+                            .map_or("No programs", |program| program.label.as_str()),
+                    );
+                    if retro_step_button(ui, rect(322.0, 16.0, 28.0, 14.0), true).clicked()
+                        && !programs.is_empty()
+                    {
+                        self.select_program(
+                            programs[(program_index + programs.len() - 1) % programs.len()].program,
+                        );
+                    }
+                    if retro_step_button(ui, rect(322.0, 32.0, 28.0, 14.0), false).clicked()
+                        && !programs.is_empty()
+                    {
+                        self.select_program(programs[(program_index + 1) % programs.len()].program);
+                    }
+                    if let Some(program) = program_list(
+                        ui,
+                        rect(0.0, 54.0, 350.0, 192.0),
+                        &programs,
+                        program_index,
+                        &mut self.program_scroll_first,
+                        &mut self.program_scroll_remainder,
+                    ) {
+                        self.select_program(program);
+                    }
+                });
+
+                retro_group(ui, rect(424.0, 166.0, 154.0, 74.0), "POLYPHONY", |ui| {
+                    let polyphony_response = retro_number_field(
+                        ui,
+                        rect(0.0, 6.0, 92.0, 30.0),
+                        "polyphony-number",
+                        &mut self.polyphony_text,
+                        snapshot.maximum_polyphony,
+                        MINIMUM_POLYPHONY,
+                        MAXIMUM_POLYPHONY,
+                    );
+                    self.polyphony_text_focused = polyphony_response.focused;
+                    if let Some(polyphony) = polyphony_response.value {
+                        state.maximum_polyphony = polyphony;
+                        changed = true;
+                    }
+                    if retro_step_button(ui, rect(98.0, 6.0, 28.0, 14.0), true).clicked() {
+                        state.maximum_polyphony = snapshot
+                            .maximum_polyphony
+                            .saturating_add(1)
+                            .min(MAXIMUM_POLYPHONY);
+                        self.polyphony_text = state.maximum_polyphony.to_string();
+                        self.polyphony_text_focused = false;
+                        changed = true;
+                    }
+                    if retro_step_button(ui, rect(98.0, 22.0, 28.0, 14.0), false).clicked() {
+                        state.maximum_polyphony = snapshot
+                            .maximum_polyphony
+                            .saturating_sub(1)
+                            .max(MINIMUM_POLYPHONY);
+                        self.polyphony_text = state.maximum_polyphony.to_string();
+                        self.polyphony_text_focused = false;
+                        changed = true;
+                    }
+                });
+
+                retro_group(
+                    ui,
+                    rect(424.0, 258.0, 376.0, 56.0),
+                    "REVERB DRY / WET",
+                    |ui| {
+                        if let Some(next) = retro_slider(
+                            ui,
+                            "reverb-wet",
+                            rect(54.0, 9.0, 208.0, 20.0),
+                            snapshot.reverb_wet,
+                        ) {
+                            state.reverb_wet = next.unwrap_or(0.0);
+                            changed = true;
+                        }
+                        retro_text(ui, pos(0.0, 10.0), "DRY", 14.0, retro::TEXT, true);
+                        retro_text(ui, pos(270.0, 10.0), "WET", 14.0, retro::TEXT, true);
+                        retro_text(
+                            ui,
+                            pos(306.0, 7.0),
+                            &format!("{:.0}%", snapshot.reverb_wet * 100.0),
+                            18.0,
+                            retro::DISPLAY,
+                            true,
+                        );
+                    },
+                );
+
+                retro_group(
+                    ui,
+                    rect(424.0, 324.0, 376.0, 56.0),
+                    "CHORUS DRY / WET",
+                    |ui| {
+                        if let Some(next) = retro_slider(
+                            ui,
+                            "chorus-wet",
+                            rect(54.0, 9.0, 208.0, 20.0),
+                            snapshot.chorus_wet,
+                        ) {
+                            state.chorus_wet = next.unwrap_or(0.0);
+                            changed = true;
+                        }
+                        retro_text(ui, pos(0.0, 10.0), "DRY", 14.0, retro::TEXT, true);
+                        retro_text(ui, pos(270.0, 10.0), "WET", 14.0, retro::TEXT, true);
+                        retro_text(
+                            ui,
+                            pos(306.0, 7.0),
+                            &format!("{:.0}%", snapshot.chorus_wet * 100.0),
+                            18.0,
+                            retro::DISPLAY,
+                            true,
+                        );
+                    },
+                );
+
+                retro_group(
+                    ui,
+                    rect(424.0, 390.0, 376.0, 56.0),
+                    "OUTPUT GAIN (DB)",
+                    |ui| {
+                        let value = normalize_output_gain(snapshot.output_gain);
+                        if let Some(next) =
+                            retro_slider(ui, "output-gain", rect(54.0, 9.0, 208.0, 20.0), value)
+                        {
+                            state.output_gain = next
+                                .map(denormalize_output_gain)
+                                .unwrap_or_else(|| output_gain_from_db(0.0));
+                            changed = true;
+                        }
+                        retro_text(ui, pos(0.0, 10.0), "-24", 14.0, retro::TEXT, true);
+                        retro_text(ui, pos(270.0, 10.0), "+12", 14.0, retro::TEXT, true);
+                        retro_text(
+                            ui,
+                            pos(306.0, 7.0),
+                            &format_output_gain_number(output_gain_to_db(snapshot.output_gain)),
+                            18.0,
+                            retro::DISPLAY,
+                            true,
+                        );
+                    },
+                );
+
+                if self.soundfont_dropdown_open
+                    && let Some(index) = retro_choice_list(
+                        ui,
+                        rect(38.0, 128.0, 350.0, 96.0),
+                        &soundfont_names,
+                        selected_soundfont,
+                        "soundfont-dropdown",
+                    )
                 {
-                    let mut state = snapshot.clone();
-                    state.maximum_polyphony = polyphony
-                        .clamp(i32::from(MINIMUM_POLYPHONY), i32::from(MAXIMUM_POLYPHONY))
-                        as u16;
+                    self.select_soundfont(index);
+                    self.soundfont_dropdown_open = false;
+                }
+
+                if changed {
                     self.apply_state(state);
                 }
             });
-
-            editor_row(ui, "Output Gain", |ui| {
-                let mut gain_db = output_gain_to_db(snapshot.output_gain);
-                ui.horizontal(|ui| {
-                    let slider =
-                        egui::Slider::new(&mut gain_db, MIN_OUTPUT_GAIN_DB..=MAX_OUTPUT_GAIN_DB)
-                            .show_value(false);
-                    let width = (ui.available_width() - 72.0).max(80.0);
-                    if ui.add_sized([width, 20.0], slider).changed() {
-                        let mut state = snapshot.clone();
-                        state.output_gain = output_gain_from_db(gain_db);
-                        self.apply_state(state);
-                    }
-                    ui.label(format_output_gain_db(gain_db));
-                });
-            });
-
-            editor_row(ui, "Reverb Dry/Wet", |ui| {
-                let mut reverb_wet = snapshot.reverb_wet.clamp(0.0, 1.0);
-                ui.horizontal(|ui| {
-                    let slider = egui::Slider::new(&mut reverb_wet, 0.0..=1.0).show_value(false);
-                    let width = (ui.available_width() - 56.0).max(80.0);
-                    if ui.add_sized([width, 20.0], slider).changed() {
-                        let mut state = snapshot.clone();
-                        state.reverb_wet = reverb_wet;
-                        self.apply_state(state);
-                    }
-                    ui.label(format!("{:.0}%", reverb_wet * 100.0));
-                });
-            });
-
-            editor_row(ui, "Chorus Dry/Wet", |ui| {
-                let mut chorus_wet = snapshot.chorus_wet.clamp(0.0, 1.0);
-                ui.horizontal(|ui| {
-                    let slider = egui::Slider::new(&mut chorus_wet, 0.0..=1.0).show_value(false);
-                    let width = (ui.available_width() - 56.0).max(80.0);
-                    if ui.add_sized([width, 20.0], slider).changed() {
-                        let mut state = snapshot.clone();
-                        state.chorus_wet = chorus_wet;
-                        self.apply_state(state);
-                    }
-                    ui.label(format!("{:.0}%", chorus_wet * 100.0));
-                });
-            });
-        });
     }
 }
 
@@ -707,22 +873,738 @@ impl SoundfontEditorApp {
     }
 }
 
-fn editor_row<F>(ui: &mut egui::Ui, label: &'static str, content: F)
+fn install_retro_style(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "w95fa".to_string(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/W95FA.otf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "cozette".to_string(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/CozetteVector.ttf"
+        ))),
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name(RETRO_UI_FONT.into()),
+        vec!["w95fa".to_string()],
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name(RETRO_DISPLAY_FONT.into()),
+        vec!["cozette".to_string()],
+    );
+    fonts
+        .families
+        .get_mut(&egui::FontFamily::Proportional)
+        .expect("default proportional font family exists")
+        .insert(0, "w95fa".to_string());
+    fonts
+        .families
+        .get_mut(&egui::FontFamily::Monospace)
+        .expect("default monospace font family exists")
+        .insert(0, "cozette".to_string());
+    ctx.set_fonts(fonts);
+
+    let mut style = (*ctx.style()).clone();
+    style.visuals.window_corner_radius = 0.into();
+    style.visuals.widgets.noninteractive.corner_radius = 0.into();
+    style.visuals.widgets.inactive.corner_radius = 0.into();
+    style.visuals.widgets.hovered.corner_radius = 0.into();
+    style.visuals.widgets.active.corner_radius = 0.into();
+    style.spacing.item_spacing = egui::vec2(0.0, 0.0);
+    ctx.set_style(style);
+}
+
+fn draw_window_shell(ui: &mut egui::Ui, rect: egui::Rect) {
+    let painter = ui.painter();
+    painter.rect_filled(rect, 0.0, retro::FACE);
+    bevel(painter, rect.shrink(2.0), false);
+
+    let title = egui::Rect::from_min_size(
+        rect.min + egui::vec2(8.0, 8.0),
+        egui::vec2(rect.width() - 16.0, 34.0),
+    );
+    painter.rect_filled(title, 0.0, retro::TITLE);
+    bevel(painter, title, false);
+    painter.text(
+        title.left_center() + egui::vec2(12.0, 1.0),
+        egui::Align2::LEFT_CENTER,
+        "SF-01  SOUNDFONT ROMPLER",
+        retro_font(25.0, false),
+        retro::TITLE_TEXT,
+    );
+}
+
+fn retro_group<F>(ui: &mut egui::Ui, local: egui::Rect, title: &'static str, content: F)
 where
     F: FnOnce(&mut egui::Ui),
 {
-    ui.horizontal(|ui| {
-        ui.set_width(ui.available_width());
-        ui.allocate_ui_with_layout(
-            egui::vec2(104.0, 20.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(label);
-            },
+    let rect = local_rect(ui, local);
+    ui.painter().rect_filled(rect, 0.0, retro::FACE);
+    bevel(ui.painter(), rect, true);
+    let label_pos = rect.min + egui::vec2(18.0, -3.0);
+    let label_galley = ui.painter().layout_no_wrap(
+        title.to_string(),
+        retro_font(20.0, false),
+        retro::LABEL_BLUE,
+    );
+    let label_cover = egui::Rect::from_min_size(
+        label_pos + egui::vec2(-6.0, 2.0),
+        label_galley.size() + egui::vec2(12.0, 2.0),
+    );
+    ui.painter().rect_filled(label_cover, 0.0, retro::FACE);
+    ui.painter()
+        .galley(label_pos, label_galley, retro::LABEL_BLUE);
+
+    let content_rect = rect.shrink2(egui::vec2(20.0, 16.0));
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(content_rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+        content,
+    );
+}
+
+fn retro_select_box(
+    ui: &mut egui::Ui,
+    local: egui::Rect,
+    id: &'static str,
+    text: &str,
+) -> egui::Response {
+    let rect = local_rect(ui, local);
+    let response = ui.interact(rect, ui.id().with(id), egui::Sense::click());
+    ui.painter().rect_filled(rect, 0.0, retro::FIELD);
+    bevel(ui.painter(), rect, true);
+    retro_text_left_center_abs(
+        ui,
+        rect.left_center() + egui::vec2(10.0, -1.0),
+        text,
+        18.0,
+        retro::TEXT,
+        false,
+    );
+    let button = egui::Rect::from_min_max(
+        rect.right_top() - egui::vec2(29.0, 0.0),
+        rect.right_bottom(),
+    );
+    retro_button_frame(
+        ui,
+        button,
+        response.hovered(),
+        response.is_pointer_button_down_on(),
+    );
+    draw_triangle(ui.painter(), button.center(), false, retro::TEXT);
+    response
+}
+
+fn retro_step_button(ui: &mut egui::Ui, local: egui::Rect, up: bool) -> egui::Response {
+    let rect = local_rect(ui, local);
+    let response = ui.interact(
+        rect,
+        ui.id()
+            .with((rect.min.x.to_bits(), rect.min.y.to_bits(), up)),
+        egui::Sense::click(),
+    );
+    retro_button_frame(
+        ui,
+        rect,
+        response.hovered(),
+        response.is_pointer_button_down_on(),
+    );
+    draw_triangle(ui.painter(), rect.center(), up, retro::TEXT);
+    response
+}
+
+fn retro_choice_list(
+    ui: &mut egui::Ui,
+    local: egui::Rect,
+    choices: &[String],
+    selected_index: usize,
+    id: &'static str,
+) -> Option<usize> {
+    let rect = local_rect(ui, local);
+    ui.painter().rect_filled(rect, 0.0, retro::FIELD);
+    bevel(ui.painter(), rect, true);
+
+    let row_height = 24.0;
+    let vertical_padding = 6.0;
+    let visible_rows = ((rect.height() - vertical_padding * 2.0) / row_height)
+        .floor()
+        .max(1.0) as usize;
+    let mut selected = None;
+    for row in 0..visible_rows {
+        let Some(choice) = choices.get(row) else {
+            break;
+        };
+        let row_rect = egui::Rect::from_min_size(
+            rect.min + egui::vec2(4.0, vertical_padding + row as f32 * row_height),
+            egui::vec2(rect.width() - 8.0, row_height - 2.0),
         );
-        ui.add_space(12.0);
-        content(ui);
+        let response = ui.interact(row_rect, ui.id().with((id, row)), egui::Sense::click());
+        if row == selected_index {
+            ui.painter().rect_filled(row_rect, 0.0, retro::SELECT);
+        } else if response.hovered() {
+            ui.painter().rect_filled(row_rect, 0.0, retro::LCD_HOVER);
+        }
+        retro_text_left_center_abs(
+            ui,
+            row_rect.left_center() + egui::vec2(8.0, 0.0),
+            choice,
+            17.0,
+            if row == selected_index {
+                retro::TITLE_TEXT
+            } else {
+                retro::TEXT
+            },
+            false,
+        );
+        if response.clicked() {
+            selected = Some(row);
+        }
+    }
+    selected
+}
+
+fn retro_checkbox(
+    ui: &mut egui::Ui,
+    local: egui::Rect,
+    checked: bool,
+    text: &str,
+) -> egui::Response {
+    let rect = local_rect(ui, local);
+    let response = ui.interact(rect, ui.id().with(text), egui::Sense::click());
+    let box_rect =
+        egui::Rect::from_min_size(rect.min + egui::vec2(0.0, 2.0), egui::vec2(18.0, 18.0));
+    ui.painter().rect_filled(box_rect, 0.0, retro::FIELD);
+    bevel(ui.painter(), box_rect, true);
+    if checked {
+        ui.painter()
+            .rect_filled(box_rect.shrink(4.0), 0.0, retro::GREEN);
+        ui.painter().rect_stroke(
+            box_rect.shrink(4.0),
+            0.0,
+            egui::Stroke::new(1.0, retro::TEXT),
+            egui::StrokeKind::Inside,
+        );
+    }
+    retro_text_abs(
+        ui,
+        rect.min + egui::vec2(28.0, 1.0),
+        text,
+        16.0,
+        retro::TEXT,
+        false,
+    );
+    response
+}
+
+fn draw_display_box(ui: &mut egui::Ui, local: egui::Rect, text: &str) {
+    let rect = local_rect(ui, local);
+    ui.painter().rect_filled(rect, 0.0, retro::LCD);
+    bevel(ui.painter(), rect, true);
+    retro_text_left_center_abs(
+        ui,
+        rect.left_center() + egui::vec2(10.0, -1.0),
+        text,
+        20.0,
+        retro::LCD_TEXT,
+        false,
+    );
+}
+
+struct NumberFieldResponse {
+    value: Option<u16>,
+    focused: bool,
+}
+
+fn retro_number_field(
+    ui: &mut egui::Ui,
+    local: egui::Rect,
+    id: &'static str,
+    text: &mut String,
+    current: u16,
+    min: u16,
+    max: u16,
+) -> NumberFieldResponse {
+    let rect = local_rect(ui, local);
+    ui.painter().rect_filled(rect, 0.0, retro::LCD);
+    bevel(ui.painter(), rect, true);
+
+    let edit_rect = rect.shrink2(egui::vec2(8.0, 3.0));
+    let response = ui.put(
+        edit_rect,
+        egui::TextEdit::singleline(text)
+            .id_salt(id)
+            .font(retro_font(20.0, true))
+            .text_color(retro::LCD_TEXT)
+            .desired_width(edit_rect.width())
+            .frame(false),
+    );
+
+    let commit = response.lost_focus() || ui.input(|input| input.key_pressed(egui::Key::Enter));
+    let value = if commit {
+        if text.trim().is_empty() {
+            None
+        } else {
+            let parsed = text
+                .trim()
+                .parse::<u16>()
+                .map(|value| value.clamp(min, max))
+                .unwrap_or(current);
+            *text = parsed.to_string();
+            Some(parsed)
+        }
+    } else {
+        None
+    };
+
+    NumberFieldResponse {
+        value,
+        focused: response.has_focus(),
+    }
+}
+
+fn draw_led(ui: &mut egui::Ui, local_pos: egui::Pos2, on: bool, color: egui::Color32) {
+    let center = ui.min_rect().min + local_pos.to_vec2();
+    let fill = if on { color } else { retro::SHADOW };
+    ui.painter().circle_filled(center, 6.0, fill);
+    ui.painter()
+        .circle_stroke(center, 7.0, egui::Stroke::new(1.0, retro::BLACK));
+    ui.painter().circle_stroke(
+        center + egui::vec2(-1.0, -1.0),
+        6.0,
+        egui::Stroke::new(1.0, retro::SHADOW),
+    );
+    ui.painter().circle_stroke(
+        center + egui::vec2(1.0, 1.0),
+        6.0,
+        egui::Stroke::new(1.0, retro::HILITE),
+    );
+}
+
+fn program_list(
+    ui: &mut egui::Ui,
+    local: egui::Rect,
+    programs: &[ProgramChoice],
+    selected_index: usize,
+    first: &mut usize,
+    scroll_remainder: &mut f32,
+) -> Option<u8> {
+    let mut selected = None;
+    let rect = local_rect(ui, local);
+    ui.painter().rect_filled(rect, 0.0, retro::FIELD);
+    bevel(ui.painter(), rect, true);
+    let row_height = 24.0;
+    let row_gap = 2.0;
+    let vertical_padding = 6.0;
+    let visible_rows = ((rect.height() - vertical_padding * 2.0) / row_height)
+        .floor()
+        .max(1.0) as usize;
+    let max_first = programs.len().saturating_sub(visible_rows);
+    *first = (*first).min(max_first);
+    let list_response = ui.interact(
+        rect,
+        ui.id().with("program-list-scroll"),
+        egui::Sense::hover(),
+    );
+    if list_response.hovered()
+        || ui.input(|input| {
+            input
+                .pointer
+                .latest_pos()
+                .is_some_and(|pos| rect.contains(pos))
+        })
+    {
+        let scroll_delta = ui.input(|input| input.raw_scroll_delta.y + input.smooth_scroll_delta.y);
+        *scroll_remainder += scroll_delta;
+        while *scroll_remainder <= -PROGRAM_SCROLL_WHEEL_POINTS_PER_ROW {
+            *first = (*first).saturating_add(1).min(max_first);
+            *scroll_remainder += PROGRAM_SCROLL_WHEEL_POINTS_PER_ROW;
+        }
+        while *scroll_remainder >= PROGRAM_SCROLL_WHEEL_POINTS_PER_ROW {
+            *first = (*first).saturating_sub(1);
+            *scroll_remainder -= PROGRAM_SCROLL_WHEEL_POINTS_PER_ROW;
+        }
+    }
+
+    let list_rect = egui::Rect::from_min_max(rect.min, rect.max - egui::vec2(24.0, 0.0));
+    for row in 0..visible_rows {
+        let index = *first + row;
+        let row_rect = egui::Rect::from_min_size(
+            list_rect.min + egui::vec2(4.0, vertical_padding + row as f32 * row_height),
+            egui::vec2(list_rect.width() - 8.0, row_height - row_gap),
+        );
+        if let Some(program) = programs.get(index) {
+            let response = ui.interact(
+                row_rect,
+                ui.id().with(("program-row", index)),
+                egui::Sense::click(),
+            );
+            if index == selected_index {
+                ui.painter().rect_filled(row_rect, 0.0, retro::SELECT);
+            } else if response.hovered() {
+                ui.painter().rect_filled(row_rect, 0.0, retro::LCD_HOVER);
+            }
+            let text_color = if index == selected_index {
+                retro::TITLE_TEXT
+            } else {
+                retro::LCD_TEXT
+            };
+            retro_text_left_center_abs(
+                ui,
+                row_rect.left_center() + egui::vec2(8.0, 0.0),
+                &program.label,
+                17.0,
+                text_color,
+                false,
+            );
+            if response.clicked() {
+                selected = Some(program.program);
+            }
+        }
+    }
+
+    let scroll_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.right() - 24.0, rect.top()),
+        rect.right_bottom(),
+    );
+    let up = egui::Rect::from_min_size(
+        scroll_rect.min + egui::vec2(3.0, 3.0),
+        egui::vec2(18.0, 16.0),
+    );
+    let down = egui::Rect::from_min_size(
+        egui::pos2(scroll_rect.left() + 3.0, scroll_rect.bottom() - 19.0),
+        egui::vec2(18.0, 16.0),
+    );
+    let up_response = ui.interact(up, ui.id().with("program-scroll-up"), egui::Sense::click());
+    let down_response = ui.interact(
+        down,
+        ui.id().with("program-scroll-down"),
+        egui::Sense::click(),
+    );
+    retro_button_frame(
+        ui,
+        up,
+        up_response.hovered(),
+        up_response.is_pointer_button_down_on(),
+    );
+    retro_button_frame(
+        ui,
+        down,
+        down_response.hovered(),
+        down_response.is_pointer_button_down_on(),
+    );
+    draw_triangle(ui.painter(), up.center(), true, retro::TEXT);
+    draw_triangle(ui.painter(), down.center(), false, retro::TEXT);
+    if up_response.clicked() {
+        *first = (*first).saturating_sub(1);
+    }
+    if down_response.clicked() {
+        *first = (*first).saturating_add(1).min(max_first);
+    }
+    let track = egui::Rect::from_min_max(
+        egui::pos2(scroll_rect.left() + 4.0, up.bottom() + 2.0),
+        egui::pos2(scroll_rect.right() - 4.0, down.top() - 2.0),
+    );
+    ui.painter().rect_filled(track, 0.0, retro::FACE);
+    bevel(ui.painter(), track, true);
+    let thumb_height = (track.height() * visible_rows as f32
+        / programs.len().max(visible_rows) as f32)
+        .clamp(18.0, track.height());
+    let thumb_top = if max_first == 0 {
+        track.top()
+    } else {
+        track.top() + (track.height() - thumb_height) * (*first as f32 / max_first as f32)
+    };
+    let thumb = egui::Rect::from_min_size(
+        egui::pos2(track.left(), thumb_top),
+        egui::vec2(track.width(), thumb_height),
+    );
+    let thumb_response = ui.interact(
+        thumb,
+        ui.id().with("program-scroll-thumb"),
+        egui::Sense::click_and_drag(),
+    );
+    let track_response = ui.interact(
+        track,
+        ui.id().with("program-scroll-track"),
+        egui::Sense::click_and_drag(),
+    );
+    let live_scroll_pointer = ui.input(|input| {
+        let pos = input.pointer.latest_pos()?;
+        if input.pointer.primary_down() && track.contains(pos) {
+            Some(pos)
+        } else {
+            None
+        }
     });
+    if max_first > 0
+        && (thumb_response.dragged()
+            || thumb_response.clicked()
+            || track_response.dragged()
+            || track_response.clicked()
+            || live_scroll_pointer.is_some())
+    {
+        if let Some(pointer) = live_scroll_pointer
+            .or_else(|| thumb_response.interact_pointer_pos())
+            .or_else(|| track_response.interact_pointer_pos())
+        {
+            let travel = (track.height() - thumb_height).max(1.0);
+            let ratio = ((pointer.y - track.top() - thumb_height / 2.0) / travel).clamp(0.0, 1.0);
+            *first = (ratio * max_first as f32).round() as usize;
+        }
+    }
+    retro_button_frame(
+        ui,
+        thumb,
+        thumb_response.hovered() || thumb_response.dragged(),
+        thumb_response.is_pointer_button_down_on(),
+    );
+    selected
+}
+
+fn retro_slider(
+    ui: &mut egui::Ui,
+    id: &'static str,
+    local: egui::Rect,
+    value: f32,
+) -> Option<Option<f32>> {
+    let rect = local_rect(ui, local);
+    let widget_id = ui.id().with(id);
+    let response = ui.interact(
+        rect.expand2(egui::vec2(8.0, 6.0)),
+        widget_id,
+        egui::Sense::click_and_drag(),
+    );
+    let track = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rect.center().y - 2.0),
+        egui::pos2(rect.right(), rect.center().y + 2.0),
+    );
+    ui.painter().rect_filled(track, 0.0, retro::SHADOW);
+    bevel(ui.painter(), track, true);
+    for tick in 0..=6 {
+        let x = rect.left() + rect.width() * tick as f32 / 6.0;
+        ui.painter().line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.top() + 6.0)],
+            egui::Stroke::new(1.0, retro::DARK_HILITE),
+        );
+    }
+
+    let normalized = value.clamp(0.0, 1.0);
+    let x = rect.left() + rect.width() * normalized;
+    let thumb =
+        egui::Rect::from_center_size(egui::pos2(x, rect.center().y), egui::vec2(18.0, 26.0));
+    retro_button_frame(
+        ui,
+        thumb,
+        response.hovered(),
+        response.is_pointer_button_down_on(),
+    );
+    for offset in [-4.0, 0.0, 4.0] {
+        ui.painter().line_segment(
+            [
+                egui::pos2(thumb.center().x + offset, thumb.top() + 5.0),
+                egui::pos2(thumb.center().x + offset, thumb.bottom() - 5.0),
+            ],
+            egui::Stroke::new(1.0, retro::DARK_HILITE),
+        );
+    }
+
+    let reset = response.double_clicked() || slider_manual_double_click(ui, widget_id, &response);
+    if reset {
+        Some(None)
+    } else if (response.dragged() || response.clicked())
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        Some(Some(
+            ((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
+        ))
+    } else {
+        None
+    }
+}
+
+fn slider_manual_double_click(ui: &mut egui::Ui, id: egui::Id, response: &egui::Response) -> bool {
+    if !response.clicked() {
+        return false;
+    }
+
+    let Some(pointer) = response
+        .interact_pointer_pos()
+        .or_else(|| ui.input(|input| input.pointer.latest_pos()))
+    else {
+        return false;
+    };
+    let now = ui.input(|input| input.time);
+    let storage_id = id.with("last-click");
+    let previous = ui.data(|data| data.get_temp::<(f64, egui::Pos2)>(storage_id));
+    ui.data_mut(|data| data.insert_temp(storage_id, (now, pointer)));
+
+    previous.is_some_and(|(last_time, last_pos)| {
+        now - last_time <= 0.35 && last_pos.distance(pointer) <= 8.0
+    })
+}
+
+fn retro_button_frame(ui: &mut egui::Ui, rect: egui::Rect, hovered: bool, pressed: bool) {
+    ui.painter().rect_filled(
+        rect,
+        0.0,
+        if hovered {
+            retro::BUTTON_HOVER
+        } else {
+            retro::FACE
+        },
+    );
+    bevel(ui.painter(), rect, pressed);
+}
+
+fn bevel(painter: &egui::Painter, rect: egui::Rect, inset: bool) {
+    let (top_left, bottom_right) = if inset {
+        (retro::SHADOW, retro::HILITE)
+    } else {
+        (retro::HILITE, retro::SHADOW)
+    };
+    painter.line_segment(
+        [rect.left_top(), rect.right_top()],
+        egui::Stroke::new(1.0, top_left),
+    );
+    painter.line_segment(
+        [rect.left_top(), rect.left_bottom()],
+        egui::Stroke::new(1.0, top_left),
+    );
+    painter.line_segment(
+        [rect.left_bottom(), rect.right_bottom()],
+        egui::Stroke::new(1.0, bottom_right),
+    );
+    painter.line_segment(
+        [rect.right_top(), rect.right_bottom()],
+        egui::Stroke::new(1.0, bottom_right),
+    );
+    painter.rect_stroke(
+        rect,
+        0.0,
+        egui::Stroke::new(1.0, retro::BLACK),
+        egui::StrokeKind::Inside,
+    );
+}
+
+fn draw_triangle(painter: &egui::Painter, center: egui::Pos2, up: bool, color: egui::Color32) {
+    let points = if up {
+        vec![
+            center + egui::vec2(-5.0, 3.0),
+            center + egui::vec2(5.0, 3.0),
+            center + egui::vec2(0.0, -4.0),
+        ]
+    } else {
+        vec![
+            center + egui::vec2(-5.0, -3.0),
+            center + egui::vec2(5.0, -3.0),
+            center + egui::vec2(0.0, 4.0),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
+fn retro_text(
+    ui: &mut egui::Ui,
+    local_pos: egui::Pos2,
+    text: &str,
+    size: f32,
+    color: egui::Color32,
+    display: bool,
+) {
+    retro_text_abs(
+        ui,
+        ui.min_rect().min + local_pos.to_vec2(),
+        text,
+        size,
+        color,
+        display,
+    );
+}
+
+fn retro_text_abs(
+    ui: &mut egui::Ui,
+    pos: egui::Pos2,
+    text: &str,
+    size: f32,
+    color: egui::Color32,
+    display: bool,
+) {
+    ui.painter().text(
+        pos,
+        egui::Align2::LEFT_TOP,
+        text,
+        retro_font(size, display),
+        color,
+    );
+}
+
+fn retro_text_left_center_abs(
+    ui: &mut egui::Ui,
+    pos: egui::Pos2,
+    text: &str,
+    size: f32,
+    color: egui::Color32,
+    display: bool,
+) {
+    ui.painter().text(
+        pos,
+        egui::Align2::LEFT_CENTER,
+        text,
+        retro_font(size, display),
+        color,
+    );
+}
+
+fn retro_font(size: f32, display: bool) -> egui::FontId {
+    let family = if display {
+        egui::FontFamily::Name(RETRO_DISPLAY_FONT.into())
+    } else {
+        egui::FontFamily::Name(RETRO_UI_FONT.into())
+    };
+    egui::FontId::new(size, family)
+}
+
+fn local_rect(ui: &egui::Ui, rect: egui::Rect) -> egui::Rect {
+    rect.translate(ui.min_rect().min.to_vec2())
+}
+
+fn rect(x: f32, y: f32, width: f32, height: f32) -> egui::Rect {
+    egui::Rect::from_min_size(pos(x, y), egui::vec2(width, height))
+}
+
+fn pos(x: f32, y: f32) -> egui::Pos2 {
+    egui::pos2(x, y)
+}
+
+mod retro {
+    use lilypalooza_egui_baseview::egui::Color32;
+
+    pub const FACE: Color32 = Color32::from_rgb(192, 192, 192);
+    pub const FIELD: Color32 = Color32::from_rgb(232, 229, 220);
+    pub const LCD: Color32 = Color32::from_rgb(148, 172, 104);
+    pub const LCD_HOVER: Color32 = Color32::from_rgb(166, 188, 124);
+    pub const LCD_TEXT: Color32 = Color32::from_rgb(16, 24, 12);
+    pub const TEXT: Color32 = Color32::from_rgb(16, 16, 16);
+    pub const TITLE: Color32 = Color32::from_rgb(0, 0, 128);
+    pub const TITLE_TEXT: Color32 = Color32::from_rgb(255, 255, 255);
+    pub const LABEL_BLUE: Color32 = Color32::from_rgb(0, 46, 140);
+    pub const SELECT: Color32 = Color32::from_rgb(0, 0, 128);
+    pub const GREEN: Color32 = Color32::from_rgb(96, 210, 82);
+    pub const LED_IDLE: Color32 = Color32::from_rgb(58, 92, 50);
+    pub const BUTTON_HOVER: Color32 = Color32::from_rgb(210, 210, 210);
+    pub const HILITE: Color32 = Color32::from_rgb(255, 255, 255);
+    pub const DARK_HILITE: Color32 = Color32::from_rgb(128, 128, 128);
+    pub const SHADOW: Color32 = Color32::from_rgb(64, 64, 64);
+    pub const BLACK: Color32 = Color32::from_rgb(0, 0, 0);
+    pub const DISPLAY: Color32 = Color32::from_rgb(0, 80, 76);
 }
 
 struct ProgramChoice {
@@ -1041,6 +1923,9 @@ impl Processor for SoundfontProcessor {
 impl InstrumentProcessor for SoundfontProcessor {
     fn handle_midi(&mut self, event: MidiEvent) {
         self.sync_shared_state();
+        if let Some(shared) = &self.shared_state {
+            shared.mark_midi_activity();
+        }
         match event {
             MidiEvent::NoteOn { note, velocity, .. } => {
                 if velocity > 0 {
@@ -1185,11 +2070,18 @@ fn denormalize_output_gain(normalized: f32) -> f32 {
     output_gain_from_db(db)
 }
 
+#[cfg(test)]
 fn format_output_gain_db(db: f32) -> String {
-    if db > 0.0 {
-        format!("+{db:.1} dB")
+    format!("{} dB", format_output_gain_number(db))
+}
+
+fn format_output_gain_number(db: f32) -> String {
+    if db.abs() < 0.05 {
+        "0.0".to_string()
+    } else if db > 0.0 {
+        format!("+{db:.1}")
     } else {
-        format!("{db:.1} dB")
+        format!("{db:.1}")
     }
 }
 
@@ -1244,7 +2136,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use super::{SoundfontProcessor, SoundfontProcessorState, create_runtime, encode_state};
+    use super::{
+        ProgramChoice, SoundfontProcessor, SoundfontProcessorState, create_runtime, encode_state,
+    };
+    use lilypalooza_audio::SoundfontPreset;
     use lilypalooza_audio::instrument::{
         EditorSize, InstrumentProcessor, InstrumentRuntimeContext, MidiEvent, Processor,
     };
@@ -1252,6 +2147,7 @@ mod tests {
         LoadedSoundfont, SoundfontResource, SoundfontSynthSettings,
     };
     use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, SlotState};
+    use lilypalooza_egui_baseview::EguiApp;
 
     fn test_soundfont_resource() -> SoundfontResource {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1697,7 +2593,7 @@ mod tests {
     }
 
     #[test]
-    fn soundfont_editor_uses_compact_fixed_size() {
+    fn soundfont_editor_uses_retro_fixed_size() {
         let editor = super::descriptor()
             .editor
             .expect("soundfont editor descriptor should exist");
@@ -1710,6 +2606,911 @@ mod tests {
             }
         );
         assert_eq!(editor.min_size, Some(editor.default_size));
+    }
+
+    #[test]
+    fn soundfont_descriptor_is_named_sf_01() {
+        assert_eq!(super::descriptor().name, "SF-01");
+    }
+
+    #[test]
+    fn soundfont_editor_bundles_retro_fonts() {
+        assert!(!include_bytes!("../assets/fonts/W95FA.otf").is_empty());
+        assert!(!include_bytes!("../assets/fonts/CozetteVector.ttf").is_empty());
+    }
+
+    #[test]
+    fn soundfont_program_list_uses_same_background_as_select_box() {
+        let mut first = 0;
+        let mut scroll_remainder = 0.0;
+        let shapes = render_test_ui(|ui| {
+            let programs = vec![ProgramChoice {
+                program: 0,
+                label: "000 Piano".to_string(),
+            }];
+            super::program_list(
+                ui,
+                super::rect(0.0, 0.0, 160.0, 96.0),
+                &programs,
+                0,
+                &mut first,
+                &mut scroll_remainder,
+            );
+        });
+
+        assert!(
+            shapes.iter().any(|shape| {
+                matches!(
+                    shape,
+                    super::egui::Shape::Rect(rect)
+                        if rect.rect == super::rect(0.0, 0.0, 160.0, 96.0)
+                            && rect.fill == super::retro::FIELD
+                )
+            }),
+            "program list background should match select-box background"
+        );
+    }
+
+    #[test]
+    fn soundfont_program_list_item_text_is_vertically_centered() {
+        let mut first = 0;
+        let mut scroll_remainder = 0.0;
+        let shapes = render_test_ui(|ui| {
+            let programs = vec![ProgramChoice {
+                program: 0,
+                label: "000 Piano".to_string(),
+            }];
+            super::program_list(
+                ui,
+                super::rect(0.0, 0.0, 160.0, 96.0),
+                &programs,
+                0,
+                &mut first,
+                &mut scroll_remainder,
+            );
+        });
+        let row = super::egui::Rect::from_min_size(
+            super::egui::pos2(4.0, 6.0),
+            super::egui::vec2(128.0, 24.0),
+        );
+
+        let text = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                super::egui::Shape::Text(text) if text.galley.text().contains("000 Piano") => {
+                    Some(text)
+                }
+                _ => None,
+            })
+            .expect("program row text should be painted");
+        let text_center = text.pos.y + text.galley.size().y / 2.0;
+
+        assert!(
+            (text_center - row.center().y).abs() <= 1.0,
+            "program row text center {text_center} should match row center {}",
+            row.center().y
+        );
+    }
+
+    #[test]
+    fn soundfont_select_box_text_is_vertically_centered() {
+        let shapes = render_test_ui(|ui| {
+            super::retro_select_box(
+                ui,
+                super::rect(0.0, 0.0, 180.0, 30.0),
+                "soundfont-test",
+                "FluidR3",
+            );
+        });
+        let text = text_shape(&shapes, "FluidR3");
+        let center = text.pos.y + text.galley.size().y / 2.0;
+
+        assert!((center - 15.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn soundfont_dropdown_rows_match_select_box_and_center_text() {
+        let shapes = render_test_ui(|ui| {
+            super::retro_choice_list(
+                ui,
+                super::rect(0.0, 0.0, 180.0, 60.0),
+                &["FluidR3".to_string()],
+                0,
+                "dropdown-test",
+            );
+        });
+
+        assert!(
+            shapes.iter().any(|shape| {
+                matches!(
+                    shape,
+                    super::egui::Shape::Rect(rect)
+                        if rect.rect == super::rect(0.0, 0.0, 180.0, 60.0)
+                            && rect.fill == super::retro::FIELD
+                )
+            }),
+            "dropdown background should match select-box background"
+        );
+
+        let text = text_shape(&shapes, "FluidR3");
+        let center = text.pos.y + text.galley.size().y / 2.0;
+        assert!((center - 17.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn soundfont_program_list_scrolls_with_mouse_wheel() {
+        let ctx = super::egui::Context::default();
+        super::install_retro_style(&ctx);
+        let programs = (0..8)
+            .map(|program| ProgramChoice {
+                program,
+                label: format!("{program:03} Program"),
+            })
+            .collect::<Vec<_>>();
+        let mut first = 0;
+
+        render_program_list_frame(
+            &ctx,
+            &programs,
+            &mut first,
+            vec![super::egui::Event::PointerMoved(super::egui::pos2(
+                20.0, 20.0,
+            ))],
+        );
+        render_program_list_frame(
+            &ctx,
+            &programs,
+            &mut first,
+            vec![
+                super::egui::Event::PointerMoved(super::egui::pos2(20.0, 20.0)),
+                super::egui::Event::MouseWheel {
+                    unit: super::egui::MouseWheelUnit::Point,
+                    delta: super::egui::vec2(0.0, -48.0),
+                    modifiers: super::egui::Modifiers::default(),
+                },
+            ],
+        );
+
+        assert!(
+            first > 0,
+            "mouse wheel should advance the visible program window"
+        );
+    }
+
+    #[test]
+    fn soundfont_program_list_ignores_tiny_wheel_deltas() {
+        let ctx = super::egui::Context::default();
+        super::install_retro_style(&ctx);
+        let programs = (0..8)
+            .map(|program| ProgramChoice {
+                program,
+                label: format!("{program:03} Program"),
+            })
+            .collect::<Vec<_>>();
+        let mut first = 0;
+
+        render_program_list_frame(
+            &ctx,
+            &programs,
+            &mut first,
+            vec![super::egui::Event::PointerMoved(super::egui::pos2(
+                20.0, 20.0,
+            ))],
+        );
+        render_program_list_frame(
+            &ctx,
+            &programs,
+            &mut first,
+            vec![
+                super::egui::Event::PointerMoved(super::egui::pos2(20.0, 20.0)),
+                super::egui::Event::MouseWheel {
+                    unit: super::egui::MouseWheelUnit::Point,
+                    delta: super::egui::vec2(0.0, -4.0),
+                    modifiers: super::egui::Modifiers::default(),
+                },
+            ],
+        );
+
+        assert_eq!(first, 0, "tiny wheel deltas should not skip a row");
+    }
+
+    #[test]
+    fn soundfont_program_list_thumb_drag_scrolls() {
+        let ctx = super::egui::Context::default();
+        super::install_retro_style(&ctx);
+        let programs = (0..12)
+            .map(|program| ProgramChoice {
+                program,
+                label: format!("{program:03} Program"),
+            })
+            .collect::<Vec<_>>();
+        let mut first = 0;
+
+        render_program_list_frame(&ctx, &programs, &mut first, vec![]);
+        render_program_list_frame(
+            &ctx,
+            &programs,
+            &mut first,
+            vec![
+                super::egui::Event::PointerMoved(super::egui::pos2(147.0, 37.0)),
+                super::egui::Event::PointerButton {
+                    pos: super::egui::pos2(147.0, 37.0),
+                    button: super::egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: super::egui::Modifiers::default(),
+                },
+                super::egui::Event::PointerMoved(super::egui::pos2(147.0, 74.0)),
+            ],
+        );
+        render_program_list_frame(
+            &ctx,
+            &programs,
+            &mut first,
+            vec![super::egui::Event::PointerButton {
+                pos: super::egui::pos2(147.0, 74.0),
+                button: super::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: super::egui::Modifiers::default(),
+            }],
+        );
+
+        assert!(first > 0, "dragging the scrollbar thumb should scroll");
+    }
+
+    #[test]
+    fn soundfont_editor_program_list_shows_at_least_three_items() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_presets(&loaded, &["first"], 6);
+        let ctx = super::egui::Context::default();
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let output = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let visible_programs = output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .filter_map(|shape| match shape {
+                super::egui::Shape::Text(text)
+                    if text.galley.text().contains("Program")
+                        && text.visual_bounding_rect().top() >= 235.0 =>
+                {
+                    Some(text.galley.text().to_string())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            visible_programs.len() >= 3,
+            "program list should show at least three rows, got {visible_programs:?}"
+        );
+    }
+
+    #[test]
+    fn soundfont_midi_indicator_is_round_led() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let output = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let has_led_circle = output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .any(|shape| match shape {
+                super::egui::Shape::Circle(circle) => {
+                    circle.center.distance(super::egui::pos2(634.0, 162.0)) < 2.0
+                }
+                _ => false,
+            });
+
+        assert!(has_led_circle, "MIDI IN indicator should be a circle");
+    }
+
+    #[test]
+    fn soundfont_group_label_background_tracks_label_width() {
+        let shapes = render_test_ui(|ui| {
+            super::retro_group(ui, super::rect(0.0, 20.0, 196.0, 80.0), "MIDI", |_| {});
+        });
+        let label_cover = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                super::egui::Shape::Rect(rect)
+                    if rect.fill == super::retro::FACE
+                        && rect.rect.top() < 24.0
+                        && rect.rect.left() > 0.0 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("group label should paint an opaque caption background");
+
+        assert!(
+            label_cover.width() < 80.0,
+            "caption background should be sized to the label, got {}",
+            label_cover.width()
+        );
+    }
+
+    #[test]
+    fn soundfont_slider_value_labels_stay_inside_group_bounds() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let output = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let shapes = output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .collect::<Vec<_>>();
+        let slider_value_bounds = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                super::egui::Shape::Text(text)
+                    if text.galley.text().ends_with('%') || text.galley.text().ends_with("dB") =>
+                {
+                    Some(text.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(!slider_value_bounds.is_empty());
+        for bounds in slider_value_bounds {
+            assert!(
+                bounds.left() >= 424.0 && bounds.right() <= 800.0 && bounds.bottom() <= 438.0,
+                "slider value label should fit the editor groups: {bounds:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn soundfont_slider_groups_leave_bottom_padding_for_thumbs() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let output = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let shapes = output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .collect::<Vec<_>>();
+        let slider_groups = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                super::egui::Shape::Rect(rect)
+                    if rect.fill == super::retro::FACE
+                        && (rect.rect.width() - 376.0).abs() < 0.1
+                        && rect.rect.left() == 424.0
+                        && rect.rect.top() >= 258.0 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(slider_groups.len(), 3);
+        for group in slider_groups {
+            let thumb = shapes
+                .iter()
+                .find_map(|shape| match shape {
+                    super::egui::Shape::Rect(rect)
+                        if rect.fill == super::retro::FACE
+                            && (rect.rect.width() - 18.0).abs() < 0.1
+                            && (rect.rect.height() - 26.0).abs() < 0.1
+                            && group.contains_rect(rect.rect) =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .expect("slider group should contain a thumb");
+            let bottom_padding = group.bottom() - thumb.bottom();
+            assert!(
+                bottom_padding >= 8.0,
+                "slider thumb needs bottom padding, got {bottom_padding} in {group:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn soundfont_slider_groups_have_vertical_spacing() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let output = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let mut slider_groups = output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .filter_map(|shape| match shape {
+                super::egui::Shape::Rect(rect)
+                    if rect.fill == super::retro::FACE
+                        && (rect.rect.width() - 376.0).abs() < 0.1
+                        && rect.rect.left() == 424.0
+                        && rect.rect.top() >= 258.0 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        slider_groups.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        assert_eq!(slider_groups.len(), 3);
+        for pair in slider_groups.windows(2) {
+            let gap = pair[1].top() - pair[0].bottom();
+            assert!(
+                gap >= 10.0,
+                "slider groups need more vertical gap, got {gap}"
+            );
+        }
+    }
+
+    #[test]
+    fn soundfont_output_gain_db_is_in_group_label_not_value() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let output = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let texts = output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .filter_map(|shape| match shape {
+                super::egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(texts.iter().any(|text| text == "OUTPUT GAIN (DB)"));
+        assert!(
+            texts.iter().all(|text| text != "0.0 dB"),
+            "output gain value should omit dB suffix"
+        );
+    }
+
+    #[test]
+    fn soundfont_header_says_soundfont_rompler_once() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let output = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let texts = output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .filter_map(|shape| match shape {
+                super::egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(texts.iter().any(|text| text == "SF-01  SOUNDFONT ROMPLER"));
+        assert!(
+            texts.iter().all(|text| text != "ROMPLER"),
+            "header should not paint a separate ROMPLER label"
+        );
+    }
+
+    #[test]
+    fn soundfont_header_text_is_vertically_centered() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let output = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let header = output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .find_map(|shape| match shape {
+                super::egui::Shape::Text(text)
+                    if text.galley.text() == "SF-01  SOUNDFONT ROMPLER" =>
+                {
+                    Some(text.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .expect("header text should be painted");
+
+        assert!(
+            (header.center().y - 25.0).abs() <= 1.0,
+            "header text center should match title bar center: {header:?}"
+        );
+    }
+
+    #[test]
+    fn soundfont_slider_double_click_resets_values() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+        let mut state = app.shared.state.snapshot().0;
+        state.reverb_wet = 0.7;
+        state.chorus_wet = 0.6;
+        state.output_gain = super::output_gain_from_db(12.0);
+        app.shared
+            .apply_state(state)
+            .expect("test state should apply");
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        double_click_editor(&ctx, &mut app, super::egui::pos2(600.0, 293.0));
+        double_click_editor(&ctx, &mut app, super::egui::pos2(600.0, 359.0));
+        double_click_editor(&ctx, &mut app, super::egui::pos2(600.0, 425.0));
+
+        let (state, _) = app.shared.state.snapshot();
+        assert_eq!(state.reverb_wet, 0.0);
+        assert_eq!(state.chorus_wet, 0.0);
+        assert!((super::output_gain_to_db(state.output_gain) - 0.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn soundfont_number_field_can_remain_empty_while_editing() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+        let bank_field = super::egui::pos2(488.0, 111.0);
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        click_editor(&ctx, &mut app, bank_field);
+        let _ = ctx.run(
+            editor_input(vec![super::egui::Event::Key {
+                key: super::egui::Key::Backspace,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: super::egui::Modifiers::default(),
+            }]),
+            |ctx| app.update(ctx),
+        );
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+
+        assert_eq!(
+            app.bank_text, "",
+            "empty number field text should not be repopulated while focused"
+        );
+    }
+
+    #[test]
+    fn soundfont_top_row_controls_are_centered_in_groups() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let output = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let shapes = output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .collect::<Vec<_>>();
+        let select_box = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                super::egui::Shape::Rect(rect)
+                    if rect.rect.width() == 350.0 && rect.rect.height() == 30.0 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("soundfont select box should be painted");
+
+        assert_eq!(select_box.center().y, 111.0);
+    }
+
+    #[test]
+    fn soundfont_chooser_click_opens_choices_without_changing_selection() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first", "second"]);
+        let ctx = super::egui::Context::default();
+        let chooser_pos = super::egui::pos2(210.0, 121.0);
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let _ = ctx.run(
+            editor_input(vec![
+                super::egui::Event::PointerMoved(chooser_pos),
+                super::egui::Event::PointerButton {
+                    pos: chooser_pos,
+                    button: super::egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: super::egui::Modifiers::default(),
+                },
+            ]),
+            |ctx| app.update(ctx),
+        );
+        let _ = ctx.run(
+            editor_input(vec![
+                super::egui::Event::PointerMoved(chooser_pos),
+                super::egui::Event::PointerButton {
+                    pos: chooser_pos,
+                    button: super::egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: super::egui::Modifiers::default(),
+                },
+            ]),
+            |ctx| app.update(ctx),
+        );
+
+        let (state, _) = app.shared.state.snapshot();
+        assert_eq!(
+            state.soundfont_id, "first",
+            "clicking the chooser should open choices, not cycle selection"
+        );
+    }
+
+    #[test]
+    fn soundfont_chooser_item_click_selects_choice() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first", "second"]);
+        let ctx = super::egui::Context::default();
+        let chooser_pos = super::egui::pos2(210.0, 121.0);
+        let second_choice_pos = super::egui::pos2(210.0, 179.0);
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        click_editor(&ctx, &mut app, chooser_pos);
+        assert!(
+            app.soundfont_dropdown_open,
+            "clicking the chooser should open the dropdown"
+        );
+        click_editor(&ctx, &mut app, second_choice_pos);
+
+        let (state, _) = app.shared.state.snapshot();
+        assert_eq!(state.soundfont_id, "second");
+    }
+
+    #[test]
+    fn soundfont_midi_panel_labels_input_without_idle_state_text() {
+        let loaded =
+            LoadedSoundfont::load(&test_soundfont_resource()).expect("test SoundFont should load");
+        let mut app = editor_app_with_soundfonts(&loaded, &["first"]);
+        let ctx = super::egui::Context::default();
+
+        let _ = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let output = ctx.run(editor_input(vec![]), |ctx| app.update(ctx));
+        let text = output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .filter_map(|shape| match shape {
+                super::egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            text.iter().any(|text| text == "MIDI IN"),
+            "MIDI panel should have a stable input label"
+        );
+        assert!(
+            text.iter().all(|text| text != "IDLE"),
+            "MIDI panel should not label no activity as IDLE"
+        );
+    }
+
+    fn render_test_ui(
+        mut add_contents: impl FnMut(&mut super::egui::Ui),
+    ) -> Vec<super::egui::Shape> {
+        let ctx = super::egui::Context::default();
+        super::install_retro_style(&ctx);
+        let output = ctx.run(
+            super::egui::RawInput {
+                screen_rect: Some(super::rect(0.0, 0.0, 240.0, 180.0)),
+                ..super::egui::RawInput::default()
+            },
+            |ctx| {
+                super::egui::CentralPanel::default()
+                    .frame(super::egui::Frame::default())
+                    .show(ctx, |ui| add_contents(ui));
+            },
+        );
+
+        output
+            .shapes
+            .into_iter()
+            .flat_map(|shape| flatten_shape(shape.shape))
+            .collect()
+    }
+
+    fn render_program_list_frame(
+        ctx: &super::egui::Context,
+        programs: &[ProgramChoice],
+        first: &mut usize,
+        events: Vec<super::egui::Event>,
+    ) {
+        let mut scroll_remainder = 0.0;
+        let _ = ctx.run(
+            super::egui::RawInput {
+                screen_rect: Some(super::rect(0.0, 0.0, 240.0, 180.0)),
+                events,
+                ..super::egui::RawInput::default()
+            },
+            |ctx| {
+                super::egui::CentralPanel::default()
+                    .frame(super::egui::Frame::default())
+                    .show(ctx, |ui| {
+                        super::program_list(
+                            ui,
+                            super::rect(0.0, 0.0, 160.0, 96.0),
+                            programs,
+                            0,
+                            first,
+                            &mut scroll_remainder,
+                        );
+                    });
+            },
+        );
+    }
+
+    fn editor_input(events: Vec<super::egui::Event>) -> super::egui::RawInput {
+        super::egui::RawInput {
+            screen_rect: Some(super::rect(
+                0.0,
+                0.0,
+                super::EDITOR_WIDTH as f32,
+                super::EDITOR_HEIGHT as f32,
+            )),
+            events,
+            ..super::egui::RawInput::default()
+        }
+    }
+
+    fn click_editor(
+        ctx: &super::egui::Context,
+        app: &mut super::SoundfontEditorApp,
+        pos: super::egui::Pos2,
+    ) {
+        let _ = ctx.run(
+            editor_input(vec![
+                super::egui::Event::PointerMoved(pos),
+                super::egui::Event::PointerButton {
+                    pos,
+                    button: super::egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: super::egui::Modifiers::default(),
+                },
+            ]),
+            |ctx| app.update(ctx),
+        );
+        let _ = ctx.run(
+            editor_input(vec![
+                super::egui::Event::PointerMoved(pos),
+                super::egui::Event::PointerButton {
+                    pos,
+                    button: super::egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: super::egui::Modifiers::default(),
+                },
+            ]),
+            |ctx| app.update(ctx),
+        );
+    }
+
+    fn double_click_editor(
+        ctx: &super::egui::Context,
+        app: &mut super::SoundfontEditorApp,
+        pos: super::egui::Pos2,
+    ) {
+        for (time, pressed) in [(1.00, true), (1.01, false), (1.08, true), (1.09, false)] {
+            let mut input = editor_input(vec![
+                super::egui::Event::PointerMoved(pos),
+                super::egui::Event::PointerButton {
+                    pos,
+                    button: super::egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: super::egui::Modifiers::default(),
+                },
+            ]);
+            input.time = Some(time);
+            let _ = ctx.run(input, |ctx| app.update(ctx));
+        }
+    }
+
+    fn editor_app_with_soundfonts(
+        loaded: &LoadedSoundfont,
+        ids: &[&str],
+    ) -> super::SoundfontEditorApp {
+        editor_app_with_presets(loaded, ids, 1)
+    }
+
+    fn editor_app_with_presets(
+        loaded: &LoadedSoundfont,
+        ids: &[&str],
+        preset_count: u8,
+    ) -> super::SoundfontEditorApp {
+        let catalog = ids
+            .iter()
+            .map(|id| super::SoundfontCatalogEntry {
+                id: (*id).to_string(),
+                name: (*id).to_string(),
+                presets: Arc::new(
+                    (0..preset_count)
+                        .map(|program| SoundfontPreset {
+                            bank: 0,
+                            program,
+                            name: format!("Program {program}"),
+                        })
+                        .collect(),
+                ),
+            })
+            .collect::<Vec<_>>();
+        let available = ids
+            .iter()
+            .map(|id| ((*id).to_string(), Arc::clone(&loaded.soundfont)))
+            .collect::<std::collections::HashMap<_, _>>();
+        let state = SoundfontProcessorState {
+            soundfont_id: ids[0].to_string(),
+            ..SoundfontProcessorState::default()
+        };
+        super::SoundfontEditorApp {
+            shared: Arc::new(super::SharedSoundfontBinding {
+                catalog: Arc::new(catalog),
+                available_soundfonts: Arc::new(available),
+                state: super::SharedSoundfontState::new(&state, Arc::clone(&loaded.soundfont)),
+            }),
+            retro_style_installed: false,
+            bank_text: String::new(),
+            bank_text_focused: false,
+            polyphony_text: String::new(),
+            polyphony_text_focused: false,
+            program_scroll_first: 0,
+            program_scroll_remainder: 0.0,
+            soundfont_dropdown_open: false,
+            seen_midi_activity: 0,
+            midi_flash_frames: 0,
+        }
+    }
+
+    fn flatten_shape(shape: super::egui::Shape) -> Vec<super::egui::Shape> {
+        match shape {
+            super::egui::Shape::Vec(shapes) => shapes.into_iter().flat_map(flatten_shape).collect(),
+            shape => vec![shape],
+        }
+    }
+
+    fn text_shape<'a>(
+        shapes: &'a [super::egui::Shape],
+        expected: &str,
+    ) -> &'a super::egui::epaint::TextShape {
+        shapes
+            .iter()
+            .find_map(|shape| match shape {
+                super::egui::Shape::Text(text) if text.galley.text().contains(expected) => {
+                    Some(text)
+                }
+                _ => None,
+            })
+            .expect("expected text should be painted")
     }
 
     #[test]
