@@ -1,7 +1,7 @@
 use iced::widget::Id;
 use iced::widget::{
-    button, column, container, lazy, mouse_area, opaque, responsive, row, scrollable, stack, svg,
-    text, text_input,
+    button, column, container, lazy, mouse_area, opaque, responsive, row, scrollable, stack, text,
+    text_input,
 };
 use iced::{Color, Element, Fill, FillPortion, Length, alignment};
 use iced_aw::helpers::color_picker_with_change;
@@ -37,6 +37,8 @@ const STRIP_SPACING: f32 = 0.0;
 const INSTRUMENT_PICKER_HEIGHT: f32 = ui_style::grid_f32(6);
 const INSTRUMENT_SLOT_BUTTON_HEIGHT: f32 = ui_style::grid_f32(5);
 const INSTRUMENT_SLOT_WIDTH: f32 = 112.0;
+const INSTRUMENT_SLOT_EDITOR_AREA_WIDTH: f32 = ui_style::grid_f32(4);
+const INSTRUMENT_SLOT_SEPARATOR_WIDTH: f32 = 1.0;
 const INSTRUMENT_SLOT_LABEL_MAX_LEN: usize = 11;
 const INSTRUMENT_BROWSER_WIDTH: f32 = 520.0;
 const INSTRUMENT_BROWSER_HEIGHT: f32 = 360.0;
@@ -1583,27 +1585,47 @@ fn slot_selector_controls(
     primary_action: Option<Message>,
     secondary_action: Option<Message>,
 ) -> Element<'static, Message> {
-    let button: Element<'static, Message> = button(
+    let editor_segment = button(
+        container(ui_style::icon(
+            icons::keyboard_music(),
+            INSTRUMENT_BROWSER_ICON_SIZE,
+            ui_style::svg_muted_control,
+        ))
+        .width(Length::Fixed(INSTRUMENT_SLOT_EDITOR_AREA_WIDTH))
+        .height(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT))
+        .center_x(Length::Fixed(INSTRUMENT_SLOT_EDITOR_AREA_WIDTH))
+        .center_y(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT)),
+    )
+    .style(transparent_hit_button)
+    .padding(0)
+    .width(Length::Fixed(INSTRUMENT_SLOT_EDITOR_AREA_WIDTH))
+    .height(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT))
+    .on_press_maybe(primary_action);
+
+    let picker_segment = button(
+        container(
+            text(label)
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .wrapping(iced::widget::text::Wrapping::None),
+        )
+        .width(Fill)
+        .height(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT))
+        .clip(true)
+        .center_x(Fill)
+        .align_y(alignment::Vertical::Center),
+    )
+    .style(transparent_hit_button)
+    .padding(0)
+    .width(Fill)
+    .height(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT))
+    .on_press_maybe(secondary_action.clone());
+
+    let surface: Element<'static, Message> = button(
         container(
             row![
-                container(ui_style::icon(
-                    icons::keyboard_music(),
-                    INSTRUMENT_BROWSER_ICON_SIZE,
-                    |theme, _status| { ui_style::svg_muted_control(theme, svg::Status::Idle) },
-                ),)
-                .width(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
-                .center_x(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
-                .center_y(Fill),
-                container(
-                    text(label)
-                        .size(ui_style::FONT_SIZE_UI_XS)
-                        .wrapping(iced::widget::text::Wrapping::None),
-                )
-                .width(Fill)
-                .height(Fill)
-                .clip(true)
-                .center_x(Fill)
-                .align_y(alignment::Vertical::Center),
+                editor_segment,
+                slot_area_separator(),
+                picker_segment,
                 container(text(""))
                     .width(Length::Fixed(INSTRUMENT_BROWSER_ICON_SIZE))
                     .height(Fill),
@@ -1620,13 +1642,13 @@ fn slot_selector_controls(
     .padding([0, ui_style::grid(2)])
     .width(Length::Fixed(INSTRUMENT_SLOT_WIDTH))
     .height(Length::Fixed(INSTRUMENT_SLOT_BUTTON_HEIGHT))
-    .on_press_maybe(primary_action)
+    .on_press(Message::Noop)
     .into();
 
     let button = if let Some(message) = secondary_action {
-        mouse_area(button).on_right_press(message).into()
+        mouse_area(surface).on_right_press(message).into()
     } else {
-        button
+        surface
     };
 
     container(button)
@@ -1635,6 +1657,53 @@ fn slot_selector_controls(
         .center_x(Fill)
         .center_y(Length::Fixed(INSTRUMENT_PICKER_HEIGHT))
         .into()
+}
+
+fn slot_area_separator() -> Element<'static, Message> {
+    container(text(""))
+        .style(slot_area_separator_surface)
+        .width(Length::Fixed(INSTRUMENT_SLOT_SEPARATOR_WIDTH))
+        .height(Length::Fixed(
+            INSTRUMENT_SLOT_BUTTON_HEIGHT - ui_style::grid_f32(2),
+        ))
+        .into()
+}
+
+fn slot_area_separator_surface(theme: &iced::Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(palette.background.strong.color.into()),
+        ..container::Style::default()
+    }
+}
+
+fn transparent_hit_button(theme: &iced::Theme, status: button::Status) -> button::Style {
+    let text_color = match status {
+        button::Status::Active | button::Status::Disabled => slot_segment_foreground(theme, false),
+        button::Status::Hovered | button::Status::Pressed => slot_segment_foreground(theme, true),
+    };
+    button::Style {
+        background: None,
+        text_color,
+        ..button::Style::default()
+    }
+}
+
+fn slot_segment_foreground(theme: &iced::Theme, hovered: bool) -> Color {
+    let palette = theme.extended_palette();
+    if hovered {
+        return palette.background.weak.text;
+    }
+
+    let color = palette.background.weak.text;
+    let background = palette.background.weak.color;
+    let amount = 0.38;
+    Color {
+        r: color.r + (background.r - color.r) * amount,
+        g: color.g + (background.g - color.g) * amount,
+        b: color.b + (background.b - color.b) * amount,
+        a: color.a + (background.a - color.a) * amount,
+    }
 }
 
 fn instrument_slot_primary_action(
@@ -1971,9 +2040,9 @@ fn selected_instrument_choice(
 #[cfg(test)]
 mod tests {
     use crate::ui_style;
-    use iced::widget::{container, row};
+    use iced::widget::{button, container, row};
     use iced::{Color, Element, Length, Theme};
-    use iced_test::Simulator;
+    use iced_test::{Simulator, simulator};
     use lilypalooza_audio::mixer::MixerMeterSnapshotWindow;
     use lilypalooza_audio::{AudioEngine, AudioEngineOptions};
     use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, MixerState, SlotState};
@@ -1981,16 +2050,17 @@ mod tests {
 
     use super::{
         COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
-        INSTRUMENT_PICKER_HEIGHT, InstrumentBrowserBackend, InstrumentChoice, MAIN_SECTION_WIDTH,
-        MAIN_STRIP_WIDTH, MIXER_MIN_HEIGHT, MeterDependency, SECTION_BODY_GAP, STRIP_MIN_HEIGHT,
-        STRIP_TOGGLE_SIZE, STRIP_VIRTUALIZATION_OVERSCAN, STRIP_WIDTH, StripMeterSnapshot,
-        TITLE_TOP_SPACING, TRACK_TITLE_EDITOR_CONTROL_HEIGHT, TRACK_TITLE_EDITOR_HEIGHT,
-        TRACK_TITLE_EDITOR_INPUT_PADDING_H, TRACK_TITLE_EDITOR_INPUT_PADDING_V,
-        TRACK_TITLE_EDITOR_SWATCH_SIZE, TrackStripDependency, VALUE_LABEL_HEIGHT, color_bits,
-        control_stack_height, gain_control_height, gain_control_mode, gain_label,
-        instrument_browser_entries, instrument_slot_primary_action, instrument_trigger_label,
-        meter_colors, meter_control_height, meter_peak_label, meter_scale_visible,
-        selected_instrument_choice, track_should_use_roll_tint, visible_strip_window,
+        INSTRUMENT_PICKER_HEIGHT, INSTRUMENT_SLOT_WIDTH, InstrumentBrowserBackend,
+        InstrumentChoice, MAIN_SECTION_WIDTH, MAIN_STRIP_WIDTH, MIXER_MIN_HEIGHT, MeterDependency,
+        SECTION_BODY_GAP, STRIP_MIN_HEIGHT, STRIP_TOGGLE_SIZE, STRIP_VIRTUALIZATION_OVERSCAN,
+        STRIP_WIDTH, StripMeterSnapshot, TITLE_TOP_SPACING, TRACK_TITLE_EDITOR_CONTROL_HEIGHT,
+        TRACK_TITLE_EDITOR_HEIGHT, TRACK_TITLE_EDITOR_INPUT_PADDING_H,
+        TRACK_TITLE_EDITOR_INPUT_PADDING_V, TRACK_TITLE_EDITOR_SWATCH_SIZE, TrackStripDependency,
+        VALUE_LABEL_HEIGHT, color_bits, control_stack_height, gain_control_height,
+        gain_control_mode, gain_label, instrument_browser_entries, instrument_slot_primary_action,
+        instrument_trigger_label, meter_colors, meter_control_height, meter_peak_label,
+        meter_scale_visible, selected_instrument_choice, track_should_use_roll_tint,
+        visible_strip_window,
     };
     use crate::app::Message;
     use crate::app::messages::MixerMessage;
@@ -2420,39 +2490,143 @@ mod tests {
     }
 
     #[test]
-    fn instrument_slot_button_hover_is_consistent_across_whole_button()
-    -> Result<(), iced_test::Error> {
-        let view = || -> Element<'static, Message> {
-            super::slot_selector_controls("Violin".to_string(), Some(Message::Noop), None)
+    fn instrument_slot_icon_area_opens_editor() {
+        let target = crate::app::processor_editor_windows::EditorTarget {
+            strip_index: 3,
+            slot_index: 0,
         };
-
-        let mut label_hover = Simulator::with_size(
+        let mut ui = Simulator::with_size(
             iced::Settings::default(),
-            [ui_style::grid_f32(32), ui_style::grid_f32(10)],
-            view(),
+            [INSTRUMENT_SLOT_WIDTH, INSTRUMENT_PICKER_HEIGHT],
+            super::slot_selector_controls(
+                "Violin".to_string(),
+                Some(Message::Mixer(MixerMessage::OpenEditor(target))),
+                Some(Message::Mixer(MixerMessage::ToggleTrackInstrumentBrowser(
+                    2,
+                ))),
+            ),
         );
-        label_hover.point_at(iced::Point::new(
-            ui_style::grid_f32(18),
-            ui_style::grid_f32(5),
-        ));
 
-        let mut icon_hover = Simulator::with_size(
+        ui.point_at(iced::Point::new(20.0, INSTRUMENT_PICKER_HEIGHT / 2.0));
+        let _ = ui.simulate(simulator::click());
+
+        assert!(ui.into_messages().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::OpenEditor(clicked)) if clicked == target
+            )
+        }));
+    }
+
+    #[test]
+    fn instrument_slot_name_area_opens_picker() {
+        let mut ui = Simulator::with_size(
             iced::Settings::default(),
-            [ui_style::grid_f32(32), ui_style::grid_f32(10)],
-            view(),
+            [INSTRUMENT_SLOT_WIDTH, INSTRUMENT_PICKER_HEIGHT],
+            super::slot_selector_controls(
+                "Violin".to_string(),
+                Some(Message::Mixer(MixerMessage::OpenEditor(
+                    crate::app::processor_editor_windows::EditorTarget {
+                        strip_index: 3,
+                        slot_index: 0,
+                    },
+                ))),
+                Some(Message::Mixer(MixerMessage::ToggleTrackInstrumentBrowser(
+                    2,
+                ))),
+            ),
         );
-        icon_hover.point_at(iced::Point::new(
-            ui_style::grid_f32(5),
-            ui_style::grid_f32(5),
-        ));
 
-        assert_snapshots_equal(
-            &mut label_hover,
-            &mut icon_hover,
-            "instrument_slot_button_hover_consistency",
-        )?;
+        ui.point_at(iced::Point::new(76.0, INSTRUMENT_PICKER_HEIGHT / 2.0));
+        let _ = ui.simulate(simulator::click());
 
-        Ok(())
+        assert!(ui.into_messages().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::ToggleTrackInstrumentBrowser(2))
+            )
+        }));
+    }
+
+    #[test]
+    fn instrument_slot_hit_button_keeps_label_text_visible() {
+        let style = super::transparent_hit_button(&Theme::Dark, button::Status::Active);
+
+        assert_ne!(
+            style.text_color,
+            Color::TRANSPARENT,
+            "slot label text must remain visible inside the transparent hit area"
+        );
+    }
+
+    #[test]
+    fn instrument_slot_area_separator_is_visible() {
+        let style = super::slot_area_separator_surface(&Theme::Dark);
+
+        assert!(
+            style.background.is_some(),
+            "slot editor and picker areas should have a visible separator"
+        );
+    }
+
+    #[test]
+    fn instrument_slot_editor_area_is_compact() {
+        assert!(
+            super::INSTRUMENT_SLOT_EDITOR_AREA_WIDTH
+                <= super::INSTRUMENT_BROWSER_ICON_SIZE + ui_style::grid_f32(1),
+            "slot editor area should hug the icon instead of taking a wide chunk"
+        );
+    }
+
+    #[test]
+    fn instrument_slot_hit_button_does_not_draw_segment_hover() {
+        let idle = super::transparent_hit_button(&Theme::Dark, button::Status::Active);
+        let hovered = super::transparent_hit_button(&Theme::Dark, button::Status::Hovered);
+
+        assert_eq!(
+            idle.background, hovered.background,
+            "slot hit areas should not draw rectangular segment hover"
+        );
+    }
+
+    #[test]
+    fn instrument_slot_hit_button_has_split_foreground_hover() {
+        let idle = super::transparent_hit_button(&Theme::Dark, button::Status::Active);
+        let hovered = super::transparent_hit_button(&Theme::Dark, button::Status::Hovered);
+
+        assert_ne!(
+            idle.text_color, hovered.text_color,
+            "slot hit areas should highlight only their own foreground"
+        );
+    }
+
+    #[test]
+    fn instrument_slot_text_foreground_matches_icon_foreground() {
+        let idle_text =
+            super::transparent_hit_button(&Theme::Dark, button::Status::Active).text_color;
+        let idle_icon = ui_style::svg_muted_control(&Theme::Dark, iced::widget::svg::Status::Idle)
+            .color
+            .expect("muted icon idle color should exist");
+        assert_eq!(idle_text, idle_icon);
+
+        let hovered_text =
+            super::transparent_hit_button(&Theme::Dark, button::Status::Hovered).text_color;
+        let hovered_icon =
+            ui_style::svg_muted_control(&Theme::Dark, iced::widget::svg::Status::Hovered)
+                .color
+                .expect("muted icon hover color should exist");
+        assert_eq!(hovered_text, hovered_icon);
+    }
+
+    #[test]
+    fn instrument_slot_surface_has_whole_button_hover_reaction() {
+        let idle = ui_style::button_selector_field(&Theme::Dark, button::Status::Active, false);
+        let hovered = ui_style::button_selector_field(&Theme::Dark, button::Status::Hovered, false);
+
+        assert_ne!(
+            idle.background, hovered.background,
+            "slot surface should still have a whole-button hover reaction"
+        );
     }
 
     #[test]
