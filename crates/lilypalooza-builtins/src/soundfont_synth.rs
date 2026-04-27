@@ -1169,19 +1169,12 @@ fn retro_number_field(
 fn draw_led(ui: &mut egui::Ui, local_pos: egui::Pos2, on: bool, color: egui::Color32) {
     let center = ui.min_rect().min + local_pos.to_vec2();
     let fill = if on { color } else { retro::SHADOW };
+    ui.painter().circle_filled(center, 7.0, retro::BLACK);
     ui.painter().circle_filled(center, 6.0, fill);
     ui.painter()
         .circle_stroke(center, 7.0, egui::Stroke::new(1.0, retro::BLACK));
-    ui.painter().circle_stroke(
-        center + egui::vec2(-1.0, -1.0),
-        6.0,
-        egui::Stroke::new(1.0, retro::SHADOW),
-    );
-    ui.painter().circle_stroke(
-        center + egui::vec2(1.0, 1.0),
-        6.0,
-        egui::Stroke::new(1.0, retro::HILITE),
-    );
+    ui.painter()
+        .circle_stroke(center, 5.0, egui::Stroke::new(1.0, retro::SHADOW));
 }
 
 fn program_list(
@@ -2906,6 +2899,26 @@ mod tests {
             });
 
         assert!(has_led_circle, "MIDI IN indicator should be a circle");
+    }
+
+    #[test]
+    fn soundfont_midi_indicator_has_no_white_circle_highlight() {
+        let shapes = render_test_ui(|ui| {
+            super::draw_led(ui, super::pos(24.0, 24.0), true, super::retro::GREEN);
+        });
+
+        let has_white_led_stroke = shapes.iter().any(|shape| match shape {
+            super::egui::Shape::Circle(circle) => {
+                circle.center.distance(super::egui::pos2(24.0, 24.0)) < 4.0
+                    && circle.stroke.color == super::retro::HILITE
+            }
+            _ => false,
+        });
+
+        assert!(
+            !has_white_led_stroke,
+            "MIDI IN LED should not draw a white circular highlight"
+        );
     }
 
     #[test]
