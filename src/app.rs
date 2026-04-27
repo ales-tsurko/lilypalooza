@@ -66,11 +66,14 @@ pub(super) const EDITOR_FILE_BROWSER_COLUMN_WIDTH: f32 = 220.0;
 pub(super) const EDITOR_FILE_BROWSER_ENTRY_HEIGHT: f32 = 26.0;
 pub(super) const SHORTCUTS_SCROLLABLE_ID: &str = "shortcuts-scrollable";
 pub(super) const TRACK_RENAME_INPUT_ID: &str = "track-rename-input";
+const EDITOR_FRAME_THICKNESS: f64 = 2.0;
+const EDITOR_FRAME_BORDER_WIDTH: f32 = 0.5;
 
 #[derive(Debug, Clone)]
 pub(super) struct AppEditorFrame {
     titlebar_height: f64,
     frame_thickness: f64,
+    border_width: f32,
     style: AppEditorFrameStyle,
 }
 
@@ -84,7 +87,8 @@ impl AppEditorFrame {
     pub(super) fn from_theme(theme: &iced::Theme) -> Self {
         Self {
             titlebar_height: 30.0,
-            frame_thickness: 4.0,
+            frame_thickness: EDITOR_FRAME_THICKNESS,
+            border_width: EDITOR_FRAME_BORDER_WIDTH,
             style: AppEditorFrameStyle::from_theme(theme),
         }
     }
@@ -148,9 +152,9 @@ impl editor_host::EditorFrame for AppEditorFrame {
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, self.style.frame_color);
         ui.painter().rect_stroke(
-            rect.shrink(0.5),
+            rect.shrink(self.border_width / 2.0),
             0.0,
-            editor_host::egui::Stroke::new(1.0, self.style.border_color),
+            editor_host::egui::Stroke::new(self.border_width, self.style.border_color),
             editor_host::egui::StrokeKind::Inside,
         );
 
@@ -1635,6 +1639,15 @@ mod tests {
             frame.style.close_background_hovered
         );
         assert_ne!(frame.style.close_icon, frame.style.close_icon_hovered);
+    }
+
+    #[test]
+    fn app_editor_frame_border_is_thin() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+
+        assert_eq!(frame.frame_thickness, EDITOR_FRAME_THICKNESS);
+        assert!(frame.frame_thickness < 4.0);
+        assert!(frame.border_width < 1.0);
     }
 
     fn char_key_press(value: &str, code: keyboard::key::Code) -> Message {

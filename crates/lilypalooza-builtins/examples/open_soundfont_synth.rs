@@ -331,6 +331,10 @@ fn window_settings() -> window::Settings {
     }
 }
 
+const DEBUG_EDITOR_FRAME_THICKNESS: f64 = 2.0;
+const DEBUG_EDITOR_FRAME_BORDER_WIDTH: f32 = 0.5;
+const DEBUG_EDITOR_FRAME_BORDER_INSET: f32 = DEBUG_EDITOR_FRAME_BORDER_WIDTH / 2.0;
+
 #[derive(Debug, Clone)]
 struct DebugEditorFrame {
     titlebar_height: f64,
@@ -342,7 +346,7 @@ impl Default for DebugEditorFrame {
     fn default() -> Self {
         Self {
             titlebar_height: 30.0,
-            frame_thickness: 4.0,
+            frame_thickness: DEBUG_EDITOR_FRAME_THICKNESS,
             style: DebugEditorFrameStyle::from_theme(&iced::Theme::Dark),
         }
     }
@@ -406,9 +410,12 @@ impl EditorFrame for DebugEditorFrame {
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, self.style.frame_color);
         ui.painter().rect_stroke(
-            rect.shrink(0.5),
+            rect.shrink(DEBUG_EDITOR_FRAME_BORDER_INSET),
             0.0,
-            editor_host::egui::Stroke::new(1.0, self.style.border_color),
+            editor_host::egui::Stroke::new(
+                DEBUG_EDITOR_FRAME_BORDER_WIDTH,
+                self.style.border_color,
+            ),
             editor_host::egui::StrokeKind::Inside,
         );
         let titlebar = editor_host::egui::Rect::from_min_size(
