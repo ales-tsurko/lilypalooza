@@ -1100,28 +1100,26 @@ impl canvas::Program<Message> for TrackResizeHandle {
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         match event {
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                if cursor.position_in(bounds).is_some() {
-                    state.dragging = true;
-                    state.last_cursor_x = cursor.position().map(|position| position.x);
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                if cursor.position_in(bounds).is_some() =>
+            {
+                state.dragging = true;
+                state.last_cursor_x = cursor.position().map(|position| position.x);
 
-                    return Some(canvas::Action::capture());
-                }
+                return Some(canvas::Action::capture());
             }
-            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                if state.dragging {
-                    let cursor_x = cursor.position().map(|position| position.x);
-                    if let (Some(last_x), Some(cursor_x)) = (state.last_cursor_x, cursor_x) {
-                        let delta = cursor_x - last_x;
-                        state.last_cursor_x = Some(cursor_x);
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
+                let cursor_x = cursor.position().map(|position| position.x);
+                if let (Some(last_x), Some(cursor_x)) = (state.last_cursor_x, cursor_x) {
+                    let delta = cursor_x - last_x;
+                    state.last_cursor_x = Some(cursor_x);
 
-                        return Some(
-                            canvas::Action::publish(Message::PianoRoll(
-                                PianoRollMessage::TrackPanelResizedBy(delta),
-                            ))
-                            .and_capture(),
-                        );
-                    }
+                    return Some(
+                        canvas::Action::publish(Message::PianoRoll(
+                            PianoRollMessage::TrackPanelResizedBy(delta),
+                        ))
+                        .and_capture(),
+                    );
                 }
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))

@@ -5,7 +5,7 @@ edition = "2024"
 
 [workspace]
 members = [
-    "crates/auxiliary-window",
+    "crates/editor-host",
     "crates/iced-code-editor",
     "crates/lilypalooza-audio",
     "crates/lilypalooza-builtins",
@@ -17,7 +17,7 @@ iced = "0.14"
 iced_core = "0.14.0"
 
 [dependencies]
-auxiliary-window = { path = "crates/auxiliary-window" }
+editor-host = { path = "crates/editor-host" }
 bytemuck = { version = "1.23.1", features = ["derive"] }
 directories = "5.0.1"
 iced = { workspace = true, features = ["canvas", "image", "lazy", "tokio", "svg"] }

@@ -147,6 +147,7 @@ impl Lilypalooza {
                 self.track_rename_color_picker_open = false;
                 self.track_color_picker_target = None;
                 self.sync_track_name_to_playback(track_index);
+                self.sync_processor_editor_titles_for_strip(1 + track_index);
                 self.persist_settings();
             }
             RenameTarget::Bus(bus_id) => {
@@ -216,6 +217,37 @@ impl Lilypalooza {
         let _ = playback
             .mixer()
             .set_track_name(lilypalooza_audio::TrackId(track_index as u16), name);
+    }
+
+    fn sync_processor_editor_titles_for_strip(&mut self, strip_index: usize) {
+        let Some(playback) = self.playback.as_ref() else {
+            return;
+        };
+        let Some(strip) = playback.mixer_state().strip_by_index(strip_index) else {
+            return;
+        };
+        let updates = self
+            .processor_editor_windows
+            .targets_for_strip(strip_index)
+            .into_iter()
+            .filter_map(|target| {
+                strip.slot(target.slot_index).map(|slot| {
+                    (
+                        target,
+                        self.editor_window_title(&strip.name, slot, target.slot_index),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for (target, title) in updates {
+            for error in self
+                .processor_editor_windows
+                .set_window_title(target, title)
+            {
+                self.log_processor_editor_error("rename", error);
+            }
+        }
     }
 
     pub(in crate::app) fn open_track_color_picker(&mut self) {

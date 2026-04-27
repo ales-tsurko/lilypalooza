@@ -261,27 +261,23 @@ pub(crate) fn parse_midi_roll_file(path: &Path) -> Result<MidiRollData, String> 
                                 instrument_name = Some(raw_name);
                             }
                         }
-                        0x51 => {
-                            if data.len() == 3 {
-                                let micros_per_quarter = (u32::from(data[0]) << 16)
-                                    | (u32::from(data[1]) << 8)
-                                    | u32::from(data[2]);
-                                tempo_changes.push(TempoChange {
-                                    tick: absolute_tick,
-                                    micros_per_quarter,
-                                });
-                            }
+                        0x51 if data.len() == 3 => {
+                            let micros_per_quarter = (u32::from(data[0]) << 16)
+                                | (u32::from(data[1]) << 8)
+                                | u32::from(data[2]);
+                            tempo_changes.push(TempoChange {
+                                tick: absolute_tick,
+                                micros_per_quarter,
+                            });
                         }
-                        0x58 => {
-                            if data.len() >= 2 {
-                                let numerator = data[0].max(1);
-                                let denominator = 2_u8.pow(u32::from(data[1])).max(1);
-                                time_signatures.push(TimeSignatureChange {
-                                    tick: absolute_tick,
-                                    numerator,
-                                    denominator,
-                                });
-                            }
+                        0x58 if data.len() >= 2 => {
+                            let numerator = data[0].max(1);
+                            let denominator = 2_u8.pow(u32::from(data[1])).max(1);
+                            time_signatures.push(TimeSignatureChange {
+                                tick: absolute_tick,
+                                numerator,
+                                denominator,
+                            });
                         }
                         _ => {}
                     }

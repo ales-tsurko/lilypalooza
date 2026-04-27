@@ -5,21 +5,17 @@ use objc2::runtime::AnyObject;
 use objc2::sel;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSBezelStyle, NSButton, NSButtonType, NSColor,
-    NSTextField, NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
-    NSWindowStyleMask, NSWindowTabbingMode,
+    NSApplication, NSAutoresizingMaskOptions, NSColor, NSView, NSWindow, NSWindowAnimationBehavior,
+    NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::CALayer;
 use raw_window_handle::RawWindowHandle;
 
-use crate::{Error, HostOptions, InstalledHost, WindowHandleSnapshot, WindowSnapshot, host_layout};
-
-const TITLEBAR_BUTTON_SIZE: f64 = 14.0;
-const TITLEBAR_BUTTON_LEFT: f64 = 10.0;
-const TITLEBAR_BUTTON_Y_OFFSET: f64 = 1.0;
-const TITLEBAR_LABEL_LEFT: f64 = 38.0;
-const TITLEBAR_LABEL_RIGHT: f64 = 12.0;
+use crate::{
+    EditorFrame, EditorHostOptions, Error, InstalledHost, Size, WindowHandleSnapshot,
+    WindowSnapshot, open_egui_frame,
+};
 
 pub fn prepare_process() -> Result<(), Error> {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -33,7 +29,8 @@ pub fn prepare_process() -> Result<(), Error> {
 
 pub fn install_editor_host(
     host: &WindowSnapshot,
-    options: &HostOptions,
+    options: &EditorHostOptions,
+    frame: impl EditorFrame + Send + 'static,
 ) -> Result<InstalledHost, Error> {
     let Some(mtm) = MainThreadMarker::new() else {
         return Err(Error::Message(
@@ -47,13 +44,15 @@ pub fn install_editor_host(
         .ok_or_else(|| Error::Message("host window is missing".to_string()))?;
 
     configure_window(&host_window, options, mtm);
+    if let Some(owner) = options.owner {
+        attach_child_window_to_owner(&host_window, &owner)?;
+    }
 
     let requested_bounds = host_view.bounds();
-    let layout = host_layout(
-        requested_bounds.size.width,
-        requested_bounds.size.height,
-        options,
-    );
+    let layout = frame.layout(Size {
+        width: requested_bounds.size.width,
+        height: requested_bounds.size.height,
+    });
 
     resize_host_window(&host_window, layout.outer_width, layout.outer_height);
     host_view.setFrameSize(NSSize::new(layout.outer_width, layout.outer_height));
@@ -61,31 +60,35 @@ pub fn install_editor_host(
     host_window.setBackgroundColor(Some(&NSColor::clearColor()));
     style_host_view(&host_view);
 
-    let host_bounds = NSRect::new(
-        NSPoint::new(0.0, 0.0),
-        NSSize::new(layout.outer_width, layout.outer_height),
-    );
-    let chrome = build_chrome_root(&host_bounds, options, mtm);
-    let (titlebar_frame, content_frame) = child_frames(&host_bounds, options);
-    let titlebar = build_titlebar(&host_window, &options.title, titlebar_frame, mtm);
-    let content = build_content_view(content_frame, mtm);
+    let frame_host = open_egui_frame(
+        *host,
+        options,
+        layout.outer_width,
+        layout.outer_height,
+        frame,
+    )?;
 
-    chrome.addSubview(&content);
-    chrome.addSubview(&titlebar);
-    host_view.addSubview(&chrome);
+    let content_frame = content_frame_for_host(layout, host_view.isFlipped());
+    let content = build_content_view(content_frame, mtm);
+    host_view.addSubview(&content);
+    let content = WindowSnapshot::capture(
+        RawWindowHandle::AppKit(raw_window_handle::AppKitWindowHandle::new(
+            NonNull::new(Retained::as_ptr(&content) as *mut std::ffi::c_void)
+                .expect("retained appkit content view pointer is non-null"),
+        )),
+        host.display.map(|_| {
+            raw_window_handle::RawDisplayHandle::AppKit(
+                raw_window_handle::AppKitDisplayHandle::new(),
+            )
+        }),
+    )?;
 
     Ok(InstalledHost {
-        content: WindowSnapshot::capture(
-            RawWindowHandle::AppKit(raw_window_handle::AppKitWindowHandle::new(
-                NonNull::new(Retained::as_ptr(&content) as *mut std::ffi::c_void)
-                    .expect("retained appkit content view pointer is non-null"),
-            )),
-            host.display.map(|_| {
-                raw_window_handle::RawDisplayHandle::AppKit(
-                    raw_window_handle::AppKitDisplayHandle::new(),
-                )
-            }),
-        )?,
+        host: *host,
+        content,
+        close_requested: frame_host.close_requested,
+        title: frame_host.title,
+        frame_window: Some(frame_host.window),
     })
 }
 
@@ -101,6 +104,32 @@ pub fn set_host_window_visible(host: &WindowSnapshot, visible: bool) -> Result<(
         host_window.orderOut(None);
     }
 
+    Ok(())
+}
+
+pub fn set_host_window_title(host: &WindowSnapshot, title: &str) -> Result<(), Error> {
+    let host_view = ns_view_from_snapshot(host)?;
+    let host_window = host_view
+        .window()
+        .ok_or_else(|| Error::Message("host window is missing".to_string()))?;
+    host_window.setTitle(&NSString::from_str(title));
+    Ok(())
+}
+
+fn attach_child_window_to_owner(
+    child_window: &NSWindow,
+    owner: &WindowSnapshot,
+) -> Result<(), Error> {
+    let owner_view = ns_view_from_snapshot(owner)?;
+    let owner_window = owner_view
+        .window()
+        .ok_or_else(|| Error::Message("owner window is missing".to_string()))?;
+
+    // SAFETY: Both windows are live AppKit windows on the main thread. AppKit uses this
+    // relationship to keep auxiliary editor windows above and with the owning app window.
+    unsafe {
+        owner_window.addChildWindow_ordered(child_window, NSWindowOrderingMode::Above);
+    }
     Ok(())
 }
 
@@ -159,7 +188,7 @@ fn ns_view_from_snapshot(snapshot: &WindowSnapshot) -> Result<Retained<NSView>, 
         .ok_or_else(|| Error::Message("host AppKit view is unavailable".to_string()))
 }
 
-fn configure_window(window: &NSWindow, options: &HostOptions, mtm: MainThreadMarker) {
+fn configure_window(window: &NSWindow, options: &EditorHostOptions, mtm: MainThreadMarker) {
     let mut style_mask = window.styleMask();
     style_mask.insert(NSWindowStyleMask::Closable);
     style_mask.remove(NSWindowStyleMask::Miniaturizable);
@@ -177,11 +206,27 @@ fn configure_window(window: &NSWindow, options: &HostOptions, mtm: MainThreadMar
     window.setStyleMask(style_mask);
     window.setTitle(&NSString::from_str(&options.title));
     window.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
+    window.setHasShadow(true);
     window.setMovableByWindowBackground(true);
     window.setAnimationBehavior(NSWindowAnimationBehavior::UtilityWindow);
     window.setCollectionBehavior(collection_behavior);
     window.setTabbingMode(NSWindowTabbingMode::Disallowed);
+    window.invalidateShadow();
     NSWindow::setAllowsAutomaticWindowTabbing(false, mtm);
+}
+
+pub fn begin_host_window_drag(host: &WindowSnapshot) -> Result<(), Error> {
+    let host_view = ns_view_from_snapshot(host)?;
+    let host_window = host_view
+        .window()
+        .ok_or_else(|| Error::Message("host window is missing".to_string()))?;
+    let event = host_window
+        .currentEvent()
+        .ok_or_else(|| Error::Message("host window drag event is missing".to_string()))?;
+
+    host_window.performWindowDragWithEvent(&event);
+    host_window.invalidateShadow();
+    Ok(())
 }
 
 fn resize_host_window(window: &NSWindow, width: f64, height: f64) {
@@ -192,141 +237,28 @@ fn resize_host_window(window: &NSWindow, width: f64, height: f64) {
     window.setFrame_display(frame, false);
 }
 
-fn build_titlebar(
-    window: &NSWindow,
-    title: &str,
-    frame: crate::Rect,
-    mtm: MainThreadMarker,
-) -> Retained<NSView> {
-    let titlebar = NSView::initWithFrame(NSView::alloc(mtm), ns_rect(frame));
-    titlebar.setAutoresizingMask(
-        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
-    );
-    style_view(
-        &titlebar,
-        &NSColor::underPageBackgroundColor(),
-        None,
-        0.0,
-        0.0,
-    );
-
-    let close_button = build_close_button(window, frame.height, mtm);
-    let title_label = build_title_label(title, frame.width, frame.height, mtm);
-
-    titlebar.addSubview(&close_button);
-    titlebar.addSubview(&title_label);
-    titlebar
-}
-
-fn build_close_button(window: &NSWindow, height: f64, mtm: MainThreadMarker) -> Retained<NSButton> {
-    let button = NSButton::initWithFrame(NSButton::alloc(mtm), close_button_rect(height));
-    button.setTitle(&NSString::from_str("×"));
-    button.setButtonType(NSButtonType::MomentaryPushIn);
-    button.setBezelStyle(NSBezelStyle::Circular);
-    button.setBordered(true);
-    button.setShowsBorderOnlyWhileMouseInside(true);
-    button.setTransparent(false);
-    // SAFETY: The target is the live host window. Borderless auxiliary windows do not reliably
-    // route `performClose:` through winit, so the custom button performs the host hide directly.
-    unsafe {
-        button.setTarget(Some(window));
-        button.setAction(Some(sel!(orderOut:)));
-    }
-    button
-}
-
-fn build_title_label(
-    title: &str,
-    width: f64,
-    height: f64,
-    mtm: MainThreadMarker,
-) -> Retained<NSTextField> {
-    let label_height = 18.0;
-    let label = NSTextField::labelWithString(&NSString::from_str(title), mtm);
-    label.setFrame(NSRect::new(
-        NSPoint::new(
-            TITLEBAR_LABEL_LEFT,
-            ((height - label_height) / 2.0).max(0.0),
-        ),
-        NSSize::new(
-            (width - TITLEBAR_LABEL_LEFT - TITLEBAR_LABEL_RIGHT).max(0.0),
-            label_height,
-        ),
-    ));
-    label.setAutoresizingMask(
-        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
-    );
-    label.setDrawsBackground(false);
-    label.setBordered(false);
-    label.setBezeled(false);
-    label.setEditable(false);
-    label.setSelectable(false);
-    label.setTextColor(Some(&NSColor::labelColor()));
-    label
-}
-
 fn build_content_view(frame: crate::Rect, mtm: MainThreadMarker) -> Retained<NSView> {
     let content = NSView::initWithFrame(NSView::alloc(mtm), ns_rect(frame));
     content.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
-    style_view(&content, &NSColor::controlBackgroundColor(), None, 0.0, 0.0);
+    style_view(&content, &NSColor::clearColor(), None, 0.0, 0.0);
     content
+}
+
+fn content_frame_for_host(layout: crate::EditorFrameLayout, host_is_flipped: bool) -> crate::Rect {
+    if !host_is_flipped {
+        return layout.content;
+    }
+
+    crate::Rect {
+        y: layout.outer_height - layout.content.y - layout.content.height,
+        ..layout.content
+    }
 }
 
 fn style_host_view(view: &NSView) {
     style_view(view, &NSColor::clearColor(), None, 0.0, 0.0);
-}
-
-fn build_chrome_root(
-    bounds: &NSRect,
-    options: &HostOptions,
-    mtm: MainThreadMarker,
-) -> Retained<NSView> {
-    let chrome = NSView::initWithFrame(NSView::alloc(mtm), *bounds);
-    chrome.setAutoresizingMask(
-        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
-    );
-    style_view(
-        &chrome,
-        &NSColor::underPageBackgroundColor(),
-        Some(&NSColor::underPageBackgroundColor()),
-        options.decoration.corner_radius,
-        options.decoration.frame_thickness,
-    );
-    chrome
-}
-
-fn child_frames(bounds: &NSRect, options: &HostOptions) -> (crate::Rect, crate::Rect) {
-    let frame = options.decoration.frame_thickness.max(0.0);
-    let titlebar_height = options.decoration.titlebar_height.max(20.0);
-    let content_width = (bounds.size.width - frame * 2.0).max(0.0);
-    let content_height = (bounds.size.height - frame * 2.0 - titlebar_height).max(0.0);
-
-    (
-        crate::Rect {
-            x: frame,
-            y: frame + content_height,
-            width: content_width,
-            height: titlebar_height,
-        },
-        crate::Rect {
-            x: frame,
-            y: frame,
-            width: content_width,
-            height: content_height,
-        },
-    )
-}
-
-fn close_button_rect(height: f64) -> NSRect {
-    NSRect::new(
-        NSPoint::new(
-            TITLEBAR_BUTTON_LEFT,
-            (((height - TITLEBAR_BUTTON_SIZE) / 2.0) + TITLEBAR_BUTTON_Y_OFFSET).max(0.0),
-        ),
-        NSSize::new(TITLEBAR_BUTTON_SIZE, TITLEBAR_BUTTON_SIZE),
-    )
 }
 
 fn style_view(
@@ -355,4 +287,41 @@ fn ns_rect(frame: crate::Rect) -> NSRect {
         NSPoint::new(frame.x, frame.y),
         NSSize::new(frame.width, frame.height),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Rect, host_layout};
+
+    use super::content_frame_for_host;
+
+    #[test]
+    fn content_frame_uses_bottom_left_coordinates_for_normal_appkit_views() {
+        let layout = host_layout(820.0, 456.0, 30.0, 4.0);
+
+        assert_eq!(
+            content_frame_for_host(layout, false),
+            Rect {
+                x: 4.0,
+                y: 4.0,
+                width: 820.0,
+                height: 456.0,
+            }
+        );
+    }
+
+    #[test]
+    fn content_frame_moves_below_titlebar_for_flipped_appkit_views() {
+        let layout = host_layout(820.0, 456.0, 30.0, 4.0);
+
+        assert_eq!(
+            content_frame_for_host(layout, true),
+            Rect {
+                x: 4.0,
+                y: 34.0,
+                width: 820.0,
+                height: 456.0,
+            }
+        );
+    }
 }

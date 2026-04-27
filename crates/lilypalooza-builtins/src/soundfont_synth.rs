@@ -1346,15 +1346,13 @@ fn program_list(
             || track_response.dragged()
             || track_response.clicked()
             || live_scroll_pointer.is_some())
-    {
-        if let Some(pointer) = live_scroll_pointer
+        && let Some(pointer) = live_scroll_pointer
             .or_else(|| thumb_response.interact_pointer_pos())
             .or_else(|| track_response.interact_pointer_pos())
-        {
-            let travel = (track.height() - thumb_height).max(1.0);
-            let ratio = ((pointer.y - track.top() - thumb_height / 2.0) / travel).clamp(0.0, 1.0);
-            *first = (ratio * max_first as f32).round() as usize;
-        }
+    {
+        let travel = (track.height() - thumb_height).max(1.0);
+        let ratio = ((pointer.y - track.top() - thumb_height / 2.0) / travel).clamp(0.0, 1.0);
+        *first = (ratio * max_first as f32).round() as usize;
     }
     retro_button_frame(
         ui,

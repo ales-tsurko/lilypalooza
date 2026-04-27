@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use auxiliary_window::WindowSnapshot;
+use editor_host::{InstalledHost, WindowSnapshot};
 use iced::window;
 use lilypalooza_audio::{EditorError, EditorParent, EditorSession};
 
@@ -24,8 +24,9 @@ pub(super) struct EditorWindow {
     pub(super) title: String,
     pub(super) resizable: bool,
     pub(super) host_window_id: window::Id,
-    pub(super) host_snapshot: Option<WindowSnapshot>,
+    pub(super) host: Option<InstalledHost>,
     pub(super) session: Box<dyn EditorSession>,
+    pub(super) visible: bool,
 }
 
 pub(super) struct PendingEditorWindow {
@@ -97,7 +98,7 @@ impl EditorWindowManager {
     pub(super) fn attach(
         &mut self,
         window_id: window::Id,
-        host_snapshot: Option<WindowSnapshot>,
+        host: Option<InstalledHost>,
         parent: EditorParent,
     ) -> Result<(), EditorError> {
         let Some(mut pending) = self.pending.remove(&window_id) else {
@@ -113,8 +114,9 @@ impl EditorWindowManager {
                 title: pending.title,
                 resizable: pending.resizable,
                 host_window_id: pending.host_window_id,
-                host_snapshot,
+                host,
                 session: pending.session,
+                visible: true,
             },
         );
         self.windows_by_id.insert(window_id, pending.target);
@@ -193,37 +195,120 @@ impl EditorWindowManager {
     pub(super) fn hide_window(
         &mut self,
         window_id: window::Id,
-    ) -> Option<(EditorTarget, Option<WindowSnapshot>, &mut dyn EditorSession)> {
+    ) -> Option<(EditorTarget, Vec<String>)> {
         let target = *self.windows_by_id.get(&window_id)?;
         let window = self.windows.get_mut(&target)?;
-        let snapshot = window.host_snapshot;
+        let mut errors = Vec::new();
         if self.focused == Some(target) {
             self.focused = None;
         }
-        Some((target, snapshot, window.session.as_mut()))
+        window.visible = false;
+        if let Err(error) = window.session.set_visible(false) {
+            errors.push(error.to_string());
+        }
+        if let Some(host) = window.host.as_mut()
+            && let Err(error) = host.set_visible(false)
+        {
+            errors.push(error.to_string());
+        } else if let Some(host) = window.host.as_ref() {
+            host.clear_close_requested();
+        }
+        Some((target, errors))
     }
 
-    pub(super) fn hide_all_windows(
-        &mut self,
-    ) -> Vec<(Option<WindowSnapshot>, Result<(), EditorError>)> {
+    pub(super) fn hide_all_windows(&mut self) -> Vec<Vec<String>> {
         self.focused = None;
         self.windows
             .values_mut()
             .map(|window| {
-                let visibility = window.session.set_visible(false);
-                (window.host_snapshot, visibility)
+                let mut errors = Vec::new();
+                window.visible = false;
+                if let Err(error) = window.session.set_visible(false) {
+                    errors.push(error.to_string());
+                }
+                if let Some(host) = window.host.as_mut()
+                    && let Err(error) = host.set_visible(false)
+                {
+                    errors.push(error.to_string());
+                }
+                errors
             })
             .collect()
     }
 
-    pub(super) fn host_snapshot_for(&self, window_id: window::Id) -> Option<WindowSnapshot> {
-        let target = *self.windows_by_id.get(&window_id)?;
-        self.windows.get(&target)?.host_snapshot
+    pub(super) fn show_window(&mut self, window_id: window::Id) -> Vec<String> {
+        let Some(target) = self.windows_by_id.get(&window_id).copied() else {
+            return Vec::new();
+        };
+        let Some(window) = self.windows.get_mut(&target) else {
+            return Vec::new();
+        };
+        let mut errors = Vec::new();
+        if let Some(host) = window.host.as_mut() {
+            host.clear_close_requested();
+            if let Err(error) = host.set_visible(true) {
+                errors.push(error.to_string());
+            }
+        }
+        if let Err(error) = window.session.set_visible(true) {
+            errors.push(error.to_string());
+        }
+        window.visible = true;
+        self.focused = Some(target);
+        errors
     }
 
-    pub(super) fn session_mut(&mut self, window_id: window::Id) -> Option<&mut dyn EditorSession> {
-        let target = *self.windows_by_id.get(&window_id)?;
-        Some(self.windows.get_mut(&target)?.session.as_mut())
+    pub(super) fn window_visible(&self, window_id: window::Id) -> bool {
+        self.windows_by_id
+            .get(&window_id)
+            .and_then(|target| self.windows.get(target))
+            .is_some_and(|window| window.visible)
+    }
+
+    pub(super) fn targets_for_strip(&self, strip_index: usize) -> Vec<EditorTarget> {
+        self.windows
+            .keys()
+            .chain(self.pending.values().map(|window| &window.target))
+            .filter(|target| target.strip_index == strip_index)
+            .copied()
+            .collect()
+    }
+
+    pub(super) fn set_window_title(&mut self, target: EditorTarget, title: String) -> Vec<String> {
+        let mut errors = Vec::new();
+        if let Some(window) = self.windows.get_mut(&target) {
+            window.title.clone_from(&title);
+            if let Some(host) = window.host.as_mut()
+                && let Err(error) = host.set_title(title.clone())
+            {
+                errors.push(error.to_string());
+            }
+        }
+        for pending in self
+            .pending
+            .values_mut()
+            .filter(|pending| pending.target == target)
+        {
+            pending.title.clone_from(&title);
+        }
+        errors
+    }
+
+    pub(super) fn close_requested_windows(&self) -> Vec<window::Id> {
+        self.windows
+            .values()
+            .filter(|window| {
+                window
+                    .host
+                    .as_ref()
+                    .is_some_and(InstalledHost::close_requested)
+            })
+            .map(|window| window.host_window_id)
+            .collect()
+    }
+
+    pub(super) fn has_installed_hosts(&self) -> bool {
+        self.windows.values().any(|window| window.host.is_some())
     }
 }
 
@@ -238,25 +323,11 @@ impl EditorWindowManager {
 mod tests {
     use std::ptr::NonNull;
 
-    use auxiliary_window::WindowSnapshot;
+    use editor_host::WindowSnapshot;
     use iced::window;
     use lilypalooza_audio::{EditorError, EditorParent, EditorSession, EditorSize};
 
     use super::{EditorTarget, EditorWindowManager, snapshot_into_editor_parent};
-
-    fn fake_snapshot() -> WindowSnapshot {
-        WindowSnapshot::capture(
-            iced::window::raw_window_handle::RawWindowHandle::AppKit(
-                iced::window::raw_window_handle::AppKitWindowHandle::new(
-                    NonNull::<std::ffi::c_void>::dangling(),
-                ),
-            ),
-            Some(iced::window::raw_window_handle::RawDisplayHandle::AppKit(
-                iced::window::raw_window_handle::AppKitDisplayHandle::new(),
-            )),
-        )
-        .expect("snapshot should capture appkit")
-    }
 
     struct FakeEditorSession;
 
@@ -320,7 +391,7 @@ mod tests {
         manager
             .attach(
                 window_id,
-                Some(fake_snapshot()),
+                None,
                 EditorParent {
                     window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
                         iced::window::raw_window_handle::AppKitWindowHandle::new(
@@ -332,6 +403,101 @@ mod tests {
             )
             .expect("attach should succeed");
         assert!(manager.windows.contains_key(&target));
+        assert!(manager.window_visible(window_id));
+    }
+
+    #[test]
+    fn processor_editor_window_manager_tracks_visibility_for_toggle() {
+        let mut manager = EditorWindowManager::default();
+        let target = EditorTarget {
+            strip_index: 1,
+            slot_index: 0,
+        };
+        let window_id = window::Id::unique();
+        manager.begin_open(
+            target,
+            "Track 1".to_string(),
+            true,
+            Box::new(FakeEditorSession),
+            window_id,
+        );
+        manager
+            .attach(
+                window_id,
+                None,
+                EditorParent {
+                    window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
+                        iced::window::raw_window_handle::AppKitWindowHandle::new(
+                            std::ptr::NonNull::<std::ffi::c_void>::dangling(),
+                        ),
+                    ),
+                    display: None,
+                },
+            )
+            .expect("attach should succeed");
+
+        assert!(manager.window_visible(window_id));
+        manager.hide_window(window_id).expect("window should hide");
+        assert!(!manager.window_visible(window_id));
+        assert!(manager.show_window(window_id).is_empty());
+        assert!(manager.window_visible(window_id));
+    }
+
+    #[test]
+    fn processor_editor_window_manager_updates_titles_for_open_and_pending_windows() {
+        let mut manager = EditorWindowManager::default();
+        let open_target = EditorTarget {
+            strip_index: 1,
+            slot_index: 0,
+        };
+        let pending_target = EditorTarget {
+            strip_index: 1,
+            slot_index: 1,
+        };
+        let open_id = window::Id::unique();
+        let pending_id = window::Id::unique();
+        manager.begin_open(
+            open_target,
+            "Old".to_string(),
+            true,
+            Box::new(FakeEditorSession),
+            open_id,
+        );
+        manager
+            .attach(
+                open_id,
+                None,
+                EditorParent {
+                    window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
+                        iced::window::raw_window_handle::AppKitWindowHandle::new(
+                            std::ptr::NonNull::<std::ffi::c_void>::dangling(),
+                        ),
+                    ),
+                    display: None,
+                },
+            )
+            .expect("attach should succeed");
+        manager.begin_open(
+            pending_target,
+            "Old pending".to_string(),
+            true,
+            Box::new(FakeEditorSession),
+            pending_id,
+        );
+
+        assert!(
+            manager
+                .set_window_title(open_target, "New".to_string())
+                .is_empty()
+        );
+        assert!(
+            manager
+                .set_window_title(pending_target, "New pending".to_string())
+                .is_empty()
+        );
+
+        assert_eq!(manager.window_title(open_id), Some("New"));
+        assert_eq!(manager.window_title(pending_id), Some("New pending"));
     }
 
     #[test]
@@ -378,7 +544,7 @@ mod tests {
         manager
             .attach(
                 window_id,
-                Some(fake_snapshot()),
+                None,
                 EditorParent {
                     window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
                         iced::window::raw_window_handle::AppKitWindowHandle::new(

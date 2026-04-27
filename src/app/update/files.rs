@@ -213,7 +213,12 @@ impl Lilypalooza {
         if self.playback.is_some() {
             self.refresh_playback_position();
         }
-        Task::none()
+        let close_requests = self.processor_editor_windows.close_requested_windows();
+        Task::batch(
+            close_requests
+                .into_iter()
+                .map(|window_id| self.handle_processor_editor_close_requested(window_id)),
+        )
     }
 
     pub(in crate::app) fn activate_score(

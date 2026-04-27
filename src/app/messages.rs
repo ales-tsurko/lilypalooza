@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use auxiliary_window::WindowSnapshot;
+use editor_host::WindowSnapshot;
 use iced::event;
 use iced::time::Instant;
 use iced::widget::{pane_grid, text_editor};

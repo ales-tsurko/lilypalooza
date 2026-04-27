@@ -3,9 +3,12 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use auxiliary_window::{HostOptions, WindowSnapshot, install_editor_host};
+use editor_host::{
+    EditorFrame, EditorFrameAction, EditorHostOptions, EditorHostState, InstalledHost,
+    WindowSnapshot, host_layout,
+};
 use iced::widget::{container, text};
-use iced::{Element, Length, Size, Subscription, Task, window};
+use iced::{Color, Element, Length, Size, Subscription, Task, window};
 use lilypalooza_audio::{
     AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, EditorDescriptor, EditorParent,
     EditorSession, MixerState, SlotAddress, SlotState, SoundfontResource, TrackId,
@@ -24,7 +27,7 @@ fn main() -> iced::Result {
         }
     };
 
-    if let Err(error) = auxiliary_window::prepare_process() {
+    if let Err(error) = editor_host::prepare_process() {
         eprintln!("failed to prepare editor host process: {error}");
         return Ok(());
     }
@@ -150,6 +153,7 @@ impl SoundfontRuntime {
 struct SoundfontEditorApp {
     runtime: Result<SoundfontRuntime, String>,
     host_window_id: Option<window::Id>,
+    host: Option<InstalledHost>,
     attached: bool,
     status: String,
 }
@@ -159,6 +163,7 @@ impl SoundfontEditorApp {
         Self {
             runtime: SoundfontRuntime::new(&options),
             host_window_id: None,
+            host: None,
             attached: false,
             status: "opening editor".to_string(),
         }
@@ -169,10 +174,11 @@ impl SoundfontEditorApp {
 enum Message {
     WindowOpened(window::Id),
     WindowClosed(window::Id),
+    CloseRequested,
+    Frame,
     HostReady {
         window_id: window::Id,
         host: Result<WindowSnapshot, String>,
-        parent: Result<WindowSnapshot, String>,
     },
 }
 
@@ -180,10 +186,6 @@ fn update(app: &mut SoundfontEditorApp, message: Message) -> Task<Message> {
     match message {
         Message::WindowOpened(window_id) => {
             app.host_window_id = Some(window_id);
-            let (title, resizable) = match &app.runtime {
-                Ok(runtime) => (runtime.title.clone(), runtime.descriptor.resizable),
-                Err(_) => return Task::none(),
-            };
             window::run(window_id, move |window| {
                 let host = window
                     .window_handle()
@@ -195,23 +197,7 @@ fn update(app: &mut SoundfontEditorApp, message: Message) -> Task<Message> {
                         )
                         .map_err(|error| error.to_string())
                     });
-                let parent = host.as_ref().map_or_else(
-                    |error| Err(error.clone()),
-                    |host| {
-                        install_editor_host(
-                            host,
-                            &HostOptions::new(title).with_resizable(resizable),
-                        )
-                        .map(|installed| installed.content)
-                        .map_err(|error| error.to_string())
-                    },
-                );
-
-                Message::HostReady {
-                    window_id,
-                    host,
-                    parent,
-                }
+                Message::HostReady { window_id, host }
             })
         }
         Message::WindowClosed(window_id) => {
@@ -225,11 +211,28 @@ fn update(app: &mut SoundfontEditorApp, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::HostReady {
-            window_id,
-            host,
-            parent,
-        } => {
+        Message::CloseRequested => {
+            if let Some(host) = app.host.as_mut() {
+                let _ = host.set_visible(false);
+            }
+            if let Ok(runtime) = &mut app.runtime
+                && let Some(session) = runtime.session.as_mut()
+            {
+                let _ = session.set_visible(false);
+            }
+            Task::none()
+        }
+        Message::Frame => {
+            if app
+                .host
+                .as_ref()
+                .is_some_and(InstalledHost::close_requested)
+            {
+                return update(app, Message::CloseRequested);
+            }
+            Task::none()
+        }
+        Message::HostReady { window_id, host } => {
             if Some(window_id) != app.host_window_id || app.attached {
                 return Task::none();
             }
@@ -239,7 +242,26 @@ fn update(app: &mut SoundfontEditorApp, message: Message) -> Task<Message> {
             let Some(session) = runtime.session.as_mut() else {
                 return Task::none();
             };
-            let parent = match host.and(parent).and_then(snapshot_into_editor_parent) {
+            let host = match host {
+                Ok(host) => host,
+                Err(error) => {
+                    app.status = error;
+                    return Task::none();
+                }
+            };
+            let installed = match editor_host::install_editor_host(
+                &host,
+                &EditorHostOptions::new(runtime.title.clone())
+                    .with_resizable(runtime.descriptor.resizable),
+                DebugEditorFrame::default(),
+            ) {
+                Ok(host) => host,
+                Err(error) => {
+                    app.status = error.to_string();
+                    return Task::none();
+                }
+            };
+            let parent = match snapshot_into_editor_parent(installed.content()) {
                 Ok(parent) => parent,
                 Err(error) => {
                     app.status = error;
@@ -248,6 +270,7 @@ fn update(app: &mut SoundfontEditorApp, message: Message) -> Task<Message> {
             };
             match session.attach(parent) {
                 Ok(()) => {
+                    app.host = Some(installed);
                     app.attached = true;
                     app.status = "editor attached".to_string();
                 }
@@ -272,11 +295,16 @@ fn view(app: &SoundfontEditorApp) -> Element<'_, Message> {
         .into()
 }
 
-fn subscription(_app: &SoundfontEditorApp) -> Subscription<Message> {
-    Subscription::batch([
+fn subscription(app: &SoundfontEditorApp) -> Subscription<Message> {
+    let mut subscriptions = vec![
         window::open_events().map(Message::WindowOpened),
         window::close_events().map(Message::WindowClosed),
-    ])
+    ];
+    if app.host.is_some() {
+        subscriptions
+            .push(iced::time::every(std::time::Duration::from_millis(33)).map(|_| Message::Frame));
+    }
+    Subscription::batch(subscriptions)
 }
 
 fn title(app: &SoundfontEditorApp) -> String {
@@ -300,6 +328,166 @@ fn window_settings() -> window::Settings {
         decorations: false,
         exit_on_close_request: false,
         ..window::Settings::default()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DebugEditorFrame {
+    titlebar_height: f64,
+    frame_thickness: f64,
+    style: DebugEditorFrameStyle,
+}
+
+impl Default for DebugEditorFrame {
+    fn default() -> Self {
+        Self {
+            titlebar_height: 30.0,
+            frame_thickness: 4.0,
+            style: DebugEditorFrameStyle::from_theme(&iced::Theme::Dark),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DebugEditorFrameStyle {
+    frame_color: editor_host::egui::Color32,
+    titlebar_color: editor_host::egui::Color32,
+    border_color: editor_host::egui::Color32,
+    title_color: editor_host::egui::Color32,
+    close_background: editor_host::egui::Color32,
+    close_background_hovered: editor_host::egui::Color32,
+    close_icon: editor_host::egui::Color32,
+    close_icon_hovered: editor_host::egui::Color32,
+}
+
+impl DebugEditorFrameStyle {
+    fn from_theme(theme: &iced::Theme) -> Self {
+        let palette = theme.extended_palette();
+        let titlebar = mix_iced_color(palette.background.weak.color, Color::WHITE, 0.04);
+        let border = mix_iced_color(
+            palette.background.weak.color,
+            palette.background.strong.color,
+            0.40,
+        );
+        let close_icon = mix_iced_color(
+            palette.background.strong.text,
+            palette.background.weak.color,
+            0.12,
+        );
+
+        Self {
+            frame_color: egui_color(palette.background.base.color),
+            titlebar_color: egui_color(titlebar),
+            border_color: egui_color(border),
+            title_color: egui_color(palette.background.base.text),
+            close_background: editor_host::egui::Color32::TRANSPARENT,
+            close_background_hovered: egui_color(palette.background.base.color),
+            close_icon: egui_color(close_icon),
+            close_icon_hovered: egui_color(palette.background.base.text),
+        }
+    }
+}
+
+impl EditorFrame for DebugEditorFrame {
+    fn layout(&self, content_size: editor_host::Size) -> editor_host::EditorFrameLayout {
+        host_layout(
+            content_size.width,
+            content_size.height,
+            self.titlebar_height,
+            self.frame_thickness,
+        )
+    }
+
+    fn render(
+        &mut self,
+        ui: &mut editor_host::egui::Ui,
+        state: &EditorHostState,
+    ) -> EditorFrameAction {
+        let rect = ui.max_rect();
+        ui.painter().rect_filled(rect, 0.0, self.style.frame_color);
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            0.0,
+            editor_host::egui::Stroke::new(1.0, self.style.border_color),
+            editor_host::egui::StrokeKind::Inside,
+        );
+        let titlebar = editor_host::egui::Rect::from_min_size(
+            rect.left_top()
+                + editor_host::egui::vec2(self.frame_thickness as f32, self.frame_thickness as f32),
+            editor_host::egui::vec2(
+                rect.width() - (self.frame_thickness * 2.0) as f32,
+                self.titlebar_height as f32,
+            ),
+        );
+        ui.painter()
+            .rect_filled(titlebar, 0.0, self.style.titlebar_color);
+        let drag_rect = editor_host::egui::Rect::from_min_max(
+            titlebar.left_top() + editor_host::egui::vec2(32.0, 0.0),
+            titlebar.right_bottom(),
+        );
+        let drag = ui.allocate_rect(drag_rect, editor_host::egui::Sense::drag());
+
+        let close_rect = editor_host::egui::Rect::from_center_size(
+            titlebar.left_center() + editor_host::egui::vec2(15.0, 0.0),
+            editor_host::egui::vec2(20.0, 20.0),
+        );
+        let close = ui.allocate_rect(close_rect, editor_host::egui::Sense::click());
+        let close_background = if close.hovered() {
+            self.style.close_background_hovered
+        } else {
+            self.style.close_background
+        };
+        let close_icon = if close.hovered() {
+            self.style.close_icon_hovered
+        } else {
+            self.style.close_icon
+        };
+        ui.painter().rect_filled(close_rect, 4.0, close_background);
+        let icon_rect = close_rect.shrink(6.0);
+        let stroke = editor_host::egui::Stroke::new(1.5, close_icon);
+        ui.painter()
+            .line_segment([icon_rect.left_top(), icon_rect.right_bottom()], stroke);
+        ui.painter()
+            .line_segment([icon_rect.right_top(), icon_rect.left_bottom()], stroke);
+        ui.painter().text(
+            titlebar.left_center() + editor_host::egui::vec2(36.0, 0.0),
+            editor_host::egui::Align2::LEFT_CENTER,
+            &state.title,
+            editor_host::egui::FontId::proportional(12.0),
+            self.style.title_color,
+        );
+
+        if close.clicked() {
+            EditorFrameAction::Close
+        } else if drag.drag_started_by(editor_host::egui::PointerButton::Primary) {
+            EditorFrameAction::DragWindow
+        } else {
+            EditorFrameAction::None
+        }
+    }
+}
+
+fn egui_color(color: Color) -> editor_host::egui::Color32 {
+    editor_host::egui::Color32::from_rgba_unmultiplied(
+        color_channel_u8(color.r),
+        color_channel_u8(color.g),
+        color_channel_u8(color.b),
+        color_channel_u8(color.a),
+    )
+}
+
+fn color_channel_u8(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn mix_iced_color(a: Color, b: Color, amount: f32) -> Color {
+    let t = amount.clamp(0.0, 1.0);
+
+    Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
     }
 }
 
@@ -353,5 +541,14 @@ mod tests {
         assert_eq!(options.path, PathBuf::from("piano.sf2"));
         assert_eq!(options.bank, 128);
         assert_eq!(options.program, 42);
+    }
+
+    #[test]
+    fn window_size_starts_with_editor_content_size() {
+        let settings = super::window_settings();
+
+        assert_eq!(settings.size, iced::Size::new(820.0, 456.0));
+        assert_eq!(settings.min_size, Some(iced::Size::new(820.0, 456.0)));
+        assert!(!settings.decorations);
     }
 }

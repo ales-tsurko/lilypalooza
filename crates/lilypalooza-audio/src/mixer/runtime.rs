@@ -837,7 +837,7 @@ impl MixerRuntime {
         for (runtime, (track, amplitude)) in self
             .tracks
             .iter_mut()
-            .zip(mixer.tracks().iter().zip(track_amplitudes.into_iter()))
+            .zip(mixer.tracks().iter().zip(track_amplitudes))
         {
             if let Some(runtime) = runtime.as_mut() {
                 runtime.apply_strip(track, amplitude);

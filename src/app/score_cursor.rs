@@ -148,10 +148,7 @@ pub(super) fn parse_svg_note_anchors(svg_source: &str, page_index: usize) -> Vec
     let mut anchors = Vec::new();
     let mut search_offset = 0;
 
-    loop {
-        let Some(anchor_start_relative) = svg_source[search_offset..].find("<a ") else {
-            break;
-        };
+    while let Some(anchor_start_relative) = svg_source[search_offset..].find("<a ") {
         let anchor_start = search_offset + anchor_start_relative;
         let Some(anchor_end_relative) = svg_source[anchor_start..].find("</a>") else {
             break;
@@ -536,7 +533,7 @@ fn map_note_file(
         return None;
     }
 
-    mapped.sort_by(|left, right| left.0.cmp(&right.0));
+    mapped.sort_by_key(|left| left.0);
 
     let mut points = Vec::new();
     let mut index = 0usize;

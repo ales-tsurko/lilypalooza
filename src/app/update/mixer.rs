@@ -1,7 +1,4 @@
-use auxiliary_window::{
-    HostOptions, WindowSnapshot, install_editor_host, route_app_quit_to_window_close,
-    set_host_window_visible,
-};
+use editor_host::{EditorHostOptions, WindowSnapshot, route_app_quit_to_window_close};
 use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, BusId, SlotState, TrackId};
 use lilypalooza_builtins::soundfont_synth::{self, SoundfontProcessorState};
 
@@ -48,14 +45,9 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn hide_all_editor_windows(&mut self) -> Task<Message> {
-        for (host_snapshot, visibility) in self.processor_editor_windows.hide_all_windows() {
-            if let Err(error) = visibility {
+        for errors in self.processor_editor_windows.hide_all_windows() {
+            for error in errors {
                 self.log_processor_editor_error("hide", error);
-            }
-            if let Some(host_snapshot) = host_snapshot
-                && let Err(error) = set_host_window_visible(&host_snapshot, false)
-            {
-                self.log_processor_editor_error("hide host window", error);
             }
         }
         Task::none()
@@ -87,15 +79,6 @@ impl Lilypalooza {
             return Task::none();
         }
 
-        let title = self
-            .processor_editor_windows
-            .window_title(window_id)
-            .unwrap_or("Processor Editor")
-            .to_string();
-        let resizable = self
-            .processor_editor_windows
-            .window_resizable(window_id)
-            .unwrap_or(true);
         window::run(window_id, move |window| {
             let host = window
                 .window_handle()
@@ -107,20 +90,10 @@ impl Lilypalooza {
                     )
                     .map_err(|error| error.to_string())
                 });
-            let parent = match &host {
-                Ok(host_snapshot) => install_editor_host(
-                    host_snapshot,
-                    &HostOptions::new(title).with_resizable(resizable),
-                )
-                .map(|installed| installed.content)
-                .map_err(|error| error.to_string()),
-                Err(error) => Err(error.clone()),
-            };
-
             Message::WindowSnapshotCaptured {
                 window_id,
                 host,
-                parent,
+                parent: Err("editor host is installed in app state".to_string()),
             }
         })
     }
@@ -163,16 +136,40 @@ impl Lilypalooza {
                 return Task::none();
             }
         };
-        let parent = match parent.and_then(snapshot_into_editor_parent) {
+        let resizable = self
+            .processor_editor_windows
+            .window_resizable(window_id)
+            .unwrap_or(true);
+        let title = self
+            .processor_editor_windows
+            .window_title(window_id)
+            .unwrap_or("Processor Editor")
+            .to_string();
+        let mut options = EditorHostOptions::new(title).with_resizable(resizable);
+        if let Some(owner) = self.main_window_snapshot {
+            options = options.with_owner(owner);
+        }
+        let installed_host = match editor_host::install_editor_host(
+            &host,
+            &options,
+            crate::app::AppEditorFrame::from_theme(&self.theme),
+        ) {
+            Ok(host) => host,
+            Err(error) => {
+                self.log_processor_editor_error("install host", error);
+                return Task::none();
+            }
+        };
+        let parent = match snapshot_into_editor_parent(installed_host.content()) {
             Ok(parent) => parent,
             Err(error) => {
                 self.log_processor_editor_error("capture content window", error);
                 return Task::none();
             }
         };
-        if let Err(error) = self
-            .processor_editor_windows
-            .attach(window_id, Some(host), parent)
+        if let Err(error) =
+            self.processor_editor_windows
+                .attach(window_id, Some(installed_host), parent)
         {
             self.log_processor_editor_error("attach", error);
         }
@@ -183,18 +180,11 @@ impl Lilypalooza {
         &mut self,
         window_id: window::Id,
     ) -> Task<Message> {
-        let Some((_target, host_snapshot, session)) =
-            self.processor_editor_windows.hide_window(window_id)
-        else {
+        let Some((_target, errors)) = self.processor_editor_windows.hide_window(window_id) else {
             return Task::none();
         };
-        if let Err(error) = session.set_visible(false) {
+        for error in errors {
             self.log_processor_editor_error("hide", error);
-        }
-        if let Some(host_snapshot) = host_snapshot
-            && let Err(error) = set_host_window_visible(&host_snapshot, false)
-        {
-            self.log_processor_editor_error("hide host window", error);
         }
         Task::none()
     }
@@ -613,7 +603,12 @@ fn mixer_message_history_mode(
 }
 
 impl Lilypalooza {
-    fn editor_window_title(&self, strip_name: &str, slot: &SlotState, slot_index: usize) -> String {
+    pub(in crate::app) fn editor_window_title(
+        &self,
+        strip_name: &str,
+        slot: &SlotState,
+        slot_index: usize,
+    ) -> String {
         if slot_index != 0 {
             return slot.title(strip_name, slot_index);
         }
@@ -634,16 +629,10 @@ impl Lilypalooza {
         if let Some(window_id) = self.processor_editor_windows.focus_existing(target) {
             return if self.processor_editor_windows.pending_contains(window_id) {
                 Task::none()
+            } else if self.processor_editor_windows.window_visible(window_id) {
+                self.handle_processor_editor_close_requested(window_id)
             } else {
-                if let Some(host_snapshot) =
-                    self.processor_editor_windows.host_snapshot_for(window_id)
-                    && let Err(error) = set_host_window_visible(&host_snapshot, true)
-                {
-                    self.log_processor_editor_error("show host window", error);
-                }
-                if let Some(session) = self.processor_editor_windows.session_mut(window_id)
-                    && let Err(error) = session.set_visible(true)
-                {
+                for error in self.processor_editor_windows.show_window(window_id) {
                     self.log_processor_editor_error("show", error);
                 }
                 window::gain_focus(window_id)
@@ -982,6 +971,7 @@ mod tests {
 
     #[test]
     fn selecting_track_instrument_opens_editor_when_available() {
+        lilypalooza_builtins::register_all();
         let mut app = test_app();
         let mut playback =
             AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
@@ -1003,7 +993,7 @@ mod tests {
             0,
             crate::app::mixer::InstrumentChoice::Processor {
                 processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
-                name: "SoundFont".to_string(),
+                name: "SF-01".to_string(),
                 backend: crate::app::mixer::InstrumentBrowserBackend::BuiltIn,
             },
         ));

@@ -216,9 +216,10 @@ impl<App: EguiApp> EguiWindow<App> {
         let clipped_primitives = self.ctx.tessellate(output.shapes, output.pixels_per_point);
         let physical = self.window_info.physical_size();
         let screen_size = [physical.width, physical.height];
+        let [r, g, b, a] = clear_color();
         // SAFETY: the glow context is current for this window during this render call.
         unsafe {
-            self.gl.clear_color(0.13, 0.13, 0.14, 1.0);
+            self.gl.clear_color(r, g, b, a);
             self.gl.clear(glow::COLOR_BUFFER_BIT);
         }
         self.painter.paint_and_update_textures(
@@ -233,6 +234,10 @@ impl<App: EguiApp> EguiWindow<App> {
             context.make_not_current();
         }
     }
+}
+
+fn clear_color() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 0.0]
 }
 
 impl<App> Drop for EguiWindow<App> {
@@ -417,5 +422,13 @@ fn pointer_button(button: MouseButton) -> Option<egui::PointerButton> {
         MouseButton::Back => Some(egui::PointerButton::Extra1),
         MouseButton::Forward => Some(egui::PointerButton::Extra2),
         MouseButton::Other(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn clears_parented_egui_view_to_transparent() {
+        assert_eq!(super::clear_color(), [0.0, 0.0, 0.0, 0.0]);
     }
 }

@@ -3137,9 +3137,20 @@ mod tests {
     fn editor_pane_header_matches_snapshot() -> Result<(), iced_test::Error> {
         let (mut app, _task) = super::super::new(None, None, false);
         let _ = app.unfold_workspace_pane(WorkspacePaneKind::Editor);
+        app.set_active_workspace_pane(WorkspacePaneKind::Editor);
         let group_id = app
             .group_for_pane(WorkspacePaneKind::Editor)
             .expect("editor pane should exist");
+        let group = app
+            .dock_groups
+            .get_mut(&group_id)
+            .expect("editor pane group should exist");
+        group.tabs = vec![
+            WorkspacePaneKind::PianoRoll,
+            WorkspacePaneKind::Score,
+            WorkspacePaneKind::Editor,
+        ];
+        group.active = WorkspacePaneKind::Editor;
 
         let mut ui = simulator(group_header(&app, group_id, 600.0));
         assert_snapshot_matches(&mut ui, "tests/snapshots/editor_pane_header")?;

@@ -113,22 +113,11 @@ impl CodeEditor {
                     WrappingCalculator::logical_to_visual(&visual_lines, line, col)
                 {
                     let target_visual = match direction {
-                        ArrowDirection::Up => {
-                            if current_visual > 0 {
-                                current_visual - 1
-                            } else {
-                                return; // Already at top
-                            }
-                        }
-                        ArrowDirection::Down => {
-                            if current_visual + 1 < visual_lines.len() {
-                                current_visual + 1
-                            } else {
-                                return; // Already at bottom
-                            }
+                        ArrowDirection::Up if current_visual > 0 => current_visual - 1,
+                        ArrowDirection::Down if current_visual + 1 < visual_lines.len() => {
+                            current_visual + 1
                         }
                         _ => {
-                            // This should never happen as we're in the Up/Down branch
                             return;
                         }
                     };

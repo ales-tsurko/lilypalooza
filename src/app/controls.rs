@@ -215,13 +215,11 @@ impl<Message: Clone> canvas_widget::Program<Message> for Knob<'_, Message> {
                     );
                 }
             }
-            canvas_widget::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                if cursor.position_in(bounds).is_some() {
-                    let next = self.apply_scroll_delta(*delta);
-                    return Some(
-                        canvas_widget::Action::publish((self.on_change)(next)).and_capture(),
-                    );
-                }
+            canvas_widget::Event::Mouse(mouse::Event::WheelScrolled { delta })
+                if cursor.position_in(bounds).is_some() =>
+            {
+                let next = self.apply_scroll_delta(*delta);
+                return Some(canvas_widget::Action::publish((self.on_change)(next)).and_capture());
             }
             canvas_widget::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.dragging = false;
@@ -367,22 +365,17 @@ impl<Message: Clone> canvas_widget::Program<Message> for GainFader<'_, Message> 
                     );
                 }
             }
-            canvas_widget::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                if state.dragging {
-                    let next =
-                        y_to_gain_value(position.y - bounds.y, gain_fader_rail_bounds(bounds));
-                    return Some(
-                        canvas_widget::Action::publish((self.on_change)(next)).and_capture(),
-                    );
-                }
+            canvas_widget::Event::Mouse(mouse::Event::CursorMoved { position })
+                if state.dragging =>
+            {
+                let next = y_to_gain_value(position.y - bounds.y, gain_fader_rail_bounds(bounds));
+                return Some(canvas_widget::Action::publish((self.on_change)(next)).and_capture());
             }
-            canvas_widget::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                if cursor.position_in(bounds).is_some() {
-                    let next = self.apply_scroll_delta(*delta);
-                    return Some(
-                        canvas_widget::Action::publish((self.on_change)(next)).and_capture(),
-                    );
-                }
+            canvas_widget::Event::Mouse(mouse::Event::WheelScrolled { delta })
+                if cursor.position_in(bounds).is_some() =>
+            {
+                let next = self.apply_scroll_delta(*delta);
+                return Some(canvas_widget::Action::publish((self.on_change)(next)).and_capture());
             }
             canvas_widget::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.dragging = false;
@@ -529,29 +522,29 @@ impl<Message: Clone> canvas_widget::Program<Message> for HorizontalSlider<'_, Me
                     );
                 }
             }
-            canvas_widget::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                if state.dragging {
-                    return Some(
-                        canvas_widget::Action::publish((self.on_change)(
-                            self.value_for_cursor_x(position.x - bounds.x, bounds),
-                        ))
-                        .and_capture(),
-                    );
-                }
+            canvas_widget::Event::Mouse(mouse::Event::CursorMoved { position })
+                if state.dragging =>
+            {
+                return Some(
+                    canvas_widget::Action::publish((self.on_change)(
+                        self.value_for_cursor_x(position.x - bounds.x, bounds),
+                    ))
+                    .and_capture(),
+                );
             }
-            canvas_widget::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                if cursor.position_in(bounds).is_some() {
-                    let amount = match delta {
-                        mouse::ScrollDelta::Lines { y, .. } => y * self.step.max(0.01),
-                        mouse::ScrollDelta::Pixels { y, .. } => y / 120.0 * self.step.max(0.01),
-                    };
-                    return Some(
-                        canvas_widget::Action::publish((self.on_change)(
-                            self.normalize(self.value + amount),
-                        ))
-                        .and_capture(),
-                    );
-                }
+            canvas_widget::Event::Mouse(mouse::Event::WheelScrolled { delta })
+                if cursor.position_in(bounds).is_some() =>
+            {
+                let amount = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y * self.step.max(0.01),
+                    mouse::ScrollDelta::Pixels { y, .. } => y / 120.0 * self.step.max(0.01),
+                };
+                return Some(
+                    canvas_widget::Action::publish((self.on_change)(
+                        self.normalize(self.value + amount),
+                    ))
+                    .and_capture(),
+                );
             }
             canvas_widget::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.dragging = false;

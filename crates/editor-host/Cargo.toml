@@ -1,9 +1,11 @@
 [package]
-name = "auxiliary-window"
+name = "editor-host"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+egui = "0.33.3"
+lilypalooza-egui-baseview = { path = "../lilypalooza-egui-baseview" }
 raw-window-handle = "0.6"
 thiserror = "2.0.18"
 
@@ -14,6 +16,8 @@ objc2-app-kit = { version = "0.3.2", features = [
     "NSButton",
     "NSColor",
     "NSControl",
+    "NSEvent",
+    "NSGraphics",
     "NSMenu",
     "NSMenuItem",
     "NSTextField",

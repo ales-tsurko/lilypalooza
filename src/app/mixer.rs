@@ -2529,6 +2529,7 @@ mod tests {
 
     #[test]
     fn soundfont_slot_maps_to_soundfont_choice() {
+        lilypalooza_builtins::register_all();
         let mixer = MixerState::new();
         assert_eq!(
             selected_instrument_choice(
@@ -2540,7 +2541,7 @@ mod tests {
             ),
             Some(InstrumentChoice::Processor {
                 processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
-                name: "SoundFont".to_string(),
+                name: "SF-01".to_string(),
                 backend: InstrumentBrowserBackend::BuiltIn,
             })
         );

@@ -92,6 +92,7 @@ wrap = []
 
 [lib]
 name = "iced_aw"
+doctest = false
 crate-type = [
     "cdylib",
     "rlib",

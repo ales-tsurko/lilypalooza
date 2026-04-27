@@ -68,7 +68,9 @@
     clippy::unit_arg,
     clippy::trivially_copy_pass_by_ref,
     clippy::let_unit_value,
-    clippy::float_cmp
+    clippy::float_cmp,
+    clippy::collapsible_match,
+    clippy::explicit_counter_loop
 )]
 
 pub mod widget;

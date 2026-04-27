@@ -466,18 +466,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
-name = "auxiliary-window"
-version = "0.1.0"
-dependencies = [
- "objc2 0.6.3",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "objc2-quartz-core 0.3.2",
- "raw-window-handle 0.6.2",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "av-scenechange"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1359,6 +1347,20 @@ checksum = "71ddb8ac7643d1dba1bb02110e804406dd459a838efcb14011ced10556711a8e"
 dependencies = [
  "bytemuck",
  "emath",
+]
+
+[[package]]
+name = "editor-host"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "lilypalooza-egui-baseview",
+ "objc2 0.6.3",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
+ "raw-window-handle 0.6.2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3069,9 +3071,9 @@ dependencies = [
 name = "lilypalooza"
 version = "0.1.0"
 dependencies = [
- "auxiliary-window",
  "bytemuck",
  "directories",
+ "editor-host",
  "iced",
  "iced-code-editor",
  "iced_aw 0.13.1",
@@ -3112,8 +3114,8 @@ name = "lilypalooza-builtins"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
- "auxiliary-window",
  "bincode",
+ "editor-host",
  "iced",
  "knyst",
  "lilypalooza-audio",

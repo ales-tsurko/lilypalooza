@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use auxiliary_window::WindowSnapshot;
+use editor_host::WindowSnapshot;
 use iced::event;
 use iced::keyboard;
 use iced::widget::{Id, pane_grid, svg};
@@ -23,6 +23,7 @@ use crate::settings::{
     self, DockAxis, DockNodeSettings, FoldedPaneRestoreSettings, FoldedPaneSettings,
 };
 use crate::state::{self, GlobalState, ProjectState};
+use crate::ui_style;
 
 use messages::{
     EditorMessage, FileMessage, KeyPress, LoggerMessage, Message, PaneMessage, PianoRollMessage,
@@ -63,6 +64,174 @@ pub(super) const EDITOR_FILE_BROWSER_ENTRY_HEIGHT: f32 = 26.0;
 pub(super) const SHORTCUTS_SCROLLABLE_ID: &str = "shortcuts-scrollable";
 pub(super) const TRACK_RENAME_INPUT_ID: &str = "track-rename-input";
 
+#[derive(Debug, Clone)]
+pub(super) struct AppEditorFrame {
+    titlebar_height: f64,
+    frame_thickness: f64,
+    style: AppEditorFrameStyle,
+}
+
+impl Default for AppEditorFrame {
+    fn default() -> Self {
+        Self::from_theme(&iced::Theme::Dark)
+    }
+}
+
+impl AppEditorFrame {
+    pub(super) fn from_theme(theme: &iced::Theme) -> Self {
+        Self {
+            titlebar_height: 30.0,
+            frame_thickness: 4.0,
+            style: AppEditorFrameStyle::from_theme(theme),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AppEditorFrameStyle {
+    frame_color: editor_host::egui::Color32,
+    titlebar_color: editor_host::egui::Color32,
+    border_color: editor_host::egui::Color32,
+    title_color: editor_host::egui::Color32,
+    close_background: editor_host::egui::Color32,
+    close_background_hovered: editor_host::egui::Color32,
+    close_icon: editor_host::egui::Color32,
+    close_icon_hovered: editor_host::egui::Color32,
+}
+
+impl AppEditorFrameStyle {
+    fn from_theme(theme: &iced::Theme) -> Self {
+        let palette = theme.extended_palette();
+        let titlebar = mix_iced_color(palette.background.weak.color, Color::WHITE, 0.04);
+        let border = mix_iced_color(
+            palette.background.weak.color,
+            palette.background.strong.color,
+            0.40,
+        );
+        let close_icon = mix_iced_color(
+            palette.background.strong.text,
+            palette.background.weak.color,
+            0.12,
+        );
+
+        Self {
+            frame_color: egui_color(palette.background.base.color),
+            titlebar_color: egui_color(titlebar),
+            border_color: egui_color(border),
+            title_color: egui_color(palette.background.base.text),
+            close_background: editor_host::egui::Color32::TRANSPARENT,
+            close_background_hovered: egui_color(palette.background.base.color),
+            close_icon: egui_color(close_icon),
+            close_icon_hovered: egui_color(palette.background.base.text),
+        }
+    }
+}
+
+impl editor_host::EditorFrame for AppEditorFrame {
+    fn layout(&self, content_size: editor_host::Size) -> editor_host::EditorFrameLayout {
+        editor_host::host_layout(
+            content_size.width,
+            content_size.height,
+            self.titlebar_height,
+            self.frame_thickness,
+        )
+    }
+
+    fn render(
+        &mut self,
+        ui: &mut editor_host::egui::Ui,
+        state: &editor_host::EditorHostState,
+    ) -> editor_host::EditorFrameAction {
+        let rect = ui.max_rect();
+        ui.painter().rect_filled(rect, 0.0, self.style.frame_color);
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            0.0,
+            editor_host::egui::Stroke::new(1.0, self.style.border_color),
+            editor_host::egui::StrokeKind::Inside,
+        );
+
+        let titlebar = editor_host::egui::Rect::from_min_size(
+            rect.left_top()
+                + editor_host::egui::vec2(self.frame_thickness as f32, self.frame_thickness as f32),
+            editor_host::egui::vec2(
+                rect.width() - (self.frame_thickness * 2.0) as f32,
+                self.titlebar_height as f32,
+            ),
+        );
+        ui.painter()
+            .rect_filled(titlebar, 0.0, self.style.titlebar_color);
+
+        let drag_rect = editor_host::egui::Rect::from_min_max(
+            titlebar.left_top() + editor_host::egui::vec2(32.0, 0.0),
+            titlebar.right_bottom(),
+        );
+        let drag = ui.allocate_rect(drag_rect, editor_host::egui::Sense::drag());
+
+        let close_rect = editor_host::egui::Rect::from_center_size(
+            titlebar.left_center() + editor_host::egui::vec2(15.0, 0.0),
+            editor_host::egui::vec2(20.0, 20.0),
+        );
+        let close = ui.allocate_rect(close_rect, editor_host::egui::Sense::click());
+        let close_background = if close.hovered() {
+            self.style.close_background_hovered
+        } else {
+            self.style.close_background
+        };
+        let close_icon = if close.hovered() {
+            self.style.close_icon_hovered
+        } else {
+            self.style.close_icon
+        };
+        ui.painter().rect_filled(close_rect, 4.0, close_background);
+        let icon_rect = close_rect.shrink(6.0);
+        let stroke = editor_host::egui::Stroke::new(1.5, close_icon);
+        ui.painter()
+            .line_segment([icon_rect.left_top(), icon_rect.right_bottom()], stroke);
+        ui.painter()
+            .line_segment([icon_rect.right_top(), icon_rect.left_bottom()], stroke);
+        ui.painter().text(
+            titlebar.left_center() + editor_host::egui::vec2(36.0, 0.0),
+            editor_host::egui::Align2::LEFT_CENTER,
+            &state.title,
+            editor_host::egui::FontId::proportional(ui_style::FONT_SIZE_UI_SM as f32),
+            self.style.title_color,
+        );
+
+        if close.clicked() {
+            editor_host::EditorFrameAction::Close
+        } else if drag.drag_started_by(editor_host::egui::PointerButton::Primary) {
+            editor_host::EditorFrameAction::DragWindow
+        } else {
+            editor_host::EditorFrameAction::None
+        }
+    }
+}
+
+fn egui_color(color: Color) -> editor_host::egui::Color32 {
+    editor_host::egui::Color32::from_rgba_unmultiplied(
+        color_channel_u8(color.r),
+        color_channel_u8(color.g),
+        color_channel_u8(color.b),
+        color_channel_u8(color.a),
+    )
+}
+
+fn color_channel_u8(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn mix_iced_color(a: Color, b: Color, amount: f32) -> Color {
+    let t = amount.clamp(0.0, 1.0);
+
+    Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RenameTarget {
     Track(usize),
@@ -80,6 +249,7 @@ const SCORE_ZOOM_PREVIEW_INTERVAL: Duration = Duration::from_millis(16);
 const SCORE_ZOOM_PREVIEW_SETTLE_DELAY: Duration = Duration::from_millis(120);
 const ACTIVE_PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(33);
 const PASSIVE_PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(120);
+const EDITOR_HOST_POLL_INTERVAL: Duration = Duration::from_millis(33);
 pub(super) const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 fn audio_engine_options(playback: &settings::PlaybackSettings) -> AudioEngineOptions {
@@ -558,7 +728,7 @@ fn new(
     startup_score: Option<PathBuf>,
     audio_enabled: bool,
 ) -> (Lilypalooza, Task<Message>) {
-    let auxiliary_window_error = auxiliary_window::prepare_process().err();
+    let editor_host_error = editor_host::prepare_process().err();
     let (main_window_id, open_main_window) = window::open(main_window_settings());
     let default_settings = settings::AppSettings::default();
     let default_global_state = GlobalState::default();
@@ -808,9 +978,9 @@ fn new(
         app.logger
             .push(format!("Playback engine startup failed: {error}"));
     }
-    if let Some(error) = auxiliary_window_error {
+    if let Some(error) = editor_host_error {
         app.logger
-            .push(format!("Auxiliary window setup failed: {error}"));
+            .push(format!("Editor host setup failed: {error}"));
     }
 
     app.restore_editor_session(
@@ -878,6 +1048,10 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
 
     if let Some(interval) = app.playback_poll_interval() {
         subscriptions.push(iced::time::every(interval).map(Message::Frame));
+    }
+
+    if app.processor_editor_windows.has_installed_hosts() {
+        subscriptions.push(iced::time::every(EDITOR_HOST_POLL_INTERVAL).map(Message::Frame));
     }
 
     Subscription::batch(subscriptions)
@@ -1373,6 +1547,41 @@ mod tests {
             physical_key: keyboard::key::Physical::Code(code),
             modifiers: keyboard::Modifiers::default(),
         })
+    }
+
+    #[test]
+    fn app_editor_frame_takes_chrome_colors_from_iced_theme() {
+        let theme = iced::Theme::Dark;
+        let palette = theme.extended_palette();
+        let frame = AppEditorFrame::from_theme(&theme);
+
+        assert_eq!(
+            frame.style.frame_color,
+            egui_color(palette.background.base.color)
+        );
+        assert_eq!(
+            frame.style.titlebar_color,
+            egui_color(mix_iced_color(
+                palette.background.weak.color,
+                Color::WHITE,
+                0.04
+            ))
+        );
+        assert_eq!(
+            frame.style.title_color,
+            egui_color(palette.background.base.text)
+        );
+    }
+
+    #[test]
+    fn app_editor_frame_close_button_has_hover_feedback() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+
+        assert_ne!(
+            frame.style.close_background,
+            frame.style.close_background_hovered
+        );
+        assert_ne!(frame.style.close_icon, frame.style.close_icon_hovered);
     }
 
     fn char_key_press(value: &str, code: keyboard::key::Code) -> Message {
