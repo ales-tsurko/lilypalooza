@@ -507,6 +507,17 @@ impl CodeEditor {
     ///
     /// A new `CodeEditor` instance
     pub fn new(content: &str, syntax: &str) -> Self {
+        let mut editor = Self::new_with_deferred_metrics(content, syntax);
+
+        // Perform initial character dimension calculation
+        editor.recalculate_char_dimensions(false);
+
+        editor
+    }
+
+    /// Creates a new canvas-based text editor using default metrics until
+    /// [`CodeEditor::refresh_font_metrics`] is called.
+    pub fn new_with_deferred_metrics(content: &str, syntax: &str) -> Self {
         // Generate a unique ID for this editor instance
         let editor_id = EDITOR_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
 
@@ -515,7 +526,7 @@ impl CodeEditor {
             FOCUSED_EDITOR_ID.store(editor_id, Ordering::Relaxed);
         }
 
-        let mut editor = Self {
+        Self {
             editor_id,
             buffer: TextBuffer::new(content),
             cursor: (0, 0),
@@ -578,12 +589,7 @@ impl CodeEditor {
             cache_window_end_line: 0,
             buffer_revision: 0,
             visual_lines_cache: RefCell::new(None),
-        };
-
-        // Perform initial character dimension calculation
-        editor.recalculate_char_dimensions(false);
-
-        editor
+        }
     }
 
     /// Sets the font used by the editor
@@ -594,6 +600,17 @@ impl CodeEditor {
     pub fn set_font(&mut self, font: iced::Font) {
         self.font = font;
         self.recalculate_char_dimensions(false);
+    }
+
+    /// Sets the font without recalculating glyph metrics immediately.
+    ///
+    /// Call [`CodeEditor::refresh_font_metrics`] before rendering when exact
+    /// glyph metrics are needed.
+    pub fn set_font_deferred(&mut self, font: iced::Font) {
+        self.font = font;
+        self.content_cache.clear();
+        self.overlay_cache.clear();
+        *self.max_content_width_cache.borrow_mut() = None;
     }
 
     /// Sets the font size and recalculates character dimensions.
@@ -608,6 +625,24 @@ impl CodeEditor {
     pub fn set_font_size(&mut self, size: f32, auto_adjust_line_height: bool) {
         self.font_size = size;
         self.recalculate_char_dimensions(auto_adjust_line_height);
+    }
+
+    /// Sets the font size without recalculating glyph metrics immediately.
+    ///
+    /// Call [`CodeEditor::refresh_font_metrics`] before rendering when exact
+    /// glyph metrics are needed.
+    pub fn set_font_size_deferred(&mut self, size: f32, auto_adjust_line_height: bool) {
+        self.font_size = size;
+
+        if auto_adjust_line_height {
+            let line_height_ratio = LINE_HEIGHT / FONT_SIZE;
+            self.line_height = self.font_size * line_height_ratio;
+        }
+
+        self.content_cache.clear();
+        self.overlay_cache.clear();
+        *self.max_content_width_cache.borrow_mut() = None;
+        let _ = self.clamp_horizontal_scroll_offset();
     }
 
     /// Recalculate glyph metrics using the current font and size.

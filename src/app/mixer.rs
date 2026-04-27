@@ -2001,6 +2001,9 @@ mod tests {
         ui: &mut iced_test::Simulator<'_, crate::app::Message>,
         baseline_name: &str,
     ) -> Result<(), iced_test::Error> {
+        let _snapshot_guard = super::super::ICED_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let snapshot = ui.snapshot(&Theme::Dark)?;
         let baseline_path = Path::new(baseline_name);
 
@@ -2021,6 +2024,9 @@ mod tests {
         second: &mut iced_test::Simulator<'_, crate::app::Message>,
         baseline_name: &str,
     ) -> Result<(), iced_test::Error> {
+        let _snapshot_guard = super::super::ICED_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut baseline_path = PathBuf::from("/tmp");
         baseline_path.push(baseline_name);
 
@@ -2051,6 +2057,9 @@ mod tests {
         second: &mut iced_test::Simulator<'_, crate::app::Message>,
         baseline_name: &str,
     ) -> Result<(), iced_test::Error> {
+        let _snapshot_guard = super::super::ICED_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut baseline_path = PathBuf::from("/tmp");
         baseline_path.push(baseline_name);
 
@@ -2330,7 +2339,7 @@ mod tests {
     #[test]
     fn mixer_bus_area_nonempty_appends_add_bus_lane_matches_snapshot()
     -> Result<(), iced_test::Error> {
-        let (mut app, _task) = crate::app::new(None, None, false);
+        let (mut app, _task) = crate::app::new_with_default_test_state();
         app.playback = Some(
             AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
                 .expect("test audio engine should start"),

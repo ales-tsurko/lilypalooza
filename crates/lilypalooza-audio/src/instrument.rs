@@ -7,7 +7,7 @@ pub mod registry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use knyst::r#gen::{Gen, GenContext};
 use knyst::graph::{EventChange, EventPayload, ResolvedNodeEventInput, SchedulerChange};
@@ -596,20 +596,23 @@ impl InstrumentRuntimeHandle {
         &mut self,
         commands: &mut MultiThreadedKnystCommands,
     ) {
-        if let Err(error) = commands
-            .request_graph_settled()
-            .recv_timeout(Self::SCHEDULER_TARGET_TIMEOUT)
-        {
-            eprintln!(
-                "Timed out waiting for graph settlement before resolving scheduler target: {error}"
-            );
-        }
         let node_id = self.node_id();
-        self.scheduler_event_target = commands
-            .resolve_scheduler_event_input(node_id.event_input("event"))
-            .recv_timeout(Self::SCHEDULER_TARGET_TIMEOUT)
-            .ok()
-            .flatten();
+        self.scheduler_event_target = None;
+        let deadline = Instant::now() + Self::SCHEDULER_TARGET_TIMEOUT;
+
+        while Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let timeout = remaining.min(Duration::from_millis(10));
+            if let Ok(Some(target)) = commands
+                .resolve_scheduler_event_input(node_id.event_input("event"))
+                .recv_timeout(timeout)
+            {
+                self.scheduler_event_target = Some(target);
+                return;
+            }
+
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     pub(crate) fn scheduler_midi_change(

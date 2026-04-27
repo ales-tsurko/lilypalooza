@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn piano_roll_track_selection_updates_shared_state() {
-        let (mut app, _task) = super::super::super::new(None, None, false);
+        let (mut app, _task) = super::super::super::new_with_default_test_state();
 
         let _ = update(
             &mut app,
@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn mixer_track_selection_updates_shared_state_without_playback() {
-        let (mut app, _task) = super::super::super::new(None, None, false);
+        let (mut app, _task) = super::super::super::new_with_default_test_state();
 
         let _ = update(&mut app, Message::Mixer(MixerMessage::SelectTrack(5)));
 

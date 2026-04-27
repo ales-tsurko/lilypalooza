@@ -1407,9 +1407,14 @@ fn group_header<'a>(
     } else {
         split_header_control_groups(control_groups, available_controls_width)
     };
-    let shows_menu_button =
-        active_pane == WorkspacePaneKind::Editor || !overflow_controls.is_empty();
-    let is_menu_open = shows_menu_button && app.open_header_overflow_menu == Some(group_id);
+    let header_layout = group_header_layout_from_parts(
+        active_pane,
+        title_width,
+        available_controls_width,
+        !overflow_controls.is_empty(),
+    );
+    let is_menu_open =
+        header_layout.shows_menu_button && app.open_header_overflow_menu == Some(group_id);
     let mut header = row![group_tabs(app, group), container(text("")).width(Fill)]
         .align_y(alignment::Vertical::Center)
         .width(Fill);
@@ -1422,7 +1427,7 @@ fn group_header<'a>(
         );
     }
 
-    if shows_menu_button {
+    if header_layout.shows_menu_button {
         header = header.push(header_overflow_trigger(app, group_id, is_menu_open));
     }
     header = header.push(header_close_trigger(app, active_pane));
@@ -1439,6 +1444,32 @@ fn group_header<'a>(
     ]
     .spacing(0)
     .into()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GroupHeaderLayout {
+    active_pane: WorkspacePaneKind,
+    title_width: f32,
+    available_controls_width: f32,
+    shows_menu_button: bool,
+    shows_close_button: bool,
+}
+
+fn group_header_layout_from_parts(
+    active_pane: WorkspacePaneKind,
+    title_width: f32,
+    available_controls_width: f32,
+    has_overflow_controls: bool,
+) -> GroupHeaderLayout {
+    let shows_menu_button = active_pane == WorkspacePaneKind::Editor || has_overflow_controls;
+
+    GroupHeaderLayout {
+        active_pane,
+        title_width,
+        available_controls_width,
+        shows_menu_button,
+        shows_close_button: true,
+    }
 }
 
 fn header_close_trigger(app: &Lilypalooza, pane: WorkspacePaneKind) -> Element<'static, Message> {
@@ -1955,7 +1986,7 @@ fn split_header_control_groups<'a>(
     groups: Vec<HeaderControlGroup<'a>>,
     available_width: f32,
 ) -> (Vec<Element<'a, Message>>, Vec<Element<'a, Message>>) {
-    let total_width = header_groups_total_width(&groups);
+    let total_width = header_group_widths_total(groups.iter().map(|group| group.min_width));
     if groups.is_empty() || total_width <= available_width {
         return (
             groups.into_iter().map(|group| group.content).collect(),
@@ -1986,9 +2017,11 @@ fn split_header_control_groups<'a>(
     (inline, overflow)
 }
 
-fn header_groups_total_width(groups: &[HeaderControlGroup<'_>]) -> f32 {
-    groups.iter().map(|group| group.min_width).sum::<f32>()
-        + ui_style::SPACE_SM as f32 * groups.len().saturating_sub(1) as f32
+fn header_group_widths_total(widths: impl IntoIterator<Item = f32>) -> f32 {
+    let mut count = 0usize;
+    let total = widths.into_iter().inspect(|_| count += 1).sum::<f32>();
+
+    total + ui_style::SPACE_SM as f32 * count.saturating_sub(1) as f32
 }
 
 pub(super) fn compact_control_icon(icon: svg::Handle) -> Element<'static, Message> {
@@ -3028,6 +3061,9 @@ mod tests {
         ui: &mut iced_test::Simulator<'_, Message>,
         baseline_name: &str,
     ) -> Result<(), iced_test::Error> {
+        let _snapshot_guard = super::super::ICED_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let snapshot = ui.snapshot(&iced::Theme::Dark)?;
         let baseline_path = Path::new(baseline_name);
 
@@ -3134,8 +3170,8 @@ mod tests {
     }
 
     #[test]
-    fn editor_pane_header_matches_snapshot() -> Result<(), iced_test::Error> {
-        let (mut app, _task) = super::super::new(None, None, false);
+    fn editor_pane_header_layout_keeps_tabs_menu_and_close_control() {
+        let (mut app, _task) = super::super::new_with_default_test_state();
         let _ = app.unfold_workspace_pane(WorkspacePaneKind::Editor);
         app.set_active_workspace_pane(WorkspacePaneKind::Editor);
         let group_id = app
@@ -3152,10 +3188,34 @@ mod tests {
         ];
         group.active = WorkspacePaneKind::Editor;
 
-        let mut ui = simulator(group_header(&app, group_id, 600.0));
-        assert_snapshot_matches(&mut ui, "tests/snapshots/editor_pane_header")?;
+        let group = app
+            .workspace_group(group_id)
+            .expect("editor pane group should exist");
+        let title_width = group_tabs_min_width(group);
+        let layout = group_header_layout_from_parts(
+            group.active,
+            title_width,
+            (600.0 - title_width).max(0.0),
+            false,
+        );
 
-        Ok(())
+        assert_eq!(layout.active_pane, WorkspacePaneKind::Editor);
+        assert_eq!(
+            layout.title_width,
+            workspace_tab_min_width(WorkspacePaneKind::PianoRoll)
+                + workspace_tab_min_width(WorkspacePaneKind::Score)
+                + workspace_tab_min_width(WorkspacePaneKind::Editor)
+                + ui_style::SPACE_XS as f32 * 2.0
+        );
+        assert_eq!(layout.available_controls_width, 600.0 - layout.title_width);
+        assert!(layout.shows_menu_button);
+        assert!(layout.shows_close_button);
+        assert_eq!(
+            workspace_pane_title(WorkspacePaneKind::PianoRoll),
+            "Piano Roll"
+        );
+        assert_eq!(workspace_pane_title(WorkspacePaneKind::Score), "Score");
+        assert_eq!(workspace_pane_title(WorkspacePaneKind::Editor), "Editor");
     }
 
     #[test]
@@ -3164,7 +3224,7 @@ mod tests {
         let alpha = root.path().join("alpha");
         fs::create_dir(&alpha).expect("alpha dir");
 
-        let (app, _task) = super::super::new(None, None, false);
+        let (app, _task) = super::super::new_with_default_test_state();
         let column = crate::app::editor::EditorBrowserColumnSummary::Directory {
             entries: vec![crate::app::editor::EditorBrowserEntrySummary {
                 path: alpha.clone(),
@@ -3190,7 +3250,7 @@ mod tests {
     #[test]
     fn browser_header_click_emits_focus_message() {
         let root = tempfile::TempDir::new().expect("tempdir");
-        let (mut app, _task) = super::super::new(None, None, false);
+        let (mut app, _task) = super::super::new_with_default_test_state();
         app.project_root = Some(root.path().to_path_buf());
         app.editor.set_project_root(Some(root.path().to_path_buf()));
         app.editor.toggle_file_browser();

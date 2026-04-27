@@ -1419,7 +1419,10 @@ fn engine_renders_audio_for_four_track_midi_with_tempo_track() {
         thread::sleep(Duration::from_millis(2));
     }
 
-    panic!("engine four-track end-to-end path produced silence");
+    panic!(
+        "engine four-track end-to-end path produced silence; debug state: {:?}",
+        engine.sequencer.debug_state()
+    );
 }
 
 #[test]

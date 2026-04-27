@@ -49,6 +49,9 @@ mod transport_bar;
 mod update;
 mod view;
 
+#[cfg(test)]
+static ICED_SNAPSHOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 const MIN_WINDOW_WIDTH: f32 = 960.0;
 const MIN_WINDOW_HEIGHT: f32 = 640.0;
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -728,25 +731,47 @@ fn new(
     startup_score: Option<PathBuf>,
     audio_enabled: bool,
 ) -> (Lilypalooza, Task<Message>) {
+    let default_settings = settings::AppSettings::default();
+    let default_global_state = GlobalState::default();
+    let (stored_settings, settings_error) = match settings::load() {
+        Ok(settings) => (settings, None),
+        Err(error) => (default_settings.clone(), Some(error)),
+    };
+    let (stored_state, state_error) = match state::load_global() {
+        Ok(state) => (state, None),
+        Err(error) => (default_global_state.clone(), Some(error)),
+    };
+
+    new_with_loaded_state(
+        startup_soundfont,
+        startup_score,
+        audio_enabled,
+        stored_settings,
+        settings_error,
+        stored_state,
+        state_error,
+    )
+}
+
+fn new_with_loaded_state(
+    startup_soundfont: Option<PathBuf>,
+    startup_score: Option<PathBuf>,
+    audio_enabled: bool,
+    stored_settings: settings::AppSettings,
+    settings_error: Option<String>,
+    mut stored_state: GlobalState,
+    state_error: Option<String>,
+) -> (Lilypalooza, Task<Message>) {
     let editor_host_error = editor_host::prepare_process().err();
     let (main_window_id, open_main_window) = window::open(main_window_settings());
-    let default_settings = settings::AppSettings::default();
     let default_global_state = GlobalState::default();
     let browser_history_dir = tempfile::Builder::new()
         .prefix("lilypalooza-browser-history")
         .tempdir()
         .ok();
-    let (stored_settings, settings_error) = match settings::load() {
-        Ok(settings) => (settings, None),
-        Err(error) => (default_settings.clone(), Some(error)),
-    };
     let startup_soundfonts = match startup_soundfont {
         Some(path) => vec![path],
         None => stored_settings.playback.soundfonts.clone(),
-    };
-    let (mut stored_state, state_error) = match state::load_global() {
-        Ok(state) => (state, None),
-        Err(error) => (default_global_state.clone(), Some(error)),
     };
     migrate_workspace_layout(
         &mut stored_state.workspace_layout.root,
@@ -810,6 +835,31 @@ fn new(
     } else {
         (None, None)
     };
+    let project_mixer_state = MixerState::new();
+    let shortcuts_search_input_id = Id::unique();
+    let browser_inline_edit_input_id = Id::unique();
+    let editor_tab_rename_input_id = Id::unique();
+    let instrument_browser_search_input_id = Id::unique();
+    let editor = editor::EditorState::new(
+        iced::Theme::Dark,
+        stored_settings.editor_view,
+        stored_settings.editor_theme,
+    );
+    let logger = Logger::new();
+    let processor_editor_windows = EditorWindowManager::default();
+    let track_rename_color_value = crate::track_colors::default_track_color(0);
+    let editor_recent_files = stored_state.editor_recent_files.clone();
+    let recent_projects = stored_state.recent_projects.clone();
+    let editor_recent_files_limit = stored_settings.editor_recent_files_limit.max(1);
+    let shortcut_settings = stored_settings.shortcuts.clone();
+    let svg_zoom = stored_state
+        .score_view
+        .zoom
+        .clamp(MIN_SVG_ZOOM, MAX_SVG_ZOOM);
+    let svg_page_brightness = stored_state
+        .score_view
+        .page_brightness
+        .clamp(MIN_SVG_PAGE_BRIGHTNESS, MAX_SVG_PAGE_BRIGHTNESS);
 
     let mut app = Lilypalooza {
         theme: iced::Theme::Dark,
@@ -822,7 +872,7 @@ fn new(
         error_prompt: None,
         prompt_ok_action: None,
         prompt_selected_button: PromptSelectedButton::Ok,
-        logger: Logger::new(),
+        logger,
         score_watcher: None,
         editor_file_watcher: None,
         browser_file_watcher: None,
@@ -843,7 +893,7 @@ fn new(
         soundfont_status: SoundfontStatus::NotSelected,
         playback_settings: stored_settings.playback.clone(),
         saved_project_state: None,
-        project_mixer_state: MixerState::new(),
+        project_mixer_state,
         workspace_panes,
         dock_layout,
         dock_groups,
@@ -863,9 +913,9 @@ fn new(
         open_project_menu_section: None,
         open_project_recent: false,
         open_shortcuts_dialog: false,
-        processor_editor_windows: EditorWindowManager::default(),
+        processor_editor_windows,
         shortcuts_search_query: String::new(),
-        shortcuts_search_input_id: Id::unique(),
+        shortcuts_search_input_id,
         shortcuts_selected_action: None,
         hovered_tooltip_key: None,
         open_tooltip_key: None,
@@ -883,7 +933,7 @@ fn new(
         browser_clipboard: None,
         browser_inline_edit: None,
         browser_inline_edit_value: String::new(),
-        browser_inline_edit_input_id: Id::unique(),
+        browser_inline_edit_input_id,
         browser_pressed_entry: None,
         browser_drag_state: None,
         browser_drop_target: None,
@@ -898,44 +948,34 @@ fn new(
         pending_reveal_editor_tab: None,
         renaming_editor_tab: None,
         editor_tab_rename_value: String::new(),
-        editor_tab_rename_input_id: Id::unique(),
+        editor_tab_rename_input_id,
         renaming_target: None,
         renaming_origin: None,
         track_color_picker_target: None,
         track_rename_was_focused: false,
         track_rename_value: String::new(),
         track_rename_color_picker_open: false,
-        track_rename_color_value: crate::track_colors::default_track_color(0),
+        track_rename_color_value,
         selected_track_index: None,
         open_instrument_browser_track: None,
         instrument_browser_backend: mixer::InstrumentBrowserBackend::BuiltIn,
         instrument_browser_search: String::new(),
-        instrument_browser_search_input_id: Id::unique(),
+        instrument_browser_search_input_id,
         track_name_overrides: Vec::new(),
         track_color_overrides: Vec::new(),
         metronome: crate::state::MetronomeState::default(),
         metronome_menu_open: false,
-        editor_recent_files: stored_state.editor_recent_files.clone(),
-        recent_projects: stored_state.recent_projects.clone(),
-        editor_recent_files_limit: stored_settings.editor_recent_files_limit.max(1),
-        editor: editor::EditorState::new(
-            iced::Theme::Dark,
-            stored_settings.editor_view,
-            stored_settings.editor_theme,
-        ),
+        editor_recent_files,
+        recent_projects,
+        editor_recent_files_limit,
+        editor,
         editor_font_metrics_refresh_pending: true,
         rendered_score: None,
         score_cursor_maps: None,
         score_cursor_overlay: None,
         piano_roll,
-        svg_zoom: stored_state
-            .score_view
-            .zoom
-            .clamp(MIN_SVG_ZOOM, MAX_SVG_ZOOM),
-        svg_page_brightness: stored_state
-            .score_view
-            .page_brightness
-            .clamp(MIN_SVG_PAGE_BRIGHTNESS, MAX_SVG_PAGE_BRIGHTNESS),
+        svg_zoom,
+        svg_page_brightness,
         svg_scroll_x: 0.0,
         svg_scroll_y: 0.0,
         score_viewport_cursor: None,
@@ -947,7 +987,7 @@ fn new(
         transport_seek_preview: None,
         keyboard_modifiers: keyboard::Modifiers::default(),
         primary_mouse_pressed: false,
-        shortcut_settings: stored_settings.shortcuts.clone(),
+        shortcut_settings,
         project_root: None,
         project_name: None,
         pending_editor_action: None,
@@ -1014,6 +1054,19 @@ fn new(
     }
 
     (app, Task::batch(startup_tasks))
+}
+
+#[cfg(test)]
+fn new_with_default_test_state() -> (Lilypalooza, Task<Message>) {
+    new_with_loaded_state(
+        None,
+        None,
+        false,
+        settings::AppSettings::default(),
+        None,
+        GlobalState::default(),
+        None,
+    )
 }
 
 fn subscription(app: &Lilypalooza) -> Subscription<Message> {
@@ -1512,7 +1565,7 @@ mod tests {
     use std::fs;
 
     fn test_app() -> Lilypalooza {
-        let (mut app, _task) = new(None, None, false);
+        let (mut app, _task) = new_with_default_test_state();
         let _ = update(
             &mut app,
             Message::Shortcuts(messages::ShortcutsMessage::OpenDialog),
@@ -1521,7 +1574,7 @@ mod tests {
     }
 
     fn test_editor_app() -> Lilypalooza {
-        let (app, _task) = new(None, None, false);
+        let (app, _task) = new_with_default_test_state();
         app
     }
 
@@ -1655,7 +1708,7 @@ mod tests {
 
     #[test]
     fn playback_poll_interval_is_visibility_aware() {
-        let (mut app, _task) = new(None, None, false);
+        let (mut app, _task) = new_with_default_test_state();
         app.playback = Some(
             AudioEngine::start_cpal(
                 MixerState::new(),
@@ -1734,7 +1787,7 @@ mod tests {
 
     #[test]
     fn project_dirty_only_tracks_project_state_changes() {
-        let (mut app, _task) = new(None, None, false);
+        let (mut app, _task) = new_with_default_test_state();
         let temp = tempfile::tempdir().expect("temp dir should exist");
 
         app.apply_project_state(temp.path().to_path_buf(), ProjectState::default());
@@ -1749,7 +1802,7 @@ mod tests {
 
     #[test]
     fn window_close_prompts_for_dirty_project_changes() {
-        let (mut app, _task) = new(None, None, false);
+        let (mut app, _task) = new_with_default_test_state();
         let temp = tempfile::tempdir().expect("temp dir should exist");
 
         app.apply_project_state(temp.path().to_path_buf(), ProjectState::default());
@@ -1771,7 +1824,7 @@ mod tests {
 
     #[test]
     fn discard_dirty_project_prompt_clears_pending_action() {
-        let (mut app, _task) = new(None, None, false);
+        let (mut app, _task) = new_with_default_test_state();
         let temp = tempfile::tempdir().expect("temp dir should exist");
 
         app.apply_project_state(temp.path().to_path_buf(), ProjectState::default());

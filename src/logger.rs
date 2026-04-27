@@ -1,3 +1,5 @@
+use std::cell::OnceCell;
+
 use iced::widget::{container, scrollable, text_editor};
 use iced::{Element, Fill, Shrink};
 
@@ -7,14 +9,14 @@ const MAX_LOG_LINES: usize = 2_000;
 
 pub(crate) struct Logger {
     lines: Vec<String>,
-    text: text_editor::Content,
+    text: OnceCell<text_editor::Content>,
 }
 
 impl Logger {
     pub(crate) fn new() -> Self {
         Self {
             lines: Vec::new(),
-            text: text_editor::Content::new(),
+            text: OnceCell::new(),
         }
     }
 
@@ -53,7 +55,7 @@ impl Logger {
             return;
         }
 
-        self.text.perform(action);
+        self.ensure_text_mut().perform(action);
     }
 
     pub(crate) fn view<'a, Message>(
@@ -64,7 +66,7 @@ impl Logger {
     where
         Message: Clone + 'a,
     {
-        let editor = text_editor(&self.text)
+        let editor = text_editor(self.text())
             .font(fonts::MONO)
             .size(ui_style::FONT_SIZE_UI_SM)
             .padding(0)
@@ -91,7 +93,24 @@ impl Logger {
 
     fn sync_text(&mut self) {
         let content = self.lines.join("\n");
-        self.text = text_editor::Content::with_text(&content);
+        if let Some(text) = self.text.get_mut() {
+            *text = text_editor::Content::with_text(&content);
+        }
+    }
+
+    fn text(&self) -> &text_editor::Content {
+        self.text
+            .get_or_init(|| text_editor::Content::with_text(&self.lines.join("\n")))
+    }
+
+    fn ensure_text_mut(&mut self) -> &mut text_editor::Content {
+        if self.text.get().is_none() {
+            let content = text_editor::Content::with_text(&self.lines.join("\n"));
+            let _ = self.text.set(content);
+        }
+        self.text
+            .get_mut()
+            .expect("logger text should be initialized")
     }
 
     fn push_raw(&mut self, line: String) {

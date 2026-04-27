@@ -124,12 +124,6 @@ impl EditorState {
             default_view_settings: EditorViewSettings::default(),
             theme_settings,
         }
-        .with_initialized_file_browser()
-    }
-
-    fn with_initialized_file_browser(mut self) -> Self {
-        self.rebuild_file_browser();
-        self
     }
 
     pub(super) fn update(
@@ -225,6 +219,9 @@ impl EditorState {
 
     pub(super) fn toggle_file_browser(&mut self) {
         self.file_browser_expanded = !self.file_browser_expanded;
+        if self.file_browser_expanded {
+            self.ensure_file_browser_initialized();
+        }
     }
 
     pub(super) fn toggle_file_browser_show_hidden(&mut self) -> Result<(), String> {
@@ -1087,6 +1084,12 @@ impl EditorState {
         self.file_browser_active_column = 0;
     }
 
+    fn ensure_file_browser_initialized(&mut self) {
+        if self.file_browser_columns.is_empty() {
+            self.rebuild_file_browser();
+        }
+    }
+
     pub(super) fn move_file_browser_selection(&mut self, delta: i32) -> Result<(), String> {
         if self.file_browser_columns.is_empty() {
             return Ok(());
@@ -1309,11 +1312,12 @@ fn build_editor(
     view_settings: EditorViewSettings,
     theme_settings: EditorThemeSettings,
 ) -> CodeEditor {
-    let mut editor = CodeEditor::new(content, syntax).with_wrap_enabled(false);
+    let mut editor =
+        CodeEditor::new_with_deferred_metrics(content, syntax).with_wrap_enabled(false);
     editor.set_document_path(document_path);
     editor.set_project_root(project_root);
-    editor.set_font(fonts::MONO);
-    editor.set_font_size(view_settings.font_size, true);
+    editor.set_font_deferred(fonts::MONO);
+    editor.set_font_size_deferred(view_settings.font_size, true);
     editor.set_center_cursor(view_settings.center_cursor);
     editor.set_lsp_enabled(false);
     editor.set_theme(iced_code_editor::theme::from_iced_theme_with_tuning(

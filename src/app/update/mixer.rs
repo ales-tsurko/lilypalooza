@@ -827,7 +827,7 @@ mod tests {
     }
 
     fn test_app() -> Lilypalooza {
-        let (app, _task) = super::super::super::new(None, None, false);
+        let (app, _task) = super::super::super::new_with_default_test_state();
         app
     }
 

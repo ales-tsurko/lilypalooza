@@ -46,14 +46,12 @@ impl EditorFileWatcher {
             .collect();
 
         for path in &removed_files {
-            let _ = self.watcher.unwatch(path);
             if let Some(parent) = path.parent() {
                 self.unwatch_dir(parent)?;
             }
         }
 
         for path in &added_files {
-            self.watcher.watch(path, RecursiveMode::NonRecursive)?;
             if let Some(parent) = path.parent() {
                 self.watch_dir(parent)?;
             }
