@@ -126,6 +126,10 @@ impl Lilypalooza {
         self.track_name_overrides.clear();
         self.track_color_overrides.clear();
         self.selected_track_index = None;
+        self.open_processor_browser_target = None;
+        self.hovered_processor_slot = None;
+        self.effect_drag_source = None;
+        self.open_mixer_effect_rack_tracks.clear();
         self.open_instrument_browser_track = None;
         self.instrument_browser_search.clear();
         self.instrument_browser_backend = super::super::mixer::InstrumentBrowserBackend::BuiltIn;
@@ -171,6 +175,10 @@ impl Lilypalooza {
             .map(|color| color.map(crate::track_colors::from_override))
             .collect();
         self.selected_track_index = None;
+        self.open_processor_browser_target = None;
+        self.hovered_processor_slot = None;
+        self.effect_drag_source = None;
+        self.open_mixer_effect_rack_tracks.clear();
         self.open_instrument_browser_track = None;
         self.instrument_browser_search.clear();
         self.instrument_browser_backend = super::super::mixer::InstrumentBrowserBackend::BuiltIn;

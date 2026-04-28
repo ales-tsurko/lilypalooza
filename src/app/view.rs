@@ -33,7 +33,7 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
         container(text("")).width(Fill).height(Fill).into()
     };
     let instrument_browser_overlay: Element<'_, Message> =
-        if app.open_instrument_browser_track.is_some() {
+        if app.open_processor_browser_target.is_some() {
             super::mixer::instrument_browser_overlay(app)
         } else {
             container(text("")).width(Fill).height(Fill).into()

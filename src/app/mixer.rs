@@ -3,7 +3,7 @@ use iced::widget::{
     button, column, container, lazy, mouse_area, opaque, responsive, row, scrollable, stack, text,
     text_input,
 };
-use iced::{Color, Element, Fill, FillPortion, Length, alignment};
+use iced::{Color, Element, Fill, FillPortion, Length, alignment, border, mouse};
 use iced_aw::helpers::color_picker_with_change;
 use lilypalooza_audio::instrument::registry;
 use lilypalooza_audio::mixer::{
@@ -29,22 +29,51 @@ pub(super) fn instrument_scroll_id() -> Id {
     Id::new(INSTRUMENT_SCROLL_ID)
 }
 
+pub(in crate::app) fn effect_rack_scroll_id(track_index: usize) -> Id {
+    Id::from(format!("effect-rack-scroll-{track_index}"))
+}
+
 const GROUP_SIDE_BORDER_WIDTH: f32 = 1.0;
 const MAIN_STRIP_WIDTH: f32 = ui_style::grid_f32(36);
 const MAIN_SECTION_WIDTH: f32 = MAIN_STRIP_WIDTH + GROUP_SIDE_BORDER_WIDTH * 2.0;
 const STRIP_WIDTH: f32 = ui_style::grid_f32(37);
 const STRIP_SPACING: f32 = 0.0;
-const INSTRUMENT_PICKER_HEIGHT: f32 = ui_style::grid_f32(6);
-const INSTRUMENT_SLOT_BUTTON_HEIGHT: f32 = ui_style::grid_f32(5);
-const INSTRUMENT_SLOT_WIDTH: f32 = 112.0;
-const INSTRUMENT_SLOT_EDITOR_AREA_WIDTH: f32 = ui_style::grid_f32(4);
-const INSTRUMENT_SLOT_SEPARATOR_WIDTH: f32 = 1.0;
-const INSTRUMENT_SLOT_LABEL_MAX_LEN: usize = 11;
-const INSTRUMENT_BROWSER_WIDTH: f32 = 520.0;
-const INSTRUMENT_BROWSER_HEIGHT: f32 = 360.0;
-const INSTRUMENT_BROWSER_ICON_SIZE: f32 = ui_style::grid_f32(3);
+const PROCESSOR_SLOT_HEIGHT: f32 = ui_style::grid_f32(7);
+const PROCESSOR_SLOT_BUTTON_HEIGHT: f32 = ui_style::grid_f32(6);
+const PROCESSOR_SLOT_WIDTH: f32 = 112.0;
+const PROCESSOR_SLOT_SEGMENT_WIDTH: f32 = ui_style::grid_f32(4);
+const PROCESSOR_SLOT_SEPARATOR_WIDTH: f32 = 1.0;
+const PROCESSOR_SLOT_LABEL_MAX_LEN: usize = 11;
+const PROCESSOR_BROWSER_WIDTH: f32 = 520.0;
+const PROCESSOR_BROWSER_HEIGHT: f32 = 360.0;
+const PROCESSOR_BROWSER_ICON_SIZE: f32 = ui_style::grid_f32(3);
+const EFFECT_RACK_VISIBLE_SLOTS: usize = 7;
+pub(in crate::app) const EFFECT_RACK_HEIGHT: f32 =
+    EFFECT_RACK_ROW_HEIGHT * EFFECT_RACK_VISIBLE_SLOTS as f32;
+pub(in crate::app) const EFFECT_RACK_EDGE_SCROLL_ZONE: f32 = ui_style::grid_f32(3);
+pub(in crate::app) const EFFECT_RACK_EDGE_SCROLL_STEP: f32 = ui_style::grid_f32(2);
+const EFFECT_RACK_PANEL_WIDTH: f32 = ui_style::grid_f32(36);
+const EFFECT_RACK_SLOT_WIDTH: f32 = EFFECT_RACK_PANEL_WIDTH;
+const EFFECT_RACK_SEPARATOR_HEIGHT: f32 = 1.0;
+const EFFECT_RACK_ROW_HEIGHT: f32 = PROCESSOR_SLOT_BUTTON_HEIGHT + EFFECT_RACK_SEPARATOR_HEIGHT;
+const EFFECT_RACK_SEPARATOR_INSET: f32 = ui_style::grid_f32(4);
+const EFFECT_RACK_SCROLLBAR_WIDTH: f32 = 6.0;
+const EFFECT_RACK_SCROLLBAR_SCROLLER_WIDTH: f32 = 3.0;
+const EFFECT_RACK_SCROLLBAR_SPACING: f32 = 2.0;
+const EFFECT_RACK_SCROLLBAR_MARGIN: f32 = 1.0;
+const INSTRUMENT_PICKER_HEIGHT: f32 = PROCESSOR_SLOT_HEIGHT;
+const INSTRUMENT_SLOT_BUTTON_HEIGHT: f32 = PROCESSOR_SLOT_BUTTON_HEIGHT;
+#[cfg(test)]
+const INSTRUMENT_SLOT_WIDTH: f32 = PROCESSOR_SLOT_WIDTH;
+#[cfg(test)]
+const INSTRUMENT_SLOT_EDITOR_AREA_WIDTH: f32 = PROCESSOR_SLOT_SEGMENT_WIDTH;
+const INSTRUMENT_SLOT_SEPARATOR_WIDTH: f32 = PROCESSOR_SLOT_SEPARATOR_WIDTH;
+const INSTRUMENT_BROWSER_WIDTH: f32 = PROCESSOR_BROWSER_WIDTH;
+const INSTRUMENT_BROWSER_HEIGHT: f32 = PROCESSOR_BROWSER_HEIGHT;
+#[cfg(test)]
+const INSTRUMENT_BROWSER_ICON_SIZE: f32 = PROCESSOR_BROWSER_ICON_SIZE;
 const SECTION_HEADER_HEIGHT: f32 = 24.0;
-const STRIP_MIN_HEIGHT: f32 = 140.0;
+const STRIP_MIN_HEIGHT: f32 = 240.0;
 const STRIP_TOGGLE_SIZE: f32 = INSTRUMENT_PICKER_HEIGHT - 4.0;
 const TRACK_TITLE_EDITOR_HEIGHT: f32 = ui_style::grid_f32(5);
 const TRACK_TITLE_EDITOR_CONTROL_HEIGHT: f32 = TRACK_TITLE_EDITOR_HEIGHT;
@@ -66,6 +95,7 @@ pub(super) fn instrument_track_scroll_x(track_index: usize) -> f32 {
 }
 
 struct StripActions<'a> {
+    panel: Option<(bool, bool, Message)>,
     solo: Option<(bool, Message)>,
     mute: Option<(bool, Message)>,
     on_gain: Option<Box<dyn Fn(f32) -> Message + 'a>>,
@@ -77,23 +107,27 @@ fn noop_message() -> Message {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(super) enum InstrumentChoice {
+pub(super) enum ProcessorChoice {
     None,
     Processor {
         processor_id: String,
         name: String,
-        backend: InstrumentBrowserBackend,
+        backend: ProcessorBrowserBackend,
     },
 }
 
+pub(super) type InstrumentChoice = ProcessorChoice;
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub(super) enum InstrumentBrowserBackend {
+pub(super) enum ProcessorBrowserBackend {
     BuiltIn,
     Clap,
     Vst3,
 }
 
-impl InstrumentBrowserBackend {
+pub(super) type InstrumentBrowserBackend = ProcessorBrowserBackend;
+
+impl ProcessorBrowserBackend {
     fn label(self) -> &'static str {
         match self {
             Self::BuiltIn => "Built-in",
@@ -103,10 +137,70 @@ impl InstrumentBrowserBackend {
     }
 }
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub(super) enum ProcessorSlotRole {
+    Instrument,
+    Effect,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub(super) enum ProcessorSlotSegment {
+    Bypass,
+    Editor,
+    Picker,
+}
+
+impl ProcessorSlotRole {
+    fn registry_role(self) -> registry::Role {
+        match self {
+            Self::Instrument => registry::Role::Instrument,
+            Self::Effect => registry::Role::Effect,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Instrument => "Choose Instrument",
+            Self::Effect => "Choose Effect",
+        }
+    }
+
+    fn search_placeholder(self) -> &'static str {
+        match self {
+            Self::Instrument => "Search instruments",
+            Self::Effect => "Search effects",
+        }
+    }
+
+    fn empty_search_label(self) -> &'static str {
+        match self {
+            Self::Instrument => "No matching instruments",
+            Self::Effect => "No matching effects",
+        }
+    }
+
+    fn backend_empty_label(self, backend: ProcessorBrowserBackend) -> &'static str {
+        match (self, backend) {
+            (Self::Instrument, ProcessorBrowserBackend::Clap) => "No CLAP instruments yet",
+            (Self::Instrument, ProcessorBrowserBackend::Vst3) => "No VST3 instruments yet",
+            (Self::Effect, ProcessorBrowserBackend::Clap) => "No CLAP effects yet",
+            (Self::Effect, ProcessorBrowserBackend::Vst3) => "No VST3 effects yet",
+            (_, ProcessorBrowserBackend::BuiltIn) => "",
+        }
+    }
+
+    fn slot_icon(self) -> iced::widget::svg::Handle {
+        match self {
+            Self::Instrument => icons::keyboard_music(),
+            Self::Effect => icons::audio_waveform(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InstrumentBrowserEntries {
     show_none: bool,
-    entries: Vec<InstrumentChoice>,
+    entries: Vec<ProcessorChoice>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -115,6 +209,8 @@ struct MainStripDependency {
     pan_bits: u32,
     meter: MeterDependency,
     compact_gain: bool,
+    effect_rack_open: bool,
+    panel_has_content: bool,
     strip_height_bits: u32,
 }
 
@@ -122,13 +218,16 @@ struct MainStripDependency {
 struct TrackStripDependency {
     index: usize,
     name: String,
-    selected: Option<InstrumentChoice>,
+    selected: Option<ProcessorChoice>,
     editor_enabled: bool,
+    effects: Vec<EffectSlotDependency>,
+    hovered_processor_slot: Option<(usize, ProcessorSlotSegment)>,
     color_bits: [u32; 4],
     gain_bits: u32,
     pan_bits: u32,
     meter: MeterDependency,
     compact_gain: bool,
+    effect_rack_open: bool,
     strip_height_bits: u32,
     soloed: bool,
     muted: bool,
@@ -140,9 +239,20 @@ struct TrackStripDependency {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct EffectSlotDependency {
+    slot_index: usize,
+    selected: Option<ProcessorChoice>,
+    editor_enabled: bool,
+    bypassed: bool,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct BusStripDependency {
+    strip_index: usize,
     id: u16,
     name: String,
+    effects: Vec<EffectSlotDependency>,
+    effect_rack_open: bool,
     gain_bits: u32,
     pan_bits: u32,
     meter: MeterDependency,
@@ -303,17 +413,23 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
             );
             let meter_window =
                 playback.meter_snapshot_window(instrument_visible.clone(), bus_visible.clone());
-
-            row![
+            let master_width = if app.open_mixer_effect_rack_tracks.contains(&0) {
+                MAIN_SECTION_WIDTH + EFFECT_RACK_PANEL_WIDTH
+            } else {
+                MAIN_SECTION_WIDTH
+            };
+            let mixer_row = row![
                 container(master_track_area(
                     mixer,
                     meter_window.main,
                     colors,
                     strip_height,
                     gain_mode,
+                    &app.open_mixer_effect_rack_tracks,
+                    app.hovered_processor_slot,
                     true,
                 ))
-                .width(Length::Fixed(MAIN_SECTION_WIDTH))
+                .width(Length::Fixed(master_width))
                 .height(Fill)
                 .style(ui_style::mixer_side_group_surface),
                 container(instrument_track_area(
@@ -331,6 +447,8 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                     track_rename_color_value,
                     track_rename_color_picker_open,
                     app.selected_track_index,
+                    app.hovered_processor_slot,
+                    &app.open_mixer_effect_rack_tracks,
                     true,
                 ))
                 .width(FillPortion(5))
@@ -343,6 +461,8 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                     strip_height,
                     gain_mode,
                     bus_visible,
+                    &app.open_mixer_effect_rack_tracks,
+                    app.hovered_processor_slot,
                     renaming_target,
                     renaming_origin,
                     &track_rename_value,
@@ -351,12 +471,13 @@ pub(super) fn content(app: &Lilypalooza) -> Element<'_, Message> {
                 .width(FillPortion(2))
                 .height(Fill)
                 .style(ui_style::mixer_side_group_surface)
-            ]
-            .spacing(ui_style::SPACE_SM)
-            .padding(ui_style::PADDING_SM)
-            .width(Fill)
-            .height(Fill)
-            .into()
+            ];
+            mixer_row
+                .spacing(ui_style::SPACE_SM)
+                .padding(ui_style::PADDING_SM)
+                .width(Fill)
+                .height(Fill)
+                .into()
         })
         .into();
     }
@@ -423,6 +544,8 @@ fn mixer_layout_without_audio<'a>(
             colors,
             strip_height,
             gain_mode,
+            &[],
+            None,
             false,
         ))
         .width(Length::Fixed(MAIN_SECTION_WIDTH))
@@ -443,6 +566,8 @@ fn mixer_layout_without_audio<'a>(
             Color::TRANSPARENT,
             false,
             selected_track_index,
+            None,
+            &[],
             false,
         ))
         .width(FillPortion(5))
@@ -455,6 +580,8 @@ fn mixer_layout_without_audio<'a>(
             strip_height,
             gain_mode,
             bus_visible,
+            &[],
+            None,
             renaming_target,
             None,
             &track_rename_value,
@@ -471,24 +598,41 @@ fn mixer_layout_without_audio<'a>(
     .into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn master_track_area(
     mixer: &MixerState,
     meter_snapshot: StripMeterSnapshot,
     colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
+    open_effect_rack_strips: &[usize],
+    hovered_processor_slot: Option<(
+        super::processor_editor_windows::EditorTarget,
+        ProcessorSlotSegment,
+    )>,
     controls_enabled: bool,
-) -> Element<'_, Message> {
-    let master_row = row![sticky_master_strip(
+) -> Element<'static, Message> {
+    let mut master_row = row![sticky_master_strip(
         mixer,
         meter_snapshot,
         colors,
         strip_height,
         gain_mode,
+        open_effect_rack_strips.contains(&0),
         controls_enabled,
     )]
     .align_y(alignment::Vertical::Top)
     .height(Length::Fixed(strip_height));
+    if open_effect_rack_strips.contains(&0) {
+        master_row = master_row.push(track_effect_rack_panel(
+            0,
+            &mixer.master().name,
+            effect_slot_dependencies(mixer.master()),
+            hovered_processor_slot,
+            controls_enabled,
+            strip_height,
+        ));
+    }
 
     column![
         container(section_header_bar(row![section_title("Main")]))
@@ -499,13 +643,7 @@ fn master_track_area(
                 .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
                 .height(Fill)
                 .style(ui_style::chrome_separator),
-            scrollable(master_row)
-                .direction(scrollable::Direction::Horizontal(
-                    scrollable::Scrollbar::new()
-                ))
-                .style(ui_style::workspace_scrollable)
-                .width(Fill)
-                .height(Fill),
+            container(master_row).width(Fill).height(Fill),
             container(text(""))
                 .width(Length::Fixed(GROUP_SIDE_BORDER_WIDTH))
                 .height(Fill)
@@ -528,6 +666,7 @@ fn sticky_master_strip(
     colors: MeterColors,
     strip_height: f32,
     gain_mode: GainControlMode,
+    effect_rack_open: bool,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
     let master = mixer.master();
@@ -537,6 +676,8 @@ fn sticky_master_strip(
             pan_bits: master.state.pan.to_bits(),
             meter: MeterDependency::from_snapshot(meter_snapshot),
             compact_gain: matches!(gain_mode, GainControlMode::Knob),
+            effect_rack_open,
+            panel_has_content: !master.effects().is_empty(),
             strip_height_bits: strip_height.to_bits(),
         },
         move |dependency| {
@@ -568,6 +709,15 @@ fn sticky_master_strip(
                         }),
                     ),
                     StripActions {
+                        panel: Some((
+                            dependency.effect_rack_open,
+                            dependency.panel_has_content,
+                            if controls_enabled {
+                                Message::Mixer(MixerMessage::ToggleMixerEffectRack(0))
+                            } else {
+                                noop_message()
+                            },
+                        )),
                         solo: None,
                         mute: None,
                         on_gain: Some(Box::new(move |value| {
@@ -614,6 +764,11 @@ fn instrument_track_area(
     track_rename_color_value: Color,
     track_rename_color_picker_open: bool,
     selected_track_index: Option<usize>,
+    hovered_processor_slot: Option<(
+        super::processor_editor_windows::EditorTarget,
+        ProcessorSlotSegment,
+    )>,
+    open_effect_rack_strips: &[usize],
     controls_enabled: bool,
 ) -> Element<'static, Message> {
     let left_spacer = strip_span_width(visible.start);
@@ -626,7 +781,15 @@ fn instrument_track_area(
             .push(horizontal_spacer(left_spacer)),
         move |row, (local_index, track)| {
             let track_index = visible.start + local_index;
+            let strip_index = track_index + 1;
+            let effect_rack_open = open_effect_rack_strips.contains(&strip_index);
             let selected_choice = selected_instrument_choice(track.instrument_slot(), mixer);
+            let effects = effect_slot_dependencies(track);
+            let strip_hovered_processor_slot =
+                hovered_processor_slot.filter(|(target, _)| target.strip_index == strip_index);
+            let hovered_processor_slot = strip_hovered_processor_slot
+                .filter(|(target, _)| target.slot_index == 0)
+                .map(|(target, segment)| (target.slot_index, segment));
             let track_color = track_colors
                 .get(track_index)
                 .copied()
@@ -639,7 +802,7 @@ fn instrument_track_area(
                 compact_gain: matches!(gain_mode, GainControlMode::Knob),
                 strip_height_bits: strip_height.to_bits(),
             };
-            row.push(lazy(
+            let row = row.push(lazy(
                 TrackStripDependency {
                     index: track_index,
                     name: track.name.clone(),
@@ -650,11 +813,14 @@ fn instrument_track_area(
                         .and_then(|slot| slot.descriptor())
                         .and_then(|descriptor| descriptor.editor)
                         .is_some(),
+                    effects: effects.clone(),
+                    hovered_processor_slot,
                     color_bits: color_bits(track_color),
                     gain_bits: track.state.gain_db.to_bits(),
                     pan_bits: track.state.pan.to_bits(),
                     meter: meter_dependency.meter,
                     compact_gain: matches!(gain_mode, GainControlMode::Knob),
+                    effect_rack_open,
                     strip_height_bits: strip_height.to_bits(),
                     soloed: track.state.soloed,
                     muted: track.state.muted,
@@ -692,10 +858,20 @@ fn instrument_track_area(
                             dependency.color_picker_open,
                         ),
                         Some({
-                            instrument_slot_controls(
-                                track_index,
-                                dependency.selected.clone(),
-                                dependency.editor_enabled,
+                            let target = super::processor_editor_windows::EditorTarget {
+                                strip_index,
+                                slot_index: 0,
+                            };
+                            strip_processor_header(
+                                strip_index,
+                                Some((
+                                    target,
+                                    dependency.selected.as_ref(),
+                                    dependency.editor_enabled,
+                                    dependency
+                                        .hovered_processor_slot
+                                        .map(|(_, segment)| segment),
+                                )),
                                 controls_enabled,
                             )
                         }),
@@ -710,6 +886,15 @@ fn instrument_track_area(
                             }),
                         ),
                         StripActions {
+                            panel: Some((
+                                dependency.effect_rack_open,
+                                !dependency.effects.is_empty(),
+                                if controls_enabled {
+                                    Message::Mixer(MixerMessage::ToggleMixerEffectRack(strip_index))
+                                } else {
+                                    noop_message()
+                                },
+                            )),
                             solo: Some((
                                 dependency.soloed,
                                 if controls_enabled {
@@ -764,14 +949,32 @@ fn instrument_track_area(
                         )
                     }
                 },
-            ))
+            ));
+            if effect_rack_open {
+                row.push(track_effect_rack_panel(
+                    strip_index,
+                    &track.name,
+                    effects.clone(),
+                    strip_hovered_processor_slot,
+                    controls_enabled,
+                    strip_height,
+                ))
+            } else {
+                row
+            }
         },
     );
     let track_row = track_row.push(horizontal_spacer(right_spacer));
 
     column![
-        container(section_header_bar(row![section_title("Instrument Tracks")]))
-            .style(ui_style::workspace_toolbar_surface),
+        container(section_header_bar(
+            row![
+                section_title("Instrument Tracks"),
+                container(text("")).width(Fill),
+            ]
+            .align_y(alignment::Vertical::Center),
+        ))
+        .style(ui_style::workspace_toolbar_surface),
         container(text("")).height(Length::Fixed(SECTION_BODY_GAP)),
         row![
             container(text(""))
@@ -805,6 +1008,75 @@ fn instrument_track_area(
     .into()
 }
 
+fn effect_slot_dependencies(strip: &lilypalooza_audio::mixer::Track) -> Vec<EffectSlotDependency> {
+    strip
+        .effects()
+        .iter()
+        .enumerate()
+        .map(|(effect_index, slot)| EffectSlotDependency {
+            slot_index: effect_index + 1,
+            selected: selected_processor_choice(Some(slot), ProcessorSlotRole::Effect),
+            editor_enabled: slot
+                .descriptor()
+                .and_then(|descriptor| descriptor.editor)
+                .is_some(),
+            bypassed: slot.bypassed,
+        })
+        .collect()
+}
+
+fn track_effect_rack_panel(
+    strip_index: usize,
+    _title: &str,
+    effects: Vec<EffectSlotDependency>,
+    hovered_processor_slot: Option<(
+        super::processor_editor_windows::EditorTarget,
+        ProcessorSlotSegment,
+    )>,
+    controls_enabled: bool,
+    strip_height: f32,
+) -> Element<'static, Message> {
+    let hovered_processor_slot = hovered_processor_slot
+        .filter(|(target, _)| target.strip_index == strip_index)
+        .map(|(target, segment)| (target.slot_index, segment));
+    let rack = effect_rack(
+        strip_index,
+        effects,
+        hovered_processor_slot,
+        controls_enabled,
+        EFFECT_RACK_VISIBLE_SLOTS,
+    );
+    let (rack_height, routing_height) = effect_rack_panel_heights(strip_height);
+
+    container(
+        column![
+            container(rack)
+                .width(Fill)
+                .height(Length::Fixed(rack_height))
+                .style(effect_rack_surface),
+            container(text(""))
+                .width(Fill)
+                .height(Length::Fixed(EFFECT_RACK_SEPARATOR_HEIGHT))
+                .style(effect_rack_separator_surface),
+            container(text(""))
+                .width(Fill)
+                .height(Length::Fixed(routing_height))
+                .style(effect_rack_surface)
+        ]
+        .spacing(0),
+    )
+    .width(Length::Fixed(EFFECT_RACK_PANEL_WIDTH))
+    .height(Length::Fixed(strip_height))
+    .style(effect_rack_surface)
+    .into()
+}
+
+fn effect_rack_panel_heights(strip_height: f32) -> (f32, f32) {
+    let available_height = (strip_height - EFFECT_RACK_SEPARATOR_HEIGHT).max(0.0);
+    let rack_height = available_height / 2.0;
+    (rack_height, available_height - rack_height)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn bus_track_area(
     mixer: &MixerState,
@@ -813,6 +1085,11 @@ fn bus_track_area(
     strip_height: f32,
     gain_mode: GainControlMode,
     visible: std::ops::Range<usize>,
+    open_effect_rack_strips: &[usize],
+    hovered_processor_slot: Option<(
+        super::processor_editor_windows::EditorTarget,
+        ProcessorSlotSegment,
+    )>,
     renaming_target: Option<super::RenameTarget>,
     renaming_origin: Option<super::WorkspacePaneKind>,
     track_rename_value: &str,
@@ -866,6 +1143,9 @@ fn bus_track_area(
             let Some(bus_id) = bus.bus_id else {
                 return row;
             };
+            let strip_index = 1 + mixer.track_count() + visible.start + local_index;
+            let effect_rack_open = open_effect_rack_strips.contains(&strip_index);
+            let effects = effect_slot_dependencies(bus);
             let meter_dependency = MeterStackDependency {
                 meter: MeterDependency::from_snapshot(
                     meters.buses.get(local_index).copied().unwrap_or_default(),
@@ -874,10 +1154,13 @@ fn bus_track_area(
                 compact_gain: matches!(gain_mode, GainControlMode::Knob),
                 strip_height_bits: strip_height.to_bits(),
             };
-            row.push(lazy(
+            let row = row.push(lazy(
                 BusStripDependency {
+                    strip_index,
                     id: bus_id.0,
                     name: bus.name.clone(),
+                    effects: effects.clone(),
+                    effect_rack_open,
                     gain_bits: bus.state.gain_db.to_bits(),
                     pan_bits: bus.state.pan.to_bits(),
                     meter: meter_dependency.meter,
@@ -891,6 +1174,7 @@ fn bus_track_area(
                 },
                 move |dependency| {
                     let name = dependency.name.clone();
+                    let strip_index = dependency.strip_index;
                     let bus_id = dependency.id;
                     let gain_db = f32::from_bits(dependency.gain_bits);
                     let pan = f32::from_bits(dependency.pan_bits);
@@ -922,6 +1206,17 @@ fn bus_track_area(
                                 }),
                             ),
                             StripActions {
+                                panel: Some((
+                                    dependency.effect_rack_open,
+                                    !dependency.effects.is_empty(),
+                                    if controls_enabled {
+                                        Message::Mixer(MixerMessage::ToggleMixerEffectRack(
+                                            strip_index,
+                                        ))
+                                    } else {
+                                        noop_message()
+                                    },
+                                )),
                                 solo: Some((
                                     soloed,
                                     if controls_enabled {
@@ -981,7 +1276,19 @@ fn bus_track_area(
                         stack([base_strip, remove_button]).into();
                     layered
                 },
-            ))
+            ));
+            if effect_rack_open {
+                row.push(track_effect_rack_panel(
+                    strip_index,
+                    &bus.name,
+                    effects.clone(),
+                    hovered_processor_slot,
+                    controls_enabled,
+                    strip_height,
+                ))
+            } else {
+                row
+            }
         },
     );
     let bus_row = if visible.end >= total_buses {
@@ -1061,6 +1368,35 @@ fn section_title<'a>(label: impl Into<String>) -> Element<'a, Message> {
     .height(Length::Fixed(SECTION_HEADER_HEIGHT))
     .center_y(Length::Fixed(SECTION_HEADER_HEIGHT))
     .into()
+}
+
+fn strip_processor_header(
+    _strip_index: usize,
+    instrument: Option<(
+        super::processor_editor_windows::EditorTarget,
+        Option<&ProcessorChoice>,
+        bool,
+        Option<ProcessorSlotSegment>,
+    )>,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    let mut content = row![]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center);
+    if let Some((target, selected, editor_enabled, hovered_segment)) = instrument {
+        content = content.push(processor_slot_controls(
+            target,
+            ProcessorSlotRole::Instrument,
+            selected,
+            editor_enabled,
+            false,
+            hovered_segment,
+            controls_enabled,
+        ));
+    } else {
+        content = content.push(container(text("")).width(Length::Fixed(PROCESSOR_SLOT_WIDTH)));
+    }
+    content.into()
 }
 
 fn visible_strip_window(
@@ -1223,6 +1559,12 @@ fn strip_shell<'a>(
                     .map_or_else(strip_toggle_placeholder, |(active, message)| {
                         strip_toggle_button("S", active, message)
                     },),
+                actions.panel.map_or_else(
+                    strip_toggle_placeholder,
+                    |(active, has_content, message)| {
+                        strip_panel_toggle_button(active, has_content, message)
+                    },
+                ),
             ]
             .spacing(ui_style::SPACE_XS)
             .align_y(alignment::Vertical::Center),
@@ -1439,7 +1781,7 @@ fn gain_control_height(strip_height: f32, gain_mode: GainControlMode) -> f32 {
             - STRIP_TOGGLE_SIZE
             - 42.0
             - (VALUE_LABEL_HEIGHT * 3.0)
-            - (ui_style::SPACE_XS as f32 * 5.0))
+            - (ui_style::SPACE_XS as f32 * 6.0))
             .max(96.0),
     }
 }
@@ -1550,6 +1892,61 @@ fn strip_toggle_button(
     .into()
 }
 
+fn strip_panel_toggle_button(
+    active: bool,
+    has_content: bool,
+    message: Message,
+) -> Element<'static, Message> {
+    button(
+        container(ui_style::icon(
+            icons::cable(),
+            ui_style::grid_f32(3),
+            move |theme, status| strip_panel_toggle_icon_style(theme, status, active, has_content),
+        ))
+        .width(Fill)
+        .height(Fill)
+        .center_x(Fill)
+        .center_y(Fill),
+    )
+    .style(move |theme, status| strip_panel_toggle_style(theme, status, active))
+    .padding(0)
+    .width(Length::Fixed(STRIP_TOGGLE_SIZE))
+    .height(Length::Fixed(STRIP_TOGGLE_SIZE))
+    .on_press(message)
+    .into()
+}
+
+fn strip_panel_toggle_icon_style(
+    theme: &iced::Theme,
+    status: iced::widget::svg::Status,
+    active: bool,
+    has_content: bool,
+) -> iced::widget::svg::Style {
+    if active || has_content {
+        return processor_slot_icon_style(theme, status, true);
+    }
+
+    processor_slot_icon_style(theme, status, false)
+}
+
+fn strip_panel_toggle_style(
+    theme: &iced::Theme,
+    status: button::Status,
+    active: bool,
+) -> button::Style {
+    if active {
+        return ui_style::button_flat_compact_control(
+            theme,
+            if matches!(status, button::Status::Disabled) {
+                status
+            } else {
+                button::Status::Hovered
+            },
+        );
+    }
+    ui_style::button_flat_compact_control(theme, status)
+}
+
 fn strip_toggle_placeholder() -> Element<'static, Message> {
     container(text(""))
         .width(Length::Fixed(STRIP_TOGGLE_SIZE))
@@ -1557,29 +1954,28 @@ fn strip_toggle_placeholder() -> Element<'static, Message> {
         .into()
 }
 
+#[allow(dead_code)]
 fn instrument_slot_controls(
     track_index: usize,
-    selected: Option<InstrumentChoice>,
+    selected: Option<ProcessorChoice>,
     editor_enabled: bool,
     controls_enabled: bool,
 ) -> Element<'static, Message> {
-    let primary_action = instrument_slot_primary_action(
-        track_index,
+    processor_slot_controls(
+        super::processor_editor_windows::EditorTarget {
+            strip_index: track_index + 1,
+            slot_index: 0,
+        },
+        ProcessorSlotRole::Instrument,
         selected.as_ref(),
         editor_enabled,
+        false,
+        None,
         controls_enabled,
-    );
-    let secondary_action = controls_enabled.then_some(Message::Mixer(
-        MixerMessage::ToggleTrackInstrumentBrowser(track_index),
-    ));
-
-    slot_selector_controls(
-        instrument_trigger_label(selected.as_ref()),
-        primary_action,
-        secondary_action,
     )
 }
 
+#[cfg(test)]
 fn slot_selector_controls(
     label: String,
     primary_action: Option<Message>,
@@ -1659,6 +2055,528 @@ fn slot_selector_controls(
         .into()
 }
 
+fn effect_rack(
+    strip_index: usize,
+    effects: Vec<EffectSlotDependency>,
+    hovered_processor_slot: Option<(usize, ProcessorSlotSegment)>,
+    controls_enabled: bool,
+    min_slots: usize,
+) -> Element<'static, Message> {
+    let mut content = column![].spacing(0).width(Fill);
+    for effect in &effects {
+        let target = super::processor_editor_windows::EditorTarget {
+            strip_index,
+            slot_index: effect.slot_index,
+        };
+        content = content.push(effect_rack_filled_slot(processor_slot_controls_sized(
+            target,
+            ProcessorSlotRole::Effect,
+            effect.selected.as_ref(),
+            effect.editor_enabled,
+            effect.bypassed,
+            hovered_processor_slot
+                .filter(|(slot_index, _)| *slot_index == effect.slot_index)
+                .map(|(_, segment)| segment),
+            controls_enabled,
+            EFFECT_RACK_SLOT_WIDTH,
+            true,
+        )));
+    }
+
+    let slot_count = min_slots.max(effects.len() + 1);
+    for slot_index in effects.len() + 1..=slot_count {
+        let add_target = super::processor_editor_windows::EditorTarget {
+            strip_index,
+            slot_index,
+        };
+        let first_empty = slot_index == effects.len() + 1;
+        content = content.push(effect_rack_empty_slot(
+            add_target,
+            first_empty,
+            controls_enabled,
+        ));
+    }
+
+    let rack: Element<'static, Message> = container(
+        scrollable(content)
+            .id(effect_rack_scroll_id(strip_index))
+            .width(Fill)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new()
+                    .width(EFFECT_RACK_SCROLLBAR_WIDTH)
+                    .scroller_width(EFFECT_RACK_SCROLLBAR_SCROLLER_WIDTH)
+                    .spacing(EFFECT_RACK_SCROLLBAR_SPACING)
+                    .margin(EFFECT_RACK_SCROLLBAR_MARGIN),
+            ))
+            .style(effect_rack_scrollable),
+    )
+    .width(Fill)
+    .height(Fill)
+    .style(effect_rack_surface)
+    .into();
+
+    container(mouse_area(rack).on_move(move |position| {
+        Message::Mixer(MixerMessage::TrackEffectDragMoved {
+            strip_index,
+            y: position.y,
+        })
+    }))
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+fn processor_slot_controls(
+    target: super::processor_editor_windows::EditorTarget,
+    role: ProcessorSlotRole,
+    selected: Option<&ProcessorChoice>,
+    editor_enabled: bool,
+    bypassed: bool,
+    hovered_segment: Option<ProcessorSlotSegment>,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    processor_slot_controls_sized(
+        target,
+        role,
+        selected,
+        editor_enabled,
+        bypassed,
+        hovered_segment,
+        controls_enabled,
+        PROCESSOR_SLOT_WIDTH,
+        false,
+    )
+}
+
+fn effect_rack_empty_slot(
+    target: super::processor_editor_windows::EditorTarget,
+    add_slot: bool,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    let picker_action = (controls_enabled && add_slot)
+        .then_some(Message::Mixer(MixerMessage::ToggleProcessorBrowser(target)));
+
+    if !add_slot {
+        return container(effect_rack_separator())
+            .width(Length::Fixed(EFFECT_RACK_SLOT_WIDTH))
+            .height(Length::Fixed(EFFECT_RACK_ROW_HEIGHT))
+            .align_y(alignment::Vertical::Bottom)
+            .into();
+    }
+
+    let add_button: Element<'static, Message> = button(
+        container(
+            row![
+                container(ui_style::icon(
+                    icons::plus(),
+                    PROCESSOR_BROWSER_ICON_SIZE,
+                    effect_rack_add_icon_style,
+                ))
+                .width(Length::Fixed(PROCESSOR_SLOT_SEGMENT_WIDTH))
+                .height(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT))
+                .center_x(Length::Fixed(PROCESSOR_SLOT_SEGMENT_WIDTH))
+                .center_y(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT)),
+                text("Add effect")
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .wrapping(iced::widget::text::Wrapping::None)
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center),
+        )
+        .width(Fill)
+        .height(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT))
+        .center_x(Fill)
+        .center_y(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT)),
+    )
+    .padding([0, ui_style::grid(2)])
+    .style(effect_rack_add_button_style)
+    .width(Length::Fixed(EFFECT_RACK_SLOT_WIDTH))
+    .height(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT))
+    .on_press_maybe(picker_action)
+    .into();
+
+    effect_rack_filled_slot(add_button)
+}
+
+fn effect_rack_filled_slot(content: Element<'static, Message>) -> Element<'static, Message> {
+    column![content, effect_rack_separator()]
+        .spacing(0)
+        .width(Length::Fixed(EFFECT_RACK_SLOT_WIDTH))
+        .into()
+}
+
+fn effect_rack_separator() -> Element<'static, Message> {
+    container(
+        container(text(""))
+            .width(Fill)
+            .height(Length::Fixed(EFFECT_RACK_SEPARATOR_HEIGHT))
+            .style(effect_rack_separator_surface),
+    )
+    .padding([0, EFFECT_RACK_SEPARATOR_INSET as u16])
+    .width(Fill)
+    .height(Length::Fixed(EFFECT_RACK_SEPARATOR_HEIGHT))
+    .into()
+}
+
+fn effect_rack_add_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: None,
+        text_color: slot_segment_foreground(theme, hovered, false),
+        border: border::rounded(0).width(0),
+        shadow: iced::Shadow::default(),
+        ..button::Style::default()
+    }
+}
+
+fn effect_rack_add_icon_style(
+    theme: &iced::Theme,
+    status: iced::widget::svg::Status,
+) -> iced::widget::svg::Style {
+    let hovered = matches!(status, iced::widget::svg::Status::Hovered);
+    iced::widget::svg::Style {
+        color: Some(slot_segment_foreground(theme, hovered, false)),
+    }
+}
+
+fn processor_slot_segment_button_style(
+    theme: &iced::Theme,
+    status: button::Status,
+    active: bool,
+    slot_hovered: bool,
+) -> button::Style {
+    let hovered =
+        slot_hovered || matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: None,
+        text_color: slot_segment_foreground(theme, hovered, active),
+        ..button::Style::default()
+    }
+}
+
+fn processor_slot_segment_icon_style(
+    theme: &iced::Theme,
+    status: iced::widget::svg::Status,
+    active: bool,
+    slot_hovered: bool,
+) -> iced::widget::svg::Style {
+    let hovered = slot_hovered || matches!(status, iced::widget::svg::Status::Hovered);
+    iced::widget::svg::Style {
+        color: Some(slot_segment_foreground(theme, hovered, active)),
+    }
+}
+
+fn processor_slot_label_icon_style(
+    theme: &iced::Theme,
+    status: iced::widget::svg::Status,
+    active: bool,
+    slot_hovered: bool,
+) -> iced::widget::svg::Style {
+    processor_slot_segment_icon_style(theme, status, active, slot_hovered)
+}
+
+fn processor_slot_active_icon_style(
+    theme: &iced::Theme,
+    status: iced::widget::svg::Status,
+    _active: bool,
+    slot_hovered: bool,
+) -> iced::widget::svg::Style {
+    processor_slot_segment_icon_style(theme, status, false, slot_hovered)
+}
+
+fn processor_slot_label_button_style(
+    theme: &iced::Theme,
+    status: button::Status,
+    active: bool,
+    slot_hovered: bool,
+) -> button::Style {
+    processor_slot_segment_button_style(theme, status, active, slot_hovered)
+}
+
+fn processor_slot_icon_button_style(
+    theme: &iced::Theme,
+    status: button::Status,
+    slot_hovered: bool,
+) -> button::Style {
+    processor_slot_segment_button_style(theme, status, false, slot_hovered)
+}
+
+#[cfg(test)]
+fn transparent_hit_button(theme: &iced::Theme, status: button::Status) -> button::Style {
+    processor_slot_segment_button_style(theme, status, false, false)
+}
+
+fn slot_segment_foreground(theme: &iced::Theme, hovered: bool, active: bool) -> Color {
+    let palette = theme.extended_palette();
+    if active {
+        let accent = if hovered {
+            palette.primary.strong.color
+        } else {
+            palette.primary.base.color
+        };
+        let text = palette.background.weak.text;
+        let amount = 0.45;
+        return Color {
+            r: accent.r + (text.r - accent.r) * amount,
+            g: accent.g + (text.g - accent.g) * amount,
+            b: accent.b + (text.b - accent.b) * amount,
+            a: accent.a + (text.a - accent.a) * amount,
+        };
+    }
+    if hovered {
+        return palette.background.weak.text;
+    }
+
+    let color = palette.background.weak.text;
+    let background = palette.background.weak.color;
+    let amount = 0.38;
+    Color {
+        r: color.r + (background.r - color.r) * amount,
+        g: color.g + (background.g - color.g) * amount,
+        b: color.b + (background.b - color.b) * amount,
+        a: color.a + (background.a - color.a) * amount,
+    }
+}
+
+fn effect_rack_surface(theme: &iced::Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(palette.background.base.color.into()),
+        ..container::Style::default()
+    }
+}
+
+fn effect_rack_scrollable(theme: &iced::Theme, status: scrollable::Status) -> scrollable::Style {
+    let palette = theme.extended_palette();
+    let mut style = ui_style::workspace_scrollable(theme, status);
+    style.container.background = Some(palette.background.base.color.into());
+    style.container.text_color = Some(palette.background.base.text);
+    style.vertical_rail.background = Some(palette.background.base.color.into());
+    style.vertical_rail.scroller.background = palette.background.weak.color.into();
+    style
+}
+
+fn effect_rack_separator_surface(theme: &iced::Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(palette.background.weak.color.into()),
+        ..container::Style::default()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn processor_slot_controls_sized(
+    target: super::processor_editor_windows::EditorTarget,
+    role: ProcessorSlotRole,
+    selected: Option<&ProcessorChoice>,
+    editor_enabled: bool,
+    bypassed: bool,
+    hovered_segment: Option<ProcessorSlotSegment>,
+    controls_enabled: bool,
+    slot_width: f32,
+    list_item: bool,
+) -> Element<'static, Message> {
+    let picker_action =
+        controls_enabled.then_some(Message::Mixer(MixerMessage::ToggleProcessorBrowser(target)));
+    let editor_action =
+        processor_slot_editor_action(target, selected, editor_enabled, controls_enabled);
+    let bypass_action =
+        (controls_enabled && role == ProcessorSlotRole::Effect && !is_empty_choice(selected))
+            .then_some(Message::Mixer(MixerMessage::ToggleSlotBypass(target)));
+    let can_drag_effect = controls_enabled
+        && role == ProcessorSlotRole::Effect
+        && target.slot_index > 0
+        && !is_empty_choice(selected);
+    let label = if list_item && is_empty_choice(selected) {
+        "Add effect".to_string()
+    } else {
+        processor_hover_label(&processor_trigger_label(selected), list_item)
+    };
+    let bypass_hovered = hovered_segment == Some(ProcessorSlotSegment::Bypass);
+    let editor_hovered = hovered_segment == Some(ProcessorSlotSegment::Editor);
+    let picker_hovered = hovered_segment == Some(ProcessorSlotSegment::Picker);
+    let label_active = role == ProcessorSlotRole::Instrument && !is_empty_choice(selected);
+
+    let mut split = row![]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center);
+    if role == ProcessorSlotRole::Effect {
+        split = split.push(processor_slot_icon_segment(
+            processor_slot_bypass_icon(bypassed),
+            bypass_action,
+            false,
+            bypass_hovered,
+            target,
+            ProcessorSlotSegment::Bypass,
+        ));
+        split = split.push(slot_area_separator());
+    }
+    split = split.push(processor_slot_label_segment(
+        role.slot_icon(),
+        label,
+        label_active,
+        editor_hovered,
+        target,
+        ProcessorSlotSegment::Editor,
+        editor_action.or_else(|| {
+            if is_empty_choice(selected) {
+                picker_action.clone()
+            } else {
+                None
+            }
+        }),
+    ));
+    split = split.push(slot_area_separator());
+    split = split.push(processor_slot_icon_segment(
+        icons::list_tree(),
+        picker_action.clone(),
+        false,
+        picker_hovered,
+        target,
+        ProcessorSlotSegment::Picker,
+    ));
+    let content: Element<'static, Message> = split.into();
+
+    let button_content = container(content)
+        .width(Fill)
+        .height(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT))
+        .center_y(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT));
+    let surface: Element<'static, Message> = button_content
+        .style(move |theme| processor_slot_surface(theme, false, list_item))
+        .padding([0, ui_style::grid(2)])
+        .width(Length::Fixed(slot_width))
+        .height(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT))
+        .into();
+
+    let mut hit_area = mouse_area(surface)
+        .on_right_press(picker_action.unwrap_or_else(noop_message))
+        .interaction(mouse::Interaction::Pointer);
+    if can_drag_effect {
+        hit_area = hit_area
+            .on_press(Message::Mixer(MixerMessage::StartTrackEffectDrag {
+                strip_index: target.strip_index,
+                effect_index: target.slot_index - 1,
+            }))
+            .on_release(Message::Mixer(MixerMessage::DropTrackEffect {
+                strip_index: target.strip_index,
+                effect_index: target.slot_index - 1,
+            }));
+    }
+
+    container(hit_area)
+        .width(Length::Fixed(slot_width))
+        .height(Length::Fixed(if list_item {
+            PROCESSOR_SLOT_BUTTON_HEIGHT
+        } else {
+            PROCESSOR_SLOT_HEIGHT
+        }))
+        .center_x(Length::Fixed(slot_width))
+        .center_y(Length::Fixed(if list_item {
+            PROCESSOR_SLOT_BUTTON_HEIGHT
+        } else {
+            PROCESSOR_SLOT_HEIGHT
+        }))
+        .into()
+}
+
+fn processor_hover_label(label: &str, list_item: bool) -> String {
+    crate::track_names::ellipsize_middle(
+        label,
+        if list_item {
+            18
+        } else {
+            PROCESSOR_SLOT_LABEL_MAX_LEN
+        },
+    )
+}
+
+fn processor_slot_label_segment(
+    icon: iced::widget::svg::Handle,
+    label: String,
+    active: bool,
+    slot_hovered: bool,
+    target: super::processor_editor_windows::EditorTarget,
+    segment: ProcessorSlotSegment,
+    action: Option<Message>,
+) -> Element<'static, Message> {
+    let button: Element<'static, Message> = button(
+        row![
+            container(ui_style::icon(
+                icon,
+                PROCESSOR_BROWSER_ICON_SIZE,
+                move |theme, status| {
+                    processor_slot_label_icon_style(theme, status, active, slot_hovered)
+                },
+            ))
+            .width(Length::Fixed(PROCESSOR_SLOT_SEGMENT_WIDTH))
+            .height(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT))
+            .center_x(Length::Fixed(PROCESSOR_SLOT_SEGMENT_WIDTH))
+            .center_y(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT)),
+            container(
+                text(label)
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .wrapping(iced::widget::text::Wrapping::None)
+            )
+            .width(Fill)
+            .height(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT))
+            .align_y(alignment::Vertical::Center)
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center),
+    )
+    .style(move |theme, status| {
+        processor_slot_label_button_style(theme, status, active, slot_hovered)
+    })
+    .padding(0)
+    .width(Fill)
+    .height(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT))
+    .on_press_maybe(action)
+    .into();
+
+    mouse_area(button)
+        .on_enter(Message::Mixer(MixerMessage::SetProcessorSlotHovered(Some(
+            (target, segment),
+        ))))
+        .on_exit(Message::Mixer(MixerMessage::SetProcessorSlotHovered(None)))
+        .into()
+}
+
+fn processor_slot_icon_segment(
+    icon: iced::widget::svg::Handle,
+    action: Option<Message>,
+    active: bool,
+    slot_hovered: bool,
+    target: super::processor_editor_windows::EditorTarget,
+    segment: ProcessorSlotSegment,
+) -> Element<'static, Message> {
+    let button: Element<'static, Message> = button(
+        container(ui_style::icon(
+            icon,
+            PROCESSOR_BROWSER_ICON_SIZE,
+            move |theme, status| {
+                processor_slot_active_icon_style(theme, status, active, slot_hovered)
+            },
+        ))
+        .width(Length::Fixed(PROCESSOR_SLOT_SEGMENT_WIDTH))
+        .height(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT))
+        .center_x(Length::Fixed(PROCESSOR_SLOT_SEGMENT_WIDTH))
+        .center_y(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT)),
+    )
+    .style(move |theme, status| processor_slot_icon_button_style(theme, status, slot_hovered))
+    .padding(0)
+    .width(Length::Fixed(PROCESSOR_SLOT_SEGMENT_WIDTH))
+    .height(Length::Fixed(PROCESSOR_SLOT_BUTTON_HEIGHT))
+    .on_press_maybe(action)
+    .into();
+
+    mouse_area(button)
+        .on_enter(Message::Mixer(MixerMessage::SetProcessorSlotHovered(Some(
+            (target, segment),
+        ))))
+        .on_exit(Message::Mixer(MixerMessage::SetProcessorSlotHovered(None)))
+        .into()
+}
+
 fn slot_area_separator() -> Element<'static, Message> {
     container(text(""))
         .style(slot_area_separator_surface)
@@ -1677,38 +2595,86 @@ fn slot_area_separator_surface(theme: &iced::Theme) -> container::Style {
     }
 }
 
-fn transparent_hit_button(theme: &iced::Theme, status: button::Status) -> button::Style {
-    let text_color = match status {
-        button::Status::Active | button::Status::Disabled => slot_segment_foreground(theme, false),
-        button::Status::Hovered | button::Status::Pressed => slot_segment_foreground(theme, true),
-    };
-    button::Style {
-        background: None,
-        text_color,
-        ..button::Style::default()
+fn processor_slot_icon_style(
+    theme: &iced::Theme,
+    status: iced::widget::svg::Status,
+    active: bool,
+) -> iced::widget::svg::Style {
+    if active {
+        let palette = theme.extended_palette();
+        return iced::widget::svg::Style {
+            color: Some(match status {
+                iced::widget::svg::Status::Idle => palette.primary.base.color,
+                iced::widget::svg::Status::Hovered => palette.primary.strong.color,
+            }),
+        };
+    }
+
+    ui_style::svg_muted_control(theme, status)
+}
+
+fn processor_slot_button_style(
+    theme: &iced::Theme,
+    status: button::Status,
+    open: bool,
+    list_item: bool,
+) -> button::Style {
+    let mut style = ui_style::button_selector_field(theme, status, open);
+    if list_item {
+        let palette = theme.extended_palette();
+        style.background = None;
+        style.border = border::rounded(0)
+            .width(0)
+            .color(palette.background.strong.color);
+        style.shadow = iced::Shadow::default();
+    }
+    style
+}
+
+fn processor_slot_surface(theme: &iced::Theme, open: bool, list_item: bool) -> container::Style {
+    let button_style = processor_slot_button_style(theme, button::Status::Active, open, list_item);
+    container::Style {
+        text_color: Some(button_style.text_color),
+        background: button_style.background,
+        border: button_style.border,
+        shadow: button_style.shadow,
+        ..container::Style::default()
     }
 }
 
-fn slot_segment_foreground(theme: &iced::Theme, hovered: bool) -> Color {
-    let palette = theme.extended_palette();
-    if hovered {
-        return palette.background.weak.text;
-    }
-
-    let color = palette.background.weak.text;
-    let background = palette.background.weak.color;
-    let amount = 0.38;
-    Color {
-        r: color.r + (background.r - color.r) * amount,
-        g: color.g + (background.g - color.g) * amount,
-        b: color.b + (background.b - color.b) * amount,
-        a: color.a + (background.a - color.a) * amount,
-    }
-}
-
+#[cfg(test)]
 fn instrument_slot_primary_action(
     track_index: usize,
     selected: Option<&InstrumentChoice>,
+    editor_enabled: bool,
+    controls_enabled: bool,
+) -> Option<Message> {
+    processor_slot_editor_action(
+        super::processor_editor_windows::EditorTarget {
+            strip_index: track_index + 1,
+            slot_index: 0,
+        },
+        selected,
+        editor_enabled,
+        controls_enabled,
+    )
+    .or_else(|| {
+        if controls_enabled && is_empty_choice(selected) {
+            Some(Message::Mixer(MixerMessage::ToggleProcessorBrowser(
+                super::processor_editor_windows::EditorTarget {
+                    strip_index: track_index + 1,
+                    slot_index: 0,
+                },
+            )))
+        } else {
+            None
+        }
+    })
+}
+
+fn processor_slot_editor_action(
+    target: super::processor_editor_windows::EditorTarget,
+    selected: Option<&ProcessorChoice>,
     editor_enabled: bool,
     controls_enabled: bool,
 ) -> Option<Message> {
@@ -1717,43 +2683,54 @@ fn instrument_slot_primary_action(
     }
 
     match (selected, editor_enabled) {
-        (Some(InstrumentChoice::Processor { .. }), true) => Some(Message::Mixer(
-            MixerMessage::OpenEditor(super::processor_editor_windows::EditorTarget {
-                strip_index: track_index + 1,
-                slot_index: 0,
-            }),
-        )),
-        (Some(InstrumentChoice::None) | None, _) => Some(Message::Mixer(
-            MixerMessage::ToggleTrackInstrumentBrowser(track_index),
-        )),
-        (Some(InstrumentChoice::Processor { .. }), false) => None,
+        (Some(ProcessorChoice::Processor { .. }), true) => {
+            Some(Message::Mixer(MixerMessage::OpenEditor(target)))
+        }
+        _ => None,
+    }
+}
+
+fn is_empty_choice(choice: Option<&ProcessorChoice>) -> bool {
+    matches!(choice, None | Some(ProcessorChoice::None))
+}
+
+fn processor_slot_bypass_icon(bypassed: bool) -> iced::widget::svg::Handle {
+    if bypassed {
+        icons::power_off()
+    } else {
+        icons::power()
     }
 }
 
 pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Message> {
-    let Some(track_index) = app.open_instrument_browser_track else {
+    let Some(target) = app.open_processor_browser_target else {
         return container(text("")).width(Fill).height(Fill).into();
     };
     let Some(playback) = app.playback.as_ref() else {
         return container(text("")).width(Fill).height(Fill).into();
     };
     let mixer = playback.mixer_state();
-    let Some(track) = mixer.tracks().get(track_index) else {
+    let Some(strip) = mixer.strip_by_index(target.strip_index) else {
         return container(text("")).width(Fill).height(Fill).into();
     };
-    let choices = instrument_choices();
-    let selected = selected_instrument_choice(track.instrument_slot(), mixer);
+    let role = if target.slot_index == 0 {
+        ProcessorSlotRole::Instrument
+    } else {
+        ProcessorSlotRole::Effect
+    };
+    let choices = processor_choices(role);
+    let selected = selected_processor_choice(strip.slot(target.slot_index), role);
 
     let header = container(
         row![
             column![
-                text("Choose Instrument")
+                text(role.title())
                     .size(ui_style::FONT_SIZE_UI_SM)
                     .font(iced::Font {
                         weight: iced::font::Weight::Bold,
                         ..fonts::UI
                     }),
-                text(track.name.clone())
+                text(strip.name.clone())
                     .size(ui_style::FONT_SIZE_UI_XS)
                     .font(fonts::MONO),
             ]
@@ -1768,7 +2745,7 @@ pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Messa
             )
             .width(Length::Fixed(ui_style::grid_f32(5)))
             .height(Length::Fixed(ui_style::grid_f32(5)))
-            .on_press(Message::Mixer(MixerMessage::CloseTrackInstrumentBrowser)),
+            .on_press(Message::Mixer(MixerMessage::CloseProcessorBrowser)),
         ]
         .spacing(ui_style::SPACE_XS)
         .align_y(alignment::Vertical::Center),
@@ -1794,8 +2771,8 @@ pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Messa
     .spacing(ui_style::SPACE_XS)
     .width(Fill);
 
-    let search = text_input("Search instruments", &app.instrument_browser_search)
-        .on_input(|value| Message::Mixer(MixerMessage::InstrumentBrowserSearchChanged(value)))
+    let search = text_input(role.search_placeholder(), &app.instrument_browser_search)
+        .on_input(|value| Message::Mixer(MixerMessage::ProcessorBrowserSearchChanged(value)))
         .id(app.instrument_browser_search_input_id.clone())
         .style(ui_style::browser_search_input)
         .size(ui_style::FONT_SIZE_UI_SM)
@@ -1803,14 +2780,19 @@ pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Messa
         .width(Fill);
 
     let body = match app.instrument_browser_backend {
-        InstrumentBrowserBackend::BuiltIn => instrument_browser_built_in_list(
-            track_index,
+        InstrumentBrowserBackend::BuiltIn => processor_browser_built_in_list(
+            target,
+            role,
             &choices,
             selected.as_ref(),
             &app.instrument_browser_search,
         ),
-        InstrumentBrowserBackend::Clap => instrument_browser_empty_state("No CLAP instruments yet"),
-        InstrumentBrowserBackend::Vst3 => instrument_browser_empty_state("No VST3 instruments yet"),
+        InstrumentBrowserBackend::Clap => {
+            instrument_browser_empty_state(role.backend_empty_label(ProcessorBrowserBackend::Clap))
+        }
+        InstrumentBrowserBackend::Vst3 => {
+            instrument_browser_empty_state(role.backend_empty_label(ProcessorBrowserBackend::Vst3))
+        }
     };
 
     let dialog = container(
@@ -1840,7 +2822,7 @@ pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Messa
             .height(Fill)
             .style(ui_style::prompt_backdrop),
     )
-    .on_press(Message::Mixer(MixerMessage::CloseTrackInstrumentBrowser));
+    .on_press(Message::Mixer(MixerMessage::CloseProcessorBrowser));
 
     opaque(backdrop)
 }
@@ -1853,25 +2835,26 @@ fn instrument_browser_tab_button(
         .style(move |theme, status| ui_style::button_pane_tab(theme, status, tab == active))
         .padding([ui_style::grid(1), ui_style::grid(3)])
         .height(Length::Fixed(ui_style::grid_f32(6)))
-        .on_press(Message::Mixer(
-            MixerMessage::SelectInstrumentBrowserBackend(tab),
-        ))
+        .on_press(Message::Mixer(MixerMessage::SelectProcessorBrowserBackend(
+            tab,
+        )))
         .into()
 }
 
-fn instrument_browser_built_in_list(
-    track_index: usize,
-    choices: &[InstrumentChoice],
-    selected: Option<&InstrumentChoice>,
+fn processor_browser_built_in_list(
+    target: super::processor_editor_windows::EditorTarget,
+    role: ProcessorSlotRole,
+    choices: &[ProcessorChoice],
+    selected: Option<&ProcessorChoice>,
     search: &str,
 ) -> Element<'static, Message> {
-    let browser = instrument_browser_entries(choices, InstrumentBrowserBackend::BuiltIn, search);
+    let browser = processor_browser_entries(choices, InstrumentBrowserBackend::BuiltIn, search);
     let InstrumentBrowserEntries { show_none, entries } = browser;
     let mut content = column![].spacing(0).width(Fill);
     if show_none {
         content = content.push(instrument_browser_choice_button(
-            track_index,
-            InstrumentChoice::None,
+            target,
+            ProcessorChoice::None,
             selected == Some(&InstrumentChoice::None),
         ));
     }
@@ -1879,14 +2862,14 @@ fn instrument_browser_built_in_list(
     let has_entries = !entries.is_empty();
     for choice in entries {
         content = content.push(instrument_browser_choice_button(
-            track_index,
+            target,
             choice.clone(),
             selected == Some(&choice),
         ));
     }
 
     if !show_none && !has_entries {
-        return instrument_browser_empty_state("No matching instruments");
+        return instrument_browser_empty_state(role.empty_search_label());
     }
 
     scrollable(content)
@@ -1896,8 +2879,8 @@ fn instrument_browser_built_in_list(
 }
 
 fn instrument_browser_choice_button(
-    track_index: usize,
-    choice: InstrumentChoice,
+    target: super::processor_editor_windows::EditorTarget,
+    choice: ProcessorChoice,
     selected: bool,
 ) -> Element<'static, Message> {
     button(
@@ -1913,9 +2896,8 @@ fn instrument_browser_choice_button(
     .style(move |theme, status| ui_style::button_browser_entry(theme, status, selected))
     .padding([ui_style::grid(2), ui_style::grid(3)])
     .width(Fill)
-    .on_press(Message::Mixer(MixerMessage::SelectTrackInstrument(
-        track_index,
-        choice,
+    .on_press(Message::Mixer(MixerMessage::SelectProcessor(
+        target, choice,
     )))
     .into()
 }
@@ -1941,12 +2923,17 @@ fn instrument_choice_primary_label(choice: &InstrumentChoice) -> String {
     }
 }
 
+#[cfg(test)]
 fn instrument_trigger_label(choice: Option<&InstrumentChoice>) -> String {
+    processor_trigger_label(choice)
+}
+
+fn processor_trigger_label(choice: Option<&ProcessorChoice>) -> String {
     crate::track_names::ellipsize_middle(
         &choice
             .map(instrument_choice_primary_label)
             .unwrap_or_else(|| "Empty".to_string()),
-        INSTRUMENT_SLOT_LABEL_MAX_LEN,
+        PROCESSOR_SLOT_LABEL_MAX_LEN,
     )
 }
 
@@ -1959,9 +2946,18 @@ fn instrument_choice_search_haystack(choice: &InstrumentChoice) -> String {
     }
 }
 
+#[cfg(test)]
 fn instrument_browser_entries(
     choices: &[InstrumentChoice],
     active_backend: InstrumentBrowserBackend,
+    search: &str,
+) -> InstrumentBrowserEntries {
+    processor_browser_entries(choices, active_backend, search)
+}
+
+fn processor_browser_entries(
+    choices: &[ProcessorChoice],
+    active_backend: ProcessorBrowserBackend,
     search: &str,
 ) -> InstrumentBrowserEntries {
     if active_backend != InstrumentBrowserBackend::BuiltIn {
@@ -1972,7 +2968,7 @@ fn instrument_browser_entries(
     }
 
     let query = search.trim().to_lowercase();
-    let matches = |choice: &InstrumentChoice| {
+    let matches = |choice: &ProcessorChoice| {
         query.is_empty() || instrument_choice_search_haystack(choice).contains(&query)
     };
 
@@ -1996,21 +2992,26 @@ fn instrument_browser_entries(
     InstrumentBrowserEntries { show_none, entries }
 }
 
+#[allow(dead_code)]
 fn instrument_choices() -> Vec<InstrumentChoice> {
+    processor_choices(ProcessorSlotRole::Instrument)
+}
+
+fn processor_choices(role: ProcessorSlotRole) -> Vec<ProcessorChoice> {
     let mut choices = Vec::new();
-    choices.push(InstrumentChoice::None);
+    choices.push(ProcessorChoice::None);
     choices.extend(
         registry::all()
             .iter()
-            .filter(|entry| entry.role == registry::Role::Instrument)
+            .filter(|entry| entry.role == role.registry_role())
             .filter(|entry| entry.id != BUILTIN_NONE_ID && entry.id != BUILTIN_METRONOME_ID)
-            .map(|entry| InstrumentChoice::Processor {
+            .map(|entry| ProcessorChoice::Processor {
                 processor_id: entry.id.to_string(),
                 name: entry.name.to_string(),
                 backend: match entry.backend {
-                    registry::Backend::BuiltIn => InstrumentBrowserBackend::BuiltIn,
-                    registry::Backend::Clap => InstrumentBrowserBackend::Clap,
-                    registry::Backend::Vst3 => InstrumentBrowserBackend::Vst3,
+                    registry::Backend::BuiltIn => ProcessorBrowserBackend::BuiltIn,
+                    registry::Backend::Clap => ProcessorBrowserBackend::Clap,
+                    registry::Backend::Vst3 => ProcessorBrowserBackend::Vst3,
                 },
             }),
     );
@@ -2021,18 +3022,25 @@ fn selected_instrument_choice(
     slot: Option<&SlotState>,
     _mixer: &MixerState,
 ) -> Option<InstrumentChoice> {
+    selected_processor_choice(slot, ProcessorSlotRole::Instrument)
+}
+
+fn selected_processor_choice(
+    slot: Option<&SlotState>,
+    _role: ProcessorSlotRole,
+) -> Option<ProcessorChoice> {
     let slot = slot?;
     if slot.is_empty() {
-        return Some(InstrumentChoice::None);
+        return Some(ProcessorChoice::None);
     }
     let entry = registry::resolve(&slot.kind)?;
-    Some(InstrumentChoice::Processor {
+    Some(ProcessorChoice::Processor {
         processor_id: entry.id.to_string(),
         name: entry.name.to_string(),
         backend: match entry.backend {
-            registry::Backend::BuiltIn => InstrumentBrowserBackend::BuiltIn,
-            registry::Backend::Clap => InstrumentBrowserBackend::Clap,
-            registry::Backend::Vst3 => InstrumentBrowserBackend::Vst3,
+            registry::Backend::BuiltIn => ProcessorBrowserBackend::BuiltIn,
+            registry::Backend::Clap => ProcessorBrowserBackend::Clap,
+            registry::Backend::Vst3 => ProcessorBrowserBackend::Vst3,
         },
     })
 }
@@ -2045,7 +3053,7 @@ mod tests {
     use iced_test::{Simulator, simulator};
     use lilypalooza_audio::mixer::MixerMeterSnapshotWindow;
     use lilypalooza_audio::{AudioEngine, AudioEngineOptions};
-    use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, MixerState, SlotState};
+    use lilypalooza_audio::{BUILTIN_GAIN_ID, BUILTIN_SOUNDFONT_ID, MixerState, SlotState};
     use std::path::{Path, PathBuf};
 
     use super::{
@@ -2059,8 +3067,8 @@ mod tests {
         VALUE_LABEL_HEIGHT, color_bits, control_stack_height, gain_control_height,
         gain_control_mode, gain_label, instrument_browser_entries, instrument_slot_primary_action,
         instrument_trigger_label, meter_colors, meter_control_height, meter_peak_label,
-        meter_scale_visible, selected_instrument_choice, track_should_use_roll_tint,
-        visible_strip_window,
+        meter_scale_visible, processor_choices, selected_instrument_choice,
+        selected_processor_choice, track_should_use_roll_tint, visible_strip_window,
     };
     use crate::app::Message;
     use crate::app::messages::MixerMessage;
@@ -2120,6 +3128,10 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    fn color_distance(first: Color, second: Color) -> f32 {
+        (first.r - second.r).abs() + (first.g - second.g).abs() + (first.b - second.b).abs()
     }
 
     fn assert_snapshots_differ(
@@ -2249,6 +3261,7 @@ mod tests {
                 0.0,
                 container(iced::widget::text("")).into(),
                 super::StripActions {
+                    panel: None,
                     solo: None,
                     mute: None,
                     on_gain: None,
@@ -2282,10 +3295,16 @@ mod tests {
                     Color::from_rgb(0.92, 0.34, 0.34),
                     false,
                 ),
-                Some(super::instrument_slot_controls(
-                    0,
-                    Some(InstrumentChoice::None),
+                Some(super::processor_slot_controls(
+                    crate::app::processor_editor_windows::EditorTarget {
+                        strip_index: 1,
+                        slot_index: 0,
+                    },
+                    super::ProcessorSlotRole::Instrument,
+                    Some(&InstrumentChoice::None),
                     false,
+                    false,
+                    None,
                     true,
                 )),
                 0.0,
@@ -2295,6 +3314,7 @@ mod tests {
                     .height(Length::Fixed(220.0))
                     .into(),
                 super::StripActions {
+                    panel: Some((false, false, super::noop_message())),
                     solo: Some((false, super::noop_message())),
                     mute: Some((false, super::noop_message())),
                     on_gain: Some(Box::new(|_| super::noop_message())),
@@ -2337,6 +3357,8 @@ mod tests {
                 Color::from_rgb(0.92, 0.34, 0.34),
                 false,
                 None,
+                None,
+                &[],
                 true,
             ),
         );
@@ -2365,6 +3387,7 @@ mod tests {
                 colors,
                 STRIP_MIN_HEIGHT,
                 GainControlMode::Knob,
+                false,
                 true,
             ),
         );
@@ -2392,6 +3415,8 @@ mod tests {
                 STRIP_MIN_HEIGHT,
                 GainControlMode::Knob,
                 0..0,
+                &[],
+                None,
                 None,
                 None,
                 "",
@@ -2435,6 +3460,8 @@ mod tests {
                 STRIP_MIN_HEIGHT,
                 GainControlMode::Knob,
                 0..mixer.bus_count(),
+                &[],
+                None,
                 None,
                 None,
                 "",
@@ -2537,7 +3564,10 @@ mod tests {
             ),
         );
 
-        ui.point_at(iced::Point::new(76.0, INSTRUMENT_PICKER_HEIGHT / 2.0));
+        ui.point_at(iced::Point::new(
+            INSTRUMENT_SLOT_WIDTH / 2.0,
+            INSTRUMENT_PICKER_HEIGHT / 2.0,
+        ));
         let _ = ui.simulate(simulator::click());
 
         assert!(ui.into_messages().any(|message| {
@@ -2546,6 +3576,309 @@ mod tests {
                 Message::Mixer(MixerMessage::ToggleTrackInstrumentBrowser(2))
             )
         }));
+    }
+
+    #[test]
+    fn hovered_effect_slot_power_area_toggles_bypass() {
+        let target = crate::app::processor_editor_windows::EditorTarget {
+            strip_index: 3,
+            slot_index: 1,
+        };
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [INSTRUMENT_SLOT_WIDTH, INSTRUMENT_PICKER_HEIGHT],
+            super::processor_slot_controls(
+                target,
+                super::ProcessorSlotRole::Effect,
+                Some(&InstrumentChoice::Processor {
+                    processor_id: BUILTIN_GAIN_ID.to_string(),
+                    name: "Gain".to_string(),
+                    backend: InstrumentBrowserBackend::BuiltIn,
+                }),
+                true,
+                false,
+                Some(super::ProcessorSlotSegment::Bypass),
+                true,
+            ),
+        );
+
+        ui.point_at(iced::Point::new(16.0, INSTRUMENT_PICKER_HEIGHT / 2.0));
+        let _ = ui.simulate(simulator::click());
+
+        assert!(ui.into_messages().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::ToggleSlotBypass(clicked)) if clicked == target
+            )
+        }));
+    }
+
+    #[test]
+    fn hovered_effect_slot_list_area_opens_processor_picker() {
+        let target = crate::app::processor_editor_windows::EditorTarget {
+            strip_index: 3,
+            slot_index: 1,
+        };
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [INSTRUMENT_SLOT_WIDTH, INSTRUMENT_PICKER_HEIGHT],
+            super::processor_slot_controls(
+                target,
+                super::ProcessorSlotRole::Effect,
+                Some(&InstrumentChoice::Processor {
+                    processor_id: BUILTIN_GAIN_ID.to_string(),
+                    name: "Gain".to_string(),
+                    backend: InstrumentBrowserBackend::BuiltIn,
+                }),
+                true,
+                false,
+                Some(super::ProcessorSlotSegment::Picker),
+                true,
+            ),
+        );
+
+        ui.point_at(iced::Point::new(96.0, INSTRUMENT_PICKER_HEIGHT / 2.0));
+        let _ = ui.simulate(simulator::click());
+
+        assert!(ui.into_messages().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::ToggleProcessorBrowser(clicked)) if clicked == target
+            )
+        }));
+    }
+
+    #[test]
+    fn effect_slot_click_emits_drag_start_and_drop_messages() {
+        let target = crate::app::processor_editor_windows::EditorTarget {
+            strip_index: 3,
+            slot_index: 2,
+        };
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [INSTRUMENT_SLOT_WIDTH, INSTRUMENT_PICKER_HEIGHT],
+            super::processor_slot_controls(
+                target,
+                super::ProcessorSlotRole::Effect,
+                Some(&InstrumentChoice::Processor {
+                    processor_id: BUILTIN_GAIN_ID.to_string(),
+                    name: "Gain".to_string(),
+                    backend: InstrumentBrowserBackend::BuiltIn,
+                }),
+                true,
+                false,
+                None,
+                true,
+            ),
+        );
+
+        ui.point_at(iced::Point::new(24.0, INSTRUMENT_PICKER_HEIGHT / 2.0));
+        let _ = ui.simulate(simulator::click());
+        let messages: Vec<_> = ui.into_messages().collect();
+
+        assert!(messages.iter().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::StartTrackEffectDrag {
+                    strip_index: 3,
+                    effect_index: 1,
+                })
+            )
+        }));
+        assert!(messages.iter().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::DropTrackEffect {
+                    strip_index: 3,
+                    effect_index: 1,
+                })
+            )
+        }));
+    }
+
+    #[test]
+    fn master_effect_slot_click_emits_drag_start_and_drop_messages() {
+        let target = crate::app::processor_editor_windows::EditorTarget {
+            strip_index: 0,
+            slot_index: 1,
+        };
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [INSTRUMENT_SLOT_WIDTH, INSTRUMENT_PICKER_HEIGHT],
+            super::processor_slot_controls(
+                target,
+                super::ProcessorSlotRole::Effect,
+                Some(&InstrumentChoice::Processor {
+                    processor_id: BUILTIN_GAIN_ID.to_string(),
+                    name: "Gain".to_string(),
+                    backend: InstrumentBrowserBackend::BuiltIn,
+                }),
+                true,
+                false,
+                None,
+                true,
+            ),
+        );
+
+        ui.point_at(iced::Point::new(24.0, INSTRUMENT_PICKER_HEIGHT / 2.0));
+        let _ = ui.simulate(simulator::click());
+        let messages: Vec<_> = ui.into_messages().collect();
+
+        assert!(messages.iter().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::StartTrackEffectDrag {
+                    strip_index: 0,
+                    effect_index: 0,
+                })
+            )
+        }));
+        assert!(messages.iter().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::DropTrackEffect {
+                    strip_index: 0,
+                    effect_index: 0,
+                })
+            )
+        }));
+    }
+
+    #[test]
+    fn master_effect_rack_empty_slot_opens_master_effect_picker() {
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [
+                super::EFFECT_RACK_SLOT_WIDTH,
+                super::PROCESSOR_SLOT_BUTTON_HEIGHT,
+            ],
+            super::effect_rack(0, Vec::new(), None, true, 1),
+        );
+
+        ui.point_at(iced::Point::new(
+            super::EFFECT_RACK_SLOT_WIDTH / 2.0,
+            super::PROCESSOR_SLOT_BUTTON_HEIGHT / 2.0,
+        ));
+        let _ = ui.simulate(simulator::click());
+
+        assert!(ui.into_messages().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::ToggleProcessorBrowser(target))
+                    if target.strip_index == 0 && target.slot_index == 1
+            )
+        }));
+    }
+
+    #[test]
+    fn master_effect_browser_overlay_shows_effect_picker() {
+        lilypalooza_builtins::register_all();
+        let (mut app, _task) = crate::app::new_with_default_test_state();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        app.open_processor_browser_target =
+            Some(crate::app::processor_editor_windows::EditorTarget {
+                strip_index: 0,
+                slot_index: 1,
+            });
+
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [800.0, 600.0],
+            super::instrument_browser_overlay(&app),
+        );
+
+        assert!(ui.find("Choose Effect").is_ok());
+        assert!(ui.find("Master").is_ok());
+        assert!(ui.find("Gain").is_ok());
+    }
+
+    #[test]
+    fn effect_rack_only_first_empty_slot_opens_picker() {
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [
+                super::EFFECT_RACK_SLOT_WIDTH,
+                super::PROCESSOR_SLOT_BUTTON_HEIGHT * 3.0,
+            ],
+            super::effect_rack(1, Vec::new(), None, true, 3),
+        );
+
+        ui.point_at(iced::Point::new(
+            super::EFFECT_RACK_SLOT_WIDTH / 2.0,
+            super::PROCESSOR_SLOT_BUTTON_HEIGHT * 1.5,
+        ));
+        let _ = ui.simulate(simulator::click());
+
+        assert!(!ui.into_messages().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::ToggleProcessorBrowser(_))
+            )
+        }));
+    }
+
+    #[test]
+    fn panel_toggle_button_emits_panel_toggle_message() {
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [super::STRIP_TOGGLE_SIZE, super::STRIP_TOGGLE_SIZE],
+            super::strip_panel_toggle_button(
+                false,
+                false,
+                Message::Mixer(MixerMessage::ToggleMixerEffectRack(0)),
+            ),
+        );
+
+        ui.point_at(iced::Point::new(
+            super::STRIP_TOGGLE_SIZE / 2.0,
+            super::STRIP_TOGGLE_SIZE / 2.0,
+        ));
+        let _ = ui.simulate(simulator::click());
+
+        assert!(ui.into_messages().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::ToggleMixerEffectRack(0))
+            )
+        }));
+    }
+
+    #[test]
+    fn panel_toggle_button_style_differs_from_mute_solo_style() {
+        let panel = super::strip_panel_toggle_style(&Theme::Dark, button::Status::Active, false);
+        let mute_solo = ui_style::button_compact_solid(&Theme::Dark, button::Status::Active);
+
+        assert_ne!(panel.background, mute_solo.background);
+    }
+
+    #[test]
+    fn open_panel_toggle_uses_hover_style() {
+        let open = super::strip_panel_toggle_style(&Theme::Dark, button::Status::Active, true);
+        let hovered = ui_style::button_flat_compact_control(&Theme::Dark, button::Status::Hovered);
+
+        assert_eq!(open.background, hovered.background);
+        assert_eq!(open.border, hovered.border);
+    }
+
+    #[test]
+    fn folded_panel_toggle_indicates_hidden_content() {
+        let empty = super::strip_panel_toggle_icon_style(
+            &Theme::Dark,
+            iced::widget::svg::Status::Idle,
+            false,
+            false,
+        );
+        let has_content = super::strip_panel_toggle_icon_style(
+            &Theme::Dark,
+            iced::widget::svg::Status::Idle,
+            false,
+            true,
+        );
+
+        assert_ne!(empty.color, has_content.color);
     }
 
     #[test]
@@ -2575,6 +3908,350 @@ mod tests {
             super::INSTRUMENT_SLOT_EDITOR_AREA_WIDTH
                 <= super::INSTRUMENT_BROWSER_ICON_SIZE + ui_style::grid_f32(1),
             "slot editor area should hug the icon instead of taking a wide chunk"
+        );
+    }
+
+    #[test]
+    fn effect_rack_uses_fixed_scrollable_height() {
+        let rack_height = super::EFFECT_RACK_HEIGHT;
+        let picker_height = super::INSTRUMENT_PICKER_HEIGHT;
+
+        assert_eq!(
+            rack_height,
+            super::EFFECT_RACK_ROW_HEIGHT * super::EFFECT_RACK_VISIBLE_SLOTS as f32
+        );
+        assert!(rack_height > picker_height);
+    }
+
+    #[test]
+    fn effect_rack_panel_is_narrower_than_channel_strip() {
+        let panel_width = super::EFFECT_RACK_PANEL_WIDTH;
+        let strip_width = super::STRIP_WIDTH;
+        assert!(panel_width < strip_width);
+    }
+
+    #[test]
+    fn effect_rack_panel_reserves_even_space_for_rack_and_routing() {
+        let strip_height = 480.0;
+        let (rack_height, routing_height) = super::effect_rack_panel_heights(strip_height);
+        let available_height = strip_height - super::EFFECT_RACK_SEPARATOR_HEIGHT;
+
+        assert!((rack_height / available_height - 0.5).abs() < 0.001);
+        assert!((routing_height / available_height - 0.5).abs() < 0.001);
+        assert!(
+            (rack_height + routing_height + super::EFFECT_RACK_SEPARATOR_HEIGHT - strip_height)
+                .abs()
+                < 0.001
+        );
+    }
+
+    #[test]
+    fn effect_rack_row_height_includes_one_separator() {
+        assert_eq!(
+            super::EFFECT_RACK_ROW_HEIGHT,
+            super::PROCESSOR_SLOT_BUTTON_HEIGHT + super::EFFECT_RACK_SEPARATOR_HEIGHT
+        );
+    }
+
+    #[test]
+    fn effect_rack_scrollbar_is_narrow_and_reserved() {
+        let width = super::EFFECT_RACK_SCROLLBAR_WIDTH;
+        let scroller_width = super::EFFECT_RACK_SCROLLBAR_SCROLLER_WIDTH;
+        let spacing = super::EFFECT_RACK_SCROLLBAR_SPACING;
+
+        assert!(width < ui_style::grid_f32(2));
+        assert!(scroller_width < width);
+        assert!(spacing > 0.0);
+    }
+
+    #[test]
+    fn effect_rack_slot_style_does_not_draw_stacked_cell_borders() {
+        let style =
+            super::processor_slot_button_style(&Theme::Dark, button::Status::Active, false, true);
+
+        assert_eq!(
+            style.border.width, 0.0,
+            "rack rows should use explicit shared separators, not per-row top/bottom borders"
+        );
+    }
+
+    #[test]
+    fn effect_rack_add_button_background_is_transparent() {
+        let idle = super::effect_rack_add_button_style(&Theme::Dark, button::Status::Active);
+        let hovered = super::effect_rack_add_button_style(&Theme::Dark, button::Status::Hovered);
+
+        assert_eq!(idle.background, None);
+        assert_eq!(hovered.background, None);
+        assert_ne!(idle.text_color, hovered.text_color);
+    }
+
+    #[test]
+    fn effect_rack_slot_background_is_transparent() {
+        let idle =
+            super::processor_slot_button_style(&Theme::Dark, button::Status::Active, false, true);
+        let hovered =
+            super::processor_slot_button_style(&Theme::Dark, button::Status::Hovered, false, true);
+
+        assert_eq!(idle.background, None);
+        assert_eq!(hovered.background, None);
+    }
+
+    #[test]
+    fn processor_slot_hover_highlights_title_and_icon_together() {
+        let idle_text = super::processor_slot_label_button_style(
+            &Theme::Dark,
+            button::Status::Active,
+            false,
+            false,
+        )
+        .text_color;
+        let hovered_text = super::processor_slot_label_button_style(
+            &Theme::Dark,
+            button::Status::Active,
+            false,
+            true,
+        )
+        .text_color;
+        let hovered_icon = super::processor_slot_label_icon_style(
+            &Theme::Dark,
+            iced::widget::svg::Status::Idle,
+            false,
+            true,
+        )
+        .color;
+
+        assert_ne!(idle_text, hovered_text);
+        assert_eq!(hovered_icon, Some(hovered_text));
+    }
+
+    #[test]
+    fn processor_slot_hover_highlights_icon_across_clickable_area() {
+        let idle_button =
+            super::processor_slot_icon_button_style(&Theme::Dark, button::Status::Active, false)
+                .text_color;
+        let hovered_button =
+            super::processor_slot_icon_button_style(&Theme::Dark, button::Status::Active, true)
+                .text_color;
+        let hovered_icon = super::processor_slot_active_icon_style(
+            &Theme::Dark,
+            iced::widget::svg::Status::Idle,
+            false,
+            true,
+        )
+        .color;
+
+        assert_ne!(idle_button, hovered_button);
+        assert_eq!(hovered_icon, Some(hovered_button));
+    }
+
+    #[test]
+    fn processor_slot_editor_hover_does_not_highlight_picker_icon() {
+        let editor_hover_text = super::processor_slot_label_button_style(
+            &Theme::Dark,
+            button::Status::Active,
+            false,
+            true,
+        )
+        .text_color;
+        let picker_idle_icon = super::processor_slot_active_icon_style(
+            &Theme::Dark,
+            iced::widget::svg::Status::Idle,
+            false,
+            false,
+        )
+        .color;
+
+        assert_ne!(picker_idle_icon, Some(editor_hover_text));
+    }
+
+    #[test]
+    fn selected_instrument_slot_accents_icon_and_name() {
+        let idle_text = super::processor_slot_label_button_style(
+            &Theme::Dark,
+            button::Status::Active,
+            false,
+            false,
+        )
+        .text_color;
+        let active_text = super::processor_slot_label_button_style(
+            &Theme::Dark,
+            button::Status::Active,
+            true,
+            false,
+        )
+        .text_color;
+        let active_icon = super::processor_slot_label_icon_style(
+            &Theme::Dark,
+            iced::widget::svg::Status::Idle,
+            true,
+            false,
+        )
+        .color;
+
+        assert_ne!(idle_text, active_text);
+        assert_eq!(active_icon, Some(active_text));
+    }
+
+    #[test]
+    fn selected_instrument_slot_accent_stays_readable() {
+        let active_text = super::processor_slot_label_button_style(
+            &Theme::Dark,
+            button::Status::Active,
+            true,
+            false,
+        )
+        .text_color;
+        let palette = Theme::Dark.extended_palette();
+        let raw_primary = palette.primary.base.color;
+        let readable_text = palette.background.weak.text;
+
+        assert!(
+            color_distance(active_text, readable_text) < color_distance(raw_primary, readable_text)
+        );
+    }
+
+    #[test]
+    fn bypass_icon_toggles_shape_without_state_color() {
+        assert_eq!(super::processor_slot_bypass_icon(false), icons::power());
+        assert_eq!(super::processor_slot_bypass_icon(true), icons::power_off());
+        assert_ne!(
+            super::processor_slot_bypass_icon(false),
+            super::processor_slot_bypass_icon(true)
+        );
+
+        let normal = super::processor_slot_active_icon_style(
+            &Theme::Dark,
+            iced::widget::svg::Status::Idle,
+            false,
+            false,
+        )
+        .color;
+        let bypassed = super::processor_slot_active_icon_style(
+            &Theme::Dark,
+            iced::widget::svg::Status::Idle,
+            true,
+            false,
+        )
+        .color;
+
+        assert_eq!(normal, bypassed);
+    }
+
+    #[test]
+    fn effect_rack_panel_uses_even_rack_and_routing_heights() {
+        let (rack_height, routing_height) = super::effect_rack_panel_heights(301.0);
+
+        assert_eq!(rack_height, 150.0);
+        assert_eq!(routing_height, 150.0);
+    }
+
+    #[test]
+    fn track_effect_rack_panel_matches_snapshot() -> Result<(), iced_test::Error> {
+        lilypalooza_builtins::register_all();
+        let mut playback =
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start");
+        playback
+            .mixer()
+            .set_track_effects(
+                lilypalooza_audio::TrackId(0),
+                vec![SlotState::built_in(
+                    BUILTIN_GAIN_ID,
+                    lilypalooza_audio::ProcessorState::default(),
+                )],
+            )
+            .expect("effect should be installed");
+        let mixer = playback.mixer_state().clone();
+
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [super::EFFECT_RACK_PANEL_WIDTH, 360.0],
+            super::track_effect_rack_panel(
+                1,
+                &mixer.tracks()[0].name,
+                super::effect_slot_dependencies(&mixer.tracks()[0]),
+                None,
+                true,
+                360.0,
+            ),
+        );
+
+        assert_snapshot_matches(&mut ui, "tests/snapshots/track_effect_rack_panel")?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn instrument_track_area_open_panel_matches_snapshot() -> Result<(), iced_test::Error> {
+        let mixer = MixerState::new();
+        let meters = MixerMeterSnapshotWindow::default();
+        let colors = meter_colors(&Theme::Dark);
+
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [
+                STRIP_WIDTH + super::EFFECT_RACK_PANEL_WIDTH + ui_style::grid_f32(8),
+                520.0,
+            ],
+            super::instrument_track_area(
+                &mixer,
+                &meters,
+                colors,
+                STRIP_MIN_HEIGHT,
+                GainControlMode::Knob,
+                0..1,
+                1,
+                &[crate::track_colors::default_track_color(0)],
+                None,
+                None,
+                "",
+                Color::TRANSPARENT,
+                false,
+                None,
+                None,
+                &[1],
+                true,
+            ),
+        );
+
+        assert_snapshot_matches(&mut ui, "tests/snapshots/instrument_track_area_open_panel")?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn master_track_area_open_panel_matches_snapshot() -> Result<(), iced_test::Error> {
+        let mixer = MixerState::new();
+        let colors = meter_colors(&Theme::Dark);
+
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [
+                MAIN_SECTION_WIDTH + super::EFFECT_RACK_PANEL_WIDTH,
+                STRIP_MIN_HEIGHT + ui_style::grid_f32(8),
+            ],
+            super::master_track_area(
+                &mixer,
+                StripMeterSnapshot::default(),
+                colors,
+                STRIP_MIN_HEIGHT,
+                GainControlMode::Knob,
+                &[0],
+                None,
+                true,
+            ),
+        );
+
+        assert_snapshot_matches(&mut ui, "tests/snapshots/master_track_area_open_panel")?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixer_strip_min_height_no_longer_reserves_per_track_effect_rack() {
+        assert!(
+            super::gain_control_height(360.0, super::GainControlMode::Fader) > 120.0,
+            "effect rack lives in the side panel, not inside every mixer strip"
         );
     }
 
@@ -2616,6 +4293,14 @@ mod tests {
                 .color
                 .expect("muted icon hover color should exist");
         assert_eq!(hovered_text, hovered_icon);
+    }
+
+    #[test]
+    fn hovered_processor_label_is_truncated() {
+        let label = super::processor_hover_label("Very Long Effect Processor Name", false);
+
+        assert!(label.chars().count() <= super::PROCESSOR_SLOT_LABEL_MAX_LEN);
+        assert_ne!(label, "Very Long Effect Processor Name");
     }
 
     #[test]
@@ -2731,6 +4416,51 @@ mod tests {
     }
 
     #[test]
+    fn processor_choices_filter_instruments_and_effects_by_role() {
+        lilypalooza_builtins::register_all();
+
+        let instruments = processor_choices(super::ProcessorSlotRole::Instrument);
+        let effects = processor_choices(super::ProcessorSlotRole::Effect);
+
+        assert!(instruments.iter().any(|choice| matches!(
+            choice,
+            InstrumentChoice::Processor { processor_id, .. } if processor_id == BUILTIN_SOUNDFONT_ID
+        )));
+        assert!(!instruments.iter().any(|choice| matches!(
+            choice,
+            InstrumentChoice::Processor { processor_id, .. } if processor_id == BUILTIN_GAIN_ID
+        )));
+        assert!(effects.iter().any(|choice| matches!(
+            choice,
+            InstrumentChoice::Processor { processor_id, .. } if processor_id == BUILTIN_GAIN_ID
+        )));
+        assert!(!effects.iter().any(|choice| matches!(
+            choice,
+            InstrumentChoice::Processor { processor_id, .. } if processor_id == BUILTIN_SOUNDFONT_ID
+        )));
+    }
+
+    #[test]
+    fn gain_effect_slot_maps_to_effect_choice() {
+        lilypalooza_builtins::register_all();
+
+        assert_eq!(
+            selected_processor_choice(
+                Some(&SlotState::built_in(
+                    BUILTIN_GAIN_ID,
+                    lilypalooza_audio::ProcessorState::default(),
+                )),
+                super::ProcessorSlotRole::Effect,
+            ),
+            Some(InstrumentChoice::Processor {
+                processor_id: BUILTIN_GAIN_ID.to_string(),
+                name: "Gain".to_string(),
+                backend: InstrumentBrowserBackend::BuiltIn,
+            })
+        );
+    }
+
+    #[test]
     fn built_in_browser_entries_filter_by_instrument_name_without_section_headers() {
         let choices = vec![
             InstrumentChoice::None,
@@ -2759,14 +4489,13 @@ mod tests {
     fn instrument_trigger_label_uses_none_and_truncates_long_names() {
         assert_eq!(instrument_trigger_label(None), "Empty");
 
-        assert_eq!(
-            instrument_trigger_label(Some(&InstrumentChoice::Processor {
-                processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
-                name: "Extremely Long SoundFont Synth Name".to_string(),
-                backend: InstrumentBrowserBackend::BuiltIn,
-            })),
-            "Extre… Name"
-        );
+        let label = instrument_trigger_label(Some(&InstrumentChoice::Processor {
+            processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
+            name: "Extremely Long SoundFont Synth Name".to_string(),
+            backend: InstrumentBrowserBackend::BuiltIn,
+        }));
+        assert!(label.chars().count() <= super::PROCESSOR_SLOT_LABEL_MAX_LEN);
+        assert_ne!(label, "Extremely Long SoundFont Synth Name");
     }
 
     #[test]
@@ -2801,8 +4530,8 @@ mod tests {
         assert!(matches!(
             instrument_slot_primary_action(2, Some(&InstrumentChoice::None), false, true),
             Some(crate::app::messages::Message::Mixer(
-                crate::app::messages::MixerMessage::ToggleTrackInstrumentBrowser(2)
-            ))
+                crate::app::messages::MixerMessage::ToggleProcessorBrowser(target)
+            )) if target.strip_index == 3 && target.slot_index == 0
         ));
         assert!(
             instrument_slot_primary_action(
@@ -2936,11 +4665,14 @@ mod tests {
             name: "Track".to_string(),
             selected: Some(InstrumentChoice::None),
             editor_enabled: false,
+            effects: Vec::new(),
+            hovered_processor_slot: None,
             color_bits: color_bits(iced::Color::from_rgb(0.1, 0.2, 0.3)),
             gain_bits: 0.0f32.to_bits(),
             pan_bits: 0.0f32.to_bits(),
             meter: MeterDependency::from_snapshot(StripMeterSnapshot::default()),
             compact_gain: false,
+            effect_rack_open: false,
             strip_height_bits: 140.0f32.to_bits(),
             soloed: false,
             muted: false,
@@ -2956,5 +4688,52 @@ mod tests {
         };
 
         assert_ne!(base, tinted);
+    }
+
+    #[test]
+    fn strip_lazy_dependencies_include_panel_open_state() {
+        let master_closed = super::MainStripDependency {
+            gain_bits: 0.0f32.to_bits(),
+            pan_bits: 0.0f32.to_bits(),
+            meter: MeterDependency::from_snapshot(StripMeterSnapshot::default()),
+            compact_gain: false,
+            effect_rack_open: false,
+            panel_has_content: false,
+            strip_height_bits: 240.0f32.to_bits(),
+        };
+        let master_open = super::MainStripDependency {
+            effect_rack_open: true,
+            ..master_closed.clone()
+        };
+
+        let track_closed = TrackStripDependency {
+            index: 0,
+            name: "Track".to_string(),
+            selected: Some(InstrumentChoice::None),
+            editor_enabled: false,
+            effects: Vec::new(),
+            hovered_processor_slot: None,
+            color_bits: color_bits(iced::Color::from_rgb(0.1, 0.2, 0.3)),
+            gain_bits: 0.0f32.to_bits(),
+            pan_bits: 0.0f32.to_bits(),
+            meter: MeterDependency::from_snapshot(StripMeterSnapshot::default()),
+            compact_gain: false,
+            effect_rack_open: false,
+            strip_height_bits: 240.0f32.to_bits(),
+            soloed: false,
+            muted: false,
+            tint_enabled: false,
+            highlighted: false,
+            renaming: false,
+            rename_value: String::new(),
+            color_picker_open: false,
+        };
+        let track_open = TrackStripDependency {
+            effect_rack_open: true,
+            ..track_closed.clone()
+        };
+
+        assert_ne!(master_closed, master_open);
+        assert_ne!(track_closed, track_open);
     }
 }

@@ -2,7 +2,9 @@ use iced::widget::svg;
 
 const ARROW_LEFT: &[u8] = include_bytes!("../assets/icons/arrow-left.svg");
 const ARROW_RIGHT: &[u8] = include_bytes!("../assets/icons/arrow-right.svg");
+const AUDIO_WAVEFORM: &[u8] = include_bytes!("../assets/icons/audio-waveform.svg");
 const BRUSH_CLEANING: &[u8] = include_bytes!("../assets/icons/brush-cleaning.svg");
+const CABLE: &[u8] = include_bytes!("../assets/icons/cable.svg");
 const CHEVRON_RIGHT: &[u8] = include_bytes!("../assets/icons/chevron-right.svg");
 const CHEVRON_DOWN: &[u8] = include_bytes!("../assets/icons/chevron-down.svg");
 const CIRCLE_ALERT: &[u8] = include_bytes!("../assets/icons/circle-alert.svg");
@@ -25,7 +27,10 @@ const KEYBOARD_MUSIC: &[u8] = include_bytes!("../assets/icons/keyboard-music.svg
 const HAT_GLASSES: &[u8] = include_bytes!("../assets/icons/hat-glasses.svg");
 const INFO: &[u8] = include_bytes!("../assets/icons/info.svg");
 const LIST_MUSIC: &[u8] = include_bytes!("../assets/icons/list-music.svg");
+const LIST_TREE: &[u8] = include_bytes!("../assets/icons/list-tree.svg");
 const PENCIL: &[u8] = include_bytes!("../assets/icons/pencil.svg");
+const POWER: &[u8] = include_bytes!("../assets/icons/power.svg");
+const POWER_OFF: &[u8] = include_bytes!("../assets/icons/power-off.svg");
 const SCROLL_TEXT: &[u8] = include_bytes!("../assets/icons/scroll-text.svg");
 const SKIP_BACK: &[u8] = include_bytes!("../assets/icons/skip-back.svg");
 const SLIDERS_VERTICAL: &[u8] = include_bytes!("../assets/icons/sliders-vertical.svg");
@@ -44,8 +49,16 @@ pub(crate) fn arrow_right() -> svg::Handle {
     svg::Handle::from_memory(ARROW_RIGHT)
 }
 
+pub(crate) fn audio_waveform() -> svg::Handle {
+    svg::Handle::from_memory(AUDIO_WAVEFORM)
+}
+
 pub(crate) fn brush_cleaning() -> svg::Handle {
     svg::Handle::from_memory(BRUSH_CLEANING)
+}
+
+pub(crate) fn cable() -> svg::Handle {
+    svg::Handle::from_memory(CABLE)
 }
 
 pub(crate) fn chevron_right() -> svg::Handle {
@@ -136,8 +149,20 @@ pub(crate) fn list_music() -> svg::Handle {
     svg::Handle::from_memory(LIST_MUSIC)
 }
 
+pub(crate) fn list_tree() -> svg::Handle {
+    svg::Handle::from_memory(LIST_TREE)
+}
+
 pub(crate) fn pencil() -> svg::Handle {
     svg::Handle::from_memory(PENCIL)
+}
+
+pub(crate) fn power() -> svg::Handle {
+    svg::Handle::from_memory(POWER)
+}
+
+pub(crate) fn power_off() -> svg::Handle {
+    svg::Handle::from_memory(POWER_OFF)
 }
 
 pub(crate) fn scroll_text() -> svg::Handle {

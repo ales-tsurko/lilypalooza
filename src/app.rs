@@ -1037,6 +1037,7 @@ struct Lilypalooza {
     mixer_instrument_viewport_width: f32,
     mixer_bus_scroll_x: f32,
     mixer_bus_viewport_width: f32,
+    open_mixer_effect_rack_tracks: Vec<usize>,
     editor_tabbar_autoscroll_direction: i8,
     editor_tabbar_drag_pointer_x: Option<f32>,
     pending_reveal_editor_tab: Option<u64>,
@@ -1051,6 +1052,12 @@ struct Lilypalooza {
     track_rename_color_picker_open: bool,
     track_rename_color_value: Color,
     selected_track_index: Option<usize>,
+    open_processor_browser_target: Option<processor_editor_windows::EditorTarget>,
+    hovered_processor_slot: Option<(
+        processor_editor_windows::EditorTarget,
+        mixer::ProcessorSlotSegment,
+    )>,
+    effect_drag_source: Option<(usize, usize)>,
     open_instrument_browser_track: Option<usize>,
     instrument_browser_backend: mixer::InstrumentBrowserBackend,
     instrument_browser_search: String,
@@ -1607,6 +1614,7 @@ fn new_with_loaded_state(
         mixer_instrument_viewport_width: 0.0,
         mixer_bus_scroll_x: 0.0,
         mixer_bus_viewport_width: 0.0,
+        open_mixer_effect_rack_tracks: Vec::new(),
         editor_tabbar_autoscroll_direction: 0,
         editor_tabbar_drag_pointer_x: None,
         pending_reveal_editor_tab: None,
@@ -1621,6 +1629,9 @@ fn new_with_loaded_state(
         track_rename_color_picker_open: false,
         track_rename_color_value,
         selected_track_index: None,
+        open_processor_browser_target: None,
+        hovered_processor_slot: None,
+        effect_drag_source: None,
         open_instrument_browser_track: None,
         instrument_browser_backend: mixer::InstrumentBrowserBackend::BuiltIn,
         instrument_browser_search: String::new(),
@@ -2815,14 +2826,17 @@ mod tests {
     #[test]
     fn instrument_browser_escape_closes_menu() {
         let mut app = test_editor_app();
-        app.open_instrument_browser_track = Some(0);
+        app.open_processor_browser_target = Some(super::processor_editor_windows::EditorTarget {
+            strip_index: 1,
+            slot_index: 0,
+        });
 
         let _ = update(
             &mut app,
             named_key_press(keyboard::key::Named::Escape, keyboard::key::Code::Escape),
         );
 
-        assert_eq!(app.open_instrument_browser_track, None);
+        assert_eq!(app.open_processor_browser_target, None);
     }
 
     #[test]

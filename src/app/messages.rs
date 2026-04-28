@@ -9,7 +9,7 @@ use iced_code_editor::Message as EditorWidgetMessage;
 use iced_core::image;
 
 use super::{
-    EditorFileMenuSection, EditorHeaderMenuSection, ProjectMenuSection, WorkspacePaneKind,
+    EditorFileMenuSection, EditorHeaderMenuSection, ProjectMenuSection, WorkspacePaneKind, mixer,
 };
 #[derive(Debug, Clone)]
 pub(super) enum Message {
@@ -276,10 +276,48 @@ pub(super) enum MixerMessage {
     CancelTrackRename,
     ToggleTrackMute(usize),
     ToggleTrackSolo(usize),
+    ToggleProcessorBrowser(super::processor_editor_windows::EditorTarget),
+    CloseProcessorBrowser,
+    ProcessorBrowserSearchChanged(String),
+    SelectProcessorBrowserBackend(super::mixer::ProcessorBrowserBackend),
+    ToggleMixerEffectRack(usize),
+    SelectProcessor(
+        super::processor_editor_windows::EditorTarget,
+        super::mixer::ProcessorChoice,
+    ),
+    SetProcessorSlotHovered(
+        Option<(
+            super::processor_editor_windows::EditorTarget,
+            mixer::ProcessorSlotSegment,
+        )>,
+    ),
+    ToggleSlotBypass(super::processor_editor_windows::EditorTarget),
+    StartTrackEffectDrag {
+        strip_index: usize,
+        effect_index: usize,
+    },
+    DropTrackEffect {
+        strip_index: usize,
+        effect_index: usize,
+    },
+    TrackEffectDragMoved {
+        strip_index: usize,
+        y: f32,
+    },
+    MoveTrackEffect {
+        strip_index: usize,
+        from_effect_index: usize,
+        to_effect_index: usize,
+    },
+    #[allow(dead_code)]
     ToggleTrackInstrumentBrowser(usize),
+    #[allow(dead_code)]
     CloseTrackInstrumentBrowser,
+    #[allow(dead_code)]
     InstrumentBrowserSearchChanged(String),
+    #[allow(dead_code)]
     SelectInstrumentBrowserBackend(super::mixer::InstrumentBrowserBackend),
+    #[allow(dead_code)]
     SelectTrackInstrument(usize, super::mixer::InstrumentChoice),
     #[allow(dead_code)]
     OpenEditor(super::processor_editor_windows::EditorTarget),

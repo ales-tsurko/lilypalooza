@@ -20,6 +20,25 @@ impl Lilypalooza {
             .push(format!("Processor editor {action} failed: {error}"));
     }
 
+    fn toggle_processor_browser(&mut self, target: EditorTarget) -> Task<Message> {
+        if self.open_processor_browser_target == Some(target) {
+            self.close_processor_browser();
+            return Task::none();
+        }
+        self.open_processor_browser_target = Some(target);
+        self.open_instrument_browser_track =
+            (target.slot_index == 0 && target.strip_index > 0).then(|| target.strip_index - 1);
+        self.instrument_browser_backend = super::super::mixer::ProcessorBrowserBackend::BuiltIn;
+        self.instrument_browser_search.clear();
+        iced::widget::operation::focus(self.instrument_browser_search_input_id.clone())
+    }
+
+    fn close_processor_browser(&mut self) {
+        self.open_processor_browser_target = None;
+        self.open_instrument_browser_track = None;
+        self.instrument_browser_search.clear();
+    }
+
     pub(in crate::app) fn destroy_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
         let Some((window_id, mut session)) = self.processor_editor_windows.remove_target(target)
         else {
@@ -297,21 +316,100 @@ impl Lilypalooza {
                     super::track_selection::TrackSelectionOrigin::Mixer,
                 );
             }
-            MixerMessage::ToggleTrackInstrumentBrowser(track_index) => {
-                if self.open_instrument_browser_track == Some(track_index) {
-                    self.close_track_instrument_browser();
+            MixerMessage::ToggleProcessorBrowser(target) => {
+                return self.toggle_processor_browser(target);
+            }
+            MixerMessage::CloseProcessorBrowser => {
+                self.close_processor_browser();
+                return Task::none();
+            }
+            MixerMessage::ProcessorBrowserSearchChanged(value) => {
+                self.instrument_browser_search = value;
+                return Task::none();
+            }
+            MixerMessage::SelectProcessorBrowserBackend(backend) => {
+                self.instrument_browser_backend = backend;
+                return Task::none();
+            }
+            MixerMessage::ToggleMixerEffectRack(strip_index) => {
+                if let Some(index) = self
+                    .open_mixer_effect_rack_tracks
+                    .iter()
+                    .position(|open_strip| *open_strip == strip_index)
+                {
+                    self.open_mixer_effect_rack_tracks.remove(index);
+                } else {
+                    self.open_mixer_effect_rack_tracks.push(strip_index);
+                    self.open_mixer_effect_rack_tracks.sort_unstable();
+                    self.open_mixer_effect_rack_tracks.dedup();
+                }
+                return Task::none();
+            }
+            MixerMessage::SetProcessorSlotHovered(target) => {
+                self.hovered_processor_slot = target;
+                return Task::none();
+            }
+            MixerMessage::StartTrackEffectDrag {
+                strip_index,
+                effect_index,
+            } => {
+                self.effect_drag_source = Some((strip_index, effect_index));
+                return Task::none();
+            }
+            MixerMessage::DropTrackEffect {
+                strip_index,
+                effect_index,
+            } => {
+                let Some((from_strip_index, from_effect_index)) = self.effect_drag_source.take()
+                else {
+                    return Task::none();
+                };
+                if from_strip_index != strip_index || from_effect_index == effect_index {
                     return Task::none();
                 }
-                self.open_instrument_browser_track = Some(track_index);
-                self.instrument_browser_backend =
-                    super::super::mixer::InstrumentBrowserBackend::BuiltIn;
-                self.instrument_browser_search.clear();
-                return iced::widget::operation::focus(
-                    self.instrument_browser_search_input_id.clone(),
-                );
+                return self.handle_mixer_message(MixerMessage::MoveTrackEffect {
+                    strip_index,
+                    from_effect_index,
+                    to_effect_index: effect_index,
+                });
+            }
+            MixerMessage::TrackEffectDragMoved { strip_index, y } => {
+                let Some((from_strip_index, _)) = self.effect_drag_source else {
+                    return Task::none();
+                };
+                if from_strip_index != strip_index {
+                    return Task::none();
+                }
+                if y <= super::super::mixer::EFFECT_RACK_EDGE_SCROLL_ZONE {
+                    return iced::widget::operation::scroll_by(
+                        super::super::mixer::effect_rack_scroll_id(strip_index),
+                        iced::widget::operation::AbsoluteOffset {
+                            x: 0.0,
+                            y: -super::super::mixer::EFFECT_RACK_EDGE_SCROLL_STEP,
+                        },
+                    );
+                }
+                if y >= super::super::mixer::EFFECT_RACK_HEIGHT
+                    - super::super::mixer::EFFECT_RACK_EDGE_SCROLL_ZONE
+                {
+                    return iced::widget::operation::scroll_by(
+                        super::super::mixer::effect_rack_scroll_id(strip_index),
+                        iced::widget::operation::AbsoluteOffset {
+                            x: 0.0,
+                            y: super::super::mixer::EFFECT_RACK_EDGE_SCROLL_STEP,
+                        },
+                    );
+                }
+                return Task::none();
+            }
+            MixerMessage::ToggleTrackInstrumentBrowser(track_index) => {
+                return self.toggle_processor_browser(EditorTarget {
+                    strip_index: track_index + 1,
+                    slot_index: 0,
+                });
             }
             MixerMessage::CloseTrackInstrumentBrowser => {
-                self.close_track_instrument_browser();
+                self.close_processor_browser();
                 return Task::none();
             }
             MixerMessage::InstrumentBrowserSearchChanged(value) => {
@@ -363,8 +461,11 @@ impl Lilypalooza {
             _ => {}
         }
 
-        if matches!(message, MixerMessage::SelectTrackInstrument(_, _)) {
-            self.close_track_instrument_browser();
+        if matches!(
+            message,
+            MixerMessage::SelectTrackInstrument(_, _) | MixerMessage::SelectProcessor(_, _)
+        ) {
+            self.close_processor_browser();
         }
 
         let editor_cleanup = match &message {
@@ -375,6 +476,7 @@ impl Lilypalooza {
                     slot_index: 0,
                 })
             }
+            MixerMessage::SelectProcessor(target, _) => self.destroy_editor_target(*target),
             _ => Task::none(),
         };
 
@@ -476,6 +578,114 @@ impl Lilypalooza {
                         });
                     }
                 }
+                MixerMessage::SelectProcessor(target, choice) => {
+                    if target.slot_index == 0 {
+                        if target.strip_index == 0 || target.strip_index > mixer.track_count() {
+                            return Task::none();
+                        }
+                        let track_id = TrackId((target.strip_index - 1) as u16);
+                        let open_editor_after_select = matches!(
+                            &choice,
+                            super::super::mixer::ProcessorChoice::Processor { .. }
+                        );
+                        let slot = match choice {
+                            super::super::mixer::ProcessorChoice::None => SlotState::default(),
+                            super::super::mixer::ProcessorChoice::Processor {
+                                ref processor_id,
+                                ..
+                            } => default_track_instrument_slot(&mixer, track_id, processor_id),
+                        };
+                        if let Err(error) = mixer.set_track_instrument(track_id, slot) {
+                            mixer_error = Some(error.to_string());
+                        } else if open_editor_after_select {
+                            editor_target_to_open = Some(target);
+                        }
+                    } else {
+                        let effect_index = target.slot_index - 1;
+                        let Some(strip) = mixer.strip_by_index(target.strip_index) else {
+                            return Task::none();
+                        };
+                        let bus_id = strip.bus_id;
+                        let mut effects = strip.effects().to_vec();
+                        match choice {
+                            super::super::mixer::ProcessorChoice::None => {
+                                if effect_index < effects.len() {
+                                    effects.remove(effect_index);
+                                }
+                            }
+                            super::super::mixer::ProcessorChoice::Processor {
+                                ref processor_id,
+                                ..
+                            } => {
+                                let slot = SlotState::built_in(
+                                    processor_id,
+                                    lilypalooza_audio::ProcessorState::default(),
+                                );
+                                if effect_index < effects.len() {
+                                    effects[effect_index] = slot;
+                                } else {
+                                    effects.push(slot);
+                                }
+                                editor_target_to_open = Some(target);
+                            }
+                        }
+                        let result = if target.strip_index == 0 {
+                            mixer.set_master_effects(effects)
+                        } else if target.strip_index <= mixer.track_count() {
+                            mixer.set_track_effects(
+                                TrackId((target.strip_index - 1) as u16),
+                                effects,
+                            )
+                        } else if let Some(bus_id) = bus_id {
+                            mixer.set_bus_effects(bus_id, effects)
+                        } else {
+                            return Task::none();
+                        };
+                        if let Err(error) = result {
+                            mixer_error = Some(error.to_string());
+                        }
+                    }
+                }
+                MixerMessage::ToggleSlotBypass(target) => {
+                    let address = lilypalooza_audio::SlotAddress {
+                        strip_index: target.strip_index,
+                        slot_index: target.slot_index,
+                    };
+                    let next = mixer
+                        .slot(address)
+                        .map(|slot| !slot.bypassed)
+                        .unwrap_or(false);
+                    if let Err(error) = mixer.set_slot_bypassed(address, next) {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
+                MixerMessage::MoveTrackEffect {
+                    strip_index,
+                    from_effect_index,
+                    to_effect_index,
+                } => {
+                    let Some(strip) = mixer.strip_by_index(strip_index) else {
+                        return Task::none();
+                    };
+                    let bus_id = strip.bus_id;
+                    let mut effects = strip.effects().to_vec();
+                    if from_effect_index < effects.len() && to_effect_index < effects.len() {
+                        let effect = effects.remove(from_effect_index);
+                        effects.insert(to_effect_index, effect);
+                        let result = if strip_index == 0 {
+                            mixer.set_master_effects(effects)
+                        } else if strip_index <= mixer.track_count() {
+                            mixer.set_track_effects(TrackId((strip_index - 1) as u16), effects)
+                        } else if let Some(bus_id) = bus_id {
+                            mixer.set_bus_effects(bus_id, effects)
+                        } else {
+                            return Task::none();
+                        };
+                        if let Err(error) = result {
+                            mixer_error = Some(error.to_string());
+                        }
+                    }
+                }
                 MixerMessage::ResetBusMeter(id) => {
                     if let Err(error) = mixer.reset_bus_meter(BusId(id)) {
                         mixer_error = Some(error.to_string());
@@ -514,6 +724,15 @@ impl Lilypalooza {
                 }
                 MixerMessage::SelectTrack(_) => {}
                 MixerMessage::StartTrackRename(_)
+                | MixerMessage::ToggleProcessorBrowser(_)
+                | MixerMessage::CloseProcessorBrowser
+                | MixerMessage::ProcessorBrowserSearchChanged(_)
+                | MixerMessage::SelectProcessorBrowserBackend(_)
+                | MixerMessage::ToggleMixerEffectRack(_)
+                | MixerMessage::SetProcessorSlotHovered(_)
+                | MixerMessage::StartTrackEffectDrag { .. }
+                | MixerMessage::DropTrackEffect { .. }
+                | MixerMessage::TrackEffectDragMoved { .. }
                 | MixerMessage::ToggleTrackInstrumentBrowser(_)
                 | MixerMessage::CloseTrackInstrumentBrowser
                 | MixerMessage::InstrumentBrowserSearchChanged(_)
@@ -572,6 +791,15 @@ fn mixer_message_history_mode(
         | MixerMessage::InstrumentViewportScrolled(_)
         | MixerMessage::BusViewportScrolled(_)
         | MixerMessage::OpenTrackColorPicker
+        | MixerMessage::ToggleProcessorBrowser(_)
+        | MixerMessage::CloseProcessorBrowser
+        | MixerMessage::ProcessorBrowserSearchChanged(_)
+        | MixerMessage::SelectProcessorBrowserBackend(_)
+        | MixerMessage::ToggleMixerEffectRack(_)
+        | MixerMessage::SetProcessorSlotHovered(_)
+        | MixerMessage::StartTrackEffectDrag { .. }
+        | MixerMessage::DropTrackEffect { .. }
+        | MixerMessage::TrackEffectDragMoved { .. }
         | MixerMessage::ToggleTrackInstrumentBrowser(_)
         | MixerMessage::CloseTrackInstrumentBrowser
         | MixerMessage::InstrumentBrowserSearchChanged(_)
@@ -601,6 +829,9 @@ fn mixer_message_history_mode(
         | MixerMessage::SubmitTrackColor(_)
         | MixerMessage::ToggleTrackMute(_)
         | MixerMessage::ToggleTrackSolo(_)
+        | MixerMessage::SelectProcessor(_, _)
+        | MixerMessage::ToggleSlotBypass(_)
+        | MixerMessage::MoveTrackEffect { .. }
         | MixerMessage::SelectTrackInstrument(_, _)
         | MixerMessage::ToggleBusMute(_)
         | MixerMessage::ToggleBusSolo(_) => MixerHistoryMode::Immediate,
@@ -619,11 +850,6 @@ impl Lilypalooza {
         }
 
         slot.title(strip_name, slot_index)
-    }
-
-    fn close_track_instrument_browser(&mut self) {
-        self.open_instrument_browser_track = None;
-        self.instrument_browser_search.clear();
     }
 
     fn open_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
@@ -976,7 +1202,7 @@ mod tests {
     use crate::state::ProjectState;
     use lilypalooza_audio::{
         AudioEngine, AudioEngineOptions, BusId, EditorError, EditorParent, EditorSession,
-        EditorSize, MixerState,
+        EditorSize, MixerState, SlotState, TrackId,
     };
     use lilypalooza_builtins::soundfont_synth::{self, SoundfontProcessorState};
 
@@ -1082,6 +1308,20 @@ mod tests {
     }
 
     #[test]
+    fn toggle_mixer_effect_rack_opens_and_closes_track_panel() {
+        let mut app = test_app();
+
+        let _ = app.handle_mixer_message(MixerMessage::ToggleMixerEffectRack(3));
+        assert_eq!(app.open_mixer_effect_rack_tracks, vec![3]);
+
+        let _ = app.handle_mixer_message(MixerMessage::ToggleMixerEffectRack(5));
+        assert_eq!(app.open_mixer_effect_rack_tracks, vec![3, 5]);
+
+        let _ = app.handle_mixer_message(MixerMessage::ToggleMixerEffectRack(3));
+        assert_eq!(app.open_mixer_effect_rack_tracks, vec![5]);
+    }
+
+    #[test]
     fn track_rename_commits_on_focus_loss() {
         let mut app = test_app();
         app.renaming_target = Some(RenameTarget::Track(0));
@@ -1151,6 +1391,13 @@ mod tests {
 
         assert_eq!(app.open_instrument_browser_track, Some(3));
         assert_eq!(
+            app.open_processor_browser_target,
+            Some(EditorTarget {
+                strip_index: 4,
+                slot_index: 0,
+            })
+        );
+        assert_eq!(
             app.instrument_browser_backend,
             crate::app::mixer::InstrumentBrowserBackend::BuiltIn
         );
@@ -1158,6 +1405,21 @@ mod tests {
 
         let _ = app.handle_mixer_message(MixerMessage::ToggleTrackInstrumentBrowser(3));
 
+        assert_eq!(app.open_instrument_browser_track, None);
+        assert_eq!(app.open_processor_browser_target, None);
+    }
+
+    #[test]
+    fn processor_browser_opens_for_master_effect_without_track_underflow() {
+        let mut app = test_app();
+        let target = EditorTarget {
+            strip_index: 0,
+            slot_index: 1,
+        };
+
+        let _ = app.handle_mixer_message(MixerMessage::ToggleProcessorBrowser(target));
+
+        assert_eq!(app.open_processor_browser_target, Some(target));
         assert_eq!(app.open_instrument_browser_track, None);
     }
 
@@ -1168,6 +1430,10 @@ mod tests {
             AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
                 .expect("test audio engine should start"),
         );
+        app.open_processor_browser_target = Some(EditorTarget {
+            strip_index: 1,
+            slot_index: 0,
+        });
         app.open_instrument_browser_track = Some(0);
         app.instrument_browser_search = "piano".into();
 
@@ -1177,7 +1443,236 @@ mod tests {
         ));
 
         assert_eq!(app.open_instrument_browser_track, None);
+        assert_eq!(app.open_processor_browser_target, None);
         assert!(app.instrument_browser_search.is_empty());
+    }
+
+    #[test]
+    fn selecting_track_effect_adds_effect_slot() {
+        lilypalooza_builtins::register_all();
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+
+        let _ = app.handle_mixer_message(MixerMessage::SelectProcessor(
+            EditorTarget {
+                strip_index: 1,
+                slot_index: 1,
+            },
+            crate::app::mixer::ProcessorChoice::Processor {
+                processor_id: lilypalooza_audio::BUILTIN_GAIN_ID.to_string(),
+                name: "Gain".to_string(),
+                backend: crate::app::mixer::ProcessorBrowserBackend::BuiltIn,
+            },
+        ));
+
+        let track = app
+            .playback
+            .as_ref()
+            .expect("playback should exist")
+            .mixer_state()
+            .track(TrackId(0))
+            .expect("track should exist");
+        assert_eq!(track.effect_count(), 1);
+        assert!(matches!(
+            &track.effect(0).expect("effect slot should exist").kind,
+            lilypalooza_audio::ProcessorKind::BuiltIn { processor_id }
+                if processor_id == lilypalooza_audio::BUILTIN_GAIN_ID
+        ));
+    }
+
+    #[test]
+    fn selecting_master_effect_adds_effect_slot() {
+        lilypalooza_builtins::register_all();
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+
+        let _ = app.handle_mixer_message(MixerMessage::SelectProcessor(
+            EditorTarget {
+                strip_index: 0,
+                slot_index: 1,
+            },
+            crate::app::mixer::ProcessorChoice::Processor {
+                processor_id: lilypalooza_audio::BUILTIN_GAIN_ID.to_string(),
+                name: "Gain".to_string(),
+                backend: crate::app::mixer::ProcessorBrowserBackend::BuiltIn,
+            },
+        ));
+
+        assert_eq!(
+            app.playback
+                .as_ref()
+                .expect("playback should exist")
+                .mixer_state()
+                .master()
+                .effect_count(),
+            1
+        );
+    }
+
+    #[test]
+    fn selecting_bus_effect_adds_effect_slot() {
+        lilypalooza_builtins::register_all();
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+        let bus_strip_index = {
+            let mixer = app
+                .playback
+                .as_ref()
+                .expect("playback should exist")
+                .mixer_state();
+            1 + mixer.track_count()
+        };
+
+        let _ = app.handle_mixer_message(MixerMessage::SelectProcessor(
+            EditorTarget {
+                strip_index: bus_strip_index,
+                slot_index: 1,
+            },
+            crate::app::mixer::ProcessorChoice::Processor {
+                processor_id: lilypalooza_audio::BUILTIN_GAIN_ID.to_string(),
+                name: "Gain".to_string(),
+                backend: crate::app::mixer::ProcessorBrowserBackend::BuiltIn,
+            },
+        ));
+
+        assert_eq!(
+            app.playback
+                .as_ref()
+                .expect("playback should exist")
+                .mixer_state()
+                .buses()
+                .first()
+                .expect("bus should exist")
+                .effect_count(),
+            1
+        );
+    }
+
+    #[test]
+    fn toggling_effect_slot_bypass_updates_slot_state() {
+        lilypalooza_builtins::register_all();
+        let mut app = test_app();
+        let mut playback =
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start");
+        playback
+            .mixer()
+            .set_track_effects(
+                TrackId(0),
+                vec![SlotState::built_in(
+                    lilypalooza_audio::BUILTIN_GAIN_ID,
+                    lilypalooza_audio::ProcessorState::default(),
+                )],
+            )
+            .expect("effect should be installed");
+        app.playback = Some(playback);
+
+        let _ = app.handle_mixer_message(MixerMessage::ToggleSlotBypass(EditorTarget {
+            strip_index: 1,
+            slot_index: 1,
+        }));
+
+        assert!(
+            app.playback
+                .as_ref()
+                .expect("playback should exist")
+                .mixer_state()
+                .track(TrackId(0))
+                .expect("track should exist")
+                .effect(0)
+                .expect("effect should exist")
+                .bypassed
+        );
+    }
+
+    #[test]
+    fn moving_track_effect_reorders_effect_slots() {
+        lilypalooza_builtins::register_all();
+        let mut app = test_app();
+        let mut playback =
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start");
+        let first = SlotState::built_in(
+            lilypalooza_audio::BUILTIN_GAIN_ID,
+            lilypalooza_audio::ProcessorState(vec![1]),
+        );
+        let second = SlotState::built_in(
+            lilypalooza_audio::BUILTIN_GAIN_ID,
+            lilypalooza_audio::ProcessorState(vec![2]),
+        );
+        playback
+            .mixer()
+            .set_track_effects(TrackId(0), vec![first.clone(), second.clone()])
+            .expect("effects should be installed");
+        app.playback = Some(playback);
+
+        let _ = app.handle_mixer_message(MixerMessage::MoveTrackEffect {
+            strip_index: 1,
+            from_effect_index: 0,
+            to_effect_index: 1,
+        });
+
+        let track = app
+            .playback
+            .as_ref()
+            .expect("playback should exist")
+            .mixer_state()
+            .track(TrackId(0))
+            .expect("track should exist");
+        assert_eq!(track.effect(0), Some(&second));
+        assert_eq!(track.effect(1), Some(&first));
+    }
+
+    #[test]
+    fn dropping_dragged_track_effect_reorders_effect_slots() {
+        lilypalooza_builtins::register_all();
+        let mut app = test_app();
+        let mut playback =
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start");
+        let first = SlotState::built_in(
+            lilypalooza_audio::BUILTIN_GAIN_ID,
+            lilypalooza_audio::ProcessorState(vec![1]),
+        );
+        let second = SlotState::built_in(
+            lilypalooza_audio::BUILTIN_GAIN_ID,
+            lilypalooza_audio::ProcessorState(vec![2]),
+        );
+        playback
+            .mixer()
+            .set_track_effects(TrackId(0), vec![first.clone(), second.clone()])
+            .expect("effects should be installed");
+        app.playback = Some(playback);
+
+        let _ = app.handle_mixer_message(MixerMessage::StartTrackEffectDrag {
+            strip_index: 1,
+            effect_index: 0,
+        });
+        let _ = app.handle_mixer_message(MixerMessage::DropTrackEffect {
+            strip_index: 1,
+            effect_index: 1,
+        });
+
+        let track = app
+            .playback
+            .as_ref()
+            .expect("playback should exist")
+            .mixer_state()
+            .track(TrackId(0))
+            .expect("track should exist");
+        assert_eq!(track.effect(0), Some(&second));
+        assert_eq!(track.effect(1), Some(&first));
+        assert_eq!(app.effect_drag_source, None);
     }
 
     #[test]
