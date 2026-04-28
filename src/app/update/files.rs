@@ -213,6 +213,9 @@ impl Lilypalooza {
         if self.playback.is_some() {
             self.refresh_playback_position();
         }
+        for (target, command) in self.processor_editor_windows.drain_frame_commands() {
+            self.handle_processor_editor_frame_command(target, command);
+        }
         let close_requests = self.processor_editor_windows.close_requested_windows();
         Task::batch(
             close_requests

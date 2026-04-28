@@ -2,10 +2,11 @@
 
 use std::sync::Arc;
 
+pub use baseview::Size;
 use baseview::gl::GlConfig;
 use baseview::{
-    Event, EventStatus, MouseButton, MouseEvent, ScrollDelta, Size, Window, WindowHandle,
-    WindowHandler, WindowInfo, WindowOpenOptions, WindowScalePolicy,
+    Event, EventStatus, MouseButton, MouseEvent, ScrollDelta, Window, WindowHandle, WindowHandler,
+    WindowInfo, WindowOpenOptions, WindowScalePolicy,
 };
 use egui::{Pos2, RawInput, Rect, Vec2};
 use egui_glow::Painter;
@@ -263,7 +264,7 @@ impl<App: EguiApp> WindowHandler for EguiWindow<App> {
                 self.input.focused = false;
             }
             Event::Window(baseview::WindowEvent::WillClose) => {}
-            Event::Mouse(mouse_event) => self.handle_mouse(mouse_event),
+            Event::Mouse(mouse_event) => self.handle_mouse(_window, mouse_event),
             Event::Keyboard(key_event) => {
                 if is_command_quit(&key_event) {
                     return EventStatus::Ignored;
@@ -276,7 +277,7 @@ impl<App: EguiApp> WindowHandler for EguiWindow<App> {
 }
 
 impl<App: EguiApp> EguiWindow<App> {
-    fn handle_mouse(&mut self, event: MouseEvent) {
+    fn handle_mouse(&mut self, window: &mut Window<'_>, event: MouseEvent) {
         match event {
             MouseEvent::CursorMoved { position, .. } => {
                 let pos = Pos2::new(position.x as f32, position.y as f32);
@@ -284,6 +285,8 @@ impl<App: EguiApp> EguiWindow<App> {
                 self.push_event(egui::Event::PointerMoved(pos));
             }
             MouseEvent::ButtonPressed { button, .. } => {
+                window.focus();
+                self.input.focused = true;
                 if let (Some(pos), Some(button)) = (self.pointer_pos, pointer_button(button)) {
                     self.push_event(egui::Event::PointerButton {
                         pos,

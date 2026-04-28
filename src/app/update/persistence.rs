@@ -50,6 +50,7 @@ impl Lilypalooza {
                 .as_ref()
                 .map(|playback| playback.mixer_state().clone())
                 .unwrap_or_else(|| self.project_mixer_state.clone()),
+            processor_presets: self.processor_presets.clone(),
         }
     }
 
@@ -130,6 +131,7 @@ impl Lilypalooza {
         self.instrument_browser_backend = super::super::mixer::InstrumentBrowserBackend::BuiltIn;
         self.metronome = state::MetronomeState::default();
         self.project_mixer_state = lilypalooza_audio::MixerState::new();
+        self.processor_presets = state.processor_presets;
         self.metronome_menu_open = false;
         self.cancel_track_rename();
         self.apply_metronome_state_to_playback();
@@ -174,6 +176,7 @@ impl Lilypalooza {
         self.instrument_browser_backend = super::super::mixer::InstrumentBrowserBackend::BuiltIn;
         self.metronome = state.metronome;
         self.project_mixer_state = state.mixer_state;
+        self.processor_presets = state.processor_presets;
         self.metronome_menu_open = false;
         self.cancel_track_rename();
         self.apply_metronome_state_to_playback();
@@ -342,6 +345,7 @@ impl Lilypalooza {
                 zoom_x: self.piano_roll.zoom_x,
                 beat_subdivision: self.piano_roll.beat_subdivision,
             },
+            processor_presets: self.processor_presets.clone(),
             main_score: self.current_score.as_ref().map(|score| score.path.clone()),
             editor_tabs: self.editor.file_backed_tab_paths(),
             active_editor_tab: self.editor.active_file_backed_tab_path(),

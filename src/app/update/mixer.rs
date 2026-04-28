@@ -1,5 +1,8 @@
-use editor_host::{EditorHostOptions, WindowSnapshot, route_app_quit_to_window_close};
-use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, BusId, SlotState, TrackId};
+use editor_host::{
+    EditorFrameCommand, EditorHostOptions, EditorPresetItem, EditorPresetOrigin, EditorPresetState,
+    WindowSnapshot, route_app_quit_to_window_close,
+};
+use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, BusId, ProcessorKind, SlotState, TrackId};
 use lilypalooza_builtins::soundfont_synth::{self, SoundfontProcessorState};
 
 use super::super::messages::MixerMessage;
@@ -172,6 +175,8 @@ impl Lilypalooza {
                 .attach(window_id, Some(installed_host), parent)
         {
             self.log_processor_editor_error("attach", error);
+        } else if let Some(target) = self.processor_editor_windows.target_for_window(window_id) {
+            self.refresh_editor_preset_state(target, None);
         }
         Task::none()
     }
@@ -702,6 +707,203 @@ impl Lilypalooza {
         );
         open_task.map(|_| Message::Noop)
     }
+
+    pub(in crate::app) fn handle_processor_editor_frame_command(
+        &mut self,
+        target: EditorTarget,
+        command: EditorFrameCommand,
+    ) {
+        match command {
+            EditorFrameCommand::PreviousPreset => self.step_processor_preset(target, -1),
+            EditorFrameCommand::NextPreset => self.step_processor_preset(target, 1),
+            EditorFrameCommand::LoadPreset(id) => self.load_processor_preset_for_target(target, id),
+            EditorFrameCommand::RenamePreset { id, name } => {
+                self.rename_processor_preset_for_target(target, id, name);
+            }
+            EditorFrameCommand::DeletePreset(id) => {
+                self.delete_processor_preset_for_target(target, id);
+            }
+            EditorFrameCommand::SavePreset => self.save_processor_preset_from_target(target),
+            EditorFrameCommand::TogglePresetBrowser => {
+                self.expanded_processor_preset_browser =
+                    (self.expanded_processor_preset_browser != Some(target)).then_some(target);
+                let selected_id = self
+                    .processor_editor_windows
+                    .preset_state(target)
+                    .and_then(|state| state.selected_id);
+                self.refresh_editor_preset_state(target, selected_id);
+            }
+        }
+    }
+
+    fn processor_kind_for_target(&self, target: EditorTarget) -> Option<ProcessorKind> {
+        self.playback
+            .as_ref()
+            .and_then(|playback| {
+                playback
+                    .mixer_state()
+                    .strip_by_index(target.strip_index)
+                    .and_then(|strip| strip.slot(target.slot_index))
+            })
+            .map(|slot| slot.kind.clone())
+    }
+
+    fn refresh_editor_preset_state(&mut self, target: EditorTarget, selected_id: Option<String>) {
+        let Some(kind) = self.processor_kind_for_target(target) else {
+            self.processor_editor_windows.set_preset_state(target, None);
+            return;
+        };
+        let items = self
+            .processor_presets
+            .presets_for(&kind)
+            .into_iter()
+            .map(|preset| EditorPresetItem {
+                id: preset.id.clone(),
+                name: preset.name.clone(),
+                origin: EditorPresetOrigin::User,
+            })
+            .collect::<Vec<_>>();
+        let current_name = selected_id
+            .as_deref()
+            .and_then(|id| items.iter().find(|item| item.id == id))
+            .map(|item| item.name.clone())
+            .unwrap_or_else(|| "Preset".to_string());
+        let expanded = self.expanded_processor_preset_browser == Some(target);
+        self.processor_editor_windows.set_preset_state(
+            target,
+            Some(EditorPresetState {
+                current_name,
+                selected_id,
+                expanded,
+                items,
+            }),
+        );
+    }
+
+    fn save_processor_preset_from_target(&mut self, target: EditorTarget) {
+        let Some(playback) = self.playback.as_ref() else {
+            return;
+        };
+        let Some(kind) = self.processor_kind_for_target(target) else {
+            return;
+        };
+        let Ok(Some(controller)) = playback.controller(lilypalooza_audio::SlotAddress {
+            strip_index: target.strip_index,
+            slot_index: target.slot_index,
+        }) else {
+            return;
+        };
+        let Ok(state) = controller.save_state() else {
+            return;
+        };
+        let name = format!(
+            "User Preset {}",
+            self.processor_presets.presets_for(&kind).len() + 1
+        );
+        let id = self.processor_presets.save_user_preset(name, kind, state);
+        self.refresh_editor_preset_state(target, Some(id));
+        self.persist_settings();
+    }
+
+    fn rename_processor_preset_for_target(
+        &mut self,
+        target: EditorTarget,
+        id: String,
+        name: String,
+    ) {
+        let Some(kind) = self.processor_kind_for_target(target) else {
+            return;
+        };
+        if self.processor_presets.rename_user_preset(&kind, &id, name) {
+            self.refresh_editor_preset_state(target, Some(id));
+            self.persist_settings();
+        }
+    }
+
+    fn delete_processor_preset_for_target(&mut self, target: EditorTarget, id: String) {
+        let Some(kind) = self.processor_kind_for_target(target) else {
+            return;
+        };
+        if self.processor_presets.delete_user_preset(&kind, &id) {
+            let selected_id = self
+                .processor_editor_windows
+                .preset_state(target)
+                .and_then(|state| state.selected_id)
+                .filter(|selected| selected != &id);
+            self.refresh_editor_preset_state(target, selected_id);
+            self.persist_settings();
+        }
+    }
+
+    fn load_processor_preset_for_target(&mut self, target: EditorTarget, id: String) {
+        let Some(kind) = self.processor_kind_for_target(target) else {
+            return;
+        };
+        let Some(state) = self.processor_presets.state_for(&kind, &id).cloned() else {
+            return;
+        };
+        let Some(playback) = self.playback.as_mut() else {
+            return;
+        };
+        let Ok(Some(controller)) = playback.controller(lilypalooza_audio::SlotAddress {
+            strip_index: target.strip_index,
+            slot_index: target.slot_index,
+        }) else {
+            return;
+        };
+        if controller.load_state(&state).is_err() {
+            return;
+        }
+        if target.slot_index == 0 && target.strip_index > 0 {
+            let track_id = TrackId((target.strip_index - 1) as u16);
+            let next_slot = playback
+                .mixer_state()
+                .track(track_id)
+                .ok()
+                .and_then(|track| track.instrument_slot())
+                .cloned()
+                .map(|mut slot| {
+                    slot.state = state;
+                    slot
+                });
+            if let Some(slot) = next_slot
+                && playback
+                    .mixer()
+                    .set_track_instrument(track_id, slot)
+                    .is_ok()
+            {
+                self.project_mixer_state = playback.mixer_state().clone();
+            }
+        }
+        self.refresh_editor_preset_state(target, Some(id));
+    }
+
+    fn step_processor_preset(&mut self, target: EditorTarget, direction: isize) {
+        let Some(kind) = self.processor_kind_for_target(target) else {
+            return;
+        };
+        let presets = self.processor_presets.presets_for(&kind);
+        if presets.is_empty() {
+            return;
+        }
+        let current_id = self
+            .processor_editor_windows
+            .preset_state(target)
+            .and_then(|state| state.selected_id);
+        let next_index = current_id
+            .as_deref()
+            .and_then(|id| presets.iter().position(|preset| preset.id == id))
+            .map_or_else(
+                || {
+                    if direction >= 0 { 0 } else { presets.len() - 1 }
+                },
+                |current_index| {
+                    (current_index as isize + direction).rem_euclid(presets.len() as isize) as usize
+                },
+            );
+        let id = presets[next_index].id.clone();
+        self.load_processor_preset_for_target(target, id);
+    }
 }
 
 fn default_track_instrument_slot(
@@ -780,6 +982,7 @@ mod tests {
         AudioEngine, AudioEngineOptions, BusId, EditorError, EditorParent, EditorSession,
         EditorSize, MixerState,
     };
+    use lilypalooza_builtins::soundfont_synth::{self, SoundfontProcessorState};
 
     struct FakeEditorSession;
 
@@ -1006,6 +1209,182 @@ mod tests {
                 })
                 .is_some()
         );
+    }
+
+    fn app_with_soundfont_track() -> (Lilypalooza, EditorTarget) {
+        lilypalooza_builtins::register_all();
+        let mut app = test_app();
+        let mut playback =
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start");
+        playback
+            .mixer()
+            .set_soundfont(lilypalooza_audio::SoundfontResource {
+                id: "default".to_string(),
+                name: "FluidR3".to_string(),
+                path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets/soundfonts/FluidR3_GM.sf2")
+                    .canonicalize()
+                    .expect("test SoundFont should exist"),
+            })
+            .expect("test SoundFont should load");
+        app.playback = Some(playback);
+        let _ = app.handle_mixer_message(MixerMessage::SelectTrackInstrument(
+            0,
+            crate::app::mixer::InstrumentChoice::Processor {
+                processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
+                name: "SF-01".to_string(),
+                backend: crate::app::mixer::InstrumentBrowserBackend::BuiltIn,
+            },
+        ));
+        let temp = tempfile::tempdir().expect("temp project dir should exist");
+        app.project_root = Some(temp.path().to_path_buf());
+        (
+            app,
+            EditorTarget {
+                strip_index: 1,
+                slot_index: 0,
+            },
+        )
+    }
+
+    #[test]
+    fn processor_frame_save_command_creates_user_preset_for_slot() {
+        let (mut app, target) = app_with_soundfont_track();
+
+        app.handle_processor_editor_frame_command(
+            target,
+            editor_host::EditorFrameCommand::SavePreset,
+        );
+
+        let kind = app.processor_kind_for_target(target).expect("slot kind");
+        let presets = app.processor_presets.presets_for(&kind);
+        assert_eq!(presets.len(), 1);
+        assert_eq!(presets[0].name, "User Preset 1");
+    }
+
+    #[test]
+    fn processor_frame_load_command_updates_slot_state() {
+        let (mut app, target) = app_with_soundfont_track();
+        let kind = app.processor_kind_for_target(target).expect("slot kind");
+        let state = soundfont_synth::encode_state(&SoundfontProcessorState {
+            program: 7,
+            output_gain: 0.25,
+            ..SoundfontProcessorState::default()
+        });
+        let id = app
+            .processor_presets
+            .save_user_preset("Muted Piano", kind, state.clone());
+
+        app.handle_processor_editor_frame_command(
+            target,
+            editor_host::EditorFrameCommand::LoadPreset(id),
+        );
+
+        let slot_state = app
+            .playback
+            .as_ref()
+            .expect("playback")
+            .mixer_state()
+            .strip_by_index(target.strip_index)
+            .and_then(|strip| strip.slot(target.slot_index))
+            .map(|slot| slot.state.clone());
+        assert_eq!(slot_state, Some(state));
+    }
+
+    #[test]
+    fn processor_frame_next_from_placeholder_loads_first_preset() {
+        let (mut app, target) = app_with_soundfont_track();
+        let kind = app.processor_kind_for_target(target).expect("slot kind");
+        let first_state = soundfont_synth::encode_state(&SoundfontProcessorState {
+            program: 1,
+            ..SoundfontProcessorState::default()
+        });
+        let second_state = soundfont_synth::encode_state(&SoundfontProcessorState {
+            program: 2,
+            ..SoundfontProcessorState::default()
+        });
+        app.processor_presets
+            .save_user_preset("First", kind.clone(), first_state.clone());
+        app.processor_presets
+            .save_user_preset("Second", kind, second_state);
+        app.refresh_editor_preset_state(target, None);
+
+        app.handle_processor_editor_frame_command(
+            target,
+            editor_host::EditorFrameCommand::NextPreset,
+        );
+
+        let slot_state = app
+            .playback
+            .as_ref()
+            .expect("playback")
+            .mixer_state()
+            .strip_by_index(target.strip_index)
+            .and_then(|strip| strip.slot(target.slot_index))
+            .map(|slot| slot.state.clone());
+        assert_eq!(slot_state, Some(first_state));
+    }
+
+    #[test]
+    fn processor_frame_rename_command_updates_user_preset() {
+        let (mut app, target) = app_with_soundfont_track();
+        let kind = app.processor_kind_for_target(target).expect("slot kind");
+        let id = app.processor_presets.save_user_preset(
+            "Warm Piano",
+            kind.clone(),
+            lilypalooza_audio::ProcessorState(vec![]),
+        );
+
+        app.handle_processor_editor_frame_command(
+            target,
+            editor_host::EditorFrameCommand::RenamePreset {
+                id: id.clone(),
+                name: "Soft Piano".to_string(),
+            },
+        );
+
+        assert_eq!(
+            app.processor_presets.presets_for(&kind)[0].name,
+            "Soft Piano"
+        );
+    }
+
+    #[test]
+    fn processor_frame_delete_command_removes_user_preset() {
+        let (mut app, target) = app_with_soundfont_track();
+        let kind = app.processor_kind_for_target(target).expect("slot kind");
+        let id = app.processor_presets.save_user_preset(
+            "Warm Piano",
+            kind.clone(),
+            lilypalooza_audio::ProcessorState(vec![]),
+        );
+
+        app.handle_processor_editor_frame_command(
+            target,
+            editor_host::EditorFrameCommand::DeletePreset(id),
+        );
+
+        assert!(app.processor_presets.presets_for(&kind).is_empty());
+    }
+
+    #[test]
+    fn processor_frame_toggle_command_tracks_expanded_browser_target() {
+        let (mut app, target) = app_with_soundfont_track();
+
+        app.handle_processor_editor_frame_command(
+            target,
+            editor_host::EditorFrameCommand::TogglePresetBrowser,
+        );
+
+        assert_eq!(app.expanded_processor_preset_browser, Some(target));
+
+        app.handle_processor_editor_frame_command(
+            target,
+            editor_host::EditorFrameCommand::TogglePresetBrowser,
+        );
+
+        assert_eq!(app.expanded_processor_preset_browser, None);
     }
 
     #[test]

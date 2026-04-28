@@ -8,6 +8,7 @@ use lilypalooza_audio::MixerState;
 use ron::ser::PrettyConfig;
 use serde::{Deserialize, Serialize};
 
+use crate::app::processor_presets::ProcessorPresetLibrary;
 use crate::settings::{PianoRollViewSettings, ScoreViewSettings, WorkspaceLayoutSettings};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -41,6 +42,7 @@ pub(crate) struct GlobalState {
     pub(crate) workspace_layout: WorkspaceLayoutSettings,
     pub(crate) score_view: ScoreViewSettings,
     pub(crate) piano_roll_view: PianoRollViewSettings,
+    pub(crate) processor_presets: ProcessorPresetLibrary,
     pub(crate) main_score: Option<PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) editor_tabs: Vec<PathBuf>,
@@ -70,6 +72,7 @@ pub(crate) struct ProjectState {
     pub(crate) track_color_overrides: Vec<Option<TrackColorOverride>>,
     pub(crate) metronome: MetronomeState,
     pub(crate) mixer_state: MixerState,
+    pub(crate) processor_presets: ProcessorPresetLibrary,
 }
 
 pub(crate) fn load_global() -> Result<GlobalState, String> {
@@ -237,7 +240,7 @@ fn global_state_load_path() -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MetronomeState, ProjectState, TrackColorOverride};
+    use super::{GlobalState, MetronomeState, ProjectState, TrackColorOverride};
 
     #[test]
     fn project_state_roundtrip_preserves_track_name_overrides() {
@@ -288,5 +291,25 @@ mod tests {
         let parsed: ProjectState = ron::from_str(&serialized).expect("state should parse");
 
         assert_eq!(parsed.metronome, state.metronome);
+    }
+
+    #[test]
+    fn global_state_roundtrip_preserves_processor_presets() {
+        let mut state = GlobalState::default();
+        let kind = lilypalooza_audio::ProcessorKind::BuiltIn {
+            processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
+        };
+        let preset_state = lilypalooza_audio::ProcessorState(vec![1, 2, 3]);
+        state
+            .processor_presets
+            .save_user_preset("Saved", kind.clone(), preset_state.clone());
+
+        let serialized = ron::to_string(&state).expect("state should serialize");
+        let parsed: GlobalState = ron::from_str(&serialized).expect("state should parse");
+
+        assert_eq!(
+            parsed.processor_presets.presets_for(&kind)[0].state,
+            preset_state
+        );
     }
 }

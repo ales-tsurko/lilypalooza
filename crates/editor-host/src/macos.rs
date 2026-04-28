@@ -14,7 +14,7 @@ use raw_window_handle::RawWindowHandle;
 
 use crate::{
     EditorFrame, EditorHostOptions, Error, InstalledHost, Size, WindowHandleSnapshot,
-    WindowSnapshot, open_egui_frame,
+    WindowSnapshot, host_layout, open_egui_frame,
 };
 
 pub fn prepare_process() -> Result<(), Error> {
@@ -54,7 +54,7 @@ pub fn install_editor_host(
         height: requested_bounds.size.height,
     });
 
-    resize_host_window(&host_window, layout.outer_width, layout.outer_height);
+    resize_host_window_from_top(&host_window, layout.outer_width, layout.outer_height);
     host_view.setFrameSize(NSSize::new(layout.outer_width, layout.outer_height));
     host_window.setOpaque(false);
     host_window.setBackgroundColor(Some(&NSColor::clearColor()));
@@ -88,8 +88,43 @@ pub fn install_editor_host(
         content,
         close_requested: frame_host.close_requested,
         title: frame_host.title,
+        preset_state: frame_host.preset_state,
+        frame_commands: frame_host.frame_commands,
         frame_window: Some(frame_host.window),
+        content_size: Size {
+            width: requested_bounds.size.width,
+            height: requested_bounds.size.height,
+        },
+        frame_thickness: layout.content.x,
     })
+}
+
+pub fn resize_installed_host(
+    host: &WindowSnapshot,
+    content: &WindowSnapshot,
+    content_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+) -> Result<(), Error> {
+    let layout = host_layout(
+        content_size.width,
+        content_size.height,
+        titlebar_height,
+        frame_thickness,
+    );
+    let host_view = ns_view_from_snapshot(host)?;
+    let host_window = host_view
+        .window()
+        .ok_or_else(|| Error::Message("host window is missing".to_string()))?;
+    resize_host_window_from_bottom(&host_window, layout.outer_width, layout.outer_height);
+    host_view.setFrameSize(NSSize::new(layout.outer_width, layout.outer_height));
+
+    let content_view = ns_view_from_snapshot(content)?;
+    content_view.setFrame(ns_rect(content_frame_for_host(
+        layout,
+        host_view.isFlipped(),
+    )));
+    Ok(())
 }
 
 pub fn set_host_window_visible(host: &WindowSnapshot, visible: bool) -> Result<(), Error> {
@@ -229,12 +264,26 @@ pub fn begin_host_window_drag(host: &WindowSnapshot) -> Result<(), Error> {
     Ok(())
 }
 
-fn resize_host_window(window: &NSWindow, width: f64, height: f64) {
-    let mut frame = window.frame();
+fn resize_host_window_from_top(window: &NSWindow, width: f64, height: f64) {
+    let frame = host_window_frame_resized_from_top(window.frame(), width, height);
+    window.setFrame_display(frame, false);
+}
+
+fn resize_host_window_from_bottom(window: &NSWindow, width: f64, height: f64) {
+    let frame = host_window_frame_resized_from_bottom(window.frame(), width, height);
+    window.setFrame_display(frame, false);
+}
+
+fn host_window_frame_resized_from_top(mut frame: NSRect, width: f64, height: f64) -> NSRect {
     let delta_height = height - frame.size.height;
     frame.origin.y -= delta_height;
     frame.size = NSSize::new(width, height);
-    window.setFrame_display(frame, false);
+    frame
+}
+
+fn host_window_frame_resized_from_bottom(mut frame: NSRect, width: f64, height: f64) -> NSRect {
+    frame.size = NSSize::new(width, height);
+    frame
 }
 
 fn build_content_view(frame: crate::Rect, mtm: MainThreadMarker) -> Retained<NSView> {
@@ -292,8 +341,12 @@ fn ns_rect(frame: crate::Rect) -> NSRect {
 #[cfg(test)]
 mod tests {
     use crate::{Rect, host_layout};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
 
-    use super::content_frame_for_host;
+    use super::{
+        content_frame_for_host, host_window_frame_resized_from_bottom,
+        host_window_frame_resized_from_top,
+    };
 
     #[test]
     fn content_frame_uses_bottom_left_coordinates_for_normal_appkit_views() {
@@ -323,5 +376,25 @@ mod tests {
                 height: 456.0,
             }
         );
+    }
+
+    #[test]
+    fn live_resize_grows_host_upward_to_keep_content_position() {
+        let frame = NSRect::new(NSPoint::new(100.0, 200.0), NSSize::new(440.0, 400.0));
+
+        let resized = host_window_frame_resized_from_bottom(frame, 440.0, 500.0);
+
+        assert_eq!(resized.origin.y, 200.0);
+        assert_eq!(resized.size.height, 500.0);
+    }
+
+    #[test]
+    fn initial_resize_keeps_existing_top_anchor() {
+        let frame = NSRect::new(NSPoint::new(100.0, 200.0), NSSize::new(440.0, 400.0));
+
+        let resized = host_window_frame_resized_from_top(frame, 440.0, 500.0);
+
+        assert_eq!(resized.origin.y, 100.0);
+        assert_eq!(resized.size.height, 500.0);
     }
 }

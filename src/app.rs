@@ -43,6 +43,7 @@ mod meters;
 mod mixer;
 mod piano_roll;
 mod processor_editor_windows;
+pub(crate) mod processor_presets;
 mod score_cursor;
 mod score_view;
 mod transport_bar;
@@ -68,13 +69,50 @@ pub(super) const SHORTCUTS_SCROLLABLE_ID: &str = "shortcuts-scrollable";
 pub(super) const TRACK_RENAME_INPUT_ID: &str = "track-rename-input";
 const EDITOR_FRAME_THICKNESS: f64 = 2.0;
 const EDITOR_FRAME_BORDER_WIDTH: f32 = 0.5;
+const EDITOR_FRAME_COMPACT_CHROME_HEIGHT: f64 = 34.0;
+const EDITOR_FRAME_EXPANDED_CHROME_HEIGHT: f64 = 160.0;
+const EDITOR_FRAME_TITLE_ROW_HEIGHT: f32 = 32.0;
+const EDITOR_FRAME_PRESET_ROW_HEIGHT: f32 = 24.0;
+const EDITOR_FRAME_PRESET_BROWSER_HEIGHT: f32 = 116.0;
+const EDITOR_FRAME_ICON_SIZE: f32 = 13.0;
+const EGUI_ICON_CHEVRON_LEFT: &[u8] = include_bytes!("../assets/icons/chevron-left.svg");
+const EGUI_ICON_CHEVRON_RIGHT: &[u8] = include_bytes!("../assets/icons/chevron-right.svg");
+const EGUI_ICON_CHEVRON_DOWN: &[u8] = include_bytes!("../assets/icons/chevron-down.svg");
+const EGUI_ICON_CHEVRON_UP: &[u8] = include_bytes!("../assets/icons/chevron-up.svg");
+const EGUI_ICON_PENCIL: &[u8] = include_bytes!("../assets/icons/pencil.svg");
+const EGUI_ICON_SAVE: &[u8] = include_bytes!("../assets/icons/save.svg");
+const EGUI_ICON_TRASH: &[u8] = include_bytes!("../assets/icons/trash-2.svg");
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(super) struct AppEditorFrame {
     titlebar_height: f64,
     frame_thickness: f64,
     border_width: f32,
+    renaming_preset_id: Option<String>,
+    renaming_preset_value: String,
+    rename_focus_requested: bool,
+    delete_confirmation_preset_id: Option<String>,
+    icon_textures: HashMap<AppEditorFrameIcon, editor_host::egui::TextureHandle>,
     style: AppEditorFrameStyle,
+}
+
+impl std::fmt::Debug for AppEditorFrame {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AppEditorFrame")
+            .field("titlebar_height", &self.titlebar_height)
+            .field("frame_thickness", &self.frame_thickness)
+            .field("border_width", &self.border_width)
+            .field("renaming_preset_id", &self.renaming_preset_id)
+            .field("renaming_preset_value", &self.renaming_preset_value)
+            .field("rename_focus_requested", &self.rename_focus_requested)
+            .field(
+                "delete_confirmation_preset_id",
+                &self.delete_confirmation_preset_id,
+            )
+            .field("style", &self.style)
+            .finish()
+    }
 }
 
 impl Default for AppEditorFrame {
@@ -86,12 +124,28 @@ impl Default for AppEditorFrame {
 impl AppEditorFrame {
     pub(super) fn from_theme(theme: &iced::Theme) -> Self {
         Self {
-            titlebar_height: 30.0,
+            titlebar_height: EDITOR_FRAME_COMPACT_CHROME_HEIGHT,
             frame_thickness: EDITOR_FRAME_THICKNESS,
             border_width: EDITOR_FRAME_BORDER_WIDTH,
+            renaming_preset_id: None,
+            renaming_preset_value: String::new(),
+            rename_focus_requested: false,
+            delete_confirmation_preset_id: None,
+            icon_textures: HashMap::new(),
             style: AppEditorFrameStyle::from_theme(theme),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AppEditorFramePresetLayout {
+    title_row: editor_host::egui::Rect,
+    title_text: editor_host::egui::Rect,
+    preset_row: editor_host::egui::Rect,
+    previous: editor_host::egui::Rect,
+    name: editor_host::egui::Rect,
+    next: editor_host::egui::Rect,
+    browser: editor_host::egui::Rect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +158,10 @@ struct AppEditorFrameStyle {
     close_background_hovered: editor_host::egui::Color32,
     close_icon: editor_host::egui::Color32,
     close_icon_hovered: editor_host::egui::Color32,
+    control_background: editor_host::egui::Color32,
+    control_background_hovered: editor_host::egui::Color32,
+    control_background_active: editor_host::egui::Color32,
+    muted_text: editor_host::egui::Color32,
 }
 
 impl AppEditorFrameStyle {
@@ -120,6 +178,13 @@ impl AppEditorFrameStyle {
             palette.background.weak.color,
             0.12,
         );
+        let control = mix_iced_color(
+            palette.background.base.color,
+            palette.background.weak.color,
+            0.50,
+        );
+        let control_hovered = mix_iced_color(control, palette.primary.weak.color, 0.20);
+        let control_active = mix_iced_color(control, palette.primary.weak.color, 0.32);
 
         Self {
             frame_color: egui_color(palette.background.base.color),
@@ -130,6 +195,35 @@ impl AppEditorFrameStyle {
             close_background_hovered: egui_color(palette.background.base.color),
             close_icon: egui_color(close_icon),
             close_icon_hovered: egui_color(palette.background.base.text),
+            control_background: egui_color(control),
+            control_background_hovered: egui_color(control_hovered),
+            control_background_active: egui_color(control_active),
+            muted_text: egui_color(palette.background.weak.text),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum AppEditorFrameIcon {
+    ChevronLeft,
+    ChevronRight,
+    ChevronDown,
+    ChevronUp,
+    Pencil,
+    Save,
+    Trash,
+}
+
+impl AppEditorFrameIcon {
+    fn svg_bytes(self) -> &'static [u8] {
+        match self {
+            Self::ChevronLeft => EGUI_ICON_CHEVRON_LEFT,
+            Self::ChevronRight => EGUI_ICON_CHEVRON_RIGHT,
+            Self::ChevronDown => EGUI_ICON_CHEVRON_DOWN,
+            Self::ChevronUp => EGUI_ICON_CHEVRON_UP,
+            Self::Pencil => EGUI_ICON_PENCIL,
+            Self::Save => EGUI_ICON_SAVE,
+            Self::Trash => EGUI_ICON_TRASH,
         }
     }
 }
@@ -163,20 +257,24 @@ impl editor_host::EditorFrame for AppEditorFrame {
                 + editor_host::egui::vec2(self.frame_thickness as f32, self.frame_thickness as f32),
             editor_host::egui::vec2(
                 rect.width() - (self.frame_thickness * 2.0) as f32,
-                self.titlebar_height as f32,
+                Self::chrome_height(state) as f32,
             ),
         );
         ui.painter()
             .rect_filled(titlebar, 0.0, self.style.titlebar_color);
 
+        let preset_layout = self.preset_layout(titlebar);
         let drag_rect = editor_host::egui::Rect::from_min_max(
-            titlebar.left_top() + editor_host::egui::vec2(32.0, 0.0),
-            titlebar.right_bottom(),
+            preset_layout.title_row.left_top() + editor_host::egui::vec2(32.0, 0.0),
+            editor_host::egui::pos2(
+                preset_layout.preset_row.left() - 8.0,
+                preset_layout.title_row.bottom(),
+            ),
         );
         let drag = ui.allocate_rect(drag_rect, editor_host::egui::Sense::drag());
 
         let close_rect = editor_host::egui::Rect::from_center_size(
-            titlebar.left_center() + editor_host::egui::vec2(15.0, 0.0),
+            preset_layout.title_row.left_center() + editor_host::egui::vec2(15.0, 0.0),
             editor_host::egui::vec2(20.0, 20.0),
         );
         let close = ui.allocate_rect(close_rect, editor_host::egui::Sense::click());
@@ -197,21 +295,533 @@ impl editor_host::EditorFrame for AppEditorFrame {
             .line_segment([icon_rect.left_top(), icon_rect.right_bottom()], stroke);
         ui.painter()
             .line_segment([icon_rect.right_top(), icon_rect.left_bottom()], stroke);
-        ui.painter().text(
-            titlebar.left_center() + editor_host::egui::vec2(36.0, 0.0),
-            editor_host::egui::Align2::LEFT_CENTER,
+        let title = ellipsize_for_width(
             &state.title,
+            preset_layout.title_text.width(),
+            ui_style::FONT_SIZE_UI_SM as f32,
+        );
+        ui.painter().text(
+            preset_layout.title_text.left_center(),
+            editor_host::egui::Align2::LEFT_CENTER,
+            title,
             editor_host::egui::FontId::proportional(ui_style::FONT_SIZE_UI_SM as f32),
             self.style.title_color,
         );
+
+        let preset_command = self.render_preset_strip(ui, state, titlebar);
 
         if close.clicked() {
             editor_host::EditorFrameAction::Close
         } else if drag.drag_started_by(editor_host::egui::PointerButton::Primary) {
             editor_host::EditorFrameAction::DragWindow
+        } else if let Some(command) = preset_command {
+            editor_host::EditorFrameAction::Command(command)
         } else {
             editor_host::EditorFrameAction::None
         }
+    }
+}
+
+impl AppEditorFrame {
+    fn preset_menu_icon(expanded: bool) -> AppEditorFrameIcon {
+        if expanded {
+            AppEditorFrameIcon::ChevronDown
+        } else {
+            AppEditorFrameIcon::ChevronUp
+        }
+    }
+
+    fn begin_preset_rename(&mut self, id: &str, name: &str) {
+        self.renaming_preset_id = Some(id.to_string());
+        self.renaming_preset_value = name.to_string();
+        self.rename_focus_requested = true;
+        self.delete_confirmation_preset_id = None;
+    }
+
+    fn cancel_preset_rename(&mut self) {
+        self.renaming_preset_id = None;
+        self.renaming_preset_value.clear();
+        self.rename_focus_requested = false;
+    }
+
+    fn request_preset_delete(&mut self, id: &str) -> Option<editor_host::EditorFrameCommand> {
+        self.delete_confirmation_preset_id = Some(id.to_string());
+        self.cancel_preset_rename();
+        None
+    }
+
+    fn cancel_preset_delete(&mut self) {
+        self.delete_confirmation_preset_id = None;
+    }
+
+    fn delete_confirmation_label(name: &str, width: f32) -> String {
+        let fixed_width = ui_style::FONT_SIZE_UI_SM as f32 * 10.0 * 0.56;
+        let name = ellipsize_for_width(
+            name,
+            (width - fixed_width).max(ui_style::FONT_SIZE_UI_SM as f32 * 3.0),
+            ui_style::FONT_SIZE_UI_SM as f32,
+        );
+        format!("Remove \"{name}\"?")
+    }
+
+    fn confirm_preset_delete(&mut self, id: &str) -> Option<editor_host::EditorFrameCommand> {
+        if self.delete_confirmation_preset_id.as_deref() != Some(id) {
+            return None;
+        }
+        self.delete_confirmation_preset_id = None;
+        Some(editor_host::EditorFrameCommand::DeletePreset(
+            id.to_string(),
+        ))
+    }
+
+    fn chrome_height(state: &editor_host::EditorHostState) -> f64 {
+        state
+            .preset
+            .as_ref()
+            .map_or(EDITOR_FRAME_COMPACT_CHROME_HEIGHT, |preset| {
+                if preset.expanded {
+                    EDITOR_FRAME_EXPANDED_CHROME_HEIGHT
+                } else {
+                    EDITOR_FRAME_COMPACT_CHROME_HEIGHT
+                }
+            })
+    }
+
+    fn preset_layout(&self, titlebar: editor_host::egui::Rect) -> AppEditorFramePresetLayout {
+        let right_inset = 8.0;
+        let button_width = 25.0;
+        let preset_width = (titlebar.width() - 176.0).clamp(188.0, 360.0);
+        let title_row = editor_host::egui::Rect::from_min_size(
+            titlebar.left_top(),
+            editor_host::egui::vec2(titlebar.width(), EDITOR_FRAME_TITLE_ROW_HEIGHT),
+        );
+        let preset_row = editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(
+                titlebar.right() - right_inset - preset_width,
+                titlebar.top() + 4.0,
+            ),
+            editor_host::egui::vec2(preset_width, EDITOR_FRAME_PRESET_ROW_HEIGHT),
+        );
+        let title_text = editor_host::egui::Rect::from_min_max(
+            title_row.left_top() + editor_host::egui::vec2(36.0, 0.0),
+            editor_host::egui::pos2(preset_row.left() - 10.0, title_row.bottom()),
+        );
+        let previous = editor_host::egui::Rect::from_min_size(
+            preset_row.left_top(),
+            editor_host::egui::vec2(button_width, preset_row.height()),
+        );
+        let next = editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(preset_row.right() - button_width, preset_row.top()),
+            editor_host::egui::vec2(button_width, preset_row.height()),
+        );
+        let name = editor_host::egui::Rect::from_min_max(
+            editor_host::egui::pos2(previous.right(), preset_row.top()),
+            editor_host::egui::pos2(next.left(), preset_row.bottom()),
+        );
+        let browser = editor_host::egui::Rect::from_min_size(
+            titlebar.left_top() + editor_host::egui::vec2(8.0, EDITOR_FRAME_TITLE_ROW_HEIGHT + 6.0),
+            editor_host::egui::vec2(titlebar.width() - 16.0, EDITOR_FRAME_PRESET_BROWSER_HEIGHT),
+        );
+        AppEditorFramePresetLayout {
+            title_row,
+            title_text,
+            preset_row,
+            previous,
+            name,
+            next,
+            browser,
+        }
+    }
+
+    fn render_preset_strip(
+        &mut self,
+        ui: &mut editor_host::egui::Ui,
+        state: &editor_host::EditorHostState,
+        titlebar: editor_host::egui::Rect,
+    ) -> Option<editor_host::EditorFrameCommand> {
+        let preset = state.preset.as_ref()?;
+        let layout = self.preset_layout(titlebar);
+
+        ui.painter().rect_filled(
+            layout.preset_row,
+            6.0,
+            if preset.expanded {
+                self.style.control_background_active
+            } else {
+                self.style.control_background
+            },
+        );
+        ui.painter().rect_stroke(
+            layout.preset_row,
+            6.0,
+            editor_host::egui::Stroke::new(self.border_width, self.style.border_color),
+            editor_host::egui::StrokeKind::Inside,
+        );
+        ui.painter().line_segment(
+            [layout.previous.right_top(), layout.previous.right_bottom()],
+            editor_host::egui::Stroke::new(self.border_width, self.style.border_color),
+        );
+        ui.painter().line_segment(
+            [layout.next.left_top(), layout.next.left_bottom()],
+            editor_host::egui::Stroke::new(self.border_width, self.style.border_color),
+        );
+
+        let previous =
+            self.preset_segment_button(ui, layout.previous, AppEditorFrameIcon::ChevronLeft);
+        let next = self.preset_segment_button(ui, layout.next, AppEditorFrameIcon::ChevronRight);
+        let name = ui.allocate_rect(layout.name, editor_host::egui::Sense::click());
+        if name.hovered() {
+            ui.painter().rect_filled(
+                layout.name.shrink2(editor_host::egui::vec2(0.0, 1.0)),
+                0.0,
+                self.style.control_background_hovered,
+            );
+        }
+        ui.painter().text(
+            layout.name.left_center() + editor_host::egui::vec2(10.0, 0.0),
+            editor_host::egui::Align2::LEFT_CENTER,
+            ellipsize_for_width(
+                &preset.current_name,
+                layout.name.width() - 34.0,
+                ui_style::FONT_SIZE_UI_SM as f32,
+            ),
+            editor_host::egui::FontId::proportional(ui_style::FONT_SIZE_UI_SM as f32),
+            self.style.title_color,
+        );
+        self.paint_icon(
+            ui,
+            editor_host::egui::Rect::from_center_size(
+                layout.name.right_center() - editor_host::egui::vec2(12.0, 0.0),
+                editor_host::egui::vec2(EDITOR_FRAME_ICON_SIZE, EDITOR_FRAME_ICON_SIZE),
+            ),
+            Self::preset_menu_icon(preset.expanded),
+            self.style.muted_text,
+        );
+
+        if name.clicked() {
+            return Some(editor_host::EditorFrameCommand::TogglePresetBrowser);
+        }
+        if previous.clicked() {
+            return Some(editor_host::EditorFrameCommand::PreviousPreset);
+        }
+        if next.clicked() {
+            return Some(editor_host::EditorFrameCommand::NextPreset);
+        }
+
+        if preset.expanded {
+            return self.render_preset_browser(ui, preset, layout.browser);
+        }
+        None
+    }
+
+    fn preset_segment_button(
+        &mut self,
+        ui: &mut editor_host::egui::Ui,
+        rect: editor_host::egui::Rect,
+        icon: AppEditorFrameIcon,
+    ) -> editor_host::egui::Response {
+        let response = ui.allocate_rect(rect, editor_host::egui::Sense::click());
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(rect.shrink(1.0), 5.0, self.style.control_background_hovered);
+        }
+        let icon_rect = editor_host::egui::Rect::from_center_size(
+            rect.center(),
+            editor_host::egui::vec2(EDITOR_FRAME_ICON_SIZE, EDITOR_FRAME_ICON_SIZE),
+        );
+        self.paint_icon(ui, icon_rect, icon, self.style.close_icon);
+        response
+    }
+
+    fn preset_icon_button(
+        &mut self,
+        ui: &mut editor_host::egui::Ui,
+        rect: editor_host::egui::Rect,
+        icon: AppEditorFrameIcon,
+    ) -> editor_host::egui::Response {
+        let response = ui.allocate_rect(rect, editor_host::egui::Sense::click());
+        let fill = if response.hovered() {
+            self.style.control_background_hovered
+        } else {
+            self.style.control_background
+        };
+        ui.painter().rect_filled(rect, 5.0, fill);
+        ui.painter().rect_stroke(
+            rect,
+            5.0,
+            editor_host::egui::Stroke::new(self.border_width, self.style.border_color),
+            editor_host::egui::StrokeKind::Inside,
+        );
+        let icon_rect = editor_host::egui::Rect::from_center_size(
+            rect.center(),
+            editor_host::egui::vec2(EDITOR_FRAME_ICON_SIZE, EDITOR_FRAME_ICON_SIZE),
+        );
+        self.paint_icon(ui, icon_rect, icon, self.style.close_icon);
+        response
+    }
+
+    fn paint_icon(
+        &mut self,
+        ui: &mut editor_host::egui::Ui,
+        rect: editor_host::egui::Rect,
+        icon: AppEditorFrameIcon,
+        tint: editor_host::egui::Color32,
+    ) {
+        if let Some(texture) = self.icon_texture(ui.ctx(), icon) {
+            ui.put(
+                rect,
+                editor_host::egui::Image::from_texture((texture.id(), rect.size())).tint(tint),
+            );
+        }
+    }
+
+    fn icon_texture(
+        &mut self,
+        ctx: &editor_host::egui::Context,
+        icon: AppEditorFrameIcon,
+    ) -> Option<&editor_host::egui::TextureHandle> {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.icon_textures.entry(icon) {
+            let image = render_lucide_icon(icon)?;
+            let texture = ctx.load_texture(
+                format!("editor-frame-icon-{icon:?}"),
+                image,
+                editor_host::egui::TextureOptions::LINEAR,
+            );
+            entry.insert(texture);
+        }
+        self.icon_textures.get(&icon)
+    }
+
+    fn render_preset_browser(
+        &mut self,
+        ui: &mut editor_host::egui::Ui,
+        preset: &editor_host::EditorPresetState,
+        rect: editor_host::egui::Rect,
+    ) -> Option<editor_host::EditorFrameCommand> {
+        let row_height = 24.0;
+        ui.painter().rect_filled(rect, 7.0, self.style.frame_color);
+        ui.painter().rect_stroke(
+            rect,
+            7.0,
+            editor_host::egui::Stroke::new(1.0, self.style.border_color),
+            editor_host::egui::StrokeKind::Inside,
+        );
+        let save_rect = Self::preset_browser_save_rect(rect);
+        let save = self.preset_icon_button(ui, save_rect, AppEditorFrameIcon::Save);
+        if save.clicked() {
+            return Some(editor_host::EditorFrameCommand::SavePreset);
+        }
+        let list_rect = Self::preset_browser_list_rect(rect);
+        if preset.items.is_empty() {
+            ui.painter().text(
+                list_rect.center(),
+                editor_host::egui::Align2::CENTER_CENTER,
+                "No user presets",
+                editor_host::egui::FontId::proportional(ui_style::FONT_SIZE_UI_XS as f32),
+                self.style.close_icon,
+            );
+            return None;
+        }
+
+        let mut command = None;
+        ui.scope_builder(
+            editor_host::egui::UiBuilder::new()
+                .max_rect(list_rect)
+                .layout(editor_host::egui::Layout::top_down(
+                    editor_host::egui::Align::Min,
+                )),
+            |ui| {
+                editor_host::egui::ScrollArea::vertical()
+                    .id_salt("editor-frame-preset-browser")
+                    .auto_shrink([false, false])
+                    .max_height(list_rect.height())
+                    .show(ui, |ui| {
+                        ui.set_width(list_rect.width());
+                        for item in &preset.items {
+                            if command.is_some() {
+                                break;
+                            }
+                            command = self.render_preset_browser_item(
+                                ui,
+                                preset,
+                                item,
+                                row_height,
+                                list_rect.width(),
+                            );
+                        }
+                        ui.add_space(6.0);
+                    });
+            },
+        );
+        command
+    }
+
+    fn preset_browser_save_rect(rect: editor_host::egui::Rect) -> editor_host::egui::Rect {
+        editor_host::egui::Rect::from_min_size(
+            rect.left_top() + editor_host::egui::vec2(6.0, 5.0),
+            editor_host::egui::vec2(28.0, 22.0),
+        )
+    }
+
+    fn preset_browser_list_rect(rect: editor_host::egui::Rect) -> editor_host::egui::Rect {
+        editor_host::egui::Rect::from_min_max(
+            rect.left_top() + editor_host::egui::vec2(6.0, 34.0),
+            rect.right_bottom() - editor_host::egui::vec2(6.0, 10.0),
+        )
+    }
+
+    fn render_preset_browser_item(
+        &mut self,
+        ui: &mut editor_host::egui::Ui,
+        preset: &editor_host::EditorPresetState,
+        item: &editor_host::EditorPresetItem,
+        row_height: f32,
+        row_width: f32,
+    ) -> Option<editor_host::EditorFrameCommand> {
+        let is_renaming = self.renaming_preset_id.as_deref() == Some(item.id.as_str());
+        let is_confirming_delete =
+            self.delete_confirmation_preset_id.as_deref() == Some(item.id.as_str());
+        let sense = if is_renaming || is_confirming_delete {
+            editor_host::egui::Sense::hover()
+        } else {
+            editor_host::egui::Sense::click()
+        };
+        let (item_rect, response) =
+            ui.allocate_exact_size(editor_host::egui::vec2(row_width, row_height), sense);
+        if response.hovered()
+            || preset.selected_id.as_deref() == Some(item.id.as_str())
+            || is_renaming
+            || is_confirming_delete
+        {
+            ui.painter()
+                .rect_filled(item_rect.shrink(2.0), 5.0, self.style.titlebar_color);
+        }
+
+        if is_confirming_delete {
+            ui.painter().text(
+                item_rect.left_center() + editor_host::egui::vec2(8.0, 0.0),
+                editor_host::egui::Align2::LEFT_CENTER,
+                Self::delete_confirmation_label(&item.name, item_rect.width() - 126.0),
+                editor_host::egui::FontId::proportional(ui_style::FONT_SIZE_UI_SM as f32),
+                self.style.title_color,
+            );
+            let remove_rect = editor_host::egui::Rect::from_min_size(
+                editor_host::egui::pos2(item_rect.right() - 112.0, item_rect.top() + 2.0),
+                editor_host::egui::vec2(62.0, item_rect.height() - 4.0),
+            );
+            let cancel_rect = editor_host::egui::Rect::from_min_size(
+                editor_host::egui::pos2(item_rect.right() - 46.0, item_rect.top() + 2.0),
+                editor_host::egui::vec2(42.0, item_rect.height() - 4.0),
+            );
+            if self.preset_text_button(ui, remove_rect, "Remove").clicked() {
+                return self.confirm_preset_delete(&item.id);
+            }
+            if self.preset_text_button(ui, cancel_rect, "Cancel").clicked() {
+                self.cancel_preset_delete();
+            }
+            return None;
+        }
+
+        let rename_rect = editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(item_rect.right() - 56.0, item_rect.top() + 2.0),
+            editor_host::egui::vec2(24.0, item_rect.height() - 4.0),
+        );
+        let delete_rect = rename_rect.translate(editor_host::egui::vec2(28.0, 0.0));
+        let content_rect = editor_host::egui::Rect::from_min_max(
+            item_rect.left_top(),
+            editor_host::egui::pos2(rename_rect.left() - 4.0, item_rect.bottom()),
+        );
+        if is_renaming {
+            let rename_rect = editor_host::egui::Rect::from_min_size(
+                editor_host::egui::pos2(item_rect.right() - 56.0, item_rect.top() + 2.0),
+                editor_host::egui::vec2(24.0, item_rect.height() - 4.0),
+            );
+            let edit_rect = editor_host::egui::Rect::from_min_max(
+                item_rect.left_top() + editor_host::egui::vec2(6.0, 3.0),
+                rename_rect.left_bottom() - editor_host::egui::vec2(6.0, 3.0),
+            );
+            let edit = ui.put(
+                edit_rect,
+                editor_host::egui::TextEdit::singleline(&mut self.renaming_preset_value)
+                    .id_salt(("preset-rename", item.id.as_str()))
+                    .desired_width(edit_rect.width())
+                    .font(editor_host::egui::FontId::proportional(
+                        ui_style::FONT_SIZE_UI_SM as f32,
+                    )),
+            );
+            let focus_requested = self.rename_focus_requested;
+            if focus_requested {
+                edit.request_focus();
+                self.rename_focus_requested = false;
+            }
+            let enter = ui.input(|input| input.key_pressed(editor_host::egui::Key::Enter));
+            let escape = ui.input(|input| input.key_pressed(editor_host::egui::Key::Escape));
+            if enter {
+                let name = self.renaming_preset_value.trim().to_string();
+                self.cancel_preset_rename();
+                if !name.is_empty() {
+                    return Some(editor_host::EditorFrameCommand::RenamePreset {
+                        id: item.id.clone(),
+                        name,
+                    });
+                }
+            } else if escape || (!focus_requested && edit.lost_focus()) {
+                self.cancel_preset_rename();
+            }
+        } else {
+            ui.painter().text(
+                item_rect.left_center() + editor_host::egui::vec2(8.0, 0.0),
+                editor_host::egui::Align2::LEFT_CENTER,
+                ellipsize_for_width(
+                    &item.name,
+                    content_rect.width() - 12.0,
+                    ui_style::FONT_SIZE_UI_SM as f32,
+                ),
+                editor_host::egui::FontId::proportional(ui_style::FONT_SIZE_UI_SM as f32),
+                self.style.title_color,
+            );
+        }
+        let rename = self.preset_icon_button(ui, rename_rect, AppEditorFrameIcon::Pencil);
+        if rename.clicked() {
+            self.begin_preset_rename(&item.id, &item.name);
+        }
+        let delete = self.preset_icon_button(ui, delete_rect, AppEditorFrameIcon::Trash);
+        if delete.clicked() {
+            return self.request_preset_delete(&item.id);
+        }
+        if response.clicked() {
+            return Some(editor_host::EditorFrameCommand::LoadPreset(item.id.clone()));
+        }
+        None
+    }
+
+    fn preset_text_button(
+        &self,
+        ui: &mut editor_host::egui::Ui,
+        rect: editor_host::egui::Rect,
+        label: &str,
+    ) -> editor_host::egui::Response {
+        let response = ui.allocate_rect(rect, editor_host::egui::Sense::click());
+        let fill = if response.hovered() {
+            self.style.control_background_hovered
+        } else {
+            self.style.control_background
+        };
+        ui.painter().rect_filled(rect, 5.0, fill);
+        ui.painter().rect_stroke(
+            rect,
+            5.0,
+            editor_host::egui::Stroke::new(self.border_width, self.style.border_color),
+            editor_host::egui::StrokeKind::Inside,
+        );
+        ui.painter().text(
+            rect.center(),
+            editor_host::egui::Align2::CENTER_CENTER,
+            label,
+            editor_host::egui::FontId::proportional(ui_style::FONT_SIZE_UI_XS as f32),
+            self.style.title_color,
+        );
+        response
     }
 }
 
@@ -237,6 +847,41 @@ fn mix_iced_color(a: Color, b: Color, amount: f32) -> Color {
         b: a.b + (b.b - a.b) * t,
         a: a.a + (b.a - a.a) * t,
     }
+}
+
+fn render_lucide_icon(icon: AppEditorFrameIcon) -> Option<editor_host::egui::ColorImage> {
+    let svg = std::str::from_utf8(icon.svg_bytes())
+        .ok()?
+        .replace("currentColor", "white");
+    let options = resvg::usvg::Options::default();
+    let tree = resvg::usvg::Tree::from_data(svg.as_bytes(), &options).ok()?;
+    let size = tree.size().to_int_size().to_size();
+    let dimension = 64;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(dimension, dimension)?;
+    let transform = resvg::tiny_skia::Transform::from_scale(
+        dimension as f32 / size.width(),
+        dimension as f32 / size.height(),
+    );
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    Some(editor_host::egui::ColorImage::from_rgba_unmultiplied(
+        [dimension as usize, dimension as usize],
+        pixmap.data(),
+    ))
+}
+
+fn ellipsize_for_width(text: &str, width: f32, font_size: f32) -> String {
+    let max_chars = (width / (font_size * 0.56)).floor().max(1.0) as usize;
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+    let byte_index = text
+        .char_indices()
+        .nth(max_chars - 3)
+        .map_or(text.len(), |(index, _)| index);
+    format!("{}...", &text[..byte_index])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,6 +975,8 @@ struct Lilypalooza {
     playback_settings: settings::PlaybackSettings,
     saved_project_state: Option<ProjectState>,
     project_mixer_state: MixerState,
+    processor_presets: processor_presets::ProcessorPresetLibrary,
+    expanded_processor_preset_browser: Option<processor_editor_windows::EditorTarget>,
     workspace_panes: pane_grid::State<DockGroupId>,
     dock_layout: Option<DockNode>,
     dock_groups: HashMap<DockGroupId, DockGroup>,
@@ -898,6 +1545,8 @@ fn new_with_loaded_state(
         playback_settings: stored_settings.playback.clone(),
         saved_project_state: None,
         project_mixer_state,
+        processor_presets: stored_state.processor_presets.clone(),
+        expanded_processor_preset_browser: None,
         workspace_panes,
         dock_layout,
         dock_groups,
@@ -1648,6 +2297,251 @@ mod tests {
         assert_eq!(frame.frame_thickness, EDITOR_FRAME_THICKNESS);
         assert!(frame.frame_thickness < 4.0);
         assert!(frame.border_width < 1.0);
+    }
+
+    #[test]
+    fn app_editor_frame_starts_compact() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+
+        assert_eq!(frame.titlebar_height, EDITOR_FRAME_COMPACT_CHROME_HEIGHT);
+    }
+
+    #[test]
+    fn app_editor_frame_dropdown_stays_inside_reserved_chrome() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+        let layout = frame.preset_layout(editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(0.0, 0.0),
+            editor_host::egui::vec2(640.0, EDITOR_FRAME_EXPANDED_CHROME_HEIGHT as f32),
+        ));
+
+        assert!(layout.browser.bottom() <= EDITOR_FRAME_EXPANDED_CHROME_HEIGHT as f32);
+    }
+
+    #[test]
+    fn app_editor_frame_browser_fits_view_width() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+        let titlebar = editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(0.0, 0.0),
+            editor_host::egui::vec2(640.0, EDITOR_FRAME_EXPANDED_CHROME_HEIGHT as f32),
+        );
+        let layout = frame.preset_layout(titlebar);
+
+        assert!(layout.browser.width() > layout.preset_row.width());
+        assert_eq!(layout.browser.left(), titlebar.left() + 8.0);
+        assert_eq!(layout.browser.right(), titlebar.right() - 8.0);
+    }
+
+    #[test]
+    fn app_editor_frame_browser_list_starts_below_save_button() {
+        let browser = editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(8.0, 38.0),
+            editor_host::egui::vec2(624.0, EDITOR_FRAME_PRESET_BROWSER_HEIGHT),
+        );
+        let save = AppEditorFrame::preset_browser_save_rect(browser);
+        let list = AppEditorFrame::preset_browser_list_rect(browser);
+
+        assert!(list.top() > save.bottom());
+        assert!(browser.bottom() - list.bottom() >= 10.0);
+        assert!(list.height() >= 72.0);
+    }
+
+    #[test]
+    fn app_editor_frame_icons_render_from_lucide_assets() {
+        for icon in [
+            AppEditorFrameIcon::ChevronLeft,
+            AppEditorFrameIcon::ChevronRight,
+            AppEditorFrameIcon::ChevronDown,
+            AppEditorFrameIcon::ChevronUp,
+            AppEditorFrameIcon::Pencil,
+            AppEditorFrameIcon::Save,
+            AppEditorFrameIcon::Trash,
+        ] {
+            let svg = std::str::from_utf8(icon.svg_bytes()).expect("icon should be utf8 svg");
+            assert!(svg.contains("<svg"));
+            assert!(render_lucide_icon(icon).is_some());
+        }
+    }
+
+    #[test]
+    fn app_editor_frame_uses_stateful_preset_chevron() {
+        assert_eq!(
+            AppEditorFrame::preset_menu_icon(false),
+            AppEditorFrameIcon::ChevronUp
+        );
+        assert_eq!(
+            AppEditorFrame::preset_menu_icon(true),
+            AppEditorFrameIcon::ChevronDown
+        );
+    }
+
+    #[test]
+    fn app_editor_frame_cuts_preset_text_to_fixed_width() {
+        let text = ellipsize_for_width("Extremely Long Preset Name", 72.0, 13.0);
+
+        assert!(text.ends_with("..."));
+        assert!(text.len() < "Extremely Long Preset Name".len());
+    }
+
+    #[test]
+    fn app_editor_frame_delete_requires_confirmation() {
+        let mut frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+
+        assert_eq!(frame.request_preset_delete("preset-1"), None);
+        assert_eq!(
+            frame.delete_confirmation_preset_id.as_deref(),
+            Some("preset-1")
+        );
+        assert_eq!(
+            frame.confirm_preset_delete("preset-1"),
+            Some(editor_host::EditorFrameCommand::DeletePreset(
+                "preset-1".to_string()
+            ))
+        );
+        assert_eq!(frame.delete_confirmation_preset_id, None);
+    }
+
+    #[test]
+    fn app_editor_frame_delete_confirmation_cuts_long_preset_name() {
+        let message = AppEditorFrame::delete_confirmation_label(
+            "Very Long Evolving Pad With Too Much Text",
+            128.0,
+        );
+
+        assert!(message.starts_with("Remove \""));
+        assert!(message.ends_with("\"?"));
+        assert!(message.contains("..."));
+        assert!(message.len() < "Remove \"Very Long Evolving Pad With Too Much Text\"?".len());
+    }
+
+    #[test]
+    fn app_editor_frame_rename_can_cancel_without_command() {
+        let mut frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+
+        frame.begin_preset_rename("preset-1", "Warm Piano");
+        frame.cancel_preset_rename();
+
+        assert_eq!(frame.renaming_preset_id, None);
+        assert!(frame.renaming_preset_value.is_empty());
+    }
+
+    #[test]
+    fn app_editor_frame_compact_preset_controls_live_in_title_row() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+        let layout = frame.preset_layout(editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(0.0, 0.0),
+            editor_host::egui::vec2(640.0, EDITOR_FRAME_COMPACT_CHROME_HEIGHT as f32),
+        ));
+
+        assert!(layout.title_row.contains_rect(layout.preset_row));
+        assert!(layout.title_text.right() <= layout.preset_row.left());
+        assert!(layout.browser.top() >= layout.title_row.bottom());
+    }
+
+    #[test]
+    fn app_editor_frame_previous_button_does_not_overlap_dropdown() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+        let layout = frame.preset_layout(editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(0.0, 0.0),
+            editor_host::egui::vec2(640.0, EDITOR_FRAME_EXPANDED_CHROME_HEIGHT as f32),
+        ));
+
+        assert!(!layout.previous.intersects(layout.browser));
+    }
+
+    #[test]
+    fn processor_preset_library_saves_user_preset_for_processor_kind() {
+        let mut library = crate::app::processor_presets::ProcessorPresetLibrary::default();
+        let kind = lilypalooza_audio::ProcessorKind::BuiltIn {
+            processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
+        };
+        let state = lilypalooza_audio::ProcessorState(vec![1, 2, 3]);
+
+        let id = library.save_user_preset("Warm Piano", kind.clone(), state.clone());
+
+        let presets = library.presets_for(&kind);
+        assert_eq!(presets.len(), 1);
+        assert_eq!(presets[0].id, id);
+        assert_eq!(presets[0].name, "Warm Piano");
+        assert_eq!(library.state_for(&kind, &id), Some(&state));
+    }
+
+    #[test]
+    fn processor_preset_library_renames_user_preset() {
+        let mut library = crate::app::processor_presets::ProcessorPresetLibrary::default();
+        let kind = lilypalooza_audio::ProcessorKind::BuiltIn {
+            processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
+        };
+        let id = library.save_user_preset(
+            "Warm Piano",
+            kind.clone(),
+            lilypalooza_audio::ProcessorState(vec![]),
+        );
+
+        assert!(library.rename_user_preset(&kind, &id, "Soft Piano"));
+
+        assert_eq!(library.presets_for(&kind)[0].name, "Soft Piano");
+    }
+
+    #[test]
+    fn processor_preset_library_deletes_user_preset() {
+        let mut library = crate::app::processor_presets::ProcessorPresetLibrary::default();
+        let kind = lilypalooza_audio::ProcessorKind::BuiltIn {
+            processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
+        };
+        let id = library.save_user_preset(
+            "Warm Piano",
+            kind.clone(),
+            lilypalooza_audio::ProcessorState(vec![]),
+        );
+
+        assert!(library.delete_user_preset(&kind, &id));
+
+        assert!(library.presets_for(&kind).is_empty());
+    }
+
+    #[test]
+    fn project_state_roundtrips_processor_presets() {
+        let mut state = ProjectState::default();
+        let kind = lilypalooza_audio::ProcessorKind::BuiltIn {
+            processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
+        };
+        let preset_state = lilypalooza_audio::ProcessorState(vec![7, 8, 9]);
+        state
+            .processor_presets
+            .save_user_preset("Saved", kind.clone(), preset_state.clone());
+
+        let serialized = ron::to_string(&state).expect("state should serialize");
+        let parsed: ProjectState = ron::from_str(&serialized).expect("state should parse");
+
+        assert_eq!(
+            parsed.processor_presets.presets_for(&kind)[0].state,
+            preset_state
+        );
+    }
+
+    #[test]
+    fn startup_restores_global_processor_presets() {
+        let kind = lilypalooza_audio::ProcessorKind::BuiltIn {
+            processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
+        };
+        let mut stored_state = GlobalState::default();
+        stored_state.processor_presets.save_user_preset(
+            "Saved",
+            kind.clone(),
+            lilypalooza_audio::ProcessorState(vec![4, 5, 6]),
+        );
+
+        let (app, _) = new_with_loaded_state(
+            None,
+            None,
+            false,
+            settings::AppSettings::default(),
+            None,
+            stored_state,
+            None,
+        );
+
+        assert_eq!(app.processor_presets.presets_for(&kind)[0].name, "Saved");
     }
 
     fn char_key_press(value: &str, code: keyboard::key::Code) -> Message {

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use editor_host::{InstalledHost, WindowSnapshot};
+use editor_host::{EditorFrameCommand, EditorPresetState, InstalledHost, WindowSnapshot};
 use iced::window;
 use lilypalooza_audio::{EditorError, EditorParent, EditorSession};
 
@@ -143,6 +143,10 @@ impl EditorWindowManager {
             .get(&window_id)
             .and_then(|target| self.windows.get(target).map(|window| window.resizable))
             .or_else(|| self.pending.get(&window_id).map(|window| window.resizable))
+    }
+
+    pub(super) fn target_for_window(&self, window_id: window::Id) -> Option<EditorTarget> {
+        self.windows_by_id.get(&window_id).copied()
     }
 
     pub(super) fn remove_window(
@@ -292,6 +296,40 @@ impl EditorWindowManager {
             pending.title.clone_from(&title);
         }
         errors
+    }
+
+    pub(super) fn set_preset_state(
+        &mut self,
+        target: EditorTarget,
+        state: Option<EditorPresetState>,
+    ) {
+        if let Some(window) = self.windows.get_mut(&target)
+            && let Some(host) = window.host.as_mut()
+        {
+            host.set_preset_state(state);
+        }
+    }
+
+    pub(super) fn preset_state(&self, target: EditorTarget) -> Option<EditorPresetState> {
+        self.windows
+            .get(&target)
+            .and_then(|window| window.host.as_ref())
+            .and_then(InstalledHost::preset_state)
+    }
+
+    pub(super) fn drain_frame_commands(&mut self) -> Vec<(EditorTarget, EditorFrameCommand)> {
+        let mut commands = Vec::new();
+        for (target, window) in &mut self.windows {
+            let Some(host) = window.host.as_mut() else {
+                continue;
+            };
+            commands.extend(
+                host.drain_frame_commands()
+                    .into_iter()
+                    .map(|command| (*target, command)),
+            );
+        }
+        commands
     }
 
     pub(super) fn close_requested_windows(&self) -> Vec<window::Id> {

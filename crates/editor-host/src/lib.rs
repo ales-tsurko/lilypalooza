@@ -142,13 +142,48 @@ pub struct EditorHostState {
     pub title: String,
     pub resizable: bool,
     pub close_requested: bool,
+    pub preset: Option<EditorPresetState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorPresetState {
+    pub current_name: String,
+    pub selected_id: Option<String>,
+    pub expanded: bool,
+    pub items: Vec<EditorPresetItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorPresetItem {
+    pub id: String,
+    pub name: String,
+    pub origin: EditorPresetOrigin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorPresetOrigin {
+    User,
+    Factory,
+    PluginNative,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorFrameAction {
     None,
     Close,
     DragWindow,
+    Command(EditorFrameCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorFrameCommand {
+    PreviousPreset,
+    NextPreset,
+    LoadPreset(String),
+    RenamePreset { id: String, name: String },
+    DeletePreset(String),
+    SavePreset,
+    TogglePresetBrowser,
 }
 
 pub trait EditorFrame {
@@ -162,7 +197,11 @@ pub struct InstalledHost {
     content: WindowSnapshot,
     close_requested: Arc<AtomicBool>,
     title: Arc<Mutex<String>>,
+    preset_state: Arc<Mutex<Option<EditorPresetState>>>,
+    frame_commands: Arc<Mutex<Vec<EditorFrameCommand>>>,
     frame_window: Option<EguiWindowHandle>,
+    content_size: Size,
+    frame_thickness: f64,
 }
 
 impl std::fmt::Debug for InstalledHost {
@@ -204,6 +243,42 @@ impl InstalledHost {
         self.close_requested.store(false, Ordering::Relaxed);
     }
 
+    pub fn set_preset_state(&mut self, preset: Option<EditorPresetState>) {
+        if let Ok(mut current) = self.preset_state.lock() {
+            *current = preset;
+        }
+        if self.frame_window.is_some() {
+            let titlebar_height = self
+                .preset_state()
+                .as_ref()
+                .map_or(34.0, |preset| if preset.expanded { 160.0 } else { 34.0 });
+            let _ = resize_installed_host(
+                &self.host,
+                &self.content,
+                self.content_size,
+                titlebar_height,
+                self.frame_thickness,
+                self.frame_window.as_mut(),
+            );
+        }
+    }
+
+    #[must_use]
+    pub fn preset_state(&self) -> Option<EditorPresetState> {
+        self.preset_state
+            .lock()
+            .map(|state| state.clone())
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn drain_frame_commands(&mut self) -> Vec<EditorFrameCommand> {
+        self.frame_commands
+            .lock()
+            .map(|mut commands| commands.drain(..).collect())
+            .unwrap_or_default()
+    }
+
     pub fn set_visible(&mut self, visible: bool) -> Result<(), Error> {
         set_host_window_visible(&self.host, visible)
     }
@@ -214,6 +289,37 @@ impl InstalledHost {
             *current = title.clone();
         }
         set_host_window_title(&self.host, &title)
+    }
+}
+
+#[cfg(test)]
+impl InstalledHost {
+    fn test_with_frame_commands(
+        commands: impl IntoIterator<Item = EditorFrameCommand>,
+    ) -> (Self, Vec<EditorFrameCommand>) {
+        let commands = commands.into_iter().collect::<Vec<_>>();
+        let frame_commands = Arc::new(Mutex::new(commands.clone()));
+        let host = WindowSnapshot {
+            window: WindowHandleSnapshot::AppKit { ns_view: 1 },
+            display: Some(DisplayHandleSnapshot::AppKit),
+        };
+        (
+            Self {
+                host,
+                content: host,
+                close_requested: Arc::new(AtomicBool::new(false)),
+                title: Arc::new(Mutex::new("Test".to_string())),
+                preset_state: Arc::new(Mutex::new(None)),
+                frame_commands,
+                frame_window: None,
+                content_size: Size {
+                    width: 440.0,
+                    height: 360.0,
+                },
+                frame_thickness: 4.0,
+            },
+            commands,
+        )
     }
 }
 
@@ -426,16 +532,21 @@ pub(crate) fn open_egui_frame(
 ) -> Result<EguiFrameHost, Error> {
     let close_requested = Arc::new(AtomicBool::new(false));
     let title = Arc::new(Mutex::new(options.title.clone()));
+    let preset_state = Arc::new(Mutex::new(None));
+    let frame_commands = Arc::new(Mutex::new(Vec::new()));
     let app = FrameApp {
         frame,
         host: parent,
         title: Arc::clone(&title),
+        preset_state: Arc::clone(&preset_state),
         state: EditorHostState {
             title: options.title.clone(),
             resizable: options.resizable,
             close_requested: false,
+            preset: None,
         },
         close_requested: Arc::clone(&close_requested),
+        frame_commands: Arc::clone(&frame_commands),
     };
     let window = open_parented(
         parent.raw_window_handle()?,
@@ -451,6 +562,8 @@ pub(crate) fn open_egui_frame(
         window,
         close_requested,
         title,
+        preset_state,
+        frame_commands,
     })
 }
 
@@ -458,14 +571,18 @@ pub(crate) struct EguiFrameHost {
     pub(crate) window: EguiWindowHandle,
     pub(crate) close_requested: Arc<AtomicBool>,
     pub(crate) title: Arc<Mutex<String>>,
+    pub(crate) preset_state: Arc<Mutex<Option<EditorPresetState>>>,
+    pub(crate) frame_commands: Arc<Mutex<Vec<EditorFrameCommand>>>,
 }
 
 struct FrameApp<F> {
     frame: F,
     host: WindowSnapshot,
     title: Arc<Mutex<String>>,
+    preset_state: Arc<Mutex<Option<EditorPresetState>>>,
     state: EditorHostState,
     close_requested: Arc<AtomicBool>,
+    frame_commands: Arc<Mutex<Vec<EditorFrameCommand>>>,
 }
 
 impl<F: EditorFrame> EguiApp for FrameApp<F> {
@@ -473,6 +590,9 @@ impl<F: EditorFrame> EguiApp for FrameApp<F> {
         self.state.close_requested = self.close_requested.load(Ordering::Relaxed);
         if let Ok(title) = self.title.lock() {
             self.state.title.clone_from(&title);
+        }
+        if let Ok(preset_state) = self.preset_state.lock() {
+            self.state.preset.clone_from(&preset_state);
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
@@ -484,9 +604,45 @@ impl<F: EditorFrame> EguiApp for FrameApp<F> {
                 EditorFrameAction::DragWindow => {
                     let _ = begin_host_window_drag(&self.host);
                 }
+                EditorFrameAction::Command(command) => {
+                    if let Ok(mut commands) = self.frame_commands.lock() {
+                        commands.push(command);
+                    }
+                }
             });
         ctx.request_repaint();
     }
+}
+
+#[cfg(target_os = "macos")]
+fn resize_installed_host(
+    host: &WindowSnapshot,
+    content: &WindowSnapshot,
+    content_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+    _frame_window: Option<&mut EguiWindowHandle>,
+) -> Result<(), Error> {
+    macos::resize_installed_host(
+        host,
+        content,
+        content_size,
+        titlebar_height,
+        frame_thickness,
+    )?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resize_installed_host(
+    _host: &WindowSnapshot,
+    _content: &WindowSnapshot,
+    _content_size: Size,
+    _titlebar_height: f64,
+    _frame_thickness: f64,
+    _frame_window: Option<&mut EguiWindowHandle>,
+) -> Result<(), Error> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -579,6 +735,36 @@ mod tests {
         });
         assert_eq!(layout.content.width, 440.0);
         assert_eq!(layout.content.height, 360.0);
+    }
+
+    #[test]
+    fn installed_host_exposes_frame_commands() {
+        let (mut host, commands) = super::InstalledHost::test_with_frame_commands([
+            super::EditorFrameCommand::PreviousPreset,
+            super::EditorFrameCommand::LoadPreset("preset-1".to_string()),
+        ]);
+
+        assert_eq!(host.drain_frame_commands(), commands);
+        assert!(host.drain_frame_commands().is_empty());
+    }
+
+    #[test]
+    fn installed_host_stores_preset_state_for_frame() {
+        let (mut host, _) = super::InstalledHost::test_with_frame_commands([]);
+        let state = super::EditorPresetState {
+            current_name: "Warm Piano".to_string(),
+            selected_id: Some("preset-1".to_string()),
+            expanded: false,
+            items: vec![super::EditorPresetItem {
+                id: "preset-1".to_string(),
+                name: "Warm Piano".to_string(),
+                origin: super::EditorPresetOrigin::User,
+            }],
+        };
+
+        host.set_preset_state(Some(state.clone()));
+
+        assert_eq!(host.preset_state(), Some(state));
     }
 
     #[test]
