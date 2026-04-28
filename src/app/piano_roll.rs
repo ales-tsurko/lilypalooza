@@ -1554,14 +1554,6 @@ struct VisibilityState<'a> {
 #[derive(Debug, Clone, Copy)]
 struct StackTop {
     note_index: usize,
-    position: usize,
-    len: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct StackBadge {
-    position: usize,
-    len: usize,
 }
 
 impl canvas::Program<Message> for RollNotesCanvas<'_> {
@@ -1681,31 +1673,12 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
             let notes = build_note_geometries(self.data, pixels_per_tick);
             let stacks = build_note_stacks(&notes);
             let draw_order = compute_note_draw_order(&notes, &stacks, &state.stack_offsets);
-            let label_notes = compute_stack_label_notes(
-                &stacks,
-                &state.stack_offsets,
-                &self.data.notes,
-                self.track_mix,
-                self.global_solo_active,
-            );
 
             for note_index in draw_order {
                 let geometry = notes[note_index];
                 let note = &self.data.notes[note_index];
-                let stack_badge = label_notes.get(&geometry.key).and_then(|top| {
-                    if top.note_index == note_index {
-                        Some(StackBadge {
-                            position: top.position,
-                            len: top.len,
-                        })
-                    } else {
-                        None
-                    }
-                });
-                let show_label = !stacks.contains_key(&geometry.key) || stack_badge.is_some();
                 draw_note(
                     frame,
-                    self.data,
                     VisibilityState {
                         track_mix: self.track_mix,
                         track_colors: &self.track_colors,
@@ -1713,8 +1686,6 @@ impl canvas::Program<Message> for RollNotesCanvas<'_> {
                     },
                     note,
                     geometry,
-                    stack_badge,
-                    show_label,
                 );
             }
         });
@@ -1755,12 +1726,9 @@ fn track_mix_hash(track_mix: &[TrackMixState]) -> u64 {
 
 fn draw_note(
     frame: &mut canvas::Frame,
-    data: &MidiRollData,
     visibility: VisibilityState<'_>,
     note: &MidiNote,
     geometry: NoteGeometry,
-    stack_badge: Option<StackBadge>,
-    show_label: bool,
 ) {
     let mut color = visibility
         .track_colors
@@ -1773,12 +1741,6 @@ fn draw_note(
         visibility.global_solo_active,
     );
     color.a *= visibility_alpha;
-
-    let track_label = data
-        .tracks
-        .get(note.track_index)
-        .map(|track| shorten_label(&track.label, 14))
-        .unwrap_or_else(|| "?".to_string());
 
     frame.fill_rectangle(
         Point::new(geometry.x, geometry.y),
@@ -1800,28 +1762,6 @@ fn draw_note(
             ..canvas::Stroke::default()
         },
     );
-
-    if show_label && geometry.width > 38.0 && visibility_alpha > 0.20 {
-        let note_label = if let Some(stack_badge) = stack_badge {
-            format!(
-                "{track_label} {}/{}",
-                stack_badge.position + 1,
-                stack_badge.len
-            )
-        } else {
-            track_label
-        };
-
-        frame.fill_text(canvas::Text {
-            content: note_label,
-            position: Point::new(geometry.x + 3.0, geometry.y + NOTE_ROW_HEIGHT * 0.5),
-            color: Color::from_rgba(0.08, 0.08, 0.08, visibility_alpha.clamp(0.35, 1.0)),
-            size: Pixels(10.0),
-            font: fonts::MONO,
-            align_y: alignment::Vertical::Center,
-            ..canvas::Text::default()
-        });
-    }
 }
 
 fn build_note_geometries(data: &MidiRollData, pixels_per_tick: f32) -> Vec<NoteGeometry> {
@@ -1901,58 +1841,11 @@ fn compute_stack_top_notes(
             *key,
             StackTop {
                 note_index: members[top_pos],
-                position: top_pos,
-                len,
             },
         );
     }
 
     top_notes
-}
-
-fn compute_stack_label_notes(
-    stacks: &HashMap<NoteStackKey, Vec<usize>>,
-    stack_offsets: &HashMap<NoteStackKey, usize>,
-    notes: &[MidiNote],
-    track_mix: &[TrackMixState],
-    global_solo_active: bool,
-) -> HashMap<NoteStackKey, StackTop> {
-    let mut label_notes = HashMap::new();
-
-    for (key, members) in stacks {
-        let len = members.len();
-        let offset = stack_offsets.get(key).copied().unwrap_or(0) % len;
-        let top_pos = (len - 1 + len - offset) % len;
-
-        let mut selected = StackTop {
-            note_index: members[top_pos],
-            position: top_pos,
-            len,
-        };
-
-        for step in 0..len {
-            let pos = (top_pos + len - step) % len;
-            let candidate_note_index = members[pos];
-            let Some(candidate_note) = notes.get(candidate_note_index) else {
-                continue;
-            };
-
-            if track_visibility_alpha(track_mix, candidate_note.track_index, global_solo_active)
-                > 0.20
-            {
-                selected = StackTop {
-                    note_index: candidate_note_index,
-                    position: pos,
-                    len,
-                };
-                break;
-            }
-        }
-
-        label_notes.insert(*key, selected);
-    }
-
-    label_notes
 }
 
 fn note_contains_point(note: NoteGeometry, point: Point) -> bool {

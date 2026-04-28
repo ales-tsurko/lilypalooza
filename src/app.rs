@@ -393,18 +393,18 @@ impl AppEditorFrame {
         let title_gap = 10.0;
         let title_width = 180.0;
         let button_width = 25.0;
+        let title_row = editor_host::egui::Rect::from_min_size(
+            titlebar.left_top(),
+            editor_host::egui::vec2(titlebar.width(), EDITOR_FRAME_TITLE_ROW_HEIGHT),
+        );
         let close_button = editor_host::egui::Rect::from_center_size(
-            titlebar.right_center() - editor_host::egui::vec2(18.0, 0.0),
+            title_row.right_center() - editor_host::egui::vec2(18.0, 0.0),
             editor_host::egui::vec2(20.0, 20.0),
         );
         let preset_max_width = (close_button.left() - title_gap - 72.0 - left_inset).max(80.0);
         let preset_width = (titlebar.width() - 176.0)
             .clamp(188.0, 360.0)
             .min(preset_max_width);
-        let title_row = editor_host::egui::Rect::from_min_size(
-            titlebar.left_top(),
-            editor_host::egui::vec2(titlebar.width(), EDITOR_FRAME_TITLE_ROW_HEIGHT),
-        );
         let preset_row = editor_host::egui::Rect::from_min_size(
             editor_host::egui::pos2(titlebar.left() + left_inset, titlebar.top() + 4.0),
             editor_host::egui::vec2(preset_width, EDITOR_FRAME_PRESET_ROW_HEIGHT),
@@ -2484,6 +2484,18 @@ mod tests {
         ));
 
         assert!(!layout.previous.intersects(layout.browser));
+    }
+
+    #[test]
+    fn app_editor_frame_close_button_stays_in_title_row_when_presets_expand() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+        let layout = frame.preset_layout(editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(0.0, 0.0),
+            editor_host::egui::vec2(640.0, EDITOR_FRAME_EXPANDED_CHROME_HEIGHT as f32),
+        ));
+
+        assert!(layout.title_row.contains_rect(layout.close_button));
+        assert!(!layout.close_button.intersects(layout.browser));
     }
 
     #[test]
