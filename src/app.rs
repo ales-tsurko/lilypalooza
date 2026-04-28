@@ -141,6 +141,7 @@ impl AppEditorFrame {
 struct AppEditorFramePresetLayout {
     title_row: editor_host::egui::Rect,
     title_text: editor_host::egui::Rect,
+    close_button: editor_host::egui::Rect,
     preset_row: editor_host::egui::Rect,
     previous: editor_host::egui::Rect,
     name: editor_host::egui::Rect,
@@ -265,18 +266,18 @@ impl editor_host::EditorFrame for AppEditorFrame {
 
         let preset_layout = self.preset_layout(titlebar);
         let drag_rect = editor_host::egui::Rect::from_min_max(
-            preset_layout.title_row.left_top() + editor_host::egui::vec2(32.0, 0.0),
             editor_host::egui::pos2(
-                preset_layout.preset_row.left() - 8.0,
+                preset_layout.preset_row.right() + 8.0,
+                preset_layout.title_row.top(),
+            ),
+            editor_host::egui::pos2(
+                preset_layout.close_button.left() - 8.0,
                 preset_layout.title_row.bottom(),
             ),
         );
         let drag = ui.allocate_rect(drag_rect, editor_host::egui::Sense::drag());
 
-        let close_rect = editor_host::egui::Rect::from_center_size(
-            preset_layout.title_row.left_center() + editor_host::egui::vec2(15.0, 0.0),
-            editor_host::egui::vec2(20.0, 20.0),
-        );
+        let close_rect = preset_layout.close_button;
         let close = ui.allocate_rect(close_rect, editor_host::egui::Sense::click());
         let close_background = if close.hovered() {
             self.style.close_background_hovered
@@ -301,8 +302,8 @@ impl editor_host::EditorFrame for AppEditorFrame {
             ui_style::FONT_SIZE_UI_SM as f32,
         );
         ui.painter().text(
-            preset_layout.title_text.left_center(),
-            editor_host::egui::Align2::LEFT_CENTER,
+            preset_layout.title_text.right_center(),
+            editor_host::egui::Align2::RIGHT_CENTER,
             title,
             editor_host::egui::FontId::proportional(ui_style::FONT_SIZE_UI_SM as f32),
             self.style.title_color,
@@ -388,23 +389,32 @@ impl AppEditorFrame {
     }
 
     fn preset_layout(&self, titlebar: editor_host::egui::Rect) -> AppEditorFramePresetLayout {
-        let right_inset = 8.0;
+        let left_inset = 8.0;
+        let title_gap = 10.0;
+        let title_width = 180.0;
         let button_width = 25.0;
-        let preset_width = (titlebar.width() - 176.0).clamp(188.0, 360.0);
+        let close_button = editor_host::egui::Rect::from_center_size(
+            titlebar.right_center() - editor_host::egui::vec2(18.0, 0.0),
+            editor_host::egui::vec2(20.0, 20.0),
+        );
+        let preset_max_width = (close_button.left() - title_gap - 72.0 - left_inset).max(80.0);
+        let preset_width = (titlebar.width() - 176.0)
+            .clamp(188.0, 360.0)
+            .min(preset_max_width);
         let title_row = editor_host::egui::Rect::from_min_size(
             titlebar.left_top(),
             editor_host::egui::vec2(titlebar.width(), EDITOR_FRAME_TITLE_ROW_HEIGHT),
         );
         let preset_row = editor_host::egui::Rect::from_min_size(
-            editor_host::egui::pos2(
-                titlebar.right() - right_inset - preset_width,
-                titlebar.top() + 4.0,
-            ),
+            editor_host::egui::pos2(titlebar.left() + left_inset, titlebar.top() + 4.0),
             editor_host::egui::vec2(preset_width, EDITOR_FRAME_PRESET_ROW_HEIGHT),
         );
         let title_text = editor_host::egui::Rect::from_min_max(
-            title_row.left_top() + editor_host::egui::vec2(36.0, 0.0),
-            editor_host::egui::pos2(preset_row.left() - 10.0, title_row.bottom()),
+            editor_host::egui::pos2(
+                (close_button.left() - 8.0 - title_width).max(preset_row.right() + title_gap),
+                title_row.top(),
+            ),
+            editor_host::egui::pos2(close_button.left() - 8.0, title_row.bottom()),
         );
         let previous = editor_host::egui::Rect::from_min_size(
             preset_row.left_top(),
@@ -425,6 +435,7 @@ impl AppEditorFrame {
         AppEditorFramePresetLayout {
             title_row,
             title_text,
+            close_button,
             preset_row,
             previous,
             name,
@@ -2433,8 +2444,24 @@ mod tests {
         ));
 
         assert!(layout.title_row.contains_rect(layout.preset_row));
-        assert!(layout.title_text.right() <= layout.preset_row.left());
+        assert!(layout.preset_row.right() <= layout.title_text.left());
+        assert!(layout.title_text.right() <= layout.close_button.left());
         assert!(layout.browser.top() >= layout.title_row.bottom());
+    }
+
+    #[test]
+    fn app_editor_frame_header_orders_presets_title_and_close_button() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+        let titlebar = editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(0.0, 0.0),
+            editor_host::egui::vec2(640.0, EDITOR_FRAME_COMPACT_CHROME_HEIGHT as f32),
+        );
+        let layout = frame.preset_layout(titlebar);
+
+        assert!(layout.preset_row.left() < layout.title_text.left());
+        assert!(layout.title_text.right() < layout.close_button.left());
+        assert!(layout.title_text.width() <= 180.0);
+        assert_eq!(layout.close_button.center().x, titlebar.right() - 18.0);
     }
 
     #[test]

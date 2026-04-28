@@ -614,15 +614,11 @@ impl Lilypalooza {
         slot: &SlotState,
         slot_index: usize,
     ) -> String {
-        if slot_index != 0 {
-            return slot.title(strip_name, slot_index);
+        if slot_index == 0 {
+            return strip_name.to_string();
         }
 
-        let Some(descriptor) = slot.descriptor() else {
-            return slot.title(strip_name, slot_index);
-        };
-
-        format!("{strip_name}: {}", descriptor.name)
+        slot.title(strip_name, slot_index)
     }
 
     fn close_track_instrument_browser(&mut self) {
@@ -1071,6 +1067,18 @@ mod tests {
             mixer_message_history_mode(&MixerMessage::ResetTrackMeter(0), false),
             MixerHistoryMode::None
         );
+    }
+
+    #[test]
+    fn editor_window_title_uses_track_name_only_for_instrument_slot() {
+        lilypalooza_builtins::register_all();
+        let app = test_app();
+        let slot = lilypalooza_audio::SlotState::built_in(
+            lilypalooza_audio::BUILTIN_SOUNDFONT_ID,
+            lilypalooza_audio::ProcessorState::default(),
+        );
+
+        assert_eq!(app.editor_window_title("Violin", &slot, 0), "Violin");
     }
 
     #[test]
