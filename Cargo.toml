@@ -6,7 +6,7 @@ edition = "2024"
 [workspace]
 members = [
     "crates/editor-host",
-    "crates/iced-code-editor",
+    "crates/vendor/iced-code-editor",
     "crates/lilypalooza-audio",
     "crates/lilypalooza-builtins",
     "crates/lilypalooza-egui-baseview",
@@ -21,9 +21,9 @@ editor-host = { path = "crates/editor-host" }
 bytemuck = { version = "1.23.1", features = ["derive"] }
 directories = "5.0.1"
 iced = { workspace = true, features = ["canvas", "image", "lazy", "tokio", "svg"] }
-iced_aw = { path = "vendor/iced_aw", default-features = false, features = ["color_picker", "drop_down"] }
+iced_aw = { path = "crates/vendor/iced_aw", default-features = false, features = ["color_picker", "drop_down"] }
 iced_core = { workspace = true }
-iced-code-editor = { path = "crates/iced-code-editor" }
+iced-code-editor = { path = "crates/vendor/iced-code-editor" }
 lilypalooza-audio = { path = "crates/lilypalooza-audio" }
 lilypalooza-builtins = { path = "crates/lilypalooza-builtins" }
 notify = "8.2.0"
