@@ -172,12 +172,56 @@ impl EditorWindowManager {
         &mut self,
         target: EditorTarget,
     ) -> Option<(window::Id, Box<dyn EditorSession>)> {
-        let window = self.windows.remove(&target)?;
-        self.windows_by_id.remove(&window.host_window_id);
+        if let Some(window) = self.windows.remove(&target) {
+            self.windows_by_id.remove(&window.host_window_id);
+            if self.focused == Some(target) {
+                self.focused = None;
+            }
+            return Some((window.host_window_id, window.session));
+        }
+        let window_id = self
+            .pending
+            .iter()
+            .find_map(|(window_id, pending)| (pending.target == target).then_some(*window_id))?;
+        let pending = self.pending.remove(&window_id)?;
         if self.focused == Some(target) {
             self.focused = None;
         }
-        Some((window.host_window_id, window.session))
+        Some((pending.host_window_id, pending.session))
+    }
+
+    pub(super) fn shift_targets_after_removed_strip(&mut self, removed_strip_index: usize) {
+        let targets_to_shift = self
+            .windows
+            .keys()
+            .copied()
+            .filter(|target| target.strip_index > removed_strip_index)
+            .collect::<Vec<_>>();
+        for target in targets_to_shift {
+            if let Some(window) = self.windows.remove(&target) {
+                let shifted = EditorTarget {
+                    strip_index: target.strip_index - 1,
+                    slot_index: target.slot_index,
+                };
+                self.windows_by_id.insert(window.host_window_id, shifted);
+                self.windows.insert(shifted, window);
+            }
+        }
+
+        for pending in self.pending.values_mut() {
+            if pending.target.strip_index > removed_strip_index {
+                pending.target.strip_index -= 1;
+            }
+        }
+
+        if let Some(target) = self.focused
+            && target.strip_index > removed_strip_index
+        {
+            self.focused = Some(EditorTarget {
+                strip_index: target.strip_index - 1,
+                slot_index: target.slot_index,
+            });
+        }
     }
 
     pub(super) fn remove_all_windows(&mut self) -> Vec<(window::Id, Box<dyn EditorSession>)> {

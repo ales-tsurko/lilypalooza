@@ -50,6 +50,18 @@ impl Lilypalooza {
         window::close(window_id)
     }
 
+    fn destroy_editor_strip_and_shift_later(&mut self, strip_index: usize) -> Task<Message> {
+        let tasks = self
+            .processor_editor_windows
+            .targets_for_strip(strip_index)
+            .into_iter()
+            .map(|target| self.destroy_editor_target(target))
+            .collect::<Vec<_>>();
+        self.processor_editor_windows
+            .shift_targets_after_removed_strip(strip_index);
+        Task::batch(tasks)
+    }
+
     pub(in crate::app) fn destroy_all_editor_windows(&mut self) -> Task<Message> {
         let removed = self.processor_editor_windows.remove_all_windows();
         if removed.is_empty() {
@@ -468,8 +480,7 @@ impl Lilypalooza {
             self.close_processor_browser();
         }
 
-        let editor_cleanup = match &message {
-            MixerMessage::AddBus | MixerMessage::RemoveBus(_) => self.destroy_all_editor_windows(),
+        let mut editor_cleanup = match &message {
             MixerMessage::SelectTrackInstrument(index, _) => {
                 self.destroy_editor_target(EditorTarget {
                     strip_index: index + 1,
@@ -479,6 +490,25 @@ impl Lilypalooza {
             MixerMessage::SelectProcessor(target, _) => self.destroy_editor_target(*target),
             _ => Task::none(),
         };
+
+        let removed_bus_strip_index = if let MixerMessage::RemoveBus(id) = &message {
+            self.playback.as_ref().and_then(|playback| {
+                playback
+                    .mixer_state()
+                    .buses()
+                    .iter()
+                    .position(|bus| bus.bus_id == Some(BusId(*id)))
+                    .map(|index| 1 + playback.mixer_state().track_count() + index)
+            })
+        } else {
+            None
+        };
+        if let Some(strip_index) = removed_bus_strip_index {
+            editor_cleanup = Task::batch([
+                editor_cleanup,
+                self.destroy_editor_strip_and_shift_later(strip_index),
+            ]);
+        }
 
         let Some(playback) = self.playback.as_mut() else {
             return editor_cleanup;
@@ -1373,6 +1403,39 @@ mod tests {
         app
     }
 
+    fn fake_editor_parent() -> EditorParent {
+        EditorParent {
+            window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
+                iced::window::raw_window_handle::AppKitWindowHandle::new(std::ptr::NonNull::<
+                    std::ffi::c_void,
+                >::dangling(
+                )),
+            ),
+            display: None,
+        }
+    }
+
+    fn attach_recording_editor(
+        app: &mut Lilypalooza,
+        target: EditorTarget,
+        detached: Rc<RefCell<usize>>,
+    ) {
+        let window_id = iced::window::Id::unique();
+        app.processor_editor_windows.begin_open(
+            target,
+            "Editor".to_string(),
+            true,
+            Box::new(RecordingEditorSession {
+                visible: Rc::new(RefCell::new(Vec::new())),
+                detached,
+            }),
+            window_id,
+        );
+        app.processor_editor_windows
+            .attach(window_id, None, fake_editor_parent())
+            .expect("attach should succeed");
+    }
+
     #[test]
     fn mixer_drag_value_changes_use_gesture_history() {
         assert_eq!(
@@ -1480,6 +1543,94 @@ mod tests {
                 .mixer_state()
                 .bus(BusId(bus_id.0))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn adding_bus_keeps_open_processor_editor_session() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        let detached = Rc::new(RefCell::new(0));
+        let target = EditorTarget {
+            strip_index: 1,
+            slot_index: 0,
+        };
+        attach_recording_editor(&mut app, target, Rc::clone(&detached));
+
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+
+        assert_eq!(*detached.borrow(), 0);
+        assert!(app.processor_editor_windows.contains_window(target));
+    }
+
+    #[test]
+    fn removing_bus_detaches_only_removed_bus_and_reindexes_later_bus_editors() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+        let (first_bus_id, track_count) = {
+            let mixer = app
+                .playback
+                .as_ref()
+                .expect("playback should exist")
+                .mixer_state();
+            (
+                mixer
+                    .buses()
+                    .first()
+                    .and_then(|bus| bus.bus_id)
+                    .expect("first bus should exist")
+                    .0,
+                mixer.track_count(),
+            )
+        };
+        let track_target = EditorTarget {
+            strip_index: 1,
+            slot_index: 0,
+        };
+        let removed_bus_target = EditorTarget {
+            strip_index: 1 + track_count,
+            slot_index: 1,
+        };
+        let later_bus_target = EditorTarget {
+            strip_index: 1 + track_count + 1,
+            slot_index: 1,
+        };
+        let reindexed_later_bus_target = EditorTarget {
+            strip_index: 1 + track_count,
+            slot_index: 1,
+        };
+        let track_detached = Rc::new(RefCell::new(0));
+        let removed_bus_detached = Rc::new(RefCell::new(0));
+        let later_bus_detached = Rc::new(RefCell::new(0));
+        attach_recording_editor(&mut app, track_target, Rc::clone(&track_detached));
+        attach_recording_editor(
+            &mut app,
+            removed_bus_target,
+            Rc::clone(&removed_bus_detached),
+        );
+        attach_recording_editor(&mut app, later_bus_target, Rc::clone(&later_bus_detached));
+
+        let _ = app.handle_mixer_message(MixerMessage::RemoveBus(first_bus_id));
+
+        assert_eq!(*track_detached.borrow(), 0);
+        assert_eq!(*removed_bus_detached.borrow(), 1);
+        assert_eq!(*later_bus_detached.borrow(), 0);
+        assert!(app.processor_editor_windows.contains_window(track_target));
+        assert!(
+            app.processor_editor_windows
+                .contains_window(reindexed_later_bus_target)
+        );
+        assert!(
+            !app.processor_editor_windows
+                .contains_window(later_bus_target)
         );
     }
 
