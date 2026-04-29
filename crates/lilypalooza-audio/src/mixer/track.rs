@@ -30,7 +30,7 @@ impl TrackId {
 pub struct BusId(pub u16);
 
 /// Main output routing target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum TrackRoute {
     /// Route directly to master.
     #[default]
@@ -46,6 +46,8 @@ pub struct BusSend {
     pub bus_id: BusId,
     /// Send gain in dB.
     pub gain_db: f32,
+    /// Whether the send is active.
+    pub enabled: bool,
     /// Whether the send taps pre-fader.
     pub pre_fader: bool,
 }
@@ -57,6 +59,7 @@ impl BusSend {
         Self {
             bus_id,
             gain_db,
+            enabled: true,
             pre_fader,
         }
     }

@@ -731,11 +731,32 @@ impl MixerRuntime {
     ) -> Result<(), MixerRuntimeError> {
         let bus_inputs = self.bus_input_nodes();
         let track = mixer.track(track_id)?;
-        let runtime = self
+        let runtime_slot = self
             .tracks
             .get_mut(track_id.index())
             .ok_or(MixerError::InvalidTrackId(track_id))?;
-        if let Some(runtime) = runtime.as_mut() {
+        let needs_rebuild = runtime_slot
+            .as_ref()
+            .is_some_and(|runtime| !runtime.matches_signal_path(track));
+        if needs_rebuild && let Some(old_runtime) = runtime_slot.take() {
+            old_runtime.free();
+            *runtime_slot = Some(TrackRuntime::new(
+                context,
+                commands,
+                track,
+                TrackRuntimeBuildContext {
+                    settings: &self.meter_settings,
+                    mixer,
+                    master_input: self.master.input_node(),
+                    bus_inputs: &bus_inputs,
+                    soundfont_resources: mixer.soundfonts(),
+                    soundfonts: &self.soundfonts,
+                    soundfont_settings: self.soundfont_settings,
+                },
+            )?);
+            return Ok(());
+        }
+        if let Some(runtime) = runtime_slot.as_mut() {
             runtime.sync_routing(
                 context,
                 commands,
@@ -1030,7 +1051,7 @@ impl TrackRuntime {
         let route_bus = context.with_activation(|| bus(2));
 
         let mut instrument = None;
-        let signal_path = if track.effect_count() == 0 {
+        let signal_path = if track_prefers_combined_signal_path(track) {
             if let Some(created_instrument) = create_track_instrument(
                 context,
                 track,
@@ -1156,6 +1177,11 @@ impl TrackRuntime {
         Ok(false)
     }
 
+    fn matches_signal_path(&self, track: &Track) -> bool {
+        matches!(self.signal_path, TrackSignalPath::Combined)
+            == track_prefers_combined_signal_path(track)
+    }
+
     fn rebuild_effects(
         &mut self,
         context: &KnystContext,
@@ -1163,7 +1189,7 @@ impl TrackRuntime {
         track: &Track,
     ) -> bool {
         if matches!(self.signal_path, TrackSignalPath::Combined) {
-            return track.effect_count() == 0;
+            return track_prefers_combined_signal_path(track);
         }
         context.with_activation(|| {
             knyst_commands().disconnect(Connection::clear_to_nodes(self.pre_send_source_node()));
@@ -1243,6 +1269,9 @@ impl TrackRuntime {
 
         context.with_activation(|| {
             for send in sends {
+                if !send.enabled {
+                    continue;
+                }
                 let Some(destination) = bus_inputs.get(&send.bus_id).copied() else {
                     continue;
                 };
@@ -1502,6 +1531,9 @@ impl BusRuntime {
 
         context.with_activation(|| {
             for send in sends {
+                if !send.enabled {
+                    continue;
+                }
                 let Some(destination) = bus_inputs.get(&send.bus_id).copied() else {
                     continue;
                 };
@@ -1722,6 +1754,10 @@ fn track_needs_runtime(track: &Track) -> bool {
         .instrument_slot()
         .is_some_and(|slot| registry::is_empty(&slot.kind))
         || track.effect_count() > 0
+}
+
+fn track_prefers_combined_signal_path(track: &Track) -> bool {
+    track.effect_count() == 0 && track.routing.sends.is_empty()
 }
 
 fn db_to_amplitude(db: f32) -> f32 {
@@ -2076,7 +2112,7 @@ mod tests {
         InstrumentRuntimeContext, InstrumentRuntimeSpec, MidiEvent, Processor, ProcessorDescriptor,
         ProcessorKind, ProcessorState, ProcessorStateError, RuntimeBinding, SlotState, registry,
     };
-    use crate::mixer::{Mixer, MixerState, TrackId};
+    use crate::mixer::{BusSend, Mixer, MixerState, TrackId};
     use crate::test_utils::{OfflineHarness, test_soundfont_resource};
     use knyst::time::Beats;
 
@@ -2694,6 +2730,97 @@ mod tests {
             assert!((harness.output_channel(0)[frame] - expected_left).abs() < 1.0e-5);
             assert!((harness.output_channel(1)[frame] - expected_right).abs() < 1.0e-5);
         }
+    }
+
+    #[test]
+    fn disabled_track_send_does_not_create_runtime_send_node() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let mut state = MixerState::new();
+        state.set_soundfont(test_soundfont_resource());
+        let bus_id = state.add_bus("Verb");
+        let mut send = BusSend::new(bus_id, -6.0, false);
+        send.enabled = false;
+        state
+            .add_track_bus_send(TrackId(0), send)
+            .expect("send should be accepted");
+        state
+            .track_mut(TrackId(0))
+            .expect("track 0 should exist")
+            .set_instrument_slot(soundfont_slot(0));
+        let context = harness.context().clone();
+        let settings = harness.settings();
+
+        let mixer = Mixer::new(&context, harness.commands(), &settings, state)
+            .expect("mixer should initialize");
+
+        let track_runtime = mixer.runtime.tracks[0]
+            .as_ref()
+            .expect("track runtime should exist");
+        assert!(track_runtime.send_nodes.is_empty());
+    }
+
+    #[test]
+    fn pre_fader_track_send_ignores_track_gain() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let mut state = MixerState::new();
+        state.set_soundfont(test_soundfont_resource());
+        let bus_id = state.add_bus("Cue");
+        state
+            .add_track_bus_send(TrackId(0), BusSend::new(bus_id, 0.0, true))
+            .expect("send should be accepted");
+        let track = state.track_mut(TrackId(0)).expect("track 0 should exist");
+        track.set_instrument_slot(soundfont_slot(0));
+        track.state.gain_db = -60.0;
+        let context = harness.context().clone();
+        let settings = harness.settings();
+
+        let mixer = Mixer::new(&context, harness.commands(), &settings, state)
+            .expect("mixer should initialize");
+        let handle = mixer
+            .instrument_handle(TrackId(0))
+            .expect("track instrument should exist");
+        harness.commands().transport_play();
+        harness.wait_for_transport_settled();
+
+        schedule_test_note(&mut harness, handle);
+        harness.process_blocks(16);
+
+        assert!(
+            harness.output_has_signal(),
+            "pre-fader send should still feed its bus when the track fader is closed"
+        );
+    }
+
+    #[test]
+    fn post_fader_track_send_follows_track_gain() {
+        let mut harness = OfflineHarness::new(44_100, 64);
+        let mut state = MixerState::new();
+        state.set_soundfont(test_soundfont_resource());
+        let bus_id = state.add_bus("Verb");
+        state
+            .add_track_bus_send(TrackId(0), BusSend::new(bus_id, 0.0, false))
+            .expect("send should be accepted");
+        let track = state.track_mut(TrackId(0)).expect("track 0 should exist");
+        track.set_instrument_slot(soundfont_slot(0));
+        track.state.gain_db = -60.0;
+        let context = harness.context().clone();
+        let settings = harness.settings();
+
+        let mixer = Mixer::new(&context, harness.commands(), &settings, state)
+            .expect("mixer should initialize");
+        let handle = mixer
+            .instrument_handle(TrackId(0))
+            .expect("track instrument should exist");
+        harness.commands().transport_play();
+        harness.wait_for_transport_settled();
+
+        schedule_test_note(&mut harness, handle);
+        harness.process_blocks(16);
+
+        assert!(
+            !harness.output_has_signal(),
+            "post-fader send should be silent when the track fader is closed"
+        );
     }
 
     #[test]

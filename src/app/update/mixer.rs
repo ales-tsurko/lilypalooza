@@ -2,7 +2,7 @@ use editor_host::{
     EditorFrameCommand, EditorHostOptions, EditorPresetItem, EditorPresetOrigin, EditorPresetState,
     WindowSnapshot, route_app_quit_to_window_close,
 };
-use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, BusId, ProcessorKind, SlotState, TrackId};
+use lilypalooza_audio::{BUILTIN_SOUNDFONT_ID, BusId, BusSend, ProcessorKind, SlotState, TrackId};
 use lilypalooza_builtins::soundfont_synth::{self, SoundfontProcessorState};
 
 use super::super::messages::MixerMessage;
@@ -529,6 +529,78 @@ impl Lilypalooza {
                         mixer_error = Some(error.to_string());
                     }
                 }
+                MixerMessage::SetMainRoute(source, route) => {
+                    let result = match source {
+                        super::super::mixer::RoutingStrip::Track(index) => {
+                            mixer.set_track_route(TrackId(index as u16), route)
+                        }
+                        super::super::mixer::RoutingStrip::Bus(id) => {
+                            mixer.set_bus_route(BusId(id), route)
+                        }
+                    };
+                    if let Err(error) = result {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
+                MixerMessage::AddSend(source, bus_id) => {
+                    let send = BusSend::new(BusId(bus_id), 0.0, false);
+                    let result = match source {
+                        super::super::mixer::RoutingStrip::Track(index) => {
+                            mixer.add_track_send(TrackId(index as u16), send)
+                        }
+                        super::super::mixer::RoutingStrip::Bus(id) => {
+                            mixer.add_bus_send(BusId(id), send)
+                        }
+                    };
+                    if let Err(error) = result {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
+                MixerMessage::SetSendDestination(source, send_index, bus_id) => {
+                    let result = update_send(&mut mixer, source, send_index, |send| {
+                        send.bus_id = BusId(bus_id);
+                    });
+                    if let Err(error) = result {
+                        mixer_error = Some(error);
+                    }
+                }
+                MixerMessage::SetSendGain(source, send_index, gain) => {
+                    let result = update_send(&mut mixer, source, send_index, |send| {
+                        send.gain_db = gain;
+                    });
+                    if let Err(error) = result {
+                        mixer_error = Some(error);
+                    }
+                }
+                MixerMessage::ToggleSendEnabled(source, send_index) => {
+                    let result = update_send(&mut mixer, source, send_index, |send| {
+                        send.enabled = !send.enabled;
+                    });
+                    if let Err(error) = result {
+                        mixer_error = Some(error);
+                    }
+                }
+                MixerMessage::ToggleSendPreFader(source, send_index) => {
+                    let result = update_send(&mut mixer, source, send_index, |send| {
+                        send.pre_fader = !send.pre_fader;
+                    });
+                    if let Err(error) = result {
+                        mixer_error = Some(error);
+                    }
+                }
+                MixerMessage::RemoveSend(source, send_index) => {
+                    let result = match source {
+                        super::super::mixer::RoutingStrip::Track(index) => mixer
+                            .remove_track_send(TrackId(index as u16), send_index)
+                            .map(drop),
+                        super::super::mixer::RoutingStrip::Bus(id) => {
+                            mixer.remove_bus_send(BusId(id), send_index).map(drop)
+                        }
+                    };
+                    if let Err(error) = result {
+                        mixer_error = Some(error.to_string());
+                    }
+                }
                 MixerMessage::ToggleTrackMute(index) => {
                     let next = mixer
                         .track(TrackId(index as u16))
@@ -773,6 +845,44 @@ fn mixer_has_any_solo(mixer: &lilypalooza_audio::MixerHandle<'_>) -> bool {
         || mixer.buses().iter().any(|bus| bus.state.soloed)
 }
 
+fn update_send(
+    mixer: &mut lilypalooza_audio::MixerHandle<'_>,
+    source: super::super::mixer::RoutingStrip,
+    send_index: usize,
+    update: impl FnOnce(&mut BusSend),
+) -> Result<(), String> {
+    match source {
+        super::super::mixer::RoutingStrip::Track(index) => {
+            let id = TrackId(index as u16);
+            let mut send = *mixer
+                .track(id)
+                .map_err(|error| error.to_string())?
+                .routing
+                .sends
+                .get(send_index)
+                .ok_or_else(|| format!("track send index {send_index} is out of bounds"))?;
+            update(&mut send);
+            mixer
+                .set_track_send(id, send_index, send)
+                .map_err(|error| error.to_string())
+        }
+        super::super::mixer::RoutingStrip::Bus(id) => {
+            let id = BusId(id);
+            let mut send = *mixer
+                .bus(id)
+                .map_err(|error| error.to_string())?
+                .routing
+                .sends
+                .get(send_index)
+                .ok_or_else(|| format!("bus send index {send_index} is out of bounds"))?;
+            update(&mut send);
+            mixer
+                .set_bus_send(id, send_index, send)
+                .map_err(|error| error.to_string())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MixerHistoryMode {
     None,
@@ -811,7 +921,8 @@ fn mixer_message_history_mode(
         | MixerMessage::SetTrackGain(_, _)
         | MixerMessage::SetTrackPan(_, _)
         | MixerMessage::SetBusGain(_, _)
-        | MixerMessage::SetBusPan(_, _) => {
+        | MixerMessage::SetBusPan(_, _)
+        | MixerMessage::SetSendGain(_, _, _) => {
             if primary_mouse_pressed {
                 MixerHistoryMode::Gesture
             } else {
@@ -829,6 +940,12 @@ fn mixer_message_history_mode(
         | MixerMessage::SubmitTrackColor(_)
         | MixerMessage::ToggleTrackMute(_)
         | MixerMessage::ToggleTrackSolo(_)
+        | MixerMessage::SetMainRoute(_, _)
+        | MixerMessage::AddSend(_, _)
+        | MixerMessage::SetSendDestination(_, _, _)
+        | MixerMessage::ToggleSendEnabled(_, _)
+        | MixerMessage::ToggleSendPreFader(_, _)
+        | MixerMessage::RemoveSend(_, _)
         | MixerMessage::SelectProcessor(_, _)
         | MixerMessage::ToggleSlotBypass(_)
         | MixerMessage::MoveTrackEffect { .. }
@@ -1688,7 +1805,7 @@ mod tests {
                 id: "default".to_string(),
                 name: "FluidR3".to_string(),
                 path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("assets/soundfonts/FluidR3_GM.sf2")
+                    .join("assets/soundfonts/lilypalooza-test.sf2")
                     .canonicalize()
                     .expect("test SoundFont should exist"),
             })
@@ -1726,7 +1843,7 @@ mod tests {
                 id: "default".to_string(),
                 name: "FluidR3".to_string(),
                 path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("assets/soundfonts/FluidR3_GM.sf2")
+                    .join("assets/soundfonts/lilypalooza-test.sf2")
                     .canonicalize()
                     .expect("test SoundFont should exist"),
             })
@@ -1888,6 +2005,129 @@ mod tests {
         );
 
         assert_eq!(app.expanded_processor_preset_browser, None);
+    }
+
+    #[test]
+    fn mixer_main_route_message_updates_track_and_bus_routes() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+        let bus_ids: Vec<_> = app
+            .playback
+            .as_ref()
+            .expect("playback")
+            .mixer_state()
+            .buses()
+            .iter()
+            .filter_map(|bus| bus.bus_id.map(|id| id.0))
+            .collect();
+
+        let _ = app.handle_mixer_message(MixerMessage::SetMainRoute(
+            crate::app::mixer::RoutingStrip::Track(0),
+            lilypalooza_audio::TrackRoute::Bus(BusId(bus_ids[0])),
+        ));
+        let _ = app.handle_mixer_message(MixerMessage::SetMainRoute(
+            crate::app::mixer::RoutingStrip::Bus(bus_ids[0]),
+            lilypalooza_audio::TrackRoute::Bus(BusId(bus_ids[1])),
+        ));
+        let _ = app.handle_mixer_message(MixerMessage::SetMainRoute(
+            crate::app::mixer::RoutingStrip::Bus(bus_ids[0]),
+            lilypalooza_audio::TrackRoute::Bus(BusId(bus_ids[0])),
+        ));
+
+        let mixer = app.playback.as_ref().expect("playback").mixer_state();
+        assert_eq!(
+            mixer.track(TrackId(0)).expect("track").routing.main,
+            lilypalooza_audio::TrackRoute::Bus(BusId(bus_ids[0]))
+        );
+        assert_eq!(
+            mixer.bus(BusId(bus_ids[0])).expect("bus").routing.main,
+            lilypalooza_audio::TrackRoute::Bus(BusId(bus_ids[1]))
+        );
+    }
+
+    #[test]
+    fn mixer_send_messages_update_destination_gain_enabled_and_prepost() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+        let bus_ids: Vec<_> = app
+            .playback
+            .as_ref()
+            .expect("playback")
+            .mixer_state()
+            .buses()
+            .iter()
+            .filter_map(|bus| bus.bus_id.map(|id| id.0))
+            .collect();
+        let source = crate::app::mixer::RoutingStrip::Track(0);
+
+        let _ = app.handle_mixer_message(MixerMessage::AddSend(source, bus_ids[0]));
+        let _ = app.handle_mixer_message(MixerMessage::SetSendDestination(source, 0, bus_ids[1]));
+        let _ = app.handle_mixer_message(MixerMessage::SetSendGain(source, 0, -7.5));
+        let _ = app.handle_mixer_message(MixerMessage::ToggleSendEnabled(source, 0));
+        let _ = app.handle_mixer_message(MixerMessage::ToggleSendPreFader(source, 0));
+
+        let send = app
+            .playback
+            .as_ref()
+            .expect("playback")
+            .mixer_state()
+            .track(TrackId(0))
+            .expect("track")
+            .routing
+            .sends[0];
+        assert_eq!(send.bus_id, BusId(bus_ids[1]));
+        assert_eq!(send.gain_db, -7.5);
+        assert!(!send.enabled);
+        assert!(send.pre_fader);
+    }
+
+    #[test]
+    fn removing_bus_from_app_clears_routes_and_sends() {
+        let mut app = test_app();
+        app.playback = Some(
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start"),
+        );
+        let _ = app.handle_mixer_message(MixerMessage::AddBus);
+        let bus_id = app
+            .playback
+            .as_ref()
+            .expect("playback")
+            .mixer_state()
+            .buses()
+            .first()
+            .and_then(|bus| bus.bus_id.map(|id| id.0))
+            .expect("bus");
+
+        let _ = app.handle_mixer_message(MixerMessage::SetMainRoute(
+            crate::app::mixer::RoutingStrip::Track(0),
+            lilypalooza_audio::TrackRoute::Bus(BusId(bus_id)),
+        ));
+        let _ = app.handle_mixer_message(MixerMessage::AddSend(
+            crate::app::mixer::RoutingStrip::Track(0),
+            bus_id,
+        ));
+        let _ = app.handle_mixer_message(MixerMessage::RemoveBus(bus_id));
+
+        let track = app
+            .playback
+            .as_ref()
+            .expect("playback")
+            .mixer_state()
+            .track(TrackId(0))
+            .expect("track");
+        assert_eq!(track.routing.main, lilypalooza_audio::TrackRoute::Master);
+        assert!(track.routing.sends.is_empty());
     }
 
     #[test]

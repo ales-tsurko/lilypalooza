@@ -169,7 +169,7 @@ impl OfflineHarness {
 
 pub(crate) fn test_soundfont_resource() -> SoundfontResource {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/soundfonts/FluidR3_GM.sf2")
+        .join("../../assets/soundfonts/lilypalooza-test.sf2")
         .canonicalize()
         .expect("test SoundFont should exist");
     SoundfontResource {

@@ -1121,6 +1121,38 @@ mod tests {
                 .len(),
             1
         );
+        assert!(
+            mixer
+                .track(TrackId(0))
+                .expect("track should exist")
+                .routing
+                .sends[0]
+                .enabled
+        );
+    }
+
+    #[test]
+    fn disabled_bus_sends_roundtrip_without_losing_gain_or_pre_fader() {
+        let mut mixer = MixerState::new();
+        let bus_id = mixer.add_bus("Verb");
+        let mut send = BusSend::new(bus_id, -9.0, true);
+        send.enabled = false;
+
+        mixer
+            .add_track_bus_send(TrackId(0), send)
+            .expect("bus send should succeed");
+
+        let restored: MixerState =
+            ron::from_str(&ron::to_string(&mixer).expect("mixer should serialize"))
+                .expect("mixer should deserialize");
+        assert_eq!(
+            restored
+                .track(TrackId(0))
+                .expect("track should exist")
+                .routing
+                .sends[0],
+            send
+        );
     }
 
     #[test]

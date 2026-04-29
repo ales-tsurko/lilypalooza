@@ -1,18 +1,21 @@
 use iced::widget::Id;
 use iced::widget::{
-    button, column, container, lazy, mouse_area, opaque, responsive, row, scrollable, stack, text,
-    text_input,
+    button, column, container, lazy, mouse_area, opaque, pick_list, responsive, row, scrollable,
+    stack, text, text_input,
 };
-use iced::{Color, Element, Fill, FillPortion, Length, alignment, border, mouse};
+use iced::{Color, Element, Fill, FillPortion, Length, Padding, alignment, border, mouse};
 use iced_aw::helpers::color_picker_with_change;
 use lilypalooza_audio::instrument::registry;
 use lilypalooza_audio::mixer::{
     ChannelMeterSnapshot, MixerMeterSnapshot, MixerMeterSnapshotWindow, STRIP_METER_MIN_DB,
-    StripMeterSnapshot,
+    StripMeterSnapshot, TrackRoute, TrackRouting,
 };
 use lilypalooza_audio::{BUILTIN_METRONOME_ID, BUILTIN_NONE_ID, MixerState, SlotState};
 
-use super::controls::{GAIN_MIN_DB, gain_control_width, gain_fader, gain_knob, pan_knob};
+use super::controls::{
+    GAIN_MIN_DB, compact_gain_slider, gain_control_width, gain_fader, gain_fader_scale,
+    gain_fader_scale_width, gain_knob, pan_knob,
+};
 use super::messages::MixerMessage;
 use super::meters::{
     MeterColors, meter_colors, stereo_meter, stereo_meter_bar_width, stereo_meter_width,
@@ -21,7 +24,7 @@ use super::meters::{
 use super::{Lilypalooza, Message};
 use crate::{fonts, icons, ui_style};
 
-pub(super) const MIXER_MIN_HEIGHT: f32 = 340.0;
+pub(super) const MIXER_MIN_HEIGHT: f32 = ui_style::grid_f32(102);
 pub(super) const MIXER_MIN_WIDTH: f32 = 520.0;
 const INSTRUMENT_SCROLL_ID: &str = "mixer-instrument-scroll";
 
@@ -61,6 +64,23 @@ const EFFECT_RACK_SCROLLBAR_WIDTH: f32 = 6.0;
 const EFFECT_RACK_SCROLLBAR_SCROLLER_WIDTH: f32 = 3.0;
 const EFFECT_RACK_SCROLLBAR_SPACING: f32 = 2.0;
 const EFFECT_RACK_SCROLLBAR_MARGIN: f32 = 1.0;
+const ROUTE_PICKER_HEIGHT: f32 = ui_style::grid_f32(6);
+const ROUTE_PICKER_TOP_SPACING: f32 = ui_style::grid_f32(3);
+const ROUTE_PICKER_BOTTOM_INSET: f32 = 0.0;
+const ROUTE_MENU_ITEM_HEIGHT: f32 = ui_style::grid_f32(7);
+const ROUTE_MENU_MAX_ITEMS: usize = 6;
+const ROUTE_PICKER_MAX_LEN: usize = 12;
+const SEND_ROW_HEIGHT: f32 = ui_style::grid_f32(14);
+const SEND_ROW_CONTENT_BOTTOM_SPACING: f32 = ui_style::grid_f32(1);
+const SEND_PANEL_TOP_SPACING: f32 = ui_style::grid_f32(1);
+const SEND_PANEL_HEADER_HEIGHT: f32 = ui_style::grid_f32(5);
+const SEND_CONTROL_HEIGHT: f32 = ui_style::grid_f32(5);
+const SEND_MODE_HEIGHT: f32 = SEND_CONTROL_HEIGHT;
+const SEND_MODE_WIDTH: f32 = ui_style::grid_f32(10);
+const SEND_PICKER_WIDTH: f32 = ui_style::grid_f32(16);
+const SEND_GAIN_MIN_DB: f32 = GAIN_MIN_DB;
+const SEND_GAIN_MAX_DB: f32 = 6.0;
+const SEND_GAIN_STEP_DB: f32 = 0.5;
 const INSTRUMENT_PICKER_HEIGHT: f32 = PROCESSOR_SLOT_HEIGHT;
 const INSTRUMENT_SLOT_BUTTON_HEIGHT: f32 = PROCESSOR_SLOT_BUTTON_HEIGHT;
 #[cfg(test)]
@@ -73,20 +93,26 @@ const INSTRUMENT_BROWSER_HEIGHT: f32 = PROCESSOR_BROWSER_HEIGHT;
 #[cfg(test)]
 const INSTRUMENT_BROWSER_ICON_SIZE: f32 = PROCESSOR_BROWSER_ICON_SIZE;
 const SECTION_HEADER_HEIGHT: f32 = 24.0;
-const STRIP_MIN_HEIGHT: f32 = 240.0;
+const STRIP_MIN_HEIGHT: f32 = ui_style::grid_f32(88);
+const STRIP_FOOTER_HEIGHT: f32 = TITLE_TOP_SPACING
+    + TRACK_TITLE_EDITOR_HEIGHT
+    + ROUTE_PICKER_TOP_SPACING
+    + ROUTE_PICKER_HEIGHT
+    + ROUTE_PICKER_BOTTOM_INSET;
 const STRIP_TOGGLE_SIZE: f32 = INSTRUMENT_PICKER_HEIGHT - 4.0;
 const TRACK_TITLE_EDITOR_HEIGHT: f32 = ui_style::grid_f32(5);
 const TRACK_TITLE_EDITOR_CONTROL_HEIGHT: f32 = TRACK_TITLE_EDITOR_HEIGHT;
 const TRACK_TITLE_EDITOR_SWATCH_SIZE: f32 = TRACK_TITLE_EDITOR_HEIGHT;
 const TRACK_TITLE_EDITOR_INPUT_PADDING_V: u16 = 2;
 const TRACK_TITLE_EDITOR_INPUT_PADDING_H: u16 = ui_style::grid(1);
-const COMPACT_GAIN_SWITCH_OFFSET: f32 = 20.0;
+const COMPACT_GAIN_SWITCH_OFFSET: f32 = ui_style::grid_f32(8);
 const VALUE_LABEL_HEIGHT: f32 = ui_style::grid_f32(4);
 const HEADER_SIDE_INSET: f32 = 12.0;
 const SECTION_BODY_GAP: f32 = 0.0;
 const METER_STACK_SPACING: f32 = ui_style::grid_f32(2);
 const STRIP_STACK_SPACING: f32 = ui_style::grid_f32(1);
 const LABEL_CONTROL_SPACING: f32 = ui_style::SPACE_XS as f32;
+const GAIN_SCALE_SPACING: f32 = 1.0;
 const TITLE_TOP_SPACING: f32 = ui_style::grid_f32(3);
 const STRIP_VIRTUALIZATION_OVERSCAN: usize = 2;
 
@@ -100,6 +126,57 @@ struct StripActions<'a> {
     mute: Option<(bool, Message)>,
     on_gain: Option<Box<dyn Fn(f32) -> Message + 'a>>,
     on_pan: Option<Box<dyn Fn(f32) -> Message + 'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum RoutingStrip {
+    Track(usize),
+    Bus(u16),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RouteChoice {
+    route: TrackRoute,
+    label: String,
+}
+
+impl std::fmt::Display for RouteChoice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum SendDestinationAction {
+    Route(u16),
+    Remove,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SendDestinationChoice {
+    action: SendDestinationAction,
+    label: String,
+}
+
+impl std::fmt::Display for SendDestinationChoice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SendDependency {
+    bus_id: u16,
+    gain_bits: u32,
+    enabled: bool,
+    pre_fader: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EffectRackPanelRouting {
+    source: RoutingStrip,
+    sends: Vec<SendDependency>,
+    send_choices: Vec<SendDestinationChoice>,
 }
 
 fn noop_message() -> Message {
@@ -225,9 +302,12 @@ struct TrackStripDependency {
     color_bits: [u32; 4],
     gain_bits: u32,
     pan_bits: u32,
+    route: RouteChoice,
+    route_choices: Vec<RouteChoice>,
     meter: MeterDependency,
     compact_gain: bool,
     effect_rack_open: bool,
+    panel_has_content: bool,
     strip_height_bits: u32,
     soloed: bool,
     muted: bool,
@@ -255,9 +335,12 @@ struct BusStripDependency {
     effect_rack_open: bool,
     gain_bits: u32,
     pan_bits: u32,
+    route: RouteChoice,
+    route_choices: Vec<RouteChoice>,
     meter: MeterDependency,
     compact_gain: bool,
     strip_height_bits: u32,
+    panel_has_content: bool,
     soloed: bool,
     muted: bool,
     renaming: bool,
@@ -628,6 +711,7 @@ fn master_track_area(
             0,
             &mixer.master().name,
             effect_slot_dependencies(mixer.master()),
+            None,
             hovered_processor_slot,
             controls_enabled,
             strip_height,
@@ -693,6 +777,7 @@ fn sticky_master_strip(
                         .center_x(Fill)
                         .into(),
                     None,
+                    None,
                     f32::from_bits(dependency.gain_bits),
                     f32::from_bits(dependency.pan_bits),
                     meter_stack(
@@ -737,6 +822,7 @@ fn sticky_master_strip(
                     },
                     f32::from_bits(dependency.strip_height_bits),
                     gain_mode,
+                    true,
                 ),
                 MAIN_STRIP_WIDTH,
                 f32::from_bits(dependency.strip_height_bits),
@@ -785,6 +871,8 @@ fn instrument_track_area(
             let effect_rack_open = open_effect_rack_strips.contains(&strip_index);
             let selected_choice = selected_instrument_choice(track.instrument_slot(), mixer);
             let effects = effect_slot_dependencies(track);
+            let route_choices = route_choices(mixer, RoutingStrip::Track(track_index));
+            let selected_route = selected_route_choice(track.routing.main, &route_choices);
             let strip_hovered_processor_slot =
                 hovered_processor_slot.filter(|(target, _)| target.strip_index == strip_index);
             let hovered_processor_slot = strip_hovered_processor_slot
@@ -818,9 +906,14 @@ fn instrument_track_area(
                     color_bits: color_bits(track_color),
                     gain_bits: track.state.gain_db.to_bits(),
                     pan_bits: track.state.pan.to_bits(),
+                    route: selected_route,
+                    route_choices,
                     meter: meter_dependency.meter,
                     compact_gain: matches!(gain_mode, GainControlMode::Knob),
                     effect_rack_open,
+                    panel_has_content: !effects.is_empty()
+                        || !track.routing.sends.is_empty()
+                        || track.routing.main != TrackRoute::Master,
                     strip_height_bits: strip_height.to_bits(),
                     soloed: track.state.soloed,
                     muted: track.state.muted,
@@ -875,6 +968,12 @@ fn instrument_track_area(
                                 controls_enabled,
                             )
                         }),
+                        Some(route_picker(
+                            RoutingStrip::Track(track_index),
+                            dependency.route.clone(),
+                            dependency.route_choices.clone(),
+                            controls_enabled,
+                        )),
                         f32::from_bits(dependency.gain_bits),
                         f32::from_bits(dependency.pan_bits),
                         meter_stack(
@@ -888,7 +987,7 @@ fn instrument_track_area(
                         StripActions {
                             panel: Some((
                                 dependency.effect_rack_open,
-                                !dependency.effects.is_empty(),
+                                dependency.panel_has_content,
                                 if controls_enabled {
                                     Message::Mixer(MixerMessage::ToggleMixerEffectRack(strip_index))
                                 } else {
@@ -928,6 +1027,7 @@ fn instrument_track_area(
                         },
                         strip_height,
                         gain_mode,
+                        true,
                     );
 
                     if dependency.tint_enabled {
@@ -955,6 +1055,14 @@ fn instrument_track_area(
                     strip_index,
                     &track.name,
                     effects.clone(),
+                    Some(EffectRackPanelRouting {
+                        source: RoutingStrip::Track(track_index),
+                        sends: send_dependencies(&track.routing),
+                        send_choices: send_destination_choices(
+                            mixer,
+                            RoutingStrip::Track(track_index),
+                        ),
+                    }),
                     strip_hovered_processor_slot,
                     controls_enabled,
                     strip_height,
@@ -1025,10 +1133,104 @@ fn effect_slot_dependencies(strip: &lilypalooza_audio::mixer::Track) -> Vec<Effe
         .collect()
 }
 
+fn route_choices(mixer: &MixerState, source: RoutingStrip) -> Vec<RouteChoice> {
+    let mut choices = vec![RouteChoice {
+        route: TrackRoute::Master,
+        label: "Master".to_string(),
+    }];
+    choices.extend(mixer.buses().iter().filter_map(|bus| {
+        let bus_id = bus.bus_id?;
+        if matches!(source, RoutingStrip::Bus(source_id) if source_id == bus_id.0) {
+            return None;
+        }
+        Some(RouteChoice {
+            route: TrackRoute::Bus(bus_id),
+            label: route_label(&bus.name),
+        })
+    }));
+    choices
+}
+
+fn selected_route_choice(route: TrackRoute, choices: &[RouteChoice]) -> RouteChoice {
+    choices
+        .iter()
+        .find(|choice| choice.route == route)
+        .cloned()
+        .unwrap_or_else(|| choices[0].clone())
+}
+
+fn route_menu_height_for_items(item_count: usize) -> f32 {
+    ROUTE_MENU_ITEM_HEIGHT * item_count.clamp(1, ROUTE_MENU_MAX_ITEMS) as f32
+}
+
+fn send_destination_choices(
+    mixer: &MixerState,
+    source: RoutingStrip,
+) -> Vec<SendDestinationChoice> {
+    mixer
+        .buses()
+        .iter()
+        .filter_map(|bus| {
+            let bus_id = bus.bus_id?;
+            if matches!(source, RoutingStrip::Bus(source_id) if source_id == bus_id.0) {
+                return None;
+            }
+            Some(SendDestinationChoice {
+                action: SendDestinationAction::Route(bus_id.0),
+                label: route_label(&bus.name),
+            })
+        })
+        .collect()
+}
+
+fn send_menu_choices(mut choices: Vec<SendDestinationChoice>) -> Vec<SendDestinationChoice> {
+    choices.insert(
+        0,
+        SendDestinationChoice {
+            action: SendDestinationAction::Remove,
+            label: "Remove".to_string(),
+        },
+    );
+    choices
+}
+
+fn first_send_bus_id(choices: &[SendDestinationChoice]) -> Option<u16> {
+    choices.iter().find_map(|choice| match choice.action {
+        SendDestinationAction::Route(bus_id) => Some(bus_id),
+        SendDestinationAction::Remove => None,
+    })
+}
+
+fn selected_send_destination_choice(
+    bus_id: u16,
+    choices: &[SendDestinationChoice],
+) -> Option<SendDestinationChoice> {
+    choices.iter().find_map(|choice| match choice.action {
+        SendDestinationAction::Route(choice_bus_id) if choice_bus_id == bus_id => {
+            Some(choice.clone())
+        }
+        SendDestinationAction::Route(_) | SendDestinationAction::Remove => None,
+    })
+}
+
+fn send_dependencies(routing: &TrackRouting) -> Vec<SendDependency> {
+    routing
+        .sends
+        .iter()
+        .map(|send| SendDependency {
+            bus_id: send.bus_id.0,
+            gain_bits: send.gain_db.to_bits(),
+            enabled: send.enabled,
+            pre_fader: send.pre_fader,
+        })
+        .collect()
+}
+
 fn track_effect_rack_panel(
     strip_index: usize,
     _title: &str,
     effects: Vec<EffectSlotDependency>,
+    routing: Option<EffectRackPanelRouting>,
     hovered_processor_slot: Option<(
         super::processor_editor_windows::EditorTarget,
         ProcessorSlotSegment,
@@ -1046,32 +1248,49 @@ fn track_effect_rack_panel(
         controls_enabled,
         EFFECT_RACK_VISIBLE_SLOTS,
     );
-    let (rack_height, routing_height) = effect_rack_panel_heights(strip_height);
+    let has_routing = routing.is_some();
+    let (rack_height, routing_height) = effect_rack_panel_heights(strip_height, has_routing);
+    let mut panel = column![
+        container(rack)
+            .width(Fill)
+            .height(Length::Fixed(rack_height))
+            .style(effect_rack_surface)
+    ]
+    .spacing(0);
 
-    container(
-        column![
-            container(rack)
-                .width(Fill)
-                .height(Length::Fixed(rack_height))
-                .style(effect_rack_surface),
-            container(text(""))
-                .width(Fill)
-                .height(Length::Fixed(EFFECT_RACK_SEPARATOR_HEIGHT))
-                .style(effect_rack_separator_surface),
-            container(text(""))
+    if let Some(routing) = routing {
+        panel = panel
+            .push(
+                container(text(""))
+                    .width(Fill)
+                    .height(Length::Fixed(EFFECT_RACK_SEPARATOR_HEIGHT))
+                    .style(effect_rack_separator_surface),
+            )
+            .push(
+                container(send_panel(
+                    routing.source,
+                    routing.sends,
+                    routing.send_choices,
+                    controls_enabled,
+                ))
                 .width(Fill)
                 .height(Length::Fixed(routing_height))
-                .style(effect_rack_surface)
-        ]
-        .spacing(0),
-    )
-    .width(Length::Fixed(EFFECT_RACK_PANEL_WIDTH))
-    .height(Length::Fixed(strip_height))
-    .style(effect_rack_surface)
-    .into()
+                .style(effect_rack_surface),
+            );
+    }
+
+    container(panel)
+        .width(Length::Fixed(EFFECT_RACK_PANEL_WIDTH))
+        .height(Length::Fixed(strip_height))
+        .style(effect_rack_surface)
+        .into()
 }
 
-fn effect_rack_panel_heights(strip_height: f32) -> (f32, f32) {
+fn effect_rack_panel_heights(strip_height: f32, has_routing: bool) -> (f32, f32) {
+    if !has_routing {
+        return (strip_height, 0.0);
+    }
+
     let available_height = (strip_height - EFFECT_RACK_SEPARATOR_HEIGHT).max(0.0);
     let rack_height = available_height / 2.0;
     (rack_height, available_height - rack_height)
@@ -1146,6 +1365,9 @@ fn bus_track_area(
             let strip_index = 1 + mixer.track_count() + visible.start + local_index;
             let effect_rack_open = open_effect_rack_strips.contains(&strip_index);
             let effects = effect_slot_dependencies(bus);
+            let routing_strip = RoutingStrip::Bus(bus_id.0);
+            let route_choices = route_choices(mixer, routing_strip);
+            let selected_route = selected_route_choice(bus.routing.main, &route_choices);
             let meter_dependency = MeterStackDependency {
                 meter: MeterDependency::from_snapshot(
                     meters.buses.get(local_index).copied().unwrap_or_default(),
@@ -1163,9 +1385,14 @@ fn bus_track_area(
                     effect_rack_open,
                     gain_bits: bus.state.gain_db.to_bits(),
                     pan_bits: bus.state.pan.to_bits(),
+                    route: selected_route,
+                    route_choices,
                     meter: meter_dependency.meter,
                     compact_gain: matches!(gain_mode, GainControlMode::Knob),
                     strip_height_bits: strip_height.to_bits(),
+                    panel_has_content: !effects.is_empty()
+                        || !bus.routing.sends.is_empty()
+                        || bus.routing.main != TrackRoute::Master,
                     soloed: bus.state.soloed,
                     muted: bus.state.muted,
                     renaming: renaming_target == Some(super::RenameTarget::Bus(bus_id.0))
@@ -1195,6 +1422,12 @@ fn bus_track_area(
                                 &dependency.rename_value,
                             ),
                             None,
+                            Some(route_picker(
+                                RoutingStrip::Bus(bus_id),
+                                dependency.route.clone(),
+                                dependency.route_choices.clone(),
+                                controls_enabled,
+                            )),
                             gain_db,
                             pan,
                             meter_stack(
@@ -1208,7 +1441,7 @@ fn bus_track_area(
                             StripActions {
                                 panel: Some((
                                     dependency.effect_rack_open,
-                                    !dependency.effects.is_empty(),
+                                    dependency.panel_has_content,
                                     if controls_enabled {
                                         Message::Mixer(MixerMessage::ToggleMixerEffectRack(
                                             strip_index,
@@ -1250,6 +1483,7 @@ fn bus_track_area(
                             },
                             strip_height,
                             gain_mode,
+                            true,
                         ),
                         STRIP_WIDTH,
                         strip_height,
@@ -1282,6 +1516,11 @@ fn bus_track_area(
                     strip_index,
                     &bus.name,
                     effects.clone(),
+                    Some(EffectRackPanelRouting {
+                        source: RoutingStrip::Bus(bus_id.0),
+                        sends: send_dependencies(&bus.routing),
+                        send_choices: send_destination_choices(mixer, RoutingStrip::Bus(bus_id.0)),
+                    }),
                     hovered_processor_slot,
                     controls_enabled,
                     strip_height,
@@ -1368,6 +1607,142 @@ fn section_title<'a>(label: impl Into<String>) -> Element<'a, Message> {
     .height(Length::Fixed(SECTION_HEADER_HEIGHT))
     .center_y(Length::Fixed(SECTION_HEADER_HEIGHT))
     .into()
+}
+
+fn route_picker(
+    source: RoutingStrip,
+    selected: RouteChoice,
+    choices: Vec<RouteChoice>,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    if choices.len() <= 1 {
+        return route_picker_placeholder(selected.label);
+    }
+    let menu_height = route_menu_height_for_items(choices.len());
+
+    let label = route_label(&selected.label);
+    let pick_list = pick_list(choices, Some(selected), move |choice| {
+        if controls_enabled {
+            Message::Mixer(MixerMessage::SetMainRoute(source, choice.route))
+        } else {
+            noop_message()
+        }
+    })
+    .placeholder("Master")
+    .width(Fill)
+    .menu_height(Length::Fixed(menu_height))
+    .padding([ui_style::grid(1), ui_style::grid(2)])
+    .text_size(ui_style::FONT_SIZE_UI_XS)
+    .font(fonts::UI)
+    .style(route_pick_list_centered_style)
+    .menu_style(route_pick_list_menu_style);
+
+    stack![
+        pick_list,
+        route_picker_centered_label(label, button::Status::Active)
+    ]
+    .into()
+}
+
+fn route_picker_placeholder(label: String) -> Element<'static, Message> {
+    container(route_picker_centered_label(
+        route_label(&label),
+        button::Status::Disabled,
+    ))
+    .width(Fill)
+    .height(Length::Fixed(ROUTE_PICKER_HEIGHT))
+    .style(route_picker_placeholder_surface)
+    .into()
+}
+
+fn route_picker_centered_label(label: String, status: button::Status) -> Element<'static, Message> {
+    container(
+        text(label)
+            .size(ui_style::FONT_SIZE_UI_XS)
+            .align_x(alignment::Horizontal::Center)
+            .wrapping(iced::widget::text::Wrapping::None),
+    )
+    .width(Fill)
+    .height(Length::Fixed(ROUTE_PICKER_HEIGHT))
+    .padding([0, ui_style::grid(4)])
+    .center_x(Fill)
+    .center_y(Length::Fixed(ROUTE_PICKER_HEIGHT))
+    .style(move |theme| {
+        let button = ui_style::button_selector_field(theme, status, false);
+        container::Style {
+            text_color: Some(button.text_color),
+            ..container::Style::default()
+        }
+    })
+    .into()
+}
+
+fn route_label(label: &str) -> String {
+    crate::track_names::ellipsize_middle(label, ROUTE_PICKER_MAX_LEN)
+}
+
+fn route_pick_list_style(
+    theme: &iced::Theme,
+    status: iced::widget::pick_list::Status,
+) -> iced::widget::pick_list::Style {
+    let open = matches!(status, iced::widget::pick_list::Status::Opened { .. });
+    let button_status = match status {
+        iced::widget::pick_list::Status::Active => button::Status::Active,
+        iced::widget::pick_list::Status::Hovered => button::Status::Hovered,
+        iced::widget::pick_list::Status::Opened { is_hovered } => {
+            if is_hovered {
+                button::Status::Hovered
+            } else {
+                button::Status::Active
+            }
+        }
+    };
+    let button = ui_style::button_selector_field(theme, button_status, open);
+    let palette = theme.extended_palette();
+    iced::widget::pick_list::Style {
+        text_color: button.text_color,
+        placeholder_color: button.text_color,
+        handle_color: palette.background.weak.text,
+        background: button
+            .background
+            .unwrap_or(palette.background.weak.color.into()),
+        border: button.border,
+    }
+}
+
+fn route_pick_list_centered_style(
+    theme: &iced::Theme,
+    status: iced::widget::pick_list::Status,
+) -> iced::widget::pick_list::Style {
+    let mut style = route_pick_list_style(theme, status);
+    style.text_color = Color::TRANSPARENT;
+    style.placeholder_color = Color::TRANSPARENT;
+    style
+}
+
+fn route_pick_list_menu_style(theme: &iced::Theme) -> iced::widget::overlay::menu::Style {
+    let palette = theme.extended_palette();
+    iced::widget::overlay::menu::Style {
+        background: palette.background.weak.color.into(),
+        border: border::rounded(ui_style::RADIUS_UI)
+            .width(1)
+            .color(palette.background.strong.color),
+        text_color: palette.background.weak.text,
+        selected_text_color: palette.background.strong.text,
+        selected_background: palette.background.strong.color.into(),
+        shadow: iced::Shadow::default(),
+    }
+}
+
+fn route_picker_placeholder_surface(theme: &iced::Theme) -> container::Style {
+    let button = ui_style::button_selector_field(theme, button::Status::Disabled, false);
+    container::Style {
+        text_color: Some(button.text_color),
+        background: button.background,
+        border: button.border,
+        shadow: button.shadow,
+        ..container::Style::default()
+    }
 }
 
 fn strip_processor_header(
@@ -1480,12 +1855,14 @@ fn gain_label(gain_db: f32) -> String {
 fn strip_shell<'a>(
     title: Element<'a, Message>,
     instrument_picker: Option<Element<'a, Message>>,
+    route_picker: Option<Element<'a, Message>>,
     gain_db: f32,
     pan: f32,
     meter_stack: Element<'a, Message>,
     actions: StripActions<'a>,
     strip_height: f32,
     gain_mode: GainControlMode,
+    show_gain_scale: bool,
 ) -> Element<'a, Message> {
     let mut content = column![]
         .spacing(STRIP_STACK_SPACING)
@@ -1524,25 +1901,44 @@ fn strip_shell<'a>(
             GainControlMode::Knob => gain_knob(gain_db, on_gain),
         };
 
-        content = content.push(
-            row![
-                column![
-                    value_label_slot(gain_width, gain_label(gain_db), None),
-                    container(gain_control)
-                        .width(Length::Fixed(gain_width))
-                        .height(Length::Fixed(control_height))
-                        .center_x(Length::Fixed(gain_width))
-                        .align_y(alignment::Vertical::Bottom),
+        let gain_column = column![
+            value_label_slot(gain_width, gain_label(gain_db), None),
+            container(gain_control)
+                .width(Length::Fixed(gain_width))
+                .height(Length::Fixed(control_height))
+                .center_x(Length::Fixed(gain_width))
+                .align_y(alignment::Vertical::Bottom),
+        ]
+        .spacing(LABEL_CONTROL_SPACING)
+        .height(Length::Fixed(stack_height))
+        .align_x(alignment::Horizontal::Center)
+        .width(Length::Shrink);
+
+        let gain_controls: Element<'a, Message> =
+            if matches!(gain_mode, GainControlMode::Fader) && show_gain_scale {
+                row![
+                    column![
+                        container(text("")).height(Length::Fixed(VALUE_LABEL_HEIGHT)),
+                        gain_fader_scale(control_height),
+                    ]
+                    .spacing(LABEL_CONTROL_SPACING)
+                    .height(Length::Fixed(stack_height))
+                    .width(Length::Fixed(gain_fader_scale_width())),
+                    gain_column,
                 ]
-                .spacing(LABEL_CONTROL_SPACING)
+                .spacing(GAIN_SCALE_SPACING)
                 .height(Length::Fixed(stack_height))
-                .align_x(alignment::Horizontal::Center)
+                .width(Length::Shrink)
+                .into()
+            } else {
+                gain_column.into()
+            };
+
+        content = content.push(
+            row![gain_controls, meter_stack]
+                .spacing(METER_STACK_SPACING)
+                .height(Length::Fixed(stack_height))
                 .width(Length::Shrink),
-                meter_stack
-            ]
-            .spacing(METER_STACK_SPACING)
-            .height(Length::Fixed(stack_height))
-            .width(Length::Shrink),
         );
     }
 
@@ -1583,6 +1979,12 @@ fn strip_shell<'a>(
             container(content).width(Fill),
             container(text("")).height(Length::Fixed(TITLE_TOP_SPACING)),
             title,
+            container(text("")).height(Length::Fixed(ROUTE_PICKER_TOP_SPACING)),
+            container(route_picker.unwrap_or_else(|| container(text("")).into()))
+                .width(Fill)
+                .height(Length::Fixed(ROUTE_PICKER_HEIGHT))
+                .center_y(Length::Fixed(ROUTE_PICKER_HEIGHT)),
+            container(text("")).height(Length::Fixed(ROUTE_PICKER_BOTTOM_INSET)),
         ]
         .spacing(0)
         .width(Fill),
@@ -1779,7 +2181,8 @@ fn gain_control_height(strip_height: f32, gain_mode: GainControlMode) -> f32 {
             - SECTION_HEADER_HEIGHT
             - INSTRUMENT_PICKER_HEIGHT
             - STRIP_TOGGLE_SIZE
-            - 42.0
+            - STRIP_FOOTER_HEIGHT
+            - 30.0
             - (VALUE_LABEL_HEIGHT * 3.0)
             - (ui_style::SPACE_XS as f32 * 6.0))
             .max(96.0),
@@ -2123,6 +2526,244 @@ fn effect_rack(
     }))
     .width(Fill)
     .height(Fill)
+    .into()
+}
+
+fn send_panel(
+    source: RoutingStrip,
+    sends: Vec<SendDependency>,
+    choices: Vec<SendDestinationChoice>,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    let mut content = column![
+        container(text("")).height(Length::Fixed(SEND_PANEL_TOP_SPACING)),
+        container(
+            row![
+                text("Sends")
+                    .size(ui_style::FONT_SIZE_UI_XS)
+                    .font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..fonts::UI
+                    }),
+                container(text("")).width(Fill),
+                send_add_button(source, first_send_bus_id(&choices), controls_enabled)
+            ]
+            .align_y(alignment::Vertical::Center)
+        )
+        .height(Length::Fixed(SEND_PANEL_HEADER_HEIGHT))
+        .padding([0, ui_style::grid(2)])
+        .center_y(Length::Fixed(SEND_PANEL_HEADER_HEIGHT))
+    ]
+    .spacing(0)
+    .width(Fill);
+
+    if choices.is_empty() {
+        content = content.push(
+            container(text("No buses").size(ui_style::FONT_SIZE_UI_XS))
+                .width(Fill)
+                .height(Fill)
+                .center_x(Fill)
+                .center_y(Fill),
+        );
+    } else {
+        for (index, send) in sends.into_iter().enumerate() {
+            content = content.push(send_row(
+                source,
+                index,
+                send,
+                choices.clone(),
+                controls_enabled,
+            ));
+        }
+    }
+
+    container(scrollable(content).style(effect_rack_scrollable))
+        .width(Fill)
+        .height(Fill)
+        .style(effect_rack_surface)
+        .into()
+}
+
+fn send_add_button(
+    source: RoutingStrip,
+    first_bus_id: Option<u16>,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    ui_style::flat_icon_button(
+        icons::plus(),
+        ui_style::grid_f32(4),
+        ui_style::grid_f32(3),
+        ui_style::button_flat_compact_control,
+        ui_style::svg_dimmed_control,
+    )
+    .width(Length::Fixed(ui_style::grid_f32(5)))
+    .height(Length::Fixed(ui_style::grid_f32(5)))
+    .on_press_maybe(
+        (controls_enabled)
+            .then_some(first_bus_id)
+            .flatten()
+            .map(|bus_id| Message::Mixer(MixerMessage::AddSend(source, bus_id))),
+    )
+    .into()
+}
+
+fn send_row(
+    source: RoutingStrip,
+    index: usize,
+    send: SendDependency,
+    choices: Vec<SendDestinationChoice>,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    let choices = send_menu_choices(choices);
+    let selected = selected_send_destination_choice(send.bus_id, &choices);
+    let enabled = send.enabled;
+    let pre_fader = send.pre_fader;
+    let gain = f32::from_bits(send.gain_bits);
+    let gain_text = gain_label(gain);
+
+    let content_height = SEND_ROW_HEIGHT - EFFECT_RACK_SEPARATOR_HEIGHT;
+    container(
+        column![
+            container(
+                column![
+                    row![
+                        send_icon_button(
+                            if enabled {
+                                icons::power()
+                            } else {
+                                icons::power_off()
+                            },
+                            Message::Mixer(MixerMessage::ToggleSendEnabled(source, index)),
+                            controls_enabled,
+                        ),
+                        container(
+                            pick_list(choices.clone(), selected, move |choice| {
+                                if !controls_enabled {
+                                    return noop_message();
+                                }
+                                match choice.action {
+                                    SendDestinationAction::Route(bus_id) => Message::Mixer(
+                                        MixerMessage::SetSendDestination(source, index, bus_id),
+                                    ),
+                                    SendDestinationAction::Remove => {
+                                        Message::Mixer(MixerMessage::RemoveSend(source, index))
+                                    }
+                                }
+                            })
+                            .placeholder("Bus")
+                            .width(Length::Fixed(SEND_PICKER_WIDTH))
+                            .menu_height(Length::Fixed(route_menu_height_for_items(choices.len())))
+                            .padding([ui_style::grid(1), ui_style::grid(2)])
+                            .text_size(ui_style::FONT_SIZE_UI_XS)
+                            .font(fonts::UI)
+                            .style(route_pick_list_style)
+                            .menu_style(route_pick_list_menu_style),
+                        )
+                        .height(Length::Fixed(SEND_CONTROL_HEIGHT))
+                        .center_y(Length::Fixed(SEND_CONTROL_HEIGHT)),
+                        send_mode_button(source, index, pre_fader, controls_enabled),
+                    ]
+                    .spacing(ui_style::SPACE_XS)
+                    .align_y(alignment::Vertical::Center),
+                    row![
+                        send_gain_slider(source, index, gain, controls_enabled),
+                        container(text(gain_text).size(ui_style::FONT_SIZE_UI_XS))
+                            .width(Length::Fixed(ui_style::grid_f32(7)))
+                            .align_y(alignment::Vertical::Center),
+                    ]
+                    .spacing(ui_style::SPACE_XS)
+                    .align_y(alignment::Vertical::Center),
+                ]
+                .spacing(ui_style::SPACE_XS)
+                .align_x(alignment::Horizontal::Center),
+            )
+            .width(Fill)
+            .height(Length::Fixed(content_height))
+            .padding(Padding {
+                top: 0.0,
+                right: ui_style::grid_f32(2),
+                bottom: SEND_ROW_CONTENT_BOTTOM_SPACING,
+                left: ui_style::grid_f32(2),
+            })
+            .center_y(Length::Fixed(content_height)),
+            effect_rack_separator(),
+        ]
+        .spacing(0)
+        .width(Fill),
+    )
+    .width(Fill)
+    .height(Length::Fixed(SEND_ROW_HEIGHT))
+    .into()
+}
+
+fn send_gain_slider(
+    source: RoutingStrip,
+    index: usize,
+    gain: f32,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    compact_gain_slider(
+        gain,
+        SEND_GAIN_MIN_DB,
+        SEND_GAIN_MAX_DB,
+        SEND_GAIN_STEP_DB,
+        0.0,
+        move |value| {
+            if controls_enabled {
+                Message::Mixer(MixerMessage::SetSendGain(source, index, value))
+            } else {
+                noop_message()
+            }
+        },
+    )
+}
+
+fn send_icon_button(
+    icon: iced::widget::svg::Handle,
+    message: Message,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    ui_style::flat_icon_button(
+        icon,
+        ui_style::grid_f32(4),
+        ui_style::grid_f32(3),
+        ui_style::button_flat_compact_control,
+        ui_style::svg_dimmed_control,
+    )
+    .width(Length::Fixed(ui_style::grid_f32(5)))
+    .height(Length::Fixed(ui_style::grid_f32(5)))
+    .on_press_maybe(controls_enabled.then_some(message))
+    .into()
+}
+
+fn send_mode_button(
+    source: RoutingStrip,
+    index: usize,
+    pre_fader: bool,
+    controls_enabled: bool,
+) -> Element<'static, Message> {
+    let label = if pre_fader { "Pre" } else { "Post" };
+    button(
+        container(
+            text(label)
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .line_height(1.0)
+                .align_x(alignment::Horizontal::Center),
+        )
+        .width(Fill)
+        .height(Length::Fixed(SEND_MODE_HEIGHT))
+        .center_x(Fill)
+        .center_y(Length::Fixed(SEND_MODE_HEIGHT)),
+    )
+    .style(move |theme, status| ui_style::button_pane_tab(theme, status, pre_fader))
+    .padding([0, 0])
+    .width(Length::Fixed(SEND_MODE_WIDTH))
+    .height(Length::Fixed(SEND_MODE_HEIGHT))
+    .on_press_maybe(
+        controls_enabled.then_some(Message::Mixer(MixerMessage::ToggleSendPreFader(
+            source, index,
+        ))),
+    )
     .into()
 }
 
@@ -3049,7 +3690,7 @@ fn selected_processor_choice(
 mod tests {
     use crate::ui_style;
     use iced::widget::{button, container, row};
-    use iced::{Color, Element, Length, Theme};
+    use iced::{Color, Element, Event, Length, Point, Theme, mouse};
     use iced_test::{Simulator, simulator};
     use lilypalooza_audio::mixer::MixerMeterSnapshotWindow;
     use lilypalooza_audio::{AudioEngine, AudioEngineOptions};
@@ -3060,20 +3701,24 @@ mod tests {
         COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
         INSTRUMENT_PICKER_HEIGHT, INSTRUMENT_SLOT_WIDTH, InstrumentBrowserBackend,
         InstrumentChoice, MAIN_SECTION_WIDTH, MAIN_STRIP_WIDTH, MIXER_MIN_HEIGHT, MeterDependency,
-        SECTION_BODY_GAP, STRIP_MIN_HEIGHT, STRIP_TOGGLE_SIZE, STRIP_VIRTUALIZATION_OVERSCAN,
-        STRIP_WIDTH, StripMeterSnapshot, TITLE_TOP_SPACING, TRACK_TITLE_EDITOR_CONTROL_HEIGHT,
-        TRACK_TITLE_EDITOR_HEIGHT, TRACK_TITLE_EDITOR_INPUT_PADDING_H,
-        TRACK_TITLE_EDITOR_INPUT_PADDING_V, TRACK_TITLE_EDITOR_SWATCH_SIZE, TrackStripDependency,
-        VALUE_LABEL_HEIGHT, color_bits, control_stack_height, gain_control_height,
-        gain_control_mode, gain_label, instrument_browser_entries, instrument_slot_primary_action,
-        instrument_trigger_label, meter_colors, meter_control_height, meter_peak_label,
-        meter_scale_visible, processor_choices, selected_instrument_choice,
-        selected_processor_choice, track_should_use_roll_tint, visible_strip_window,
+        ROUTE_PICKER_BOTTOM_INSET, ROUTE_PICKER_TOP_SPACING, RouteChoice, RoutingStrip,
+        SECTION_BODY_GAP, SEND_CONTROL_HEIGHT, SEND_MODE_HEIGHT, SEND_PANEL_TOP_SPACING,
+        SEND_ROW_CONTENT_BOTTOM_SPACING, SEND_ROW_HEIGHT, STRIP_MIN_HEIGHT, STRIP_TOGGLE_SIZE,
+        STRIP_VIRTUALIZATION_OVERSCAN, STRIP_WIDTH, SendDependency, SendDestinationAction,
+        SendDestinationChoice, StripMeterSnapshot, TITLE_TOP_SPACING,
+        TRACK_TITLE_EDITOR_CONTROL_HEIGHT, TRACK_TITLE_EDITOR_HEIGHT,
+        TRACK_TITLE_EDITOR_INPUT_PADDING_H, TRACK_TITLE_EDITOR_INPUT_PADDING_V,
+        TRACK_TITLE_EDITOR_SWATCH_SIZE, TrackStripDependency, VALUE_LABEL_HEIGHT, color_bits,
+        control_stack_height, gain_control_height, gain_control_mode, gain_label,
+        instrument_browser_entries, instrument_slot_primary_action, instrument_trigger_label,
+        meter_colors, meter_control_height, meter_peak_label, meter_scale_visible,
+        processor_choices, selected_instrument_choice, selected_processor_choice,
+        track_should_use_roll_tint, visible_strip_window,
     };
     use crate::app::Message;
     use crate::app::messages::MixerMessage;
     use crate::icons;
-    use lilypalooza_audio::mixer::ChannelMeterSnapshot;
+    use lilypalooza_audio::mixer::{ChannelMeterSnapshot, TrackRoute};
 
     fn assert_snapshot_matches(
         ui: &mut iced_test::Simulator<'_, crate::app::Message>,
@@ -3172,9 +3817,18 @@ mod tests {
         for value in [
             MAIN_STRIP_WIDTH,
             STRIP_WIDTH,
+            STRIP_MIN_HEIGHT,
+            MIXER_MIN_HEIGHT,
             INSTRUMENT_PICKER_HEIGHT,
             TRACK_TITLE_EDITOR_HEIGHT,
             VALUE_LABEL_HEIGHT,
+            ROUTE_PICKER_TOP_SPACING,
+            ROUTE_PICKER_BOTTOM_INSET,
+            SEND_ROW_HEIGHT,
+            SEND_ROW_CONTENT_BOTTOM_SPACING,
+            SEND_PANEL_TOP_SPACING,
+            SEND_CONTROL_HEIGHT,
+            SEND_MODE_HEIGHT,
             COMPACT_GAIN_SWITCH_OFFSET,
         ] {
             assert!(is_grid_multiple(value), "{value} should use the 4px grid");
@@ -3257,6 +3911,7 @@ mod tests {
                     false,
                 ),
                 None,
+                None,
                 0.0,
                 0.0,
                 container(iced::widget::text("")).into(),
@@ -3269,6 +3924,7 @@ mod tests {
                 },
                 STRIP_MIN_HEIGHT,
                 GainControlMode::Knob,
+                false,
             ))
             .padding(ui_style::PADDING_SM),
         );
@@ -3307,6 +3963,7 @@ mod tests {
                     None,
                     true,
                 )),
+                None,
                 0.0,
                 0.0,
                 container(iced::widget::text(""))
@@ -3322,6 +3979,7 @@ mod tests {
                 },
                 480.0,
                 GainControlMode::Knob,
+                false,
             ))
             .padding(ui_style::PADDING_SM),
         );
@@ -3933,7 +4591,7 @@ mod tests {
     #[test]
     fn effect_rack_panel_reserves_even_space_for_rack_and_routing() {
         let strip_height = 480.0;
-        let (rack_height, routing_height) = super::effect_rack_panel_heights(strip_height);
+        let (rack_height, routing_height) = super::effect_rack_panel_heights(strip_height, true);
         let available_height = strip_height - super::EFFECT_RACK_SEPARATOR_HEIGHT;
 
         assert!((rack_height / available_height - 0.5).abs() < 0.001);
@@ -3943,6 +4601,15 @@ mod tests {
                 .abs()
                 < 0.001
         );
+    }
+
+    #[test]
+    fn master_effect_rack_panel_uses_full_height_without_routing() {
+        let strip_height = 480.0;
+        let (rack_height, routing_height) = super::effect_rack_panel_heights(strip_height, false);
+
+        assert_eq!(rack_height, strip_height);
+        assert_eq!(routing_height, 0.0);
     }
 
     #[test]
@@ -4139,10 +4806,313 @@ mod tests {
 
     #[test]
     fn effect_rack_panel_uses_even_rack_and_routing_heights() {
-        let (rack_height, routing_height) = super::effect_rack_panel_heights(301.0);
+        let (rack_height, routing_height) = super::effect_rack_panel_heights(301.0, true);
 
         assert_eq!(rack_height, 150.0);
         assert_eq!(routing_height, 150.0);
+    }
+
+    #[test]
+    fn route_menus_shrink_to_item_count_until_maximum() {
+        assert_eq!(
+            super::route_menu_height_for_items(1),
+            super::ROUTE_MENU_ITEM_HEIGHT
+        );
+        assert_eq!(
+            super::route_menu_height_for_items(3),
+            super::ROUTE_MENU_ITEM_HEIGHT * 3.0
+        );
+        assert_eq!(
+            super::route_menu_height_for_items(super::ROUTE_MENU_MAX_ITEMS + 4),
+            super::ROUTE_MENU_ITEM_HEIGHT * super::ROUTE_MENU_MAX_ITEMS as f32
+        );
+    }
+
+    #[test]
+    fn send_rows_reserve_a_second_line_for_gain() {
+        let row_height = super::SEND_ROW_HEIGHT;
+        let compact_controls_width = [super::SEND_PICKER_WIDTH, super::SEND_MODE_WIDTH]
+            .iter()
+            .sum::<f32>();
+        let extra_spacing = [
+            super::SEND_ROW_CONTENT_BOTTOM_SPACING,
+            super::SEND_PANEL_TOP_SPACING,
+        ]
+        .iter()
+        .sum::<f32>();
+
+        assert!(row_height >= ui_style::grid_f32(12));
+        assert_eq!(super::SEND_MODE_HEIGHT, super::SEND_CONTROL_HEIGHT);
+        assert!(extra_spacing > 0.0);
+        assert!(compact_controls_width <= super::EFFECT_RACK_PANEL_WIDTH);
+    }
+
+    #[test]
+    fn send_gain_slider_double_click_resets_to_zero_db() {
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [super::EFFECT_RACK_PANEL_WIDTH, super::SEND_ROW_HEIGHT],
+            super::send_row(
+                RoutingStrip::Track(0),
+                0,
+                SendDependency {
+                    bus_id: 1,
+                    gain_bits: (-6.0f32).to_bits(),
+                    enabled: true,
+                    pre_fader: false,
+                },
+                vec![SendDestinationChoice {
+                    action: SendDestinationAction::Route(1),
+                    label: "Verb".to_string(),
+                }],
+                true,
+            ),
+        );
+
+        ui.point_at(iced::Point::new(
+            super::EFFECT_RACK_PANEL_WIDTH * 0.5,
+            super::SEND_ROW_HEIGHT - ui_style::grid_f32(4),
+        ));
+        let _ = ui.simulate(simulator::click());
+        let _ = ui.simulate(simulator::click());
+
+        assert!(ui.into_messages().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::SetSendGain(RoutingStrip::Track(0), 0, gain))
+                    if gain == 0.0
+            )
+        }));
+    }
+
+    #[test]
+    fn send_gain_slider_drag_changes_value() {
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [super::EFFECT_RACK_PANEL_WIDTH, super::SEND_ROW_HEIGHT],
+            super::send_row(
+                RoutingStrip::Track(0),
+                0,
+                SendDependency {
+                    bus_id: 1,
+                    gain_bits: (-6.0f32).to_bits(),
+                    enabled: true,
+                    pre_fader: false,
+                },
+                vec![SendDestinationChoice {
+                    action: SendDestinationAction::Route(1),
+                    label: "Verb".to_string(),
+                }],
+                true,
+            ),
+        );
+        let start = Point::new(
+            ui_style::grid_f32(8),
+            super::SEND_ROW_HEIGHT - ui_style::grid_f32(4),
+        );
+        let end = Point::new(
+            super::EFFECT_RACK_PANEL_WIDTH - ui_style::grid_f32(8),
+            super::SEND_ROW_HEIGHT - ui_style::grid_f32(4),
+        );
+
+        ui.point_at(start);
+        let _ = ui.simulate([Event::Mouse(mouse::Event::ButtonPressed(
+            mouse::Button::Left,
+        ))]);
+        ui.point_at(end);
+        let _ = ui.simulate([Event::Mouse(mouse::Event::CursorMoved { position: end })]);
+        let _ = ui.simulate([Event::Mouse(mouse::Event::ButtonReleased(
+            mouse::Button::Left,
+        ))]);
+
+        assert!(ui.into_messages().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::SetSendGain(RoutingStrip::Track(0), 0, gain))
+                    if gain != -6.0 && gain != 0.0
+            )
+        }));
+    }
+
+    #[test]
+    fn strip_minimum_height_covers_route_footer() {
+        let fixed_controls = super::INSTRUMENT_PICKER_HEIGHT
+            + super::STRIP_TOGGLE_SIZE
+            + super::STRIP_FOOTER_HEIGHT
+            + (ui_style::PADDING_SM as f32 * 2.0);
+
+        assert!(super::STRIP_MIN_HEIGHT > fixed_controls + ui_style::grid_f32(16));
+        assert!(
+            super::MIXER_MIN_HEIGHT
+                >= super::STRIP_MIN_HEIGHT
+                    + super::SECTION_HEADER_HEIGHT
+                    + (ui_style::PADDING_SM as f32 * 2.0)
+        );
+    }
+
+    #[test]
+    fn strip_minimum_height_covers_fader_controls_and_route_footer() {
+        let pan_stack_height = ui_style::SPACE_XS as f32
+            + super::VALUE_LABEL_HEIGHT
+            + 40.0
+            + (super::LABEL_CONTROL_SPACING * 2.0);
+        let gain_stack_height = super::control_stack_height(96.0);
+        let content_height = super::INSTRUMENT_PICKER_HEIGHT
+            + pan_stack_height
+            + gain_stack_height
+            + super::STRIP_TOGGLE_SIZE
+            + (super::STRIP_STACK_SPACING * 3.0);
+        let required_strip_height =
+            content_height + super::STRIP_FOOTER_HEIGHT + (ui_style::PADDING_SM as f32 * 2.0);
+
+        assert!(super::STRIP_MIN_HEIGHT >= required_strip_height);
+    }
+
+    #[test]
+    fn output_picker_bottom_inset_matches_instrument_top_inset() {
+        assert_eq!(super::ROUTE_PICKER_BOTTOM_INSET, 0.0);
+    }
+
+    #[test]
+    fn route_picker_closed_button_hides_native_left_label_for_centered_overlay() {
+        let style = super::route_pick_list_centered_style(
+            &Theme::Dark,
+            iced::widget::pick_list::Status::Active,
+        );
+
+        assert_eq!(style.text_color, Color::TRANSPARENT);
+        assert_eq!(style.placeholder_color, Color::TRANSPARENT);
+    }
+
+    #[test]
+    fn fader_height_accounts_for_route_footer() {
+        let strip_height = 360.0;
+        let expected = (strip_height
+            - (ui_style::PADDING_SM as f32 * 2.0)
+            - super::SECTION_HEADER_HEIGHT
+            - super::INSTRUMENT_PICKER_HEIGHT
+            - super::STRIP_TOGGLE_SIZE
+            - super::STRIP_FOOTER_HEIGHT
+            - 30.0
+            - (super::VALUE_LABEL_HEIGHT * 3.0)
+            - (ui_style::SPACE_XS as f32 * 6.0))
+            .max(96.0);
+
+        assert_eq!(
+            super::gain_control_height(strip_height, super::GainControlMode::Fader),
+            expected
+        );
+    }
+
+    #[test]
+    fn route_choices_follow_added_removed_buses_and_exclude_source_bus() {
+        let mut playback =
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start");
+        let (verb, delay) = {
+            let mut mixer = playback.mixer();
+            let verb = mixer.add_bus("Verb").expect("bus should be added");
+            let delay = mixer.add_bus("Delay").expect("bus should be added");
+            (verb, delay)
+        };
+        let mixer = playback.mixer_state().clone();
+
+        let track_choices = super::route_choices(&mixer, RoutingStrip::Track(0));
+        assert_eq!(
+            track_choices
+                .iter()
+                .map(|choice| choice.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Master", "Verb", "Delay"]
+        );
+
+        let bus_choices = super::route_choices(&mixer, RoutingStrip::Bus(verb.0));
+        assert!(
+            !bus_choices
+                .iter()
+                .any(|choice| choice.route == TrackRoute::Bus(verb))
+        );
+        assert!(
+            bus_choices
+                .iter()
+                .any(|choice| choice.route == TrackRoute::Bus(delay))
+        );
+
+        playback
+            .mixer()
+            .remove_bus(delay)
+            .expect("bus removal should succeed");
+        let mixer = playback.mixer_state().clone();
+        let track_choices = super::route_choices(&mixer, RoutingStrip::Track(0));
+        assert!(
+            !track_choices
+                .iter()
+                .any(|choice| choice.route == TrackRoute::Bus(delay))
+        );
+    }
+
+    #[test]
+    fn send_destination_choices_exclude_source_bus() {
+        let mut playback =
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start");
+        let (verb, delay) = {
+            let mut mixer = playback.mixer();
+            let verb = mixer.add_bus("Verb").expect("bus should be added");
+            let delay = mixer.add_bus("Delay").expect("bus should be added");
+            (verb, delay)
+        };
+        let mixer = playback.mixer_state().clone();
+
+        let choices = super::send_destination_choices(&mixer, RoutingStrip::Bus(verb.0));
+
+        assert_eq!(
+            choices
+                .iter()
+                .filter_map(|choice| match choice.action {
+                    super::SendDestinationAction::Route(bus_id) => Some(bus_id),
+                    super::SendDestinationAction::Remove => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![delay.0]
+        );
+    }
+
+    #[test]
+    fn send_menu_adds_remove_action_before_bus_choices() {
+        let choices = super::send_menu_choices(vec![super::SendDestinationChoice {
+            action: super::SendDestinationAction::Route(7),
+            label: "Verb".to_string(),
+        }]);
+
+        assert!(matches!(
+            choices[0].action,
+            super::SendDestinationAction::Remove
+        ));
+        assert!(matches!(
+            choices[1].action,
+            super::SendDestinationAction::Route(7)
+        ));
+    }
+
+    #[test]
+    fn route_choices_reflect_renamed_buses() {
+        let mut playback =
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start");
+        let bus_id = playback
+            .mixer()
+            .add_bus("Verb")
+            .expect("bus should be added");
+        playback
+            .mixer()
+            .set_bus_name(bus_id, "Long Hall")
+            .expect("bus should be renamed");
+
+        let choices = super::route_choices(playback.mixer_state(), RoutingStrip::Track(0));
+
+        assert!(choices.iter().any(|choice| choice.label == "Long Hall"));
+        assert!(!choices.iter().any(|choice| choice.label == "Verb"));
     }
 
     #[test]
@@ -4170,6 +5140,11 @@ mod tests {
                 1,
                 &mixer.tracks()[0].name,
                 super::effect_slot_dependencies(&mixer.tracks()[0]),
+                Some(super::EffectRackPanelRouting {
+                    source: RoutingStrip::Track(0),
+                    sends: super::send_dependencies(&mixer.tracks()[0].routing),
+                    send_choices: super::send_destination_choices(&mixer, RoutingStrip::Track(0)),
+                }),
                 None,
                 true,
                 360.0,
@@ -4250,8 +5225,8 @@ mod tests {
     #[test]
     fn mixer_strip_min_height_no_longer_reserves_per_track_effect_rack() {
         assert!(
-            super::gain_control_height(360.0, super::GainControlMode::Fader) > 120.0,
-            "effect rack lives in the side panel, not inside every mixer strip"
+            super::gain_control_height(360.0, super::GainControlMode::Fader) >= 96.0,
+            "effect rack lives in the side panel while the strip footer still needs routing space"
         );
     }
 
@@ -4670,9 +5645,18 @@ mod tests {
             color_bits: color_bits(iced::Color::from_rgb(0.1, 0.2, 0.3)),
             gain_bits: 0.0f32.to_bits(),
             pan_bits: 0.0f32.to_bits(),
+            route: RouteChoice {
+                route: TrackRoute::Master,
+                label: "Master".to_string(),
+            },
+            route_choices: vec![RouteChoice {
+                route: TrackRoute::Master,
+                label: "Master".to_string(),
+            }],
             meter: MeterDependency::from_snapshot(StripMeterSnapshot::default()),
             compact_gain: false,
             effect_rack_open: false,
+            panel_has_content: false,
             strip_height_bits: 140.0f32.to_bits(),
             soloed: false,
             muted: false,
@@ -4716,9 +5700,18 @@ mod tests {
             color_bits: color_bits(iced::Color::from_rgb(0.1, 0.2, 0.3)),
             gain_bits: 0.0f32.to_bits(),
             pan_bits: 0.0f32.to_bits(),
+            route: RouteChoice {
+                route: TrackRoute::Master,
+                label: "Master".to_string(),
+            },
+            route_choices: vec![RouteChoice {
+                route: TrackRoute::Master,
+                label: "Master".to_string(),
+            }],
             meter: MeterDependency::from_snapshot(StripMeterSnapshot::default()),
             compact_gain: false,
             effect_rack_open: false,
+            panel_has_content: false,
             strip_height_bits: 240.0f32.to_bits(),
             soloed: false,
             muted: false,
