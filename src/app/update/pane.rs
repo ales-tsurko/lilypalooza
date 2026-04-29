@@ -238,6 +238,37 @@ impl Lilypalooza {
         }
     }
 
+    fn constrained_workspace_group_split_ratio(
+        &self,
+        axis: pane_grid::Axis,
+        ratio: f32,
+        first_group_id: DockGroupId,
+        second_group_id: DockGroupId,
+        bounds: iced::Rectangle,
+    ) -> f32 {
+        let (total_size, min_first, min_second) = match axis {
+            pane_grid::Axis::Horizontal => (
+                bounds.height.max(1.0),
+                super::dock_view::workspace_group_min_height(self, first_group_id),
+                super::dock_view::workspace_group_min_height(self, second_group_id),
+            ),
+            pane_grid::Axis::Vertical => (
+                bounds.width.max(1.0),
+                super::dock_view::workspace_group_min_width(self, first_group_id),
+                super::dock_view::workspace_group_min_width(self, second_group_id),
+            ),
+        };
+
+        let min_ratio = (min_first.min(total_size) / total_size).clamp(0.05, 0.95);
+        let max_ratio = (1.0 - min_second.min(total_size) / total_size).clamp(0.05, 0.95);
+
+        if min_ratio > max_ratio {
+            ratio.clamp(0.05, 0.95)
+        } else {
+            ratio.clamp(min_ratio, max_ratio)
+        }
+    }
+
     pub(in crate::app) fn set_active_workspace_pane(&mut self, pane: WorkspacePaneKind) {
         let Some(group_id) = self.group_for_pane(pane) else {
             return;
@@ -628,6 +659,11 @@ impl Lilypalooza {
                 {
                     return;
                 }
+                let target_bounds = self
+                    .workspace_group_bounds()
+                    .get(&target.group_id)
+                    .copied()
+                    .unwrap_or_else(|| self.workspace_bounds());
 
                 let source_empty =
                     remove_pane_from_group(&mut self.dock_groups, source_group_id, dragged);
@@ -658,13 +694,25 @@ impl Lilypalooza {
                     DockDropRegion::Right => (pane_grid::Axis::Vertical, false),
                     DockDropRegion::Center => unreachable!(),
                 };
+                let (first_group_id, second_group_id) = if insert_first {
+                    (new_group_id, target.group_id)
+                } else {
+                    (target.group_id, new_group_id)
+                };
+                let ratio = self.constrained_workspace_group_split_ratio(
+                    axis,
+                    0.5,
+                    first_group_id,
+                    second_group_id,
+                    target_bounds,
+                );
 
                 if let Some(layout) = self.dock_layout.as_mut() {
                     replace_group_with_split(
                         layout,
                         target.group_id,
                         axis,
-                        0.5,
+                        ratio,
                         new_group_id,
                         insert_first,
                     );
@@ -684,5 +732,70 @@ impl Lilypalooza {
         self.workspace_drag_origin = None;
         self.dragged_workspace_pane = None;
         self.dock_drop_target = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dock_drop_split_respects_inserted_pane_minimum_size() {
+        let (mut app, _task) = crate::app::new_with_default_test_state();
+        app.window_width = 900.0;
+        app.window_height = crate::status_bar::HEIGHT
+            + crate::app::transport_bar::HEIGHT
+            + crate::app::dock_view::TOOLBAR_HEIGHT
+            + crate::app::mixer::MIXER_MIN_HEIGHT * 1.5;
+        let target_group = 1;
+        let source_group = 2;
+        app.dock_groups.clear();
+        app.dock_groups.insert(
+            target_group,
+            DockGroup {
+                tabs: vec![WorkspacePaneKind::Score],
+                active: WorkspacePaneKind::Score,
+            },
+        );
+        app.dock_groups.insert(
+            source_group,
+            DockGroup {
+                tabs: vec![WorkspacePaneKind::Mixer],
+                active: WorkspacePaneKind::Mixer,
+            },
+        );
+        app.next_dock_group_id = 3;
+        app.dock_layout = Some(DockNode::Split {
+            axis: pane_grid::Axis::Vertical,
+            ratio: 0.5,
+            first: Box::new(DockNode::Group(target_group)),
+            second: Box::new(DockNode::Group(source_group)),
+        });
+        app.rebuild_workspace_panes();
+
+        app.apply_dock_drop(
+            WorkspacePaneKind::Mixer,
+            DockDropTarget {
+                group_id: target_group,
+                region: DockDropRegion::Top,
+            },
+        );
+
+        let Some(DockNode::Split {
+            axis, ratio, first, ..
+        }) = app.dock_layout.as_ref()
+        else {
+            panic!("drop should create a split");
+        };
+        assert_eq!(*axis, pane_grid::Axis::Horizontal);
+        assert!(matches!(first.as_ref(), DockNode::Group(group_id) if *group_id != source_group));
+        assert!(
+            *ratio > 0.5,
+            "mixer split ratio should be expanded above the default half split"
+        );
+        assert!(
+            *ratio * app.workspace_area_size().height >= crate::app::mixer::MIXER_MIN_HEIGHT,
+            "mixer split should receive its minimum height"
+        );
     }
 }
