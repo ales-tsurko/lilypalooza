@@ -41,6 +41,14 @@ pub enum MixerError {
     /// One bus cannot route to itself.
     #[error("bus {0:?} cannot route to itself")]
     SelfRouting(BusId),
+    /// Routing would create a feedback cycle.
+    #[error("routing from bus {source_id:?} to bus {destination_id:?} would create feedback")]
+    FeedbackRouting {
+        /// Source bus.
+        source_id: BusId,
+        /// Destination bus.
+        destination_id: BusId,
+    },
     /// Bus send index is outside the current send list.
     #[error("bus send index {index} is out of bounds (len: {len})")]
     BusSendIndexOutOfBounds {
@@ -442,6 +450,7 @@ impl MixerState {
                     return Err(MixerError::SelfRouting(source_id));
                 }
                 self.bus(bus_id)?;
+                self.validate_no_feedback(source_id, bus_id)?;
                 Ok(())
             }
         }
@@ -475,7 +484,55 @@ impl MixerState {
             return Err(MixerError::SelfRouting(source_id));
         }
         self.bus(send.bus_id)?;
+        self.validate_no_feedback(source_id, send.bus_id)?;
         Ok(())
+    }
+
+    /// Returns `true` when adding `source_id -> destination_id` would keep the routing graph acyclic.
+    pub fn can_route_bus_to_bus(&self, source_id: BusId, destination_id: BusId) -> bool {
+        source_id != destination_id
+            && self.bus(source_id).is_ok()
+            && self.bus(destination_id).is_ok()
+            && !self.bus_reaches_bus(destination_id, source_id)
+    }
+
+    fn validate_no_feedback(
+        &self,
+        source_id: BusId,
+        destination_id: BusId,
+    ) -> Result<(), MixerError> {
+        if self.bus_reaches_bus(destination_id, source_id) {
+            return Err(MixerError::FeedbackRouting {
+                source_id,
+                destination_id,
+            });
+        }
+        Ok(())
+    }
+
+    fn bus_reaches_bus(&self, start: BusId, target: BusId) -> bool {
+        let mut stack = vec![start];
+        let mut visited = Vec::new();
+
+        while let Some(bus_id) = stack.pop() {
+            if bus_id == target {
+                return true;
+            }
+            if visited.contains(&bus_id) {
+                continue;
+            }
+            visited.push(bus_id);
+
+            let Ok(bus) = self.bus(bus_id) else {
+                continue;
+            };
+            if let TrackRoute::Bus(next) = bus.routing.main {
+                stack.push(next);
+            }
+            stack.extend(bus.routing.sends.iter().map(|send| send.bus_id));
+        }
+
+        false
     }
 
     pub(crate) fn set_soundfont(&mut self, resource: SoundfontResource) {
@@ -1128,6 +1185,50 @@ mod tests {
                 .routing
                 .sends[0]
                 .enabled
+        );
+    }
+
+    #[test]
+    fn bus_routes_reject_feedback_cycles() {
+        let mut mixer = MixerState::new();
+        let verb = mixer.add_bus("Verb");
+        let delay = mixer.add_bus("Delay");
+        mixer
+            .set_bus_route(verb, TrackRoute::Bus(delay))
+            .expect("forward bus route should succeed");
+
+        let error = mixer
+            .set_bus_route(delay, TrackRoute::Bus(verb))
+            .expect_err("route cycle should be rejected");
+
+        assert_eq!(
+            error,
+            MixerError::FeedbackRouting {
+                source_id: delay,
+                destination_id: verb,
+            }
+        );
+    }
+
+    #[test]
+    fn bus_sends_reject_feedback_cycles() {
+        let mut mixer = MixerState::new();
+        let verb = mixer.add_bus("Verb");
+        let delay = mixer.add_bus("Delay");
+        mixer
+            .set_bus_route(verb, TrackRoute::Bus(delay))
+            .expect("forward bus route should succeed");
+
+        let error = mixer
+            .add_bus_send(delay, BusSend::new(verb, -6.0, false))
+            .expect_err("send cycle should be rejected");
+
+        assert_eq!(
+            error,
+            MixerError::FeedbackRouting {
+                source_id: delay,
+                destination_id: verb,
+            }
         );
     }
 

@@ -7,7 +7,7 @@ use iced::{Color, Element, Fill, FillPortion, Length, Padding, alignment, border
 use iced_aw::helpers::color_picker_with_change;
 use lilypalooza_audio::instrument::registry;
 use lilypalooza_audio::mixer::{
-    ChannelMeterSnapshot, MixerMeterSnapshot, MixerMeterSnapshotWindow, STRIP_METER_MIN_DB,
+    BusId, ChannelMeterSnapshot, MixerMeterSnapshot, MixerMeterSnapshotWindow, STRIP_METER_MIN_DB,
     StripMeterSnapshot, TrackRoute, TrackRouting,
 };
 use lilypalooza_audio::{BUILTIN_METRONOME_ID, BUILTIN_NONE_ID, MixerState, SlotState};
@@ -1143,6 +1143,10 @@ fn route_choices(mixer: &MixerState, source: RoutingStrip) -> Vec<RouteChoice> {
         if matches!(source, RoutingStrip::Bus(source_id) if source_id == bus_id.0) {
             return None;
         }
+        if matches!(source, RoutingStrip::Bus(source_id) if !mixer.can_route_bus_to_bus(BusId(source_id), bus_id))
+        {
+            return None;
+        }
         Some(RouteChoice {
             route: TrackRoute::Bus(bus_id),
             label: route_label(&bus.name),
@@ -1173,6 +1177,10 @@ fn send_destination_choices(
         .filter_map(|bus| {
             let bus_id = bus.bus_id?;
             if matches!(source, RoutingStrip::Bus(source_id) if source_id == bus_id.0) {
+                return None;
+            }
+            if matches!(source, RoutingStrip::Bus(source_id) if !mixer.can_route_bus_to_bus(BusId(source_id), bus_id))
+            {
                 return None;
             }
             Some(SendDestinationChoice {
@@ -5076,6 +5084,36 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![delay.0]
         );
+    }
+
+    #[test]
+    fn route_and_send_choices_exclude_feedback_destinations() {
+        let mut playback =
+            AudioEngine::start_cpal(MixerState::new(), AudioEngineOptions::default())
+                .expect("test audio engine should start");
+        let (verb, delay) = {
+            let mut mixer = playback.mixer();
+            let verb = mixer.add_bus("Verb").expect("bus should be added");
+            let delay = mixer.add_bus("Delay").expect("bus should be added");
+            mixer
+                .set_bus_route(verb, TrackRoute::Bus(delay))
+                .expect("forward route should be allowed");
+            (verb, delay)
+        };
+        let mixer = playback.mixer_state().clone();
+
+        let delay_route_choices = super::route_choices(&mixer, RoutingStrip::Bus(delay.0));
+        assert!(
+            !delay_route_choices
+                .iter()
+                .any(|choice| choice.route == TrackRoute::Bus(verb))
+        );
+
+        let delay_send_choices =
+            super::send_destination_choices(&mixer, RoutingStrip::Bus(delay.0));
+        assert!(!delay_send_choices.iter().any(|choice| {
+            matches!(choice.action, super::SendDestinationAction::Route(bus_id) if bus_id == verb.0)
+        }));
     }
 
     #[test]
