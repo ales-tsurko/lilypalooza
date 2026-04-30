@@ -10,6 +10,25 @@ use super::*;
 use crate::app::processor_editor_windows::{EditorTarget, snapshot_into_editor_parent};
 use iced::window;
 
+fn processor_editor_window_settings(
+    descriptor: lilypalooza_audio::EditorDescriptor,
+    initial_size: Option<lilypalooza_audio::EditorSize>,
+) -> window::Settings {
+    let size = initial_size.unwrap_or(descriptor.default_size);
+    window::Settings {
+        size: Size::new(size.width as f32, size.height as f32),
+        min_size: descriptor
+            .min_size
+            .map(|size| Size::new(size.width as f32, size.height as f32)),
+        resizable: descriptor.resizable,
+        closeable: true,
+        minimizable: false,
+        decorations: false,
+        exit_on_close_request: false,
+        ..window::Settings::default()
+    }
+}
+
 impl Lilypalooza {
     pub(in crate::app) fn log_processor_editor_error(
         &mut self,
@@ -278,6 +297,16 @@ impl Lilypalooza {
         };
         for error in errors {
             self.log_processor_editor_error("hide", error);
+        }
+        Task::none()
+    }
+
+    pub(in crate::app) fn handle_processor_editor_focused(
+        &mut self,
+        window_id: window::Id,
+    ) -> Task<Message> {
+        for error in self.processor_editor_windows.focus_window(window_id) {
+            self.log_processor_editor_error("raise", error);
         }
         Task::none()
     }
@@ -1237,21 +1266,8 @@ impl Lilypalooza {
             return Task::none();
         };
 
-        let (window_id, open_task) = window::open(window::Settings {
-            size: Size::new(
-                descriptor.default_size.width as f32,
-                descriptor.default_size.height as f32,
-            ),
-            min_size: descriptor
-                .min_size
-                .map(|size| Size::new(size.width as f32, size.height as f32)),
-            resizable: descriptor.resizable,
-            closeable: true,
-            minimizable: false,
-            decorations: false,
-            exit_on_close_request: false,
-            ..window::Settings::default()
-        });
+        let (window_id, open_task) =
+            window::open(processor_editor_window_settings(descriptor, None));
         self.processor_editor_windows.begin_open(
             target,
             title,
@@ -1586,6 +1602,7 @@ mod tests {
     use crate::app::messages::{MixerMessage, PromptMessage};
     use crate::app::processor_editor_windows::EditorTarget;
     use crate::state::ProjectState;
+    use iced::Size;
     use lilypalooza_audio::{
         AudioEngine, AudioEngineOptions, BusId, EditorError, EditorParent, EditorSession,
         EditorSize, MixerState, SlotState, TrackId,
@@ -2906,6 +2923,50 @@ mod tests {
 
         assert!(app.processor_editor_windows.contains_window(target));
         assert!(app.pending_editor_action.is_none());
+    }
+
+    #[test]
+    fn processor_editor_window_settings_use_session_reported_content_size() {
+        let descriptor = lilypalooza_audio::EditorDescriptor {
+            default_size: EditorSize {
+                width: 720,
+                height: 480,
+            },
+            min_size: Some(EditorSize {
+                width: 320,
+                height: 220,
+            }),
+            resizable: true,
+        };
+
+        let settings = super::processor_editor_window_settings(
+            descriptor,
+            Some(EditorSize {
+                width: 936,
+                height: 612,
+            }),
+        );
+
+        assert_eq!(settings.size, Size::new(936.0, 612.0));
+        assert_eq!(settings.min_size, Some(Size::new(320.0, 220.0)));
+        assert!(settings.resizable);
+        assert!(!settings.decorations);
+    }
+
+    #[test]
+    fn processor_editor_window_settings_can_disable_resizing() {
+        let descriptor = lilypalooza_audio::EditorDescriptor {
+            default_size: EditorSize {
+                width: 720,
+                height: 480,
+            },
+            min_size: None,
+            resizable: false,
+        };
+
+        let settings = super::processor_editor_window_settings(descriptor, None);
+
+        assert!(!settings.resizable);
     }
 
     #[test]

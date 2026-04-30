@@ -75,6 +75,7 @@ pub(super) fn update(app: &mut Lilypalooza, message: Message) -> Task<Message> {
         Message::Prompt(message) => app.handle_prompt_message(message),
         Message::WindowOpened(window_id) => app.handle_window_opened(window_id),
         Message::WindowClosed(window_id) => app.handle_window_closed(window_id),
+        Message::WindowFocused(window_id) => app.handle_processor_editor_focused(window_id),
         Message::WindowSnapshotCaptured {
             window_id,
             host,
@@ -113,6 +114,7 @@ fn should_commit_track_rename_before_message(message: &Message) -> bool {
             | Message::Frame(_)
             | Message::WindowOpened(_)
             | Message::WindowClosed(_)
+            | Message::WindowFocused(_)
             | Message::WindowResized { .. }
             | Message::WindowCloseRequested(_)
             | Message::PianoRoll(

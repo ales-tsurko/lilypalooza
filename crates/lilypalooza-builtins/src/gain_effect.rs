@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use lilypalooza_audio::instrument::{EffectRuntimeSpec, RuntimeBinding, RuntimeFactoryError};
+use lilypalooza_audio::instrument::{
+    EffectRuntimeContext, EffectRuntimeSpec, RuntimeBinding, RuntimeFactoryError,
+};
 use lilypalooza_audio::{
     BUILTIN_GAIN_ID, Controller, ControllerError, EffectProcessor, ParameterDescriptor, Processor,
     ProcessorDescriptor, ProcessorKind, ProcessorState, ProcessorStateError, SlotState,
@@ -100,6 +102,7 @@ impl Controller for GainController {
 
 pub(crate) fn create_runtime(
     slot: &SlotState,
+    _context: &EffectRuntimeContext,
 ) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError> {
     if !is_slot(slot) {
         return Ok(None);

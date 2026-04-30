@@ -550,7 +550,7 @@ impl Lilypalooza {
         self.open_editor_file_in_editor_internal(path, true, true)
     }
 
-    fn open_editor_file_in_editor_internal(
+    pub(in crate::app) fn open_editor_file_in_editor_internal(
         &mut self,
         path: &Path,
         log_open: bool,

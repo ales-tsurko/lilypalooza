@@ -34,6 +34,7 @@ pub(super) enum Message {
     },
     WindowOpened(window::Id),
     WindowClosed(window::Id),
+    WindowFocused(window::Id),
     KeyPressed(KeyPress),
     TrackRenameFocusChanged(bool),
     ModifiersChanged(keyboard::Modifiers),

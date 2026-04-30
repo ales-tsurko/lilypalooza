@@ -1,4 +1,4 @@
-#![cfg_attr(test, allow(dead_code))]
+//! Reusable background plugin scanner.
 
 use std::collections::HashMap;
 use std::fs;
@@ -11,46 +11,97 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{PluginFormat, PluginSearchPath};
+/// Maximum number of concurrent validator subprocesses.
+pub const PLUGIN_VALIDATOR_CONCURRENCY: usize = 1;
 
-pub(crate) const PLUGIN_VALIDATOR_CONCURRENCY: usize = 1;
+/// Plugin binary format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginFormat {
+    /// CLAP plugin.
+    Clap,
+    /// VST3 plugin.
+    Vst3,
+}
 
+/// One plugin search root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginSearchPath {
+    /// Plugin format to search for.
+    pub format: PluginFormat,
+    /// Filesystem search root.
+    pub path: PathBuf,
+    /// Whether this root participates in scans.
+    pub enabled: bool,
+}
+
+impl Default for PluginSearchPath {
+    fn default() -> Self {
+        Self {
+            format: PluginFormat::Clap,
+            path: PathBuf::new(),
+            enabled: true,
+        }
+    }
+}
+
+/// Background scanner event.
 #[derive(Debug)]
-pub(crate) enum PluginScanEvent {
+pub enum PluginScanEvent {
+    /// Human-readable progress line.
     Log(String),
+    /// Validated CLAP plugin metadata.
     ClapPlugins(Vec<lilypalooza_clap::ClapPluginMetadata>),
+    /// Scan completion.
     Finished {
+        /// Scan summary.
         summary: PluginScanSummary,
+        /// Updated cache.
         cache: PluginScanCache,
     },
 }
 
+/// Scan counters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct PluginScanSummary {
-    pub(crate) candidates: usize,
-    pub(crate) valid_plugins: usize,
-    pub(crate) invalid_candidates: usize,
+pub struct PluginScanSummary {
+    /// Candidate binaries seen.
+    pub candidates: usize,
+    /// Valid plugin descriptors found.
+    pub valid_plugins: usize,
+    /// Invalid candidates.
+    pub invalid_candidates: usize,
 }
 
+/// Background plugin scan state.
 #[derive(Debug, Default)]
-pub(crate) struct PluginScanState {
+pub struct PluginScanState {
     receiver: Option<mpsc::Receiver<PluginScanEvent>>,
     active: bool,
 }
 
 impl PluginScanState {
-    pub(crate) fn start(&mut self, search_paths: Vec<PluginSearchPath>, cache: PluginScanCache) {
+    /// Starts a background scan.
+    pub fn start(
+        &mut self,
+        search_paths: Vec<PluginSearchPath>,
+        cache: PluginScanCache,
+        validator: PathBuf,
+    ) {
         let (sender, receiver) = mpsc::channel();
         self.receiver = Some(receiver);
         self.active = true;
-        thread::spawn(move || scan_worker(search_paths, cache, sender));
+        thread::spawn(move || scan_worker(search_paths, cache, validator, sender));
     }
 
-    pub(crate) fn is_active(&self) -> bool {
+    /// Returns whether a scan is currently running.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
         self.active
     }
 
-    pub(crate) fn drain_events(&mut self) -> Vec<PluginScanEvent> {
+    /// Drains pending scan events.
+    pub fn drain_events(&mut self) -> Vec<PluginScanEvent> {
         let mut events = Vec::new();
         let Some(receiver) = &self.receiver else {
             return events;
@@ -68,8 +119,9 @@ impl PluginScanState {
     }
 }
 
+/// Persistent scan cache.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct PluginScanCache {
+pub struct PluginScanCache {
     entries: HashMap<PathBuf, CachedPluginCandidate>,
 }
 
@@ -81,19 +133,18 @@ struct CachedPluginCandidate {
 }
 
 impl PluginScanCache {
-    pub(crate) fn load() -> Self {
-        let Ok(path) = cache_path() else {
-            return Self::default();
-        };
-        match fs::read_to_string(&path) {
+    /// Loads a scan cache from `path`.
+    #[must_use]
+    pub fn load_from(path: &Path) -> Self {
+        match fs::read_to_string(path) {
             Ok(contents) => ron::from_str(&contents).unwrap_or_default(),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
             Err(_) => Self::default(),
         }
     }
 
-    pub(crate) fn save(&self) -> Result<(), String> {
-        let path = cache_path()?;
+    /// Saves a scan cache to `path`.
+    pub fn save_to(&self, path: &Path) -> Result<(), String> {
         let Some(parent) = path.parent() else {
             return Err(format!(
                 "Plugin cache path has no parent: {}",
@@ -108,17 +159,20 @@ impl PluginScanCache {
         })?;
         let contents = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::new())
             .map_err(|error| format!("Failed to serialize plugin cache: {error}"))?;
-        fs::write(&path, contents)
+        fs::write(path, contents)
             .map_err(|error| format!("Failed to write plugin cache {}: {error}", path.display()))
     }
 
-    pub(crate) fn is_stale(&self, path: &Path, fingerprint: PluginCandidateFingerprint) -> bool {
+    /// Returns whether a candidate has changed since the cached scan.
+    #[must_use]
+    pub fn is_stale(&self, path: &Path, fingerprint: PluginCandidateFingerprint) -> bool {
         self.entries
             .get(path)
             .is_none_or(|entry| entry.fingerprint != fingerprint)
     }
 
-    pub(crate) fn mark_checked(
+    /// Stores a checked candidate.
+    pub fn mark_checked(
         &mut self,
         path: PathBuf,
         fingerprint: PluginCandidateFingerprint,
@@ -135,37 +189,45 @@ impl PluginScanCache {
         );
     }
 
-    fn cached_clap_plugins(
+    fn cached_candidate(
         &self,
         path: &Path,
         fingerprint: PluginCandidateFingerprint,
-    ) -> Option<Vec<lilypalooza_clap::ClapPluginMetadata>> {
+    ) -> Option<CachedCandidateResult> {
         self.entries.get(path).and_then(|entry| {
-            (entry.valid && entry.fingerprint == fingerprint).then(|| entry.clap_plugins.clone())
+            (entry.fingerprint == fingerprint).then(|| {
+                if entry.valid && !entry.clap_plugins.is_empty() {
+                    CachedCandidateResult::ValidClapPlugins(entry.clap_plugins.clone())
+                } else {
+                    CachedCandidateResult::Invalid
+                }
+            })
         })
     }
 }
 
-fn cache_path() -> Result<PathBuf, String> {
-    let project_dirs = directories::ProjectDirs::from("", "", "lilypalooza")
-        .ok_or_else(|| "Failed to resolve user config directory".to_string())?;
-    Ok(project_dirs.config_dir().join("plugin-cache.ron"))
+enum CachedCandidateResult {
+    ValidClapPlugins(Vec<lilypalooza_clap::ClapPluginMetadata>),
+    Invalid,
 }
 
+/// Candidate file fingerprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PluginCandidateFingerprint {
-    modified_millis: u128,
+pub struct PluginCandidateFingerprint {
+    modified_millis: u64,
     len: u64,
 }
 
 impl PluginCandidateFingerprint {
-    pub(crate) fn from_path(path: &Path) -> std::io::Result<Self> {
+    /// Builds a fingerprint from filesystem metadata.
+    pub fn from_path(path: &Path) -> std::io::Result<Self> {
         let metadata = std::fs::metadata(path)?;
         let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let modified_millis = modified
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis();
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
         Ok(Self {
             modified_millis,
             len: metadata.len(),
@@ -176,12 +238,12 @@ impl PluginCandidateFingerprint {
 fn scan_worker(
     search_paths: Vec<PluginSearchPath>,
     mut cache: PluginScanCache,
+    validator: PathBuf,
     sender: mpsc::Sender<PluginScanEvent>,
 ) {
     let _ = sender.send(PluginScanEvent::Log(format!(
         "Scanning plugins with {PLUGIN_VALIDATOR_CONCURRENCY} validator process"
     )));
-    let validator = validator_path();
     let mut summary = PluginScanSummary::default();
 
     for root in search_paths.into_iter().filter(|path| path.enabled) {
@@ -210,16 +272,28 @@ fn scan_worker(
                 }
             };
             if !cache.is_stale(&candidate, fingerprint) {
-                if let Some(plugins) = cache.cached_clap_plugins(&candidate, fingerprint)
-                    && !plugins.is_empty()
-                {
-                    summary.valid_plugins += plugins.len();
-                    let _ = sender.send(PluginScanEvent::ClapPlugins(plugins));
+                match cache.cached_candidate(&candidate, fingerprint) {
+                    Some(CachedCandidateResult::ValidClapPlugins(plugins)) => {
+                        summary.valid_plugins += plugins.len();
+                        let _ = sender.send(PluginScanEvent::ClapPlugins(plugins));
+                    }
+                    Some(CachedCandidateResult::Invalid) | None => {
+                        summary.invalid_candidates += 1;
+                    }
                 }
                 continue;
             }
             match validate_candidate(root.format, &candidate, &validator) {
                 Ok(ValidatedPlugins::Clap(plugins)) => {
+                    if plugins.is_empty() {
+                        summary.invalid_candidates += 1;
+                        cache.mark_checked(candidate.clone(), fingerprint, false, Vec::new());
+                        let _ = sender.send(PluginScanEvent::Log(format!(
+                            "No CLAP plugins found in {}",
+                            candidate.display()
+                        )));
+                        continue;
+                    }
                     summary.valid_plugins += plugins.len();
                     cache.mark_checked(candidate.clone(), fingerprint, true, plugins.clone());
                     let _ = sender.send(PluginScanEvent::Log(format!(
@@ -248,7 +322,8 @@ fn scan_worker(
     let _ = sender.send(PluginScanEvent::Finished { summary, cache });
 }
 
-fn candidates_for_root(root: &PluginSearchPath) -> Result<Vec<PathBuf>, String> {
+/// Returns plugin candidates directly under one search root.
+pub fn candidates_for_root(root: &PluginSearchPath) -> Result<Vec<PathBuf>, String> {
     match root.format {
         PluginFormat::Clap => {
             lilypalooza_clap::candidate_paths(&root.path).map_err(|error| error.to_string())
@@ -292,18 +367,10 @@ fn validate_clap_candidate(path: &Path, validator: &Path) -> Result<ValidatedPlu
         .map_err(|error| error.to_string())
 }
 
-fn validator_path() -> PathBuf {
-    let mut path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("lilypalooza"));
-    path.set_file_name(format!(
-        "lilypalooza-plugin-validator{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    path
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn cache_marks_changed_candidate_as_stale() {
@@ -338,5 +405,93 @@ mod tests {
         let candidates = candidates_for_root(&root).expect("scan root");
 
         assert_eq!(candidates, vec![dir.path().join("a.clap")]);
+    }
+
+    #[test]
+    fn cache_roundtrips_from_explicit_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("plugin-cache.ron");
+        let candidate = PathBuf::from("/tmp/test.clap");
+        let fingerprint = PluginCandidateFingerprint {
+            modified_millis: 7,
+            len: 9,
+        };
+        let mut cache = PluginScanCache::default();
+        cache.mark_checked(candidate.clone(), fingerprint, true, Vec::new());
+
+        cache.save_to(&path).expect("cache should save");
+        let loaded = PluginScanCache::load_from(&path);
+
+        assert!(!loaded.is_stale(&candidate, fingerprint));
+    }
+
+    #[test]
+    fn empty_clap_validation_result_counts_as_invalid_candidate() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let candidate = dir.path().join("empty.clap");
+        std::fs::write(&candidate, "").expect("clap file");
+        let validator = fake_empty_clap_validator();
+        let mut state = PluginScanState::default();
+
+        state.start(
+            vec![PluginSearchPath {
+                format: PluginFormat::Clap,
+                path: dir.path().to_path_buf(),
+                enabled: true,
+            }],
+            PluginScanCache::default(),
+            validator,
+        );
+
+        let (summary, logs) = drain_scan_until_finished(&mut state);
+
+        assert_eq!(
+            summary,
+            PluginScanSummary {
+                candidates: 1,
+                valid_plugins: 0,
+                invalid_candidates: 1,
+            }
+        );
+        assert!(logs.iter().any(|log| log.contains("No CLAP plugins found")));
+    }
+
+    fn drain_scan_until_finished(state: &mut PluginScanState) -> (PluginScanSummary, Vec<String>) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut logs = Vec::new();
+        while Instant::now() < deadline {
+            for event in state.drain_events() {
+                match event {
+                    PluginScanEvent::Log(log) => logs.push(log),
+                    PluginScanEvent::Finished { summary, .. } => return (summary, logs),
+                    PluginScanEvent::ClapPlugins(_) => {}
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("scan did not finish");
+    }
+
+    fn fake_empty_clap_validator() -> PathBuf {
+        let dir = tempfile::tempdir().expect("validator temp dir").keep();
+        let path = dir.join("validator");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\nprintf '{\"format\":\"clap\",\"path\":\"%s\",\"result\":{\"Ok\":[]}}' \"$4\"\n",
+        )
+        .expect("validator script");
+        make_executable(&path);
+        path
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(path)
+            .expect("validator metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("validator permissions");
     }
 }

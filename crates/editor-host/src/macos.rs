@@ -151,6 +151,24 @@ pub fn set_host_window_title(host: &WindowSnapshot, title: &str) -> Result<(), E
     Ok(())
 }
 
+pub fn raise_host_window(host: &WindowSnapshot) -> Result<(), Error> {
+    let host_view = ns_view_from_snapshot(host)?;
+    let host_window = host_view
+        .window()
+        .ok_or_else(|| Error::Message("host window is missing".to_string()))?;
+
+    if let Some(parent_window) = host_window.parentWindow() {
+        parent_window.removeChildWindow(&host_window);
+        // SAFETY: Both windows are live AppKit windows on the main thread. Re-adding the editor
+        // child above the app window updates sibling editor stacking order.
+        unsafe {
+            parent_window.addChildWindow_ordered(&host_window, NSWindowOrderingMode::Above);
+        }
+    }
+    host_window.makeKeyAndOrderFront(None);
+    Ok(())
+}
+
 fn attach_child_window_to_owner(
     child_window: &NSWindow,
     owner: &WindowSnapshot,

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use editor_host::WindowSnapshot;
@@ -57,6 +57,7 @@ const MIN_WINDOW_WIDTH: f32 = 960.0;
 const MIN_WINDOW_HEIGHT: f32 = 640.0;
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const EDITOR_TICK_INTERVAL: Duration = Duration::from_millis(500);
+const PLUGIN_SCAN_POLL_INTERVAL: Duration = Duration::from_millis(120);
 const SPINNER_POLL_INTERVAL: Duration = Duration::from_millis(120);
 const EDITOR_TABBAR_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(16);
 pub(super) const SCORE_SCROLLABLE_ID: &str = "score-scrollable";
@@ -925,6 +926,53 @@ fn audio_engine_options(playback: &settings::PlaybackSettings) -> AudioEngineOpt
     }
 }
 
+fn plugin_scan_cache_path() -> PathBuf {
+    directories::ProjectDirs::from("", "", "lilypalooza")
+        .map(|project_dirs| project_dirs.config_dir().join("plugin-cache.ron"))
+        .unwrap_or_else(|| PathBuf::from("plugin-cache.ron"))
+}
+
+fn plugin_validator_path() -> PathBuf {
+    plugin_validator_path_for_exe(
+        &std::env::current_exe().unwrap_or_else(|_| PathBuf::from("lilypalooza")),
+    )
+}
+
+fn plugin_validator_path_for_exe(exe: &Path) -> PathBuf {
+    let validator_name = format!(
+        "lilypalooza-plugin-validator{}",
+        std::env::consts::EXE_SUFFIX
+    );
+
+    if is_macos_app_bundle_exe(exe)
+        && let Some(contents_dir) = exe
+            .ancestors()
+            .find(|path| path.file_name().is_some_and(|name| name == "Contents"))
+    {
+        return contents_dir.join("MacOS").join(validator_name);
+    }
+
+    exe.parent()
+        .map(|parent| parent.join(&validator_name))
+        .unwrap_or_else(|| PathBuf::from(validator_name))
+}
+
+fn is_macos_app_bundle_exe(exe: &Path) -> bool {
+    exe.ancestors()
+        .any(|path| path.extension().is_some_and(|extension| extension == "app"))
+}
+
+fn ensure_plugin_validator_available(validator: &Path) -> Result<(), String> {
+    if validator.exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Plugin validator helper not found at {}",
+            validator.display()
+        ))
+    }
+}
+
 pub(super) fn editor_file_browser_column_scroll_id(index: usize) -> Id {
     Id::new(Box::leak(
         format!("editor-file-browser-column-{index}").into_boxed_str(),
@@ -985,8 +1033,8 @@ struct Lilypalooza {
     soundfont_status: SoundfontStatus,
     playback_settings: settings::PlaybackSettings,
     plugin_search_paths: Vec<settings::PluginSearchPath>,
-    plugin_scan: crate::plugin_scan::PluginScanState,
-    plugin_scan_cache: crate::plugin_scan::PluginScanCache,
+    plugin_scan: lilypalooza_plugin_scan::PluginScanState,
+    plugin_scan_cache: lilypalooza_plugin_scan::PluginScanCache,
     saved_project_state: Option<ProjectState>,
     project_mixer_state: MixerState,
     processor_presets: processor_presets::ProcessorPresetLibrary,
@@ -1571,9 +1619,11 @@ fn new_with_loaded_state(
         playback,
         soundfont_status: SoundfontStatus::NotSelected,
         playback_settings: stored_settings.playback.clone(),
-        plugin_search_paths: stored_settings.plugin_search_paths.clone(),
-        plugin_scan: crate::plugin_scan::PluginScanState::default(),
-        plugin_scan_cache: crate::plugin_scan::PluginScanCache::load(),
+        plugin_search_paths: stored_settings.plugin_search_paths(),
+        plugin_scan: lilypalooza_plugin_scan::PluginScanState::default(),
+        plugin_scan_cache: lilypalooza_plugin_scan::PluginScanCache::load_from(
+            &plugin_scan_cache_path(),
+        ),
         saved_project_state: None,
         project_mixer_state,
         processor_presets: stored_state.processor_presets.clone(),
@@ -1786,6 +1836,10 @@ fn subscription(app: &Lilypalooza) -> Subscription<Message> {
         subscriptions.push(iced::time::every(SPINNER_POLL_INTERVAL).map(|_| Message::Tick));
     }
 
+    if app.plugin_scan.is_active() {
+        subscriptions.push(iced::time::every(PLUGIN_SCAN_POLL_INTERVAL).map(|_| Message::Tick));
+    }
+
     if app.dragged_editor_tab.is_some() {
         subscriptions
             .push(iced::time::every(EDITOR_TABBAR_AUTOSCROLL_INTERVAL).map(|_| Message::Tick));
@@ -1852,9 +1906,10 @@ async fn cleanup_stale_browser_history_dirs(current_dir: Option<PathBuf>) -> Res
 fn runtime_event_to_message(
     event: iced::Event,
     status: event::Status,
-    _window_id: window::Id,
+    window_id: window::Id,
 ) -> Option<Message> {
     match event {
+        iced::Event::Window(window::Event::Focused) => Some(Message::WindowFocused(window_id)),
         iced::Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
             Some(Message::ModifiersChanged(modifiers))
         }
@@ -2767,6 +2822,59 @@ mod tests {
                 settings::ShortcutActionId::OpenSettingsFile
             ))
         )));
+    }
+
+    #[test]
+    fn plugin_validator_path_uses_sibling_helper_for_dev_binary() {
+        let path = plugin_validator_path_for_exe(Path::new("/repo/target/debug/lilypalooza"));
+
+        assert_eq!(
+            path,
+            PathBuf::from("/repo/target/debug/lilypalooza-plugin-validator")
+        );
+    }
+
+    #[test]
+    fn plugin_validator_path_uses_app_bundle_macos_directory() {
+        let path = plugin_validator_path_for_exe(Path::new(
+            "/Applications/Lilypalooza.app/Contents/MacOS/lilypalooza",
+        ));
+
+        assert_eq!(
+            path,
+            PathBuf::from(
+                "/Applications/Lilypalooza.app/Contents/MacOS/lilypalooza-plugin-validator"
+            )
+        );
+    }
+
+    #[test]
+    fn starting_plugin_scan_logs_immediately() {
+        let mut app = test_app();
+        app.logger.clear();
+        app.plugin_search_paths.clear();
+
+        app.start_plugin_scan_with_validator(std::env::current_exe().expect("test exe"));
+
+        assert_eq!(
+            app.logger.last_line(),
+            Some("Scanning plugins from 0 path(s)")
+        );
+        assert!(app.plugin_scan.is_active());
+    }
+
+    #[test]
+    fn open_settings_file_does_not_log_editor_open_noise() {
+        let mut app = test_editor_app();
+        app.logger.clear();
+
+        let _ = app.handle_shortcut_action(shortcuts::ShortcutAction::OpenSettingsFile);
+
+        assert!(
+            app.logger
+                .last_line()
+                .is_none_or(|line| !line.contains("editor file"))
+        );
     }
 
     #[test]

@@ -6,8 +6,8 @@ use std::sync::{OnceLock, RwLock};
 use serde::{Deserialize, Serialize};
 
 use crate::instrument::{
-    BUILTIN_NONE_ID, EffectRuntimeSpec, InstrumentRuntimeContext, InstrumentRuntimeSpec,
-    ProcessorDescriptor, ProcessorKind, RuntimeFactoryError, SlotState,
+    BUILTIN_NONE_ID, EffectRuntimeContext, EffectRuntimeSpec, InstrumentRuntimeContext,
+    InstrumentRuntimeSpec, ProcessorDescriptor, ProcessorKind, RuntimeFactoryError, SlotState,
 };
 
 /// Stable processor identifier type used by the registry catalog.
@@ -64,7 +64,8 @@ pub type CreateInstrument = fn(
     &InstrumentRuntimeContext<'_>,
 ) -> Result<Option<InstrumentRuntimeSpec>, RuntimeFactoryError>;
 /// Effect runtime factory callback.
-pub type CreateEffect = fn(&SlotState) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError>;
+pub type CreateEffect =
+    fn(&SlotState, &EffectRuntimeContext) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError>;
 
 impl Entry {
     /// Creates an empty built-in instrument entry.
@@ -283,11 +284,12 @@ pub(crate) fn create_instrument_runtime(
 
 pub(crate) fn create_effect_runtime(
     slot: &SlotState,
+    context: &EffectRuntimeContext,
 ) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError> {
     let Some(factory) = resolve(&slot.kind).and_then(|entry| entry.factory.create_effect) else {
         return Ok(None);
     };
-    factory(slot)
+    factory(slot, context)
 }
 
 #[cfg(test)]
@@ -309,7 +311,7 @@ mod tests {
             BUILTIN_GAIN_ID,
             "Gain",
             &TEST_DESCRIPTOR,
-            |_| Ok(None),
+            |_, _| Ok(None),
         )]);
         let entries = all();
 
@@ -324,7 +326,7 @@ mod tests {
             BUILTIN_GAIN_ID,
             "Gain",
             &TEST_DESCRIPTOR,
-            |_| Ok(None),
+            |_, _| Ok(None),
         )]);
         let kind = ProcessorKind::BuiltIn {
             processor_id: BUILTIN_GAIN_ID.to_string(),
@@ -352,7 +354,7 @@ mod tests {
             "Test Gain".to_string(),
             Backend::Clap,
             &TEST_DESCRIPTOR,
-            |_| Ok(None),
+            |_, _| Ok(None),
         )]);
 
         let kind = ProcessorKind::Plugin {

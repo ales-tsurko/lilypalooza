@@ -131,6 +131,20 @@ pub fn host_layout(
     }
 }
 
+#[must_use]
+pub fn content_size_from_outer_size(
+    outer_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+) -> Size {
+    let frame = frame_thickness.max(0.0);
+    let titlebar_height = titlebar_height.max(20.0);
+    Size {
+        width: (outer_size.width - frame * 2.0).max(1.0),
+        height: (outer_size.height - titlebar_height - frame * 2.0).max(1.0),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Size {
     pub width: f64,
@@ -248,19 +262,40 @@ impl InstalledHost {
             *current = preset;
         }
         if self.frame_window.is_some() {
-            let titlebar_height = self
-                .preset_state()
-                .as_ref()
-                .map_or(34.0, |preset| if preset.expanded { 160.0 } else { 34.0 });
             let _ = resize_installed_host(
                 &self.host,
                 &self.content,
                 self.content_size,
-                titlebar_height,
+                self.titlebar_height(),
                 self.frame_thickness,
                 self.frame_window.as_mut(),
             );
         }
+    }
+
+    pub fn resize_content(&mut self, content_size: Size) -> Result<(), Error> {
+        self.content_size = content_size;
+        resize_installed_host(
+            &self.host,
+            &self.content,
+            self.content_size,
+            self.titlebar_height(),
+            self.frame_thickness,
+            self.frame_window.as_mut(),
+        )
+    }
+
+    pub fn resize_outer(&mut self, outer_size: Size) -> Result<Size, Error> {
+        let content_size =
+            content_size_from_outer_size(outer_size, self.titlebar_height(), self.frame_thickness);
+        self.resize_content(content_size)?;
+        Ok(content_size)
+    }
+
+    fn titlebar_height(&self) -> f64 {
+        self.preset_state()
+            .as_ref()
+            .map_or(34.0, |preset| if preset.expanded { 160.0 } else { 34.0 })
     }
 
     #[must_use]
@@ -289,6 +324,10 @@ impl InstalledHost {
             *current = title.clone();
         }
         set_host_window_title(&self.host, &title)
+    }
+
+    pub fn raise(&mut self) -> Result<(), Error> {
+        raise_host_window(&self.host)
     }
 }
 
@@ -497,6 +536,17 @@ fn set_host_window_title(host: &WindowSnapshot, _title: &str) -> Result<(), Erro
 }
 
 #[cfg(target_os = "macos")]
+fn raise_host_window(host: &WindowSnapshot) -> Result<(), Error> {
+    macos::raise_host_window(host)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn raise_host_window(host: &WindowSnapshot) -> Result<(), Error> {
+    host.raw_window_handle()?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 fn begin_host_window_drag(host: &WindowSnapshot) -> Result<(), Error> {
     macos::begin_host_window_drag(host)
 }
@@ -621,8 +671,14 @@ fn resize_installed_host(
     content_size: Size,
     titlebar_height: f64,
     frame_thickness: f64,
-    _frame_window: Option<&mut EguiWindowHandle>,
+    frame_window: Option<&mut EguiWindowHandle>,
 ) -> Result<(), Error> {
+    let layout = host_layout(
+        content_size.width,
+        content_size.height,
+        titlebar_height,
+        frame_thickness,
+    );
     macos::resize_installed_host(
         host,
         content,
@@ -630,6 +686,9 @@ fn resize_installed_host(
         titlebar_height,
         frame_thickness,
     )?;
+    if let Some(frame_window) = frame_window {
+        frame_window.resize(layout.outer_width, layout.outer_height);
+    }
     Ok(())
 }
 
@@ -637,11 +696,20 @@ fn resize_installed_host(
 fn resize_installed_host(
     _host: &WindowSnapshot,
     _content: &WindowSnapshot,
-    _content_size: Size,
-    _titlebar_height: f64,
-    _frame_thickness: f64,
-    _frame_window: Option<&mut EguiWindowHandle>,
+    content_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+    frame_window: Option<&mut EguiWindowHandle>,
 ) -> Result<(), Error> {
+    let layout = host_layout(
+        content_size.width,
+        content_size.height,
+        titlebar_height,
+        frame_thickness,
+    );
+    if let Some(frame_window) = frame_window {
+        frame_window.resize(layout.outer_width, layout.outer_height);
+    }
     Ok(())
 }
 
@@ -708,6 +776,24 @@ mod tests {
         assert_eq!(layout.content.height, 456.0);
         assert_eq!(layout.titlebar.height, 30.0);
         assert_eq!(layout.titlebar.y, 460.0);
+    }
+
+    #[test]
+    fn content_size_from_outer_size_removes_frame_and_titlebar() {
+        assert_eq!(
+            super::content_size_from_outer_size(
+                Size {
+                    width: 828.0,
+                    height: 494.0,
+                },
+                30.0,
+                4.0,
+            ),
+            Size {
+                width: 820.0,
+                height: 456.0,
+            }
+        );
     }
 
     #[test]

@@ -215,39 +215,26 @@ pub(crate) struct PlaybackSettings {
     pub(crate) chase_notes_on_seek: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum PluginFormat {
-    Clap,
-    Vst3,
-}
+pub(crate) use lilypalooza_plugin_scan::{PluginFormat, PluginSearchPath};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub(crate) struct PluginSearchPath {
-    pub(crate) format: PluginFormat,
-    pub(crate) path: PathBuf,
-    pub(crate) enabled: bool,
-}
-
-impl Default for PluginSearchPath {
-    fn default() -> Self {
-        Self {
-            format: PluginFormat::Clap,
-            path: PathBuf::new(),
-            enabled: true,
-        }
-    }
-}
-
+#[cfg(test)]
 pub(crate) fn default_plugin_search_paths() -> Vec<PluginSearchPath> {
+    plugin_search_paths_from_lists(&default_clap_search_paths(), &default_vst3_search_paths())
+}
+
+pub(crate) fn default_clap_search_paths() -> Vec<PathBuf> {
     default_plugin_search_path_specs()
         .into_iter()
-        .map(|(format, path)| PluginSearchPath {
-            format,
-            path: expand_home(path),
-            enabled: true,
-        })
+        .filter(|(format, _)| *format == PluginFormat::Clap)
+        .map(|(_, path)| expand_home(path))
+        .collect()
+}
+
+pub(crate) fn default_vst3_search_paths() -> Vec<PathBuf> {
+    default_plugin_search_path_specs()
+        .into_iter()
+        .filter(|(format, _)| *format == PluginFormat::Vst3)
+        .map(|(_, path)| expand_home(path))
         .collect()
 }
 
@@ -307,15 +294,39 @@ fn expand_home(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-fn plugin_search_paths_is_default(paths: &[PluginSearchPath]) -> bool {
-    paths == default_plugin_search_paths()
+fn plugin_search_paths_from_lists(
+    clap_search_paths: &[PathBuf],
+    vst3_search_paths: &[PathBuf],
+) -> Vec<PluginSearchPath> {
+    clap_search_paths
+        .iter()
+        .map(|path| PluginSearchPath {
+            format: PluginFormat::Clap,
+            path: path.clone(),
+            enabled: true,
+        })
+        .chain(vst3_search_paths.iter().map(|path| PluginSearchPath {
+            format: PluginFormat::Vst3,
+            path: path.clone(),
+            enabled: true,
+        }))
+        .collect()
 }
 
-fn plugin_format_key(format: PluginFormat) -> &'static str {
-    match format {
-        PluginFormat::Clap => "clap",
-        PluginFormat::Vst3 => "vst3",
+pub(crate) fn split_plugin_search_paths(
+    paths: &[PluginSearchPath],
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut clap_search_paths = Vec::new();
+    let mut vst3_search_paths = Vec::new();
+
+    for path in paths.iter().filter(|path| path.enabled) {
+        match path.format {
+            PluginFormat::Clap => clap_search_paths.push(path.path.clone()),
+            PluginFormat::Vst3 => vst3_search_paths.push(path.path.clone()),
+        }
     }
+
+    (clap_search_paths, vst3_search_paths)
 }
 
 fn default_editor_recent_files_limit() -> usize {
@@ -609,8 +620,10 @@ pub(crate) struct AppSettings {
     )]
     pub(crate) editor_recent_files_limit: usize,
     pub(crate) playback: PlaybackSettings,
-    #[serde(default = "default_plugin_search_paths")]
-    pub(crate) plugin_search_paths: Vec<PluginSearchPath>,
+    #[serde(default = "default_clap_search_paths")]
+    pub(crate) clap_search_paths: Vec<PathBuf>,
+    #[serde(default = "default_vst3_search_paths")]
+    pub(crate) vst3_search_paths: Vec<PathBuf>,
     #[serde(skip_serializing_if = "ShortcutSettings::is_empty")]
     pub(crate) shortcuts: ShortcutSettings,
 }
@@ -622,9 +635,16 @@ impl Default for AppSettings {
             editor_theme: EditorThemeSettings::default(),
             editor_recent_files_limit: default_editor_recent_files_limit(),
             playback: PlaybackSettings::default(),
-            plugin_search_paths: default_plugin_search_paths(),
+            clap_search_paths: default_clap_search_paths(),
+            vst3_search_paths: default_vst3_search_paths(),
             shortcuts: ShortcutSettings::default(),
         }
+    }
+}
+
+impl AppSettings {
+    pub(crate) fn plugin_search_paths(&self) -> Vec<PluginSearchPath> {
+        plugin_search_paths_from_lists(&self.clap_search_paths, &self.vst3_search_paths)
     }
 }
 
@@ -672,8 +692,14 @@ fn render_settings_file(settings: &AppSettings) -> Result<String, toml::ser::Err
 
     out.push_str("# Lilypalooza settings\n");
     out.push_str("#\n");
-    out.push_str("# Defaults are shown as commented lines.\n");
+    out.push_str("# Most defaults are shown as commented lines.\n");
     out.push_str("# Uncomment and change a line to override it.\n\n");
+
+    out.push_str("# Plugin scan roots. The scanner runs in the background and validates candidates in an isolated helper process.\n");
+    push_path_list(&mut out, "clap_search_paths", &settings.clap_search_paths);
+    out.push('\n');
+    push_path_list(&mut out, "vst3_search_paths", &settings.vst3_search_paths);
+    out.push('\n');
 
     out.push_str("[editor_view]\n");
     push_documented_value(
@@ -787,29 +813,6 @@ fn render_settings_file(settings: &AppSettings) -> Result<String, toml::ser::Err
         &settings.playback.chase_notes_on_seek.to_string(),
         &defaults.playback.chase_notes_on_seek.to_string(),
     );
-
-    out.push_str("\n# Plugin scan roots. The scanner runs in the background and validates candidates in an isolated helper process.\n");
-    if plugin_search_paths_is_default(&settings.plugin_search_paths) {
-        for path in &defaults.plugin_search_paths {
-            out.push_str("# [[plugin_search_paths]]\n");
-            out.push_str("# format = ");
-            out.push_str(&format!("{:?}\n", plugin_format_key(path.format)));
-            out.push_str("# path = ");
-            out.push_str(&format!("{:?}\n", path.path.display().to_string()));
-            out.push_str("# enabled = true\n\n");
-        }
-    } else {
-        for path in &settings.plugin_search_paths {
-            out.push_str("[[plugin_search_paths]]\n");
-            out.push_str("format = ");
-            out.push_str(&format!("{:?}\n", plugin_format_key(path.format)));
-            out.push_str("path = ");
-            out.push_str(&format!("{:?}\n", path.path.display().to_string()));
-            out.push_str("enabled = ");
-            out.push_str(&path.enabled.to_string());
-            out.push_str("\n\n");
-        }
-    }
 
     out.push_str("\n[shortcuts]\n");
     out.push_str("# Shortcut overrides. Use View > Actions to discover action ids.\n");
@@ -925,6 +928,23 @@ fn format_shortcut_binding_override(binding: &ShortcutBindingOverride) -> String
         ShortcutBindingOverride::Assigned(binding) => format_shortcut_binding(binding),
         ShortcutBindingOverride::Unassigned => "Unassigned".to_string(),
     }
+}
+
+fn push_path_list(out: &mut String, key: &str, paths: &[PathBuf]) {
+    if paths.is_empty() {
+        out.push_str(key);
+        out.push_str(" = []\n");
+        return;
+    }
+
+    out.push_str(key);
+    out.push_str(" = [\n");
+    for path in paths {
+        out.push_str("    ");
+        out.push_str(&format!("{:?}", path.display().to_string()));
+        out.push_str(",\n");
+    }
+    out.push_str("]\n");
 }
 
 fn format_shortcut_binding(binding: &ShortcutBinding) -> String {
@@ -1196,20 +1216,23 @@ mod tests {
     }
 
     #[test]
-    fn settings_roundtrip_parses_plugin_search_paths() {
+    fn default_settings_file_persists_active_plugin_search_paths() {
+        let contents =
+            render_settings_file(&AppSettings::default()).expect("default settings should render");
+        let parsed: AppSettings =
+            toml::from_str(&contents).expect("rendered default settings should parse back");
+
+        assert!(contents.contains("clap_search_paths = ["));
+        assert!(contents.contains("vst3_search_paths = ["));
+        assert!(!contents.contains("[[plugin_search_paths]]"));
+        assert_eq!(parsed.plugin_search_paths(), default_plugin_search_paths());
+    }
+
+    #[test]
+    fn settings_roundtrip_parses_plugin_search_path_lists() {
         let settings = AppSettings {
-            plugin_search_paths: vec![
-                PluginSearchPath {
-                    format: PluginFormat::Clap,
-                    path: PathBuf::from("/plugins/clap"),
-                    enabled: true,
-                },
-                PluginSearchPath {
-                    format: PluginFormat::Vst3,
-                    path: PathBuf::from("/plugins/vst3"),
-                    enabled: false,
-                },
-            ],
+            clap_search_paths: vec![PathBuf::from("/plugins/clap")],
+            vst3_search_paths: vec![PathBuf::from("/plugins/vst3")],
             ..AppSettings::default()
         };
 
@@ -1218,6 +1241,22 @@ mod tests {
         let parsed: AppSettings =
             toml::from_str(&contents).expect("rendered settings should parse back");
 
-        assert_eq!(parsed.plugin_search_paths, settings.plugin_search_paths);
+        assert_eq!(parsed.clap_search_paths, settings.clap_search_paths);
+        assert_eq!(parsed.vst3_search_paths, settings.vst3_search_paths);
+        assert_eq!(
+            parsed.plugin_search_paths(),
+            vec![
+                PluginSearchPath {
+                    format: PluginFormat::Clap,
+                    path: PathBuf::from("/plugins/clap"),
+                    enabled: true,
+                },
+                PluginSearchPath {
+                    format: PluginFormat::Vst3,
+                    path: PathBuf::from("/plugins/vst3"),
+                    enabled: true,
+                },
+            ]
+        );
     }
 }

@@ -5,10 +5,11 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::engine::AudioEngineSettings;
 use crate::instrument::metronome_synth::{MetronomeProcessor, SharedMetronomeState};
 use crate::instrument::{
-    Controller, EffectProcessorNode, EffectRuntimeHandle, InstrumentProcessor,
-    InstrumentProcessorNode, InstrumentRuntimeContext, InstrumentRuntimeHandle,
-    ProcessorStateError, RuntimeBinding, RuntimeFactoryError, ScheduledInstrumentEvent,
-    SharedInstrumentResetState, SlotState, create_effect_runtime as build_effect_runtime_spec,
+    Controller, EffectProcessorNode, EffectRuntimeContext, EffectRuntimeHandle,
+    InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeContext,
+    InstrumentRuntimeHandle, ProcessorStateError, RuntimeBinding, RuntimeFactoryError,
+    ScheduledInstrumentEvent, SharedInstrumentResetState, SlotState,
+    create_effect_runtime as build_effect_runtime_spec,
     create_instrument_runtime as build_instrument_runtime_spec, decode_instrument_event,
     generation_is_current_or_newer, registry,
 };
@@ -609,7 +610,7 @@ impl MixerRuntime {
         commands: &mut MultiThreadedKnystCommands,
         mixer: &MixerState,
         track_id: TrackId,
-    ) -> Result<(), MixerRuntimeError> {
+    ) -> Result<bool, MixerRuntimeError> {
         let track = mixer.track(track_id)?;
         let master_input = self.master.input_node();
         let bus_inputs = self.bus_input_nodes();
@@ -620,13 +621,15 @@ impl MixerRuntime {
         if !track_needs_runtime(track) {
             if let Some(runtime) = runtime.take() {
                 runtime.free();
+                return Ok(true);
             }
-            return Ok(());
+            return Ok(false);
         }
         if let Some(existing) = runtime.take() {
             let mut existing = existing;
-            if existing.rebuild_effects(context, commands, track) {
+            if existing.rebuild_effects(context, commands, track, &self.meter_settings) {
                 *runtime = Some(existing);
+                Ok(false)
             } else {
                 existing.free();
                 *runtime = Some(TrackRuntime::new(
@@ -643,6 +646,7 @@ impl MixerRuntime {
                         soundfont_settings: self.soundfont_settings,
                     },
                 )?);
+                Ok(true)
             }
         } else {
             *runtime = Some(TrackRuntime::new(
@@ -659,8 +663,8 @@ impl MixerRuntime {
                     soundfont_settings: self.soundfont_settings,
                 },
             )?);
+            Ok(true)
         }
-        Ok(())
     }
 
     pub(crate) fn sync_track_strip(
@@ -707,7 +711,7 @@ impl MixerRuntime {
             .buses
             .get_mut(&bus_id)
             .ok_or(MixerError::InvalidBusId(bus_id))?;
-        runtime.rebuild_effects(context, commands, bus);
+        runtime.rebuild_effects(context, commands, bus, &self.meter_settings);
         Ok(())
     }
 
@@ -718,7 +722,7 @@ impl MixerRuntime {
         mixer: &MixerState,
     ) -> Result<(), MixerRuntimeError> {
         self.master
-            .rebuild_effects(context, commands, mixer.master());
+            .rebuild_effects(context, commands, mixer.master(), &self.meter_settings);
         Ok(())
     }
 
@@ -1110,7 +1114,7 @@ impl MasterRuntime {
             meter,
             level,
         };
-        runtime.rebuild_effects(context, commands, mixer.master());
+        runtime.rebuild_effects(context, commands, mixer.master(), settings);
         runtime
     }
 
@@ -1127,21 +1131,18 @@ impl MasterRuntime {
         context: &KnystContext,
         _commands: &mut MultiThreadedKnystCommands,
         track: &Track,
+        settings: &AudioEngineSettings,
     ) {
         context.with_activation(|| {
-            knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.input)));
-            for effect in self.effects.drain(..).flatten() {
-                free_effect(effect);
-            }
+            disconnect_effect_chain(node_id_of(self.input), &self.effects);
+            sync_effect_runtimes(&mut self.effects, track.effects(), settings);
             let mut previous = node_id_of(self.input);
-            for effect_slot in track.effect_states() {
-                let effect = create_effect_runtime(effect_slot);
+            for (effect, effect_slot) in self.effects.iter().zip(track.effect_states()) {
                 if let Some(effect) = effect.as_ref().filter(|_| !effect_slot.bypassed) {
                     let node = effect.node_id();
                     connect_stereo(previous, node);
                     previous = node;
                 }
-                self.effects.push(effect);
             }
             connect_stereo(previous, node_id_of(self.strip));
         });
@@ -1332,7 +1333,7 @@ impl TrackRuntime {
             signal_path,
         };
         if !matches!(runtime.signal_path, TrackSignalPath::Combined) {
-            runtime.rebuild_effects(context, commands, track);
+            runtime.rebuild_effects(context, commands, track, build.settings);
             runtime.sync_source(
                 context,
                 commands,
@@ -1430,24 +1431,21 @@ impl TrackRuntime {
         context: &KnystContext,
         _commands: &mut MultiThreadedKnystCommands,
         track: &Track,
+        settings: &AudioEngineSettings,
     ) -> bool {
         if matches!(self.signal_path, TrackSignalPath::Combined) {
             return track_prefers_combined_signal_path(track);
         }
         context.with_activation(|| {
-            knyst_commands().disconnect(Connection::clear_to_nodes(self.pre_send_source_node()));
-            for effect in self.effects.drain(..).flatten() {
-                free_effect(effect);
-            }
+            disconnect_effect_chain(self.pre_send_source_node(), &self.effects);
+            sync_effect_runtimes(&mut self.effects, track.effects(), settings);
             let mut previous = self.pre_send_source_node();
-            for effect_slot in track.effect_states() {
-                let effect = create_effect_runtime(effect_slot);
+            for (effect, effect_slot) in self.effects.iter().zip(track.effect_states()) {
                 if let Some(effect) = effect.as_ref().filter(|_| !effect_slot.bypassed) {
                     let node = effect.node_id();
                     connect_stereo(previous, node);
                     previous = node;
                 }
-                self.effects.push(effect);
             }
             connect_stereo(previous, self.post_send_source_node());
         });
@@ -1631,12 +1629,19 @@ impl TrackInstrumentRuntime {
 }
 
 struct EffectRuntime {
+    slot: SlotState,
     handle: EffectRuntimeHandle,
     binding: Option<Box<dyn RuntimeBinding>>,
     processor_latency_samples: u32,
 }
 
 impl EffectRuntime {
+    fn can_reuse_for(&self, slot: &SlotState) -> bool {
+        self.slot.instance_id == slot.instance_id
+            && self.slot.kind == slot.kind
+            && self.slot.state == slot.state
+    }
+
     fn node_id(&self) -> NodeId {
         self.handle.node_id()
     }
@@ -1656,15 +1661,58 @@ impl EffectRuntime {
     }
 }
 
-fn create_effect_runtime(effect: &SlotState) -> Option<EffectRuntime> {
-    let spec = build_effect_runtime_spec(effect).ok()??;
+fn create_effect_runtime(
+    effect: &SlotState,
+    settings: &AudioEngineSettings,
+) -> Option<EffectRuntime> {
+    let context = EffectRuntimeContext {
+        sample_rate: settings.sample_rate,
+        block_size: settings.block_size,
+    };
+    let spec = build_effect_runtime_spec(effect, &context).ok()??;
     let processor_latency_samples = spec.processor.latency_samples();
     let node = handle(EffectProcessorNode::new(spec.processor));
     Some(EffectRuntime {
+        slot: effect.clone(),
         handle: EffectRuntimeHandle::new(node),
         binding: spec.binding,
         processor_latency_samples,
     })
+}
+
+fn sync_effect_runtimes(
+    effects: &mut Vec<Option<EffectRuntime>>,
+    slots: &[SlotState],
+    settings: &AudioEngineSettings,
+) {
+    let mut old_effects = std::mem::take(effects);
+    for slot in slots {
+        let reused = old_effects
+            .iter()
+            .position(|effect| {
+                effect
+                    .as_ref()
+                    .is_some_and(|effect| effect.can_reuse_for(slot))
+            })
+            .and_then(|index| old_effects[index].take())
+            .map(|mut effect| {
+                effect.slot = slot.clone();
+                effect
+            });
+        effects.push(reused.or_else(|| create_effect_runtime(slot, settings)));
+    }
+    for effect in old_effects.into_iter().flatten() {
+        free_effect(effect);
+    }
+}
+
+fn disconnect_effect_chain(source: NodeId, effects: &[Option<EffectRuntime>]) {
+    knyst_commands().disconnect(Connection::clear_to_nodes(source));
+    for effect in effects.iter().flatten() {
+        let node = effect.node_id();
+        knyst_commands().disconnect(Connection::clear_from_nodes(node));
+        knyst_commands().disconnect(Connection::clear_to_nodes(node));
+    }
 }
 
 fn free_effect(effect: EffectRuntime) {
@@ -1734,7 +1782,7 @@ impl BusRuntime {
             route_delay_node: None,
             send_nodes: Vec::new(),
         };
-        runtime.rebuild_effects(context, commands, bus_track);
+        runtime.rebuild_effects(context, commands, bus_track, settings);
         runtime
     }
 
@@ -1751,21 +1799,18 @@ impl BusRuntime {
         context: &KnystContext,
         _commands: &mut MultiThreadedKnystCommands,
         bus_track: &Track,
+        settings: &AudioEngineSettings,
     ) {
         context.with_activation(|| {
-            knyst_commands().disconnect(Connection::clear_to_nodes(node_id_of(self.input)));
-            for effect in self.effects.drain(..).flatten() {
-                free_effect(effect);
-            }
+            disconnect_effect_chain(node_id_of(self.input), &self.effects);
+            sync_effect_runtimes(&mut self.effects, bus_track.effects(), settings);
             let mut previous = node_id_of(self.input);
-            for effect_slot in bus_track.effect_states() {
-                let effect = create_effect_runtime(effect_slot);
+            for (effect, effect_slot) in self.effects.iter().zip(bus_track.effect_states()) {
                 if let Some(effect) = effect.as_ref().filter(|_| !effect_slot.bypassed) {
                     let node = effect.node_id();
                     connect_stereo(previous, node);
                     previous = node;
                 }
-                self.effects.push(effect);
             }
             connect_stereo(previous, node_id_of(self.strip));
         });
@@ -2604,6 +2649,7 @@ mod tests {
 
     fn create_test_latency_effect_runtime(
         slot: &SlotState,
+        _context: &crate::instrument::EffectRuntimeContext,
     ) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError> {
         if !matches!(
             slot.kind,

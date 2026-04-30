@@ -178,6 +178,15 @@ pub struct EffectRuntimeSpec {
     pub binding: Option<Box<dyn RuntimeBinding>>,
 }
 
+/// Runtime resources supplied to effect factories.
+#[derive(Debug, Clone, Copy)]
+pub struct EffectRuntimeContext {
+    /// Active audio device sample rate.
+    pub sample_rate: usize,
+    /// Active audio device block size.
+    pub block_size: usize,
+}
+
 /// Runtime resources supplied by the host to instrument factories.
 pub struct InstrumentRuntimeContext<'a> {
     /// Loaded SoundFont resources keyed by id.
@@ -201,6 +210,14 @@ pub enum RuntimeFactoryError {
 
 /// Live processor editor session.
 pub trait EditorSession {
+    /// Returns a backend-reported initial content size, when available.
+    fn initial_size(&mut self) -> Result<Option<EditorSize>, EditorError> {
+        Ok(None)
+    }
+    /// Returns and clears a backend-requested content resize, when available.
+    fn requested_size(&mut self) -> Result<Option<EditorSize>, EditorError> {
+        Ok(None)
+    }
     /// Attaches the editor view to the host parent.
     fn attach(&mut self, parent: EditorParent) -> Result<(), EditorError>;
     /// Detaches the editor view from the host parent.
@@ -280,7 +297,7 @@ pub trait Processor: Send {
     fn save_state(&self) -> ProcessorState;
     /// Loads the full processor state.
     fn load_state(&mut self, state: &ProcessorState) -> Result<(), ProcessorStateError>;
-    /// Resets transient runtime state.
+    /// Resets transient runtime state and silences active voices.
     fn reset(&mut self);
     /// Returns the currently reported processing latency in samples.
     fn latency_samples(&self) -> u32 {
@@ -831,8 +848,9 @@ pub(crate) fn create_instrument_runtime(
 
 pub(crate) fn create_effect_runtime(
     effect: &SlotState,
+    context: &EffectRuntimeContext,
 ) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError> {
-    registry::create_effect_runtime(effect)
+    registry::create_effect_runtime(effect, context)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1243,7 +1261,7 @@ mod tests {
                 params: &[],
                 editor: None,
             },
-            |_| Ok(None),
+            |_, _| Ok(None),
         )]);
         let slot = crate::instrument::SlotState::built_in(
             crate::instrument::BUILTIN_GAIN_ID,

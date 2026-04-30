@@ -3088,13 +3088,13 @@ dependencies = [
  "lilypalooza-audio",
  "lilypalooza-builtins",
  "lilypalooza-clap",
+ "lilypalooza-plugin-scan",
  "midly",
  "notify",
  "resvg",
  "rfd",
  "ron",
  "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "toml",
@@ -3142,6 +3142,7 @@ dependencies = [
  "clap-sys",
  "libloading",
  "lilypalooza-audio",
+ "raw-window-handle 0.6.2",
  "serde",
  "serde_json",
  "tempfile",
@@ -3160,6 +3161,25 @@ dependencies = [
  "raw-window-handle 0.5.2",
  "raw-window-handle 0.6.2",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "lilypalooza-plugin-scan"
+version = "0.1.0"
+dependencies = [
+ "lilypalooza-clap",
+ "ron",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "lilypalooza-plugin-validator"
+version = "0.1.0"
+dependencies = [
+ "lilypalooza-clap",
+ "serde_json",
 ]
 
 [[package]]

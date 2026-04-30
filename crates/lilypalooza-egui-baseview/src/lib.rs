@@ -1,6 +1,7 @@
 //! Minimal egui host on top of parented baseview windows.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 
 pub use baseview::Size;
 use baseview::gl::GlConfig;
@@ -35,12 +36,20 @@ pub struct EguiWindowOptions {
 /// Live parented egui editor handle.
 pub struct EguiWindowHandle {
     window: WindowHandle,
+    pending_resize: Arc<Mutex<Option<Size>>>,
 }
 
 impl EguiWindowHandle {
     /// Closes and destroys the parented editor view.
     pub fn close(&mut self) {
         self.window.close();
+    }
+
+    /// Resizes the parented editor view.
+    pub fn resize(&mut self, width: f64, height: f64) {
+        if let Ok(mut pending) = self.pending_resize.lock() {
+            *pending = Some(Size::new(width, height));
+        }
     }
 }
 
@@ -67,6 +76,7 @@ where
     Build: FnOnce() -> App + Send + 'static,
 {
     let parent = ParentWindow::from_raw(parent)?;
+    let pending_resize = Arc::new(Mutex::new(None));
     let open_options = WindowOpenOptions {
         title: options.title,
         size: Size::new(options.width, options.height),
@@ -76,10 +86,14 @@ where
             ..GlConfig::default()
         }),
     };
+    let window_pending_resize = Arc::clone(&pending_resize);
     let window = Window::open_parented(&parent, open_options, move |window| {
-        EguiWindow::new(window, build())
+        EguiWindow::new(window, build(), window_pending_resize)
     });
-    Ok(EguiWindowHandle { window })
+    Ok(EguiWindowHandle {
+        window,
+        pending_resize,
+    })
 }
 
 /// egui editor application.
@@ -147,10 +161,11 @@ struct EguiWindow<App> {
     input: RawInput,
     window_info: WindowInfo,
     pointer_pos: Option<Pos2>,
+    pending_resize: Arc<Mutex<Option<Size>>>,
 }
 
 impl<App: EguiApp> EguiWindow<App> {
-    fn new(window: &mut Window<'_>, app: App) -> Self {
+    fn new(window: &mut Window<'_>, app: App, pending_resize: Arc<Mutex<Option<Size>>>) -> Self {
         let Some(context) = window.gl_context() else {
             panic!("baseview did not create an OpenGL context");
         };
@@ -181,6 +196,7 @@ impl<App: EguiApp> EguiWindow<App> {
             input: RawInput::default(),
             window_info: WindowInfo::from_logical_size(Size::new(1.0, 1.0), 1.0),
             pointer_pos: None,
+            pending_resize,
         }
     }
 
@@ -249,6 +265,18 @@ impl<App> Drop for EguiWindow<App> {
 
 impl<App: EguiApp> WindowHandler for EguiWindow<App> {
     fn on_frame(&mut self, window: &mut Window<'_>) {
+        let requested_size = self
+            .pending_resize
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.take());
+        if let Some(size) = requested_size {
+            window.resize(size);
+            self.set_window_info(WindowInfo::from_logical_size(
+                size,
+                self.window_info.scale(),
+            ));
+        }
         self.render(window);
     }
 

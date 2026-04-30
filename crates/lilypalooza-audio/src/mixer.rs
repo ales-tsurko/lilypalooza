@@ -775,7 +775,7 @@ impl MixerHandle<'_> {
         effects: Vec<SlotState>,
     ) -> Result<(), AudioEngineError> {
         self.mixer.state.track_mut(id)?.set_effects(effects);
-        self.mixer.runtime.sync_track_effects(
+        let graph_changed = self.mixer.runtime.sync_track_effects(
             self.context,
             self.commands,
             &self.mixer.state,
@@ -785,6 +785,14 @@ impl MixerHandle<'_> {
             .runtime
             .sync_all_routing(self.context, self.commands, &self.mixer.state)?;
         settle_graph_mutation(self.commands);
+        if graph_changed {
+            self.sequencer
+                .sync_track_handle(self.commands, id, self.mixer.instrument_handle(id));
+            if self.sequencer.is_playing() {
+                let current_beat = current_playing_beat(self.commands).unwrap_or(Beats::ZERO);
+                self.sequencer.mark_dirty_for_seek(current_beat, true);
+            }
+        }
         Ok(())
     }
 
@@ -1052,7 +1060,7 @@ impl MixerHandle<'_> {
             }
             strip_index if strip_index <= self.mixer.state.track_count() => {
                 let track_id = TrackId((strip_index - 1) as u16);
-                self.mixer.runtime.sync_track_effects(
+                let graph_changed = self.mixer.runtime.sync_track_effects(
                     self.context,
                     self.commands,
                     &self.mixer.state,
@@ -1063,6 +1071,18 @@ impl MixerHandle<'_> {
                     self.commands,
                     &self.mixer.state,
                 )?;
+                if graph_changed {
+                    self.sequencer.sync_track_handle(
+                        self.commands,
+                        track_id,
+                        self.mixer.instrument_handle(track_id),
+                    );
+                    if self.sequencer.is_playing() {
+                        let current_beat =
+                            current_playing_beat(self.commands).unwrap_or(Beats::ZERO);
+                        self.sequencer.mark_dirty_for_seek(current_beat, true);
+                    }
+                }
             }
             _ => {
                 let Some(bus_id) = self

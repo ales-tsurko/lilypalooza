@@ -16,7 +16,6 @@ mod icons;
 mod lilypond;
 mod logger;
 mod midi;
-mod plugin_scan;
 mod score_watcher;
 mod settings;
 mod shortcuts;

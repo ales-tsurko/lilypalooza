@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use editor_host::{EditorFrameCommand, EditorPresetState, InstalledHost, WindowSnapshot};
 use iced::window;
-use lilypalooza_audio::{EditorError, EditorParent, EditorSession};
+use lilypalooza_audio::{EditorError, EditorParent, EditorSession, EditorSize};
 
 /// Mixer-strip processor target.
 ///
@@ -98,7 +98,7 @@ impl EditorWindowManager {
     pub(super) fn attach(
         &mut self,
         window_id: window::Id,
-        host: Option<InstalledHost>,
+        mut host: Option<InstalledHost>,
         parent: EditorParent,
     ) -> Result<(), EditorError> {
         let Some(mut pending) = self.pending.remove(&window_id) else {
@@ -107,6 +107,14 @@ impl EditorWindowManager {
             )));
         };
         pending.session.attach(parent)?;
+        if let Some(host) = host.as_mut()
+            && let Ok(Some(size)) = pending.session.initial_size()
+        {
+            let _ = host.resize_content(editor_host::Size {
+                width: f64::from(size.width),
+                height: f64::from(size.height),
+            });
+        }
         self.focused = Some(pending.target);
         self.windows.insert(
             pending.target,
@@ -147,6 +155,23 @@ impl EditorWindowManager {
 
     pub(super) fn target_for_window(&self, window_id: window::Id) -> Option<EditorTarget> {
         self.windows_by_id.get(&window_id).copied()
+    }
+
+    pub(super) fn focus_window(&mut self, window_id: window::Id) -> Vec<String> {
+        let Some(target) = self.windows_by_id.get(&window_id).copied() else {
+            return Vec::new();
+        };
+        let Some(window) = self.windows.get_mut(&target) else {
+            return Vec::new();
+        };
+        self.focused = Some(target);
+        let mut errors = Vec::new();
+        if let Some(host) = window.host.as_mut()
+            && let Err(error) = host.raise()
+        {
+            errors.push(error.to_string());
+        }
+        errors
     }
 
     pub(super) fn remove_window(
@@ -428,6 +453,61 @@ impl EditorWindowManager {
         commands
     }
 
+    pub(super) fn apply_requested_content_resizes(&mut self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for window in self.windows.values_mut() {
+            let requested = match window.session.requested_size() {
+                Ok(Some(size)) => size,
+                Ok(None) => continue,
+                Err(error) => {
+                    errors.push(error.to_string());
+                    continue;
+                }
+            };
+            let Some(host) = window.host.as_mut() else {
+                continue;
+            };
+            if let Err(error) = host.resize_content(editor_host::Size {
+                width: f64::from(requested.width),
+                height: f64::from(requested.height),
+            }) {
+                errors.push(error.to_string());
+            }
+        }
+        errors
+    }
+
+    pub(super) fn resize_window(&mut self, window_id: window::Id, size: iced::Size) -> Vec<String> {
+        let Some(target) = self.windows_by_id.get(&window_id).copied() else {
+            return Vec::new();
+        };
+        let Some(window) = self.windows.get_mut(&target) else {
+            return Vec::new();
+        };
+        if !window.resizable {
+            return Vec::new();
+        }
+        let Some(host) = window.host.as_mut() else {
+            return Vec::new();
+        };
+        let mut errors = Vec::new();
+        match host.resize_outer(editor_host::Size {
+            width: f64::from(size.width),
+            height: f64::from(size.height),
+        }) {
+            Ok(content_size) => {
+                if let Err(error) = window.session.resize(EditorSize {
+                    width: content_size.width.round().max(1.0) as u32,
+                    height: content_size.height.round().max(1.0) as u32,
+                }) {
+                    errors.push(error.to_string());
+                }
+            }
+            Err(error) => errors.push(error.to_string()),
+        }
+        errors
+    }
+
     pub(super) fn close_requested_windows(&self) -> Vec<window::Id> {
         self.windows
             .values()
@@ -456,6 +536,8 @@ impl EditorWindowManager {
 #[cfg(test)]
 mod tests {
     use std::ptr::NonNull;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use editor_host::WindowSnapshot;
     use iced::window;
@@ -464,8 +546,37 @@ mod tests {
     use super::{EditorTarget, EditorWindowManager, snapshot_into_editor_parent};
 
     struct FakeEditorSession;
+    struct RequestedSizeEditorSession {
+        calls: Arc<AtomicUsize>,
+    }
 
     impl EditorSession for FakeEditorSession {
+        fn attach(&mut self, _parent: EditorParent) -> Result<(), EditorError> {
+            Ok(())
+        }
+
+        fn detach(&mut self) -> Result<(), EditorError> {
+            Ok(())
+        }
+
+        fn set_visible(&mut self, _visible: bool) -> Result<(), EditorError> {
+            Ok(())
+        }
+
+        fn resize(&mut self, _size: EditorSize) -> Result<(), EditorError> {
+            Ok(())
+        }
+    }
+
+    impl EditorSession for RequestedSizeEditorSession {
+        fn requested_size(&mut self) -> Result<Option<EditorSize>, EditorError> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            Ok(Some(EditorSize {
+                width: 640,
+                height: 480,
+            }))
+        }
+
         fn attach(&mut self, _parent: EditorParent) -> Result<(), EditorError> {
             Ok(())
         }
@@ -575,6 +686,42 @@ mod tests {
         assert!(!manager.window_visible(window_id));
         assert!(manager.show_window(window_id).is_empty());
         assert!(manager.window_visible(window_id));
+    }
+
+    #[test]
+    fn processor_editor_window_manager_polls_requested_editor_resize() {
+        let mut manager = EditorWindowManager::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let window_id = window::Id::unique();
+        manager.begin_open(
+            EditorTarget {
+                strip_index: 1,
+                slot_index: 0,
+            },
+            "Track 1".to_string(),
+            true,
+            Box::new(RequestedSizeEditorSession {
+                calls: Arc::clone(&calls),
+            }),
+            window_id,
+        );
+        manager
+            .attach(
+                window_id,
+                None,
+                EditorParent {
+                    window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
+                        iced::window::raw_window_handle::AppKitWindowHandle::new(
+                            std::ptr::NonNull::<std::ffi::c_void>::dangling(),
+                        ),
+                    ),
+                    display: None,
+                },
+            )
+            .expect("attach should succeed");
+
+        assert!(manager.apply_requested_content_resizes().is_empty());
+        assert_eq!(calls.load(Ordering::Acquire), 1);
     }
 
     #[test]

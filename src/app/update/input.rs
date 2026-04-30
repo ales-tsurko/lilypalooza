@@ -901,6 +901,9 @@ impl Lilypalooza {
         size: Size,
     ) -> Task<Message> {
         if window_id != self.main_window_id {
+            for error in self.processor_editor_windows.resize_window(window_id, size) {
+                self.log_processor_editor_error("resize", error);
+            }
             return Task::none();
         }
 
@@ -1201,12 +1204,15 @@ impl Lilypalooza {
         };
 
         if !path.exists() {
+            let (clap_search_paths, vst3_search_paths) =
+                settings::split_plugin_search_paths(&self.plugin_search_paths);
             let settings = settings::AppSettings {
                 editor_view: self.editor.view_settings(),
                 editor_theme: self.editor.theme_settings(),
                 editor_recent_files_limit: self.editor_recent_files_limit,
                 playback: self.playback_settings.clone(),
-                plugin_search_paths: self.plugin_search_paths.clone(),
+                clap_search_paths,
+                vst3_search_paths,
                 shortcuts: self.shortcut_settings.clone(),
             };
 
@@ -1225,7 +1231,7 @@ impl Lilypalooza {
         }
 
         let _ = self.unfold_workspace_pane(WorkspacePaneKind::Editor);
-        let task = self.open_editor_file_in_editor(&path);
+        let task = self.open_editor_file_in_editor_internal(&path, false, true);
         if let Some(tab_id) = self.editor.find_tab_by_path(&path) {
             self.editor.activate_tab(tab_id);
             self.pending_reveal_editor_tab = Some(tab_id);

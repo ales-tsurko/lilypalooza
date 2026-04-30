@@ -30,6 +30,7 @@ struct TestNoteProcessor {
     active: bool,
     program: Arc<AtomicU32>,
 }
+struct TestMuteEffect;
 
 #[derive(Clone)]
 struct TestGainBinding {
@@ -52,6 +53,15 @@ fn settle_backend(backend: &SharedTestBackendHandle) {
     }
 }
 
+fn output_peak(backend: &SharedTestBackendHandle) -> f32 {
+    backend
+        .output_channel(0)
+        .into_iter()
+        .chain(backend.output_channel(1))
+        .map(f32::abs)
+        .fold(0.0, f32::max)
+}
+
 fn raw_transport_play(engine: &mut AudioEngine) {
     engine.commands.transport_play();
     super::wait_for_transport_settled(&mut engine.commands);
@@ -63,6 +73,18 @@ fn soundfont_slot(program: u8) -> SlotState {
         BUILTIN_SOUNDFONT_ID,
         encode_test_soundfont_state("default", program),
     )
+}
+
+fn gain_effect_slot() -> SlotState {
+    register_test_processors();
+    SlotState::built_in(BUILTIN_GAIN_ID, ProcessorState::default())
+}
+
+fn mute_effect_slot(bypassed: bool) -> SlotState {
+    register_test_processors();
+    let mut slot = SlotState::built_in("test-mute", ProcessorState::default());
+    slot.bypassed = bypassed;
+    slot
 }
 
 fn register_test_processors() {
@@ -79,6 +101,12 @@ fn register_test_processors() {
             gain_descriptor(),
             create_test_gain_runtime,
         ),
+        Entry::builtin_effect(
+            "test-mute",
+            "Mute",
+            mute_descriptor(),
+            create_test_mute_runtime,
+        ),
     ]);
 }
 
@@ -94,6 +122,15 @@ fn soundfont_descriptor() -> &'static ProcessorDescriptor {
 fn gain_descriptor() -> &'static ProcessorDescriptor {
     static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
         name: "Gain",
+        params: &[],
+        editor: None,
+    };
+    &DESCRIPTOR
+}
+
+fn mute_descriptor() -> &'static ProcessorDescriptor {
+    static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+        name: "Mute",
         params: &[],
         editor: None,
     };
@@ -146,6 +183,7 @@ fn decode_test_soundfont_state(
 
 fn create_test_gain_runtime(
     slot: &SlotState,
+    _context: &crate::instrument::EffectRuntimeContext,
 ) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError> {
     if !matches!(
         slot.kind,
@@ -161,6 +199,22 @@ fn create_test_gain_runtime(
             binding: binding.clone(),
         }),
         binding: Some(Box::new(binding)),
+    }))
+}
+
+fn create_test_mute_runtime(
+    slot: &SlotState,
+    _context: &crate::instrument::EffectRuntimeContext,
+) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError> {
+    if !matches!(
+        slot.kind,
+        ProcessorKind::BuiltIn { ref processor_id } if processor_id == "test-mute"
+    ) {
+        return Ok(None);
+    }
+    Ok(Some(EffectRuntimeSpec {
+        processor: Box::new(TestMuteEffect),
+        binding: None,
     }))
 }
 
@@ -564,8 +618,50 @@ impl EffectProcessor for TestGainEffect {
         left_out: &mut [f32],
         right_out: &mut [f32],
     ) {
-        left_out.copy_from_slice(left);
-        right_out.copy_from_slice(right);
+        let gain = f32::from_bits(self.binding.normalized_bits.load(Ordering::Relaxed));
+        for (out, input) in left_out.iter_mut().zip(left) {
+            *out = *input * gain;
+        }
+        for (out, input) in right_out.iter_mut().zip(right) {
+            *out = *input * gain;
+        }
+    }
+}
+
+impl Processor for TestMuteEffect {
+    fn descriptor(&self) -> &'static ProcessorDescriptor {
+        mute_descriptor()
+    }
+
+    fn set_param(&mut self, _id: &str, _normalized: f32) -> bool {
+        false
+    }
+
+    fn get_param(&self, _id: &str) -> Option<f32> {
+        None
+    }
+
+    fn save_state(&self) -> ProcessorState {
+        ProcessorState::default()
+    }
+
+    fn load_state(&mut self, _state: &ProcessorState) -> Result<(), ProcessorStateError> {
+        Ok(())
+    }
+
+    fn reset(&mut self) {}
+}
+
+impl EffectProcessor for TestMuteEffect {
+    fn process(
+        &mut self,
+        left: &[f32],
+        right: &[f32],
+        left_out: &mut [f32],
+        right_out: &mut [f32],
+    ) {
+        left_out[..left.len()].fill(0.0);
+        right_out[..right.len()].fill(0.0);
     }
 }
 
@@ -1907,6 +2003,318 @@ fn pause_immediate_resets_active_notes() {
     }
 
     panic!("pause_immediate should eventually clear active notes");
+}
+
+#[test]
+fn inserting_first_effect_during_playback_keeps_track_audible() {
+    let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+    let mut engine = AudioEngine::start(
+        MixerState::new(),
+        backend,
+        AudioEngineOptions {
+            chase_notes_on_seek: true,
+            ..AudioEngineOptions::default()
+        },
+    )
+    .expect("engine should start");
+    let _audio = backend_handle.start_realtime();
+
+    {
+        let mut mixer = engine.mixer();
+        mixer
+            .set_soundfont(test_soundfont_resource())
+            .expect("soundfont should load");
+        mixer
+            .set_track_instrument(TrackId(0), soundfont_slot(0))
+            .expect("track should accept soundfont instrument");
+    }
+    settle_backend(&backend_handle);
+
+    engine
+        .sequencer()
+        .replace_from_midi_bytes(&sustained_note_midi_bytes(480, 3840))
+        .expect("midi should load");
+    engine.transport().play();
+
+    let mut heard_before_insert = false;
+    for _ in 0..1024 {
+        backend_handle.process_block();
+        if backend_handle.output_has_signal() {
+            heard_before_insert = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        heard_before_insert,
+        "track should be audible before effect insert"
+    );
+
+    {
+        let mut mixer = engine.mixer();
+        mixer
+            .set_track_effects(TrackId(0), vec![gain_effect_slot()])
+            .expect("track should accept inserted effect");
+    }
+
+    let mut heard_after_insert = false;
+    for _ in 0..1024 {
+        backend_handle.process_block();
+        if backend_handle.output_has_signal() {
+            heard_after_insert = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+
+    assert!(
+        heard_after_insert,
+        "track should stay audible after inserting first effect during playback"
+    );
+}
+
+#[test]
+fn toggling_effect_bypass_during_playback_rebuilds_processing_path() {
+    let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+    let mut engine = AudioEngine::start(
+        MixerState::new(),
+        backend,
+        AudioEngineOptions {
+            chase_notes_on_seek: true,
+            ..AudioEngineOptions::default()
+        },
+    )
+    .expect("engine should start");
+    let _audio = backend_handle.start_realtime();
+
+    {
+        let mut mixer = engine.mixer();
+        mixer
+            .set_soundfont(test_soundfont_resource())
+            .expect("soundfont should load");
+        mixer
+            .set_track_instrument(TrackId(0), soundfont_slot(0))
+            .expect("track should accept soundfont instrument");
+        mixer
+            .set_track_effects(TrackId(0), vec![mute_effect_slot(true)])
+            .expect("track should accept bypassed mute effect");
+    }
+    settle_backend(&backend_handle);
+
+    engine
+        .sequencer()
+        .replace_from_midi_bytes(&sustained_note_midi_bytes(480, 3840))
+        .expect("midi should load");
+    engine.transport().play();
+
+    let mut heard_bypassed = false;
+    for _ in 0..1024 {
+        backend_handle.process_block();
+        if backend_handle.output_has_signal() {
+            heard_bypassed = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert!(heard_bypassed, "bypassed mute effect should pass audio");
+
+    {
+        let mut mixer = engine.mixer();
+        mixer
+            .set_slot_bypassed(
+                SlotAddress {
+                    strip_index: 1,
+                    slot_index: 1,
+                },
+                false,
+            )
+            .expect("effect should unbypass");
+    }
+
+    let mut silent_blocks = 0_usize;
+    for _ in 0..1024 {
+        backend_handle.process_block();
+        if !backend_handle.output_has_signal() {
+            silent_blocks += 1;
+            if silent_blocks >= 16 {
+                return;
+            }
+        } else {
+            silent_blocks = 0;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+
+    panic!("unbypassed mute effect should process and silence audio");
+}
+
+#[test]
+fn effect_controller_stays_live_after_bypass_toggle() {
+    let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+    let mut engine = AudioEngine::start(
+        MixerState::new(),
+        backend,
+        AudioEngineOptions {
+            chase_notes_on_seek: true,
+            ..AudioEngineOptions::default()
+        },
+    )
+    .expect("engine should start");
+    let _audio = backend_handle.start_realtime();
+
+    {
+        let mut mixer = engine.mixer();
+        mixer
+            .set_soundfont(test_soundfont_resource())
+            .expect("soundfont should load");
+        mixer
+            .set_track_instrument(TrackId(0), soundfont_slot(0))
+            .expect("track should accept soundfont instrument");
+        mixer
+            .set_track_effects(TrackId(0), vec![gain_effect_slot()])
+            .expect("track should accept gain effect");
+    }
+    settle_backend(&backend_handle);
+    let controller = engine
+        .controller(SlotAddress {
+            strip_index: 1,
+            slot_index: 1,
+        })
+        .expect("controller lookup should succeed")
+        .expect("gain controller should exist");
+    controller
+        .set_param("gain_db", 0.0)
+        .expect("gain should update");
+
+    engine
+        .sequencer()
+        .replace_from_midi_bytes(&sustained_note_midi_bytes(480, 3840))
+        .expect("midi should load");
+    engine.transport().play();
+    settle_backend(&backend_handle);
+    assert!(
+        !backend_handle.output_has_signal(),
+        "zero gain should silence audio before bypass toggle"
+    );
+
+    {
+        let mut mixer = engine.mixer();
+        mixer
+            .set_slot_bypassed(
+                SlotAddress {
+                    strip_index: 1,
+                    slot_index: 1,
+                },
+                true,
+            )
+            .expect("effect should bypass");
+    }
+    settle_backend(&backend_handle);
+    assert!(
+        backend_handle.output_has_signal(),
+        "bypassed zero-gain effect should pass audio"
+    );
+
+    {
+        let mut mixer = engine.mixer();
+        mixer
+            .set_slot_bypassed(
+                SlotAddress {
+                    strip_index: 1,
+                    slot_index: 1,
+                },
+                false,
+            )
+            .expect("effect should unbypass");
+    }
+    settle_backend(&backend_handle);
+
+    assert!(
+        !backend_handle.output_has_signal(),
+        "original controller should still control live effect after bypass toggle"
+    );
+}
+
+#[test]
+fn repeated_effect_bypass_toggle_does_not_duplicate_processing_path() {
+    let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
+    let mut engine = AudioEngine::start(
+        MixerState::new(),
+        backend,
+        AudioEngineOptions {
+            chase_notes_on_seek: true,
+            ..AudioEngineOptions::default()
+        },
+    )
+    .expect("engine should start");
+    let _audio = backend_handle.start_realtime();
+
+    {
+        let mut mixer = engine.mixer();
+        mixer
+            .set_soundfont(test_soundfont_resource())
+            .expect("soundfont should load");
+        mixer
+            .set_track_instrument(TrackId(0), soundfont_slot(0))
+            .expect("track should accept soundfont instrument");
+        mixer
+            .set_track_effects(TrackId(0), vec![gain_effect_slot()])
+            .expect("track should accept gain effect");
+    }
+    settle_backend(&backend_handle);
+    engine
+        .controller(SlotAddress {
+            strip_index: 1,
+            slot_index: 1,
+        })
+        .expect("controller lookup should succeed")
+        .expect("gain controller should exist")
+        .set_param("gain_db", 0.5)
+        .expect("gain should update");
+
+    engine
+        .sequencer()
+        .replace_from_midi_bytes(&sustained_note_midi_bytes(480, 3840))
+        .expect("midi should load");
+    engine.transport().play();
+    settle_backend(&backend_handle);
+    let baseline_peak = output_peak(&backend_handle);
+    assert!(baseline_peak > 0.0, "gain effect should pass reduced audio");
+
+    for _ in 0..4 {
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_slot_bypassed(
+                    SlotAddress {
+                        strip_index: 1,
+                        slot_index: 1,
+                    },
+                    true,
+                )
+                .expect("effect should bypass");
+        }
+        settle_backend(&backend_handle);
+        {
+            let mut mixer = engine.mixer();
+            mixer
+                .set_slot_bypassed(
+                    SlotAddress {
+                        strip_index: 1,
+                        slot_index: 1,
+                    },
+                    false,
+                )
+                .expect("effect should unbypass");
+        }
+        settle_backend(&backend_handle);
+    }
+
+    let after_peak = output_peak(&backend_handle);
+    assert!(
+        after_peak <= baseline_peak * 1.05,
+        "bypass toggles should not add parallel effect paths: baseline {baseline_peak}, after {after_peak}"
+    );
 }
 
 #[test]

@@ -1,24 +1,27 @@
-//! Isolated helper process for plugin validation.
+//! Isolated plugin validation helper.
 
+use std::io;
 use std::path::PathBuf;
 
-fn main() {
-    let result = run(std::env::args().skip(1).collect());
-    match result {
-        Ok(report) => {
-            if let Err(error) = serde_json::to_writer(std::io::stdout(), &report) {
+/// Runs validator CLI logic, writes CLI output, and returns a process exit code.
+pub fn run_cli(args: Vec<String>) -> i32 {
+    match run(args) {
+        Ok(report) => match serde_json::to_writer(io::stdout(), &report) {
+            Ok(()) => 0,
+            Err(error) => {
                 eprintln!("failed to write validation report: {error}");
-                std::process::exit(2);
+                2
             }
-        }
+        },
         Err(error) => {
             eprintln!("{error}");
-            std::process::exit(2);
+            2
         }
     }
 }
 
-fn run(args: Vec<String>) -> Result<lilypalooza_clap::ValidationReport, String> {
+/// Runs validator CLI logic and returns a structured report.
+pub fn run(args: Vec<String>) -> Result<lilypalooza_clap::ValidationReport, String> {
     let mut format = None;
     let mut path = None;
     let mut iter = args.into_iter();
@@ -48,4 +51,22 @@ fn run(args: Vec<String>) -> Result<lilypalooza_clap::ValidationReport, String> 
 
 fn usage() -> String {
     "usage: lilypalooza-plugin-validator --format clap --path <plugin>".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_unknown_format() {
+        let error = run(vec![
+            "--format".to_string(),
+            "vst2".to_string(),
+            "--path".to_string(),
+            "/tmp/plugin".to_string(),
+        ])
+        .expect_err("unknown format should fail");
+
+        assert!(error.contains("unsupported plugin format: vst2"));
+    }
 }
