@@ -23,6 +23,7 @@ use super::meters::{
 };
 use super::{Lilypalooza, Message};
 use crate::{fonts, icons, ui_style};
+use std::collections::BTreeMap;
 
 pub(super) const MIXER_MIN_HEIGHT: f32 = ui_style::grid_f32(102);
 pub(super) const MIXER_MIN_WIDTH: f32 = 520.0;
@@ -242,14 +243,12 @@ pub(super) enum ProcessorChoice {
 
 pub(super) type InstrumentChoice = ProcessorChoice;
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum ProcessorBrowserBackend {
     BuiltIn,
     Clap,
     Vst3,
 }
-
-pub(super) type InstrumentBrowserBackend = ProcessorBrowserBackend;
 
 impl ProcessorBrowserBackend {
     fn label(self) -> &'static str {
@@ -303,16 +302,6 @@ impl ProcessorSlotRole {
         }
     }
 
-    fn backend_empty_label(self, backend: ProcessorBrowserBackend) -> &'static str {
-        match (self, backend) {
-            (Self::Instrument, ProcessorBrowserBackend::Clap) => "No CLAP instruments yet",
-            (Self::Instrument, ProcessorBrowserBackend::Vst3) => "No VST3 instruments yet",
-            (Self::Effect, ProcessorBrowserBackend::Clap) => "No CLAP effects yet",
-            (Self::Effect, ProcessorBrowserBackend::Vst3) => "No VST3 effects yet",
-            (_, ProcessorBrowserBackend::BuiltIn) => "",
-        }
-    }
-
     fn slot_icon(self) -> iced::widget::svg::Handle {
         match self {
             Self::Instrument => icons::keyboard_music(),
@@ -324,7 +313,66 @@ impl ProcessorSlotRole {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InstrumentBrowserEntries {
     show_none: bool,
+    backends: Vec<ProcessorBrowserBackendSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessorBrowserBackendSection {
+    key: ProcessorBrowserSectionKey,
+    title: String,
+    sections: Vec<ProcessorBrowserSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessorBrowserSection {
+    key: ProcessorBrowserSectionKey,
+    title: String,
     entries: Vec<ProcessorChoice>,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub(super) struct ProcessorBrowserSectionKey {
+    role: ProcessorSlotRole,
+    backend: ProcessorBrowserBackend,
+    depth: ProcessorBrowserSectionDepth,
+    title: String,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+enum ProcessorBrowserSectionDepth {
+    Backend,
+    Group,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessorBrowserRowDepth {
+    Root,
+    Group,
+    Leaf,
+}
+
+impl ProcessorBrowserSectionKey {
+    pub(super) fn new(
+        role: ProcessorSlotRole,
+        backend: ProcessorBrowserBackend,
+        title: String,
+    ) -> Self {
+        Self {
+            role,
+            backend,
+            depth: ProcessorBrowserSectionDepth::Group,
+            title,
+        }
+    }
+
+    fn backend(role: ProcessorSlotRole, backend: ProcessorBrowserBackend) -> Self {
+        Self {
+            role,
+            backend,
+            depth: ProcessorBrowserSectionDepth::Backend,
+            title: backend.label().to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -3591,23 +3639,6 @@ pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Messa
     .padding([ui_style::PADDING_XS, ui_style::PADDING_SM])
     .style(ui_style::prompt_header);
 
-    let tabs = row![
-        instrument_browser_tab_button(
-            InstrumentBrowserBackend::BuiltIn,
-            app.instrument_browser_backend
-        ),
-        instrument_browser_tab_button(
-            InstrumentBrowserBackend::Clap,
-            app.instrument_browser_backend
-        ),
-        instrument_browser_tab_button(
-            InstrumentBrowserBackend::Vst3,
-            app.instrument_browser_backend
-        ),
-    ]
-    .spacing(ui_style::SPACE_XS)
-    .width(Fill);
-
     let search = text_input(role.search_placeholder(), &app.instrument_browser_search)
         .on_input(|value| Message::Mixer(MixerMessage::ProcessorBrowserSearchChanged(value)))
         .id(app.instrument_browser_search_input_id.clone())
@@ -3616,21 +3647,20 @@ pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Messa
         .padding([ui_style::PADDING_XS, ui_style::PADDING_SM])
         .width(Fill);
 
-    let backend = app.instrument_browser_backend;
-    let body = processor_browser_list(
+    let body = processor_browser_list(ProcessorBrowserListArgs {
         target,
         role,
-        &choices,
-        selected.as_ref(),
-        &app.instrument_browser_search,
-        backend,
-        app.plugin_scan.is_active(),
-    );
+        choices: &choices,
+        selected: selected.as_ref(),
+        search: &app.instrument_browser_search,
+        expanded_sections: &app.processor_browser_expanded_sections,
+        scan_active: app.plugin_scan.is_active(),
+    });
 
     let dialog = container(
         column![
             header,
-            container(column![tabs, search, body].spacing(ui_style::SPACE_SM))
+            container(column![search, body].spacing(ui_style::SPACE_SM))
                 .padding(ui_style::PADDING_SM)
         ]
         .spacing(0),
@@ -3659,56 +3689,87 @@ pub(super) fn instrument_browser_overlay(app: &Lilypalooza) -> Element<'_, Messa
     opaque(backdrop)
 }
 
-fn instrument_browser_tab_button(
-    tab: InstrumentBrowserBackend,
-    active: InstrumentBrowserBackend,
-) -> Element<'static, Message> {
-    button(text(tab.label()).size(ui_style::FONT_SIZE_UI_XS))
-        .style(move |theme, status| ui_style::button_pane_tab(theme, status, tab == active))
-        .padding([ui_style::grid(1), ui_style::grid(3)])
-        .height(Length::Fixed(ui_style::grid_f32(6)))
-        .on_press(Message::Mixer(MixerMessage::SelectProcessorBrowserBackend(
-            tab,
-        )))
-        .into()
-}
-
-fn processor_browser_list(
+struct ProcessorBrowserListArgs<'a> {
     target: super::processor_editor_windows::EditorTarget,
     role: ProcessorSlotRole,
-    choices: &[ProcessorChoice],
-    selected: Option<&ProcessorChoice>,
-    search: &str,
-    backend: ProcessorBrowserBackend,
+    choices: &'a [ProcessorChoice],
+    selected: Option<&'a ProcessorChoice>,
+    search: &'a str,
+    expanded_sections: &'a [ProcessorBrowserSectionKey],
     scan_active: bool,
-) -> Element<'static, Message> {
-    let browser = processor_browser_entries(choices, backend, search);
-    let InstrumentBrowserEntries { show_none, entries } = browser;
+}
+
+fn processor_browser_list(args: ProcessorBrowserListArgs<'_>) -> Element<'static, Message> {
+    let ProcessorBrowserListArgs {
+        target,
+        role,
+        choices,
+        selected,
+        search,
+        expanded_sections,
+        scan_active,
+    } = args;
+    let browser = processor_browser_entries(choices, role, search);
+    let InstrumentBrowserEntries {
+        show_none,
+        backends,
+    } = browser;
     let mut content = column![].spacing(0).width(Fill);
     if show_none {
         content = content.push(instrument_browser_choice_button(
             target,
+            role,
             ProcessorChoice::None,
             selected == Some(&InstrumentChoice::None),
+            ProcessorBrowserRowDepth::Root,
         ));
     }
 
-    let has_entries = !entries.is_empty();
-    for choice in entries {
-        content = content.push(instrument_browser_choice_button(
-            target,
-            choice.clone(),
-            selected == Some(&choice),
+    let has_entries = backends.iter().any(|backend| {
+        backend
+            .sections
+            .iter()
+            .any(|section| !section.entries.is_empty())
+    });
+    for backend in backends {
+        let backend_expanded =
+            processor_browser_section_expanded(&backend.key, expanded_sections, search);
+        content = content.push(processor_browser_section_header(
+            backend.key,
+            backend.title,
+            backend_expanded,
+            ProcessorBrowserRowDepth::Root,
         ));
+        if backend_expanded {
+            for section in backend.sections {
+                let section_expanded =
+                    processor_browser_section_expanded(&section.key, expanded_sections, search);
+                content = content.push(processor_browser_section_header(
+                    section.key,
+                    section.title,
+                    section_expanded,
+                    ProcessorBrowserRowDepth::Group,
+                ));
+                if section_expanded {
+                    for choice in section.entries {
+                        content = content.push(instrument_browser_choice_button(
+                            target,
+                            role,
+                            choice.clone(),
+                            selected == Some(&choice),
+                            ProcessorBrowserRowDepth::Leaf,
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     if !show_none && !has_entries {
-        let label = if backend == ProcessorBrowserBackend::BuiltIn {
-            role.empty_search_label()
-        } else if scan_active {
+        let label = if scan_active {
             "Scanning plugins..."
         } else {
-            role.backend_empty_label(backend)
+            role.empty_search_label()
         };
         return instrument_browser_empty_state(label);
     }
@@ -3719,28 +3780,116 @@ fn processor_browser_list(
         .into()
 }
 
+fn processor_browser_section_expanded(
+    key: &ProcessorBrowserSectionKey,
+    expanded_sections: &[ProcessorBrowserSectionKey],
+    search: &str,
+) -> bool {
+    !search.trim().is_empty() || expanded_sections.iter().any(|expanded| expanded == key)
+}
+
+fn processor_browser_section_header(
+    key: ProcessorBrowserSectionKey,
+    title: String,
+    expanded: bool,
+    depth: ProcessorBrowserRowDepth,
+) -> Element<'static, Message> {
+    button(
+        row![
+            ui_style::icon(
+                processor_browser_section_icon(expanded),
+                PROCESSOR_BROWSER_ICON_SIZE,
+                ui_style::svg_dimmed_control,
+            ),
+            text(title)
+                .size(ui_style::FONT_SIZE_UI_XS)
+                .font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..fonts::UI
+                }),
+        ]
+        .spacing(ui_style::SPACE_XS)
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Fill)
+    .padding(processor_browser_choice_padding(depth))
+    .style(ui_style::button_browser_section_header)
+    .on_press(Message::Mixer(MixerMessage::ToggleProcessorBrowserSection(
+        key,
+    )))
+    .into()
+}
+
 fn instrument_browser_choice_button(
     target: super::processor_editor_windows::EditorTarget,
+    role: ProcessorSlotRole,
     choice: ProcessorChoice,
     selected: bool,
+    depth: ProcessorBrowserRowDepth,
 ) -> Element<'static, Message> {
     button(
         container(
-            text(instrument_choice_primary_label(&choice))
-                .size(ui_style::FONT_SIZE_UI_SM)
-                .width(Fill)
-                .wrapping(iced::widget::text::Wrapping::None),
+            row![
+                instrument_browser_choice_icon(role, &choice),
+                text(instrument_choice_primary_label(&choice))
+                    .size(ui_style::FONT_SIZE_UI_SM)
+                    .width(Fill)
+                    .wrapping(iced::widget::text::Wrapping::None),
+            ]
+            .spacing(ui_style::SPACE_XS)
+            .align_y(alignment::Vertical::Center),
         )
         .width(Fill)
         .center_y(Fill),
     )
-    .style(move |theme, status| ui_style::button_browser_entry(theme, status, selected))
-    .padding([ui_style::grid(2), ui_style::grid(3)])
+    .style(move |theme, status| ui_style::button_browser_child_entry(theme, status, selected))
+    .padding(processor_browser_choice_padding(depth))
     .width(Fill)
     .on_press(Message::Mixer(MixerMessage::SelectProcessor(
         target, choice,
     )))
     .into()
+}
+
+fn processor_browser_section_icon(expanded: bool) -> iced::widget::svg::Handle {
+    if expanded {
+        icons::folder_open()
+    } else {
+        icons::folder()
+    }
+}
+
+fn instrument_browser_choice_icon(
+    role: ProcessorSlotRole,
+    choice: &ProcessorChoice,
+) -> Element<'static, Message> {
+    ui_style::icon(
+        processor_browser_choice_icon(role, choice),
+        PROCESSOR_BROWSER_ICON_SIZE,
+        ui_style::svg_dimmed_control,
+    )
+    .into()
+}
+
+fn processor_browser_choice_icon(
+    role: ProcessorSlotRole,
+    choice: &ProcessorChoice,
+) -> iced::widget::svg::Handle {
+    match choice {
+        ProcessorChoice::None => icons::x(),
+        ProcessorChoice::Processor { .. } => role.slot_icon(),
+    }
+}
+
+fn processor_browser_choice_padding(depth: ProcessorBrowserRowDepth) -> [u16; 2] {
+    [
+        ui_style::grid(2),
+        ui_style::grid(match depth {
+            ProcessorBrowserRowDepth::Root => 3,
+            ProcessorBrowserRowDepth::Group => 7,
+            ProcessorBrowserRowDepth::Leaf => 11,
+        }),
+    ]
 }
 
 fn instrument_browser_empty_state(label: &'static str) -> Element<'static, Message> {
@@ -3782,7 +3931,12 @@ fn instrument_choice_search_haystack(choice: &InstrumentChoice) -> String {
     match choice {
         InstrumentChoice::None => "empty none no instrument".to_string(),
         InstrumentChoice::Processor { name, backend, .. } => {
-            format!("{} {}", name.to_lowercase(), backend.label().to_lowercase())
+            format!(
+                "{} {} {}",
+                name.to_lowercase(),
+                backend.label().to_lowercase(),
+                processor_choice_group_label(choice).to_lowercase()
+            )
         }
     }
 }
@@ -3790,15 +3944,14 @@ fn instrument_choice_search_haystack(choice: &InstrumentChoice) -> String {
 #[cfg(test)]
 fn instrument_browser_entries(
     choices: &[InstrumentChoice],
-    active_backend: InstrumentBrowserBackend,
     search: &str,
 ) -> InstrumentBrowserEntries {
-    processor_browser_entries(choices, active_backend, search)
+    processor_browser_entries(choices, ProcessorSlotRole::Instrument, search)
 }
 
 fn processor_browser_entries(
     choices: &[ProcessorChoice],
-    active_backend: ProcessorBrowserBackend,
+    role: ProcessorSlotRole,
     search: &str,
 ) -> InstrumentBrowserEntries {
     let query = search.trim().to_lowercase();
@@ -3806,24 +3959,71 @@ fn processor_browser_entries(
         query.is_empty() || instrument_choice_search_haystack(choice).contains(&query)
     };
 
-    let mut entries = Vec::new();
+    let mut groups: BTreeMap<ProcessorBrowserBackend, BTreeMap<String, Vec<ProcessorChoice>>> =
+        BTreeMap::new();
     let mut show_none = false;
     for choice in choices {
         match choice {
             InstrumentChoice::None => {
-                if active_backend == InstrumentBrowserBackend::BuiltIn && matches(choice) {
+                if matches(choice) {
                     show_none = true;
                 }
             }
-            InstrumentChoice::Processor { backend, .. } if *backend != active_backend => {}
-            InstrumentChoice::Processor { .. } if matches(choice) => {
-                entries.push(choice.clone());
+            InstrumentChoice::Processor { backend, .. } if matches(choice) => {
+                groups
+                    .entry(*backend)
+                    .or_default()
+                    .entry(processor_choice_group_label(choice))
+                    .or_default()
+                    .push(choice.clone());
             }
             InstrumentChoice::Processor { .. } => {}
         }
     }
 
-    InstrumentBrowserEntries { show_none, entries }
+    let backends = groups
+        .into_iter()
+        .map(|(backend, groups)| ProcessorBrowserBackendSection {
+            key: ProcessorBrowserSectionKey::backend(role, backend),
+            title: backend.label().to_string(),
+            sections: groups
+                .into_iter()
+                .map(|(title, entries)| ProcessorBrowserSection {
+                    key: ProcessorBrowserSectionKey::new(role, backend, title.clone()),
+                    title,
+                    entries,
+                })
+                .collect(),
+        })
+        .collect();
+
+    InstrumentBrowserEntries {
+        show_none,
+        backends,
+    }
+}
+
+fn processor_choice_group_label(choice: &ProcessorChoice) -> String {
+    match choice {
+        ProcessorChoice::None => "General".to_string(),
+        ProcessorChoice::Processor {
+            processor_id,
+            backend,
+            ..
+        } => registry::entry(processor_id)
+            .map(|entry| match backend {
+                ProcessorBrowserBackend::BuiltIn => entry.category.into_owned(),
+                ProcessorBrowserBackend::Clap | ProcessorBrowserBackend::Vst3 => {
+                    entry.manufacturer.into_owned()
+                }
+            })
+            .unwrap_or_else(|| match backend {
+                ProcessorBrowserBackend::BuiltIn => "Built-in".to_string(),
+                ProcessorBrowserBackend::Clap | ProcessorBrowserBackend::Vst3 => {
+                    "Unknown Manufacturer".to_string()
+                }
+            }),
+    }
 }
 
 #[allow(dead_code)]
@@ -3882,7 +4082,7 @@ fn selected_processor_choice(
 #[cfg(test)]
 mod tests {
     use crate::ui_style;
-    use iced::widget::{button, container, row};
+    use iced::widget::{button, container};
     use iced::{Color, Element, Event, Length, Point, Theme, mouse};
     use iced_test::{Simulator, simulator};
     use lilypalooza_audio::mixer::MixerMeterSnapshotWindow;
@@ -3892,8 +4092,8 @@ mod tests {
 
     use super::{
         COMPACT_GAIN_SWITCH_OFFSET, GROUP_SIDE_BORDER_WIDTH, GainControlMode,
-        INSTRUMENT_PICKER_HEIGHT, INSTRUMENT_SLOT_WIDTH, InstrumentBrowserBackend,
-        InstrumentChoice, MAIN_SECTION_WIDTH, MAIN_STRIP_WIDTH, MIXER_MIN_HEIGHT, MeterDependency,
+        INSTRUMENT_PICKER_HEIGHT, INSTRUMENT_SLOT_WIDTH, InstrumentChoice, MAIN_SECTION_WIDTH,
+        MAIN_STRIP_WIDTH, MIXER_MIN_HEIGHT, MeterDependency, ProcessorBrowserBackend,
         ROUTE_PICKER_BOTTOM_INSET, ROUTE_PICKER_TOP_SPACING, RouteChoice, RoutingStrip,
         SECTION_BODY_GAP, SEND_CONTROL_HEIGHT, SEND_MODE_HEIGHT, SEND_PANEL_TOP_SPACING,
         SEND_ROW_CONTENT_BOTTOM_SPACING, SEND_ROW_HEIGHT, STRIP_MIN_HEIGHT, STRIP_TOGGLE_SIZE,
@@ -4470,7 +4670,7 @@ mod tests {
                 Some(&InstrumentChoice::Processor {
                     processor_id: BUILTIN_GAIN_ID.to_string(),
                     name: "Gain".to_string(),
-                    backend: InstrumentBrowserBackend::BuiltIn,
+                    backend: ProcessorBrowserBackend::BuiltIn,
                 }),
                 true,
                 false,
@@ -4505,7 +4705,7 @@ mod tests {
                 Some(&InstrumentChoice::Processor {
                     processor_id: BUILTIN_GAIN_ID.to_string(),
                     name: "Gain".to_string(),
-                    backend: InstrumentBrowserBackend::BuiltIn,
+                    backend: ProcessorBrowserBackend::BuiltIn,
                 }),
                 true,
                 false,
@@ -4540,7 +4740,7 @@ mod tests {
                 Some(&InstrumentChoice::Processor {
                     processor_id: BUILTIN_GAIN_ID.to_string(),
                     name: "Gain".to_string(),
-                    backend: InstrumentBrowserBackend::BuiltIn,
+                    backend: ProcessorBrowserBackend::BuiltIn,
                 }),
                 true,
                 false,
@@ -4588,7 +4788,7 @@ mod tests {
                 Some(&InstrumentChoice::Processor {
                     processor_id: BUILTIN_GAIN_ID.to_string(),
                     name: "Gain".to_string(),
-                    backend: InstrumentBrowserBackend::BuiltIn,
+                    backend: ProcessorBrowserBackend::BuiltIn,
                 }),
                 true,
                 false,
@@ -4669,7 +4869,9 @@ mod tests {
 
         assert!(ui.find("Choose Effect").is_ok());
         assert!(ui.find("Master").is_ok());
-        assert!(ui.find("Gain").is_ok());
+        assert!(ui.find("Built-in").is_ok());
+        assert!(ui.find("Utility").is_err());
+        assert!(ui.find("Gain").is_err());
     }
 
     #[test]
@@ -5734,33 +5936,6 @@ mod tests {
     }
 
     #[test]
-    fn instrument_browser_tabs_match_snapshot() -> Result<(), iced_test::Error> {
-        let mut ui = Simulator::with_size(
-            iced::Settings::default(),
-            [ui_style::grid_f32(48), ui_style::grid_f32(8)],
-            row![
-                super::instrument_browser_tab_button(
-                    InstrumentBrowserBackend::BuiltIn,
-                    InstrumentBrowserBackend::BuiltIn,
-                ),
-                super::instrument_browser_tab_button(
-                    InstrumentBrowserBackend::Clap,
-                    InstrumentBrowserBackend::BuiltIn,
-                ),
-                super::instrument_browser_tab_button(
-                    InstrumentBrowserBackend::Vst3,
-                    InstrumentBrowserBackend::BuiltIn,
-                ),
-            ]
-            .spacing(ui_style::SPACE_XS),
-        );
-
-        assert_snapshot_matches(&mut ui, "tests/snapshots/instrument_browser_tabs")?;
-
-        Ok(())
-    }
-
-    #[test]
     fn remove_bus_button_idle_and_hover_render_differ() -> Result<(), iced_test::Error> {
         let view = || -> Element<'static, Message> {
             container(
@@ -5829,7 +6004,7 @@ mod tests {
             Some(InstrumentChoice::Processor {
                 processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
                 name: "SF-01".to_string(),
-                backend: InstrumentBrowserBackend::BuiltIn,
+                backend: ProcessorBrowserBackend::BuiltIn,
             })
         );
     }
@@ -5874,33 +6049,244 @@ mod tests {
             Some(InstrumentChoice::Processor {
                 processor_id: BUILTIN_GAIN_ID.to_string(),
                 name: "Gain".to_string(),
-                backend: InstrumentBrowserBackend::BuiltIn,
+                backend: ProcessorBrowserBackend::BuiltIn,
             })
         );
     }
 
     #[test]
-    fn built_in_browser_entries_filter_by_instrument_name_without_section_headers() {
+    fn built_in_browser_entries_filter_by_instrument_name_and_group_by_type() {
+        lilypalooza_builtins::register_all();
         let choices = vec![
             InstrumentChoice::None,
             InstrumentChoice::Processor {
                 processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
                 name: "SoundFont".to_string(),
-                backend: InstrumentBrowserBackend::BuiltIn,
+                backend: ProcessorBrowserBackend::BuiltIn,
             },
         ];
 
-        let browser =
-            instrument_browser_entries(&choices, InstrumentBrowserBackend::BuiltIn, "sound");
+        let browser = instrument_browser_entries(&choices, "sound");
 
         assert!(!browser.show_none);
         assert_eq!(
-            browser.entries,
-            vec![InstrumentChoice::Processor {
-                processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
-                name: "SoundFont".to_string(),
-                backend: InstrumentBrowserBackend::BuiltIn,
+            browser.backends,
+            vec![super::ProcessorBrowserBackendSection {
+                key: super::ProcessorBrowserSectionKey::backend(
+                    super::ProcessorSlotRole::Instrument,
+                    ProcessorBrowserBackend::BuiltIn,
+                ),
+                title: "Built-in".to_string(),
+                sections: vec![super::ProcessorBrowserSection {
+                    key: super::ProcessorBrowserSectionKey::new(
+                        super::ProcessorSlotRole::Instrument,
+                        ProcessorBrowserBackend::BuiltIn,
+                        "Sampler".to_string(),
+                    ),
+                    title: "Sampler".to_string(),
+                    entries: vec![InstrumentChoice::Processor {
+                        processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
+                        name: "SoundFont".to_string(),
+                        backend: ProcessorBrowserBackend::BuiltIn,
+                    }],
+                }],
             }]
+        );
+    }
+
+    #[test]
+    fn processor_browser_empty_choice_is_available_on_single_page() {
+        let choices = vec![
+            InstrumentChoice::None,
+            InstrumentChoice::Processor {
+                processor_id: "clap:/tmp/vendor.clap#vendor.instrument".to_string(),
+                name: "Vendor Instrument".to_string(),
+                backend: ProcessorBrowserBackend::Clap,
+            },
+        ];
+
+        let browser = instrument_browser_entries(&choices, "");
+
+        assert!(browser.show_none);
+    }
+
+    #[test]
+    fn plugin_browser_entries_group_by_manufacturer() {
+        const TEST_DESCRIPTOR: lilypalooza_audio::ProcessorDescriptor =
+            lilypalooza_audio::ProcessorDescriptor {
+                name: "Vendor Effect",
+                params: &[],
+                editor: None,
+            };
+        let processor_id = "clap:/tmp/vendor.clap#vendor.effect";
+        lilypalooza_audio::instrument::registry::register([
+            lilypalooza_audio::instrument::registry::Entry::plugin_effect(
+                processor_id.to_string(),
+                "Vendor Effect".to_string(),
+                lilypalooza_audio::instrument::registry::Backend::Clap,
+                Some("Acme Audio".to_string()),
+                &TEST_DESCRIPTOR,
+                |_, _| Ok(None),
+            ),
+        ]);
+        let choices = vec![InstrumentChoice::Processor {
+            processor_id: processor_id.to_string(),
+            name: "Vendor Effect".to_string(),
+            backend: ProcessorBrowserBackend::Clap,
+        }];
+
+        let browser = instrument_browser_entries(&choices, "");
+
+        assert_eq!(
+            browser.backends,
+            vec![super::ProcessorBrowserBackendSection {
+                key: super::ProcessorBrowserSectionKey::backend(
+                    super::ProcessorSlotRole::Instrument,
+                    ProcessorBrowserBackend::Clap,
+                ),
+                title: "CLAP".to_string(),
+                sections: vec![super::ProcessorBrowserSection {
+                    key: super::ProcessorBrowserSectionKey::new(
+                        super::ProcessorSlotRole::Instrument,
+                        ProcessorBrowserBackend::Clap,
+                        "Acme Audio".to_string(),
+                    ),
+                    title: "Acme Audio".to_string(),
+                    entries: choices,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn processor_browser_entries_show_multiple_backends_on_one_page() {
+        const TEST_DESCRIPTOR: lilypalooza_audio::ProcessorDescriptor =
+            lilypalooza_audio::ProcessorDescriptor {
+                name: "CLAP Instrument",
+                params: &[],
+                editor: None,
+            };
+        let plugin_id = "clap:/tmp/vendor.clap#vendor.instrument";
+        lilypalooza_builtins::register_all();
+        lilypalooza_audio::instrument::registry::register([
+            lilypalooza_audio::instrument::registry::Entry::plugin_instrument(
+                plugin_id.to_string(),
+                "CLAP Instrument".to_string(),
+                lilypalooza_audio::instrument::registry::Backend::Clap,
+                Some("Acme Audio".to_string()),
+                &TEST_DESCRIPTOR,
+                |_, _| Ok(None),
+            ),
+        ]);
+        let choices = vec![
+            InstrumentChoice::None,
+            InstrumentChoice::Processor {
+                processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
+                name: "SF-01".to_string(),
+                backend: ProcessorBrowserBackend::BuiltIn,
+            },
+            InstrumentChoice::Processor {
+                processor_id: plugin_id.to_string(),
+                name: "CLAP Instrument".to_string(),
+                backend: ProcessorBrowserBackend::Clap,
+            },
+        ];
+
+        let browser = instrument_browser_entries(&choices, "");
+        let titles = browser
+            .backends
+            .iter()
+            .map(|backend| backend.title.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(titles, vec!["Built-in", "CLAP"]);
+    }
+
+    #[test]
+    fn processor_browser_sections_are_folded_by_default_and_expand_on_search() {
+        let key = super::ProcessorBrowserSectionKey::new(
+            super::ProcessorSlotRole::Effect,
+            ProcessorBrowserBackend::BuiltIn,
+            "Utility".to_string(),
+        );
+
+        assert!(!super::processor_browser_section_expanded(&key, &[], ""));
+        assert!(super::processor_browser_section_expanded(
+            &key,
+            std::slice::from_ref(&key),
+            ""
+        ));
+        assert!(super::processor_browser_section_expanded(&key, &[], "gain"));
+    }
+
+    #[test]
+    fn processor_browser_section_header_toggles_section() {
+        let key = super::ProcessorBrowserSectionKey::new(
+            super::ProcessorSlotRole::Effect,
+            ProcessorBrowserBackend::BuiltIn,
+            "Utility".to_string(),
+        );
+        let mut ui = Simulator::with_size(
+            iced::Settings::default(),
+            [240.0, 48.0],
+            super::processor_browser_section_header(
+                key.clone(),
+                "Utility".to_string(),
+                false,
+                super::ProcessorBrowserRowDepth::Group,
+            ),
+        );
+
+        ui.point_at(Point::new(20.0, 16.0));
+        let _ = ui.simulate(simulator::click());
+
+        assert!(ui.into_messages().any(|message| {
+            matches!(
+                message,
+                Message::Mixer(MixerMessage::ToggleProcessorBrowserSection(clicked)) if clicked == key
+            )
+        }));
+    }
+
+    #[test]
+    fn processor_browser_row_padding_tracks_hierarchy_depth() {
+        let backend =
+            super::processor_browser_choice_padding(super::ProcessorBrowserRowDepth::Root);
+        let group = super::processor_browser_choice_padding(super::ProcessorBrowserRowDepth::Group);
+        let leaf = super::processor_browser_choice_padding(super::ProcessorBrowserRowDepth::Leaf);
+
+        assert_eq!(backend[1], ui_style::grid(3));
+        assert_eq!(group[1], ui_style::grid(7));
+        assert_eq!(leaf[1], ui_style::grid(11));
+    }
+
+    #[test]
+    fn processor_browser_section_headers_use_folder_icons() {
+        assert_eq!(
+            super::processor_browser_section_icon(false),
+            icons::folder()
+        );
+        assert_eq!(
+            super::processor_browser_section_icon(true),
+            icons::folder_open()
+        );
+    }
+
+    #[test]
+    fn processor_browser_leaf_icons_match_slot_role() {
+        let choice = InstrumentChoice::Processor {
+            processor_id: "example".to_string(),
+            name: "Example".to_string(),
+            backend: ProcessorBrowserBackend::BuiltIn,
+        };
+
+        assert_eq!(
+            super::processor_browser_choice_icon(super::ProcessorSlotRole::Instrument, &choice),
+            icons::keyboard_music()
+        );
+        assert_eq!(
+            super::processor_browser_choice_icon(super::ProcessorSlotRole::Effect, &choice),
+            icons::audio_waveform()
         );
     }
 
@@ -5911,7 +6297,7 @@ mod tests {
         let label = instrument_trigger_label(Some(&InstrumentChoice::Processor {
             processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
             name: "Extremely Long SoundFont Synth Name".to_string(),
-            backend: InstrumentBrowserBackend::BuiltIn,
+            backend: ProcessorBrowserBackend::BuiltIn,
         }));
         assert!(label.chars().count() <= super::PROCESSOR_SLOT_LABEL_MAX_LEN);
         assert_ne!(label, "Extremely Long SoundFont Synth Name");
@@ -5933,7 +6319,7 @@ mod tests {
                 Some(&InstrumentChoice::Processor {
                     processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
                     name: "SoundFont".to_string(),
-                    backend: InstrumentBrowserBackend::BuiltIn,
+                    backend: ProcessorBrowserBackend::BuiltIn,
                 }),
                 true,
                 true,
@@ -5958,7 +6344,7 @@ mod tests {
                 Some(&InstrumentChoice::Processor {
                     processor_id: BUILTIN_SOUNDFONT_ID.to_string(),
                     name: "SoundFont".to_string(),
-                    backend: InstrumentBrowserBackend::BuiltIn,
+                    backend: ProcessorBrowserBackend::BuiltIn,
                 }),
                 false,
                 true,

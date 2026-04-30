@@ -805,19 +805,20 @@ pub(crate) fn button_pane_tab(
     }
 }
 
-pub(crate) fn button_browser_entry(
+pub(crate) fn button_browser_child_entry(
     theme: &Theme,
     status: button::Status,
     selected: bool,
 ) -> button::Style {
     let palette = theme.extended_palette();
-    let selected_background = mix_color(palette.background.weak.color, Color::WHITE, 0.04);
+    let base_background = palette.background.base.color;
+    let selected_background = mix_color(base_background, Color::WHITE, 0.08);
     let base = button::Style {
         background: Some(
             if selected {
                 selected_background
             } else {
-                palette.background.weak.color
+                base_background
             }
             .into(),
         ),
@@ -832,25 +833,13 @@ pub(crate) fn button_browser_entry(
         button::Status::Active => base,
         button::Status::Hovered => button::Style {
             background: Some(
-                if selected {
-                    mix_color(selected_background, palette.background.strong.color, 0.18)
-                } else {
-                    palette.background.strong.color
-                }
-                .into(),
+                mix_color(base_background, palette.background.strong.color, 0.4).into(),
             ),
             text_color: palette.background.strong.text,
             ..base
         },
         button::Status::Pressed => button::Style {
-            background: Some(
-                if selected {
-                    mix_color(selected_background, palette.background.base.color, 0.16)
-                } else {
-                    palette.background.base.color
-                }
-                .into(),
-            ),
+            background: Some(mix_color(base_background, palette.background.weak.color, 0.2).into()),
             text_color: palette.background.base.text,
             ..base
         },
@@ -859,6 +848,13 @@ pub(crate) fn button_browser_entry(
             ..base
         },
     }
+}
+
+pub(crate) fn button_browser_section_header(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    button_browser_child_entry(theme, status, false)
 }
 
 pub(crate) fn button_compact_solid(theme: &Theme, status: button::Status) -> button::Style {
@@ -1688,6 +1684,24 @@ mod tests {
 
         assert_eq!(style.background, None);
         assert_eq!(style.border.width, 0.0);
+    }
+
+    #[test]
+    fn browser_section_header_uses_tree_row_background() {
+        let theme = Theme::Dark;
+        let row = button_browser_child_entry(&theme, button::Status::Active, false);
+        let header = button_browser_section_header(&theme, button::Status::Active);
+
+        assert_eq!(header.background, row.background);
+    }
+
+    #[test]
+    fn browser_child_entry_uses_dark_inset_background() {
+        let theme = Theme::Dark;
+        let palette = theme.extended_palette();
+        let child = button_browser_child_entry(&theme, button::Status::Active, false);
+
+        assert_eq!(child.background, Some(palette.background.base.color.into()));
     }
 
     #[test]

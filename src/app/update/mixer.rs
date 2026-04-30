@@ -431,8 +431,16 @@ impl Lilypalooza {
                 self.instrument_browser_search = value;
                 return Task::none();
             }
-            MixerMessage::SelectProcessorBrowserBackend(backend) => {
-                self.instrument_browser_backend = backend;
+            MixerMessage::ToggleProcessorBrowserSection(key) => {
+                if let Some(index) = self
+                    .processor_browser_expanded_sections
+                    .iter()
+                    .position(|expanded| expanded == &key)
+                {
+                    self.processor_browser_expanded_sections.remove(index);
+                } else {
+                    self.processor_browser_expanded_sections.push(key);
+                }
                 return Task::none();
             }
             MixerMessage::ToggleMixerEffectRack(strip_index) => {
@@ -517,10 +525,6 @@ impl Lilypalooza {
             }
             MixerMessage::InstrumentBrowserSearchChanged(value) => {
                 self.instrument_browser_search = value;
-                return Task::none();
-            }
-            MixerMessage::SelectInstrumentBrowserBackend(backend) => {
-                self.instrument_browser_backend = backend;
                 return Task::none();
             }
             MixerMessage::StartTrackRename(track_index) => {
@@ -920,7 +924,7 @@ impl Lilypalooza {
                 | MixerMessage::ToggleProcessorBrowser(_)
                 | MixerMessage::CloseProcessorBrowser
                 | MixerMessage::ProcessorBrowserSearchChanged(_)
-                | MixerMessage::SelectProcessorBrowserBackend(_)
+                | MixerMessage::ToggleProcessorBrowserSection(_)
                 | MixerMessage::ToggleMixerEffectRack(_)
                 | MixerMessage::SetProcessorSlotHovered(_)
                 | MixerMessage::StartTrackEffectDrag { .. }
@@ -931,7 +935,6 @@ impl Lilypalooza {
                 | MixerMessage::ToggleTrackInstrumentBrowser(_)
                 | MixerMessage::CloseTrackInstrumentBrowser
                 | MixerMessage::InstrumentBrowserSearchChanged(_)
-                | MixerMessage::SelectInstrumentBrowserBackend(_)
                 | MixerMessage::StartBusRename(_)
                 | MixerMessage::OpenEditor(_)
                 | MixerMessage::TrackRenameInputChanged(_)
@@ -1145,7 +1148,7 @@ fn mixer_message_history_mode(
         | MixerMessage::ToggleProcessorBrowser(_)
         | MixerMessage::CloseProcessorBrowser
         | MixerMessage::ProcessorBrowserSearchChanged(_)
-        | MixerMessage::SelectProcessorBrowserBackend(_)
+        | MixerMessage::ToggleProcessorBrowserSection(_)
         | MixerMessage::ToggleMixerEffectRack(_)
         | MixerMessage::SetProcessorSlotHovered(_)
         | MixerMessage::StartTrackEffectDrag { .. }
@@ -1156,7 +1159,6 @@ fn mixer_message_history_mode(
         | MixerMessage::ToggleTrackInstrumentBrowser(_)
         | MixerMessage::CloseTrackInstrumentBrowser
         | MixerMessage::InstrumentBrowserSearchChanged(_)
-        | MixerMessage::SelectInstrumentBrowserBackend(_)
         | MixerMessage::OpenEditor(_)
         | MixerMessage::PreviewTrackColor(_) => MixerHistoryMode::None,
         MixerMessage::SetMasterGain(_)
@@ -1968,10 +1970,6 @@ mod tests {
                 slot_index: 0,
             })
         );
-        assert_eq!(
-            app.instrument_browser_backend,
-            crate::app::mixer::InstrumentBrowserBackend::BuiltIn
-        );
         assert!(app.instrument_browser_search.is_empty());
 
         let _ = app.handle_mixer_message(MixerMessage::ToggleTrackInstrumentBrowser(3));
@@ -1995,24 +1993,19 @@ mod tests {
     }
 
     #[test]
-    fn processor_browser_reopening_keeps_selected_backend_for_session() {
+    fn processor_browser_section_toggle_expands_and_collapses_for_session() {
         let mut app = test_app();
-        let target = EditorTarget {
-            strip_index: 0,
-            slot_index: 1,
-        };
-
-        let _ = app.handle_mixer_message(MixerMessage::ToggleProcessorBrowser(target));
-        let _ = app.handle_mixer_message(MixerMessage::SelectProcessorBrowserBackend(
-            crate::app::mixer::ProcessorBrowserBackend::Clap,
-        ));
-        let _ = app.handle_mixer_message(MixerMessage::CloseProcessorBrowser);
-        let _ = app.handle_mixer_message(MixerMessage::ToggleProcessorBrowser(target));
-
-        assert_eq!(
-            app.instrument_browser_backend,
-            crate::app::mixer::ProcessorBrowserBackend::Clap
+        let key = crate::app::mixer::ProcessorBrowserSectionKey::new(
+            crate::app::mixer::ProcessorSlotRole::Effect,
+            crate::app::mixer::ProcessorBrowserBackend::BuiltIn,
+            "Utility".to_string(),
         );
+
+        let _ = app.handle_mixer_message(MixerMessage::ToggleProcessorBrowserSection(key.clone()));
+        assert_eq!(app.processor_browser_expanded_sections, vec![key.clone()]);
+
+        let _ = app.handle_mixer_message(MixerMessage::ToggleProcessorBrowserSection(key));
+        assert!(app.processor_browser_expanded_sections.is_empty());
     }
 
     #[test]
@@ -2542,7 +2535,7 @@ mod tests {
             crate::app::mixer::InstrumentChoice::Processor {
                 processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
                 name: "SF-01".to_string(),
-                backend: crate::app::mixer::InstrumentBrowserBackend::BuiltIn,
+                backend: crate::app::mixer::ProcessorBrowserBackend::BuiltIn,
             },
         ));
 
@@ -2579,7 +2572,7 @@ mod tests {
             crate::app::mixer::InstrumentChoice::Processor {
                 processor_id: lilypalooza_audio::BUILTIN_SOUNDFONT_ID.to_string(),
                 name: "SF-01".to_string(),
-                backend: crate::app::mixer::InstrumentBrowserBackend::BuiltIn,
+                backend: crate::app::mixer::ProcessorBrowserBackend::BuiltIn,
             },
         ));
         let temp = tempfile::tempdir().expect("temp project dir should exist");

@@ -294,7 +294,7 @@ pub(super) enum MixerMessage {
     ToggleProcessorBrowser(super::processor_editor_windows::EditorTarget),
     CloseProcessorBrowser,
     ProcessorBrowserSearchChanged(String),
-    SelectProcessorBrowserBackend(super::mixer::ProcessorBrowserBackend),
+    ToggleProcessorBrowserSection(super::mixer::ProcessorBrowserSectionKey),
     ToggleMixerEffectRack(usize),
     SelectProcessor(
         super::processor_editor_windows::EditorTarget,
@@ -331,8 +331,6 @@ pub(super) enum MixerMessage {
     CloseTrackInstrumentBrowser,
     #[allow(dead_code)]
     InstrumentBrowserSearchChanged(String),
-    #[allow(dead_code)]
-    SelectInstrumentBrowserBackend(super::mixer::InstrumentBrowserBackend),
     #[allow(dead_code)]
     SelectTrackInstrument(usize, super::mixer::InstrumentChoice),
     #[allow(dead_code)]

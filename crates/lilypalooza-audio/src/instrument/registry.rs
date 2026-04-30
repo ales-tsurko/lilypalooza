@@ -46,6 +46,10 @@ pub struct Entry {
     pub role: Role,
     /// Backend family.
     pub backend: Backend,
+    /// User-visible category used to group built-in processors in pickers.
+    pub category: Cow<'static, str>,
+    /// User-visible manufacturer used to group plugin processors in pickers.
+    pub manufacturer: Cow<'static, str>,
     /// Static processor descriptor.
     pub descriptor: &'static ProcessorDescriptor,
     factory: Factory,
@@ -80,6 +84,8 @@ impl Entry {
             name: Cow::Borrowed(name),
             role: Role::Instrument,
             backend: Backend::BuiltIn,
+            category: Cow::Borrowed("Utility"),
+            manufacturer: Cow::Borrowed("Lilypalooza"),
             descriptor,
             factory: Factory {
                 is_empty: true,
@@ -102,6 +108,8 @@ impl Entry {
             name: Cow::Borrowed(name),
             role: Role::Instrument,
             backend: Backend::BuiltIn,
+            category: Cow::Borrowed("Instrument"),
+            manufacturer: Cow::Borrowed("Lilypalooza"),
             descriptor,
             factory: Factory {
                 is_empty: false,
@@ -123,6 +131,8 @@ impl Entry {
             name: Cow::Borrowed(name),
             role: Role::Instrument,
             backend: Backend::BuiltIn,
+            category: Cow::Borrowed("Instrument"),
+            manufacturer: Cow::Borrowed("Lilypalooza"),
             descriptor,
             factory: Factory {
                 is_empty: false,
@@ -145,6 +155,8 @@ impl Entry {
             name: Cow::Borrowed(name),
             role: Role::Effect,
             backend: Backend::BuiltIn,
+            category: Cow::Borrowed("Effect"),
+            manufacturer: Cow::Borrowed("Lilypalooza"),
             descriptor,
             factory: Factory {
                 is_empty: false,
@@ -154,12 +166,27 @@ impl Entry {
         }
     }
 
+    /// Overrides the picker category for a built-in processor entry.
+    #[must_use]
+    pub fn with_category(mut self, category: &'static str) -> Self {
+        self.category = Cow::Borrowed(category);
+        self
+    }
+
+    /// Overrides the picker manufacturer for a built-in processor entry.
+    #[must_use]
+    pub fn with_manufacturer(mut self, manufacturer: &'static str) -> Self {
+        self.manufacturer = Cow::Borrowed(manufacturer);
+        self
+    }
+
     /// Creates a dynamically discovered plugin effect entry.
     #[must_use]
     pub fn plugin_effect(
         id: String,
         name: String,
         backend: Backend,
+        manufacturer: Option<String>,
         descriptor: &'static ProcessorDescriptor,
         create: CreateEffect,
     ) -> Self {
@@ -168,6 +195,11 @@ impl Entry {
             name: Cow::Owned(name),
             role: Role::Effect,
             backend,
+            category: Cow::Borrowed("Effect"),
+            manufacturer: manufacturer
+                .filter(|value| !value.trim().is_empty())
+                .map(Cow::Owned)
+                .unwrap_or(Cow::Borrowed("Unknown Manufacturer")),
             descriptor,
             factory: Factory {
                 is_empty: false,
@@ -183,6 +215,7 @@ impl Entry {
         id: String,
         name: String,
         backend: Backend,
+        manufacturer: Option<String>,
         descriptor: &'static ProcessorDescriptor,
         create: CreateInstrument,
     ) -> Self {
@@ -191,6 +224,11 @@ impl Entry {
             name: Cow::Owned(name),
             role: Role::Instrument,
             backend,
+            category: Cow::Borrowed("Instrument"),
+            manufacturer: manufacturer
+                .filter(|value| !value.trim().is_empty())
+                .map(Cow::Owned)
+                .unwrap_or(Cow::Borrowed("Unknown Manufacturer")),
             descriptor,
             factory: Factory {
                 is_empty: false,
@@ -353,6 +391,7 @@ mod tests {
             "clap:/tmp/test.clap#org.test.gain".to_string(),
             "Test Gain".to_string(),
             Backend::Clap,
+            Some("Test Vendor".to_string()),
             &TEST_DESCRIPTOR,
             |_, _| Ok(None),
         )]);
@@ -366,5 +405,6 @@ mod tests {
         assert_eq!(resolved.name.as_ref(), "Test Gain");
         assert_eq!(resolved.role, Role::Effect);
         assert_eq!(resolved.backend, Backend::Clap);
+        assert_eq!(resolved.manufacturer.as_ref(), "Test Vendor");
     }
 }

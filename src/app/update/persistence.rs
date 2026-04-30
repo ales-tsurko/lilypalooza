@@ -138,7 +138,6 @@ impl Lilypalooza {
         self.open_mixer_effect_rack_tracks.clear();
         self.open_instrument_browser_track = None;
         self.instrument_browser_search.clear();
-        self.instrument_browser_backend = super::super::mixer::InstrumentBrowserBackend::BuiltIn;
         self.metronome = state::MetronomeState::default();
         self.project_mixer_state = lilypalooza_audio::MixerState::new();
         self.processor_presets = state.processor_presets;
@@ -193,7 +192,6 @@ impl Lilypalooza {
         self.open_mixer_effect_rack_tracks.clear();
         self.open_instrument_browser_track = None;
         self.instrument_browser_search.clear();
-        self.instrument_browser_backend = super::super::mixer::InstrumentBrowserBackend::BuiltIn;
         self.metronome = state.metronome;
         self.project_mixer_state = state.mixer_state;
         self.processor_presets = state.processor_presets;

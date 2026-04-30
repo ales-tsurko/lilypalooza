@@ -16,18 +16,21 @@ pub fn register_all() {
             "SF-01",
             soundfont_synth::DESCRIPTOR,
             soundfont_synth::create_runtime,
-        ),
+        )
+        .with_category("Sampler"),
         Entry::builtin_effect(
             BUILTIN_GAIN_ID,
             "Gain",
             gain_effect::DESCRIPTOR,
             gain_effect::create_runtime,
-        ),
+        )
+        .with_category("Utility"),
         Entry::builtin_instrument_descriptor(
             BUILTIN_METRONOME_ID,
             "Metronome",
             metronome_synth::DESCRIPTOR,
-        ),
+        )
+        .with_category("Utility"),
     ]);
 }
 
