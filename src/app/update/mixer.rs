@@ -10,6 +10,8 @@ use super::*;
 use crate::app::processor_editor_windows::{EditorTarget, snapshot_into_editor_parent};
 use iced::window;
 
+const EDITOR_DETACH_SETTLE_FRAMES: u8 = 1;
+
 fn processor_editor_window_settings(
     descriptor: lilypalooza_audio::EditorDescriptor,
     initial_size: Option<lilypalooza_audio::EditorSize>,
@@ -57,12 +59,19 @@ impl Lilypalooza {
         self.instrument_browser_search.clear();
     }
 
+    fn defer_mixer_message_after_editor_detach(&mut self, message: MixerMessage) {
+        self.pending_mixer_message_after_editor_detach = Some(DeferredMixerMessage {
+            message,
+            frames_remaining: EDITOR_DETACH_SETTLE_FRAMES,
+        });
+    }
+
     pub(in crate::app) fn destroy_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
-        let Some((window_id, mut session)) = self.processor_editor_windows.remove_target(target)
-        else {
+        let Some(removed) = self.processor_editor_windows.remove_target(target) else {
             return Task::none();
         };
-        if let Err(error) = session.detach() {
+        let window_id = removed.window_id;
+        if let Err(error) = removed.detach() {
             self.log_processor_editor_error("detach", error);
         }
         window::close(window_id)
@@ -76,13 +85,13 @@ impl Lilypalooza {
         let window_id = self.processor_editor_windows.window_for_target(target)?;
         if !self.processor_editor_windows.pending_contains(window_id)
             && !self.processor_editor_windows.window_visible(window_id)
-            && let Some((window_id, mut session)) =
-                self.processor_editor_windows.remove_target(target)
+            && let Some(removed) = self.processor_editor_windows.remove_target(target)
         {
-            if let Err(error) = session.detach() {
+            let window_id = removed.window_id;
+            if let Err(error) = removed.detach() {
                 self.log_processor_editor_error("detach", error);
             }
-            self.pending_mixer_message_after_editor_detach = Some(message);
+            self.defer_mixer_message_after_editor_detach(message);
             return Some(window::close(window_id));
         }
         self.pending_mixer_message_after_editor_close = Some((window_id, message));
@@ -165,8 +174,9 @@ impl Lilypalooza {
         }
 
         let mut tasks = Vec::with_capacity(removed.len());
-        for (window_id, mut session) in removed {
-            if let Err(error) = session.detach() {
+        for removed in removed {
+            let window_id = removed.window_id;
+            if let Err(error) = removed.detach() {
                 self.log_processor_editor_error("detach", error);
             }
             tasks.push(window::close(window_id));
@@ -236,13 +246,13 @@ impl Lilypalooza {
                 None
             }
         };
-        if let Some((_target, mut session)) = self.processor_editor_windows.remove_window(window_id)
-            && let Err(error) = session.detach()
+        if let Some(removed) = self.processor_editor_windows.remove_window(window_id)
+            && let Err(error) = removed.detach()
         {
             self.log_processor_editor_error("detach", error);
         }
         if let Some(message) = deferred {
-            self.pending_mixer_message_after_editor_detach = Some(message);
+            self.defer_mixer_message_after_editor_detach(message);
         }
         Task::none()
     }
@@ -1336,6 +1346,14 @@ impl Lilypalooza {
         match command {
             EditorFrameCommand::PreviousPreset => self.step_processor_preset(target, -1),
             EditorFrameCommand::NextPreset => self.step_processor_preset(target, 1),
+            EditorFrameCommand::SetZoomPercent(percent) => {
+                let errors = self
+                    .processor_editor_windows
+                    .set_zoom_percent(target, percent);
+                for error in errors {
+                    self.log_processor_editor_error("resize editor", error);
+                }
+            }
             EditorFrameCommand::LoadPreset(id) => self.load_processor_preset_for_target(target, id),
             EditorFrameCommand::RenamePreset { id, name } => {
                 self.rename_processor_preset_for_target(target, id, name);
@@ -1352,17 +1370,6 @@ impl Lilypalooza {
                     .preset_state(target)
                     .and_then(|state| state.selected_id);
                 self.refresh_editor_preset_state(target, selected_id);
-            }
-            EditorFrameCommand::ResizeContent { width, height } => {
-                for error in self.processor_editor_windows.resize_target_content(
-                    target,
-                    editor_host::Size {
-                        width: f64::from(width),
-                        height: f64::from(height),
-                    },
-                ) {
-                    self.log_processor_editor_error("resize", error);
-                }
             }
         }
     }
@@ -1750,7 +1757,7 @@ mod tests {
     }
 
     #[test]
-    fn processor_editor_window_uses_app_drawn_resize_grip_not_native_edges() {
+    fn processor_editor_window_settings_disable_native_resizing() {
         let settings = super::processor_editor_window_settings(
             lilypalooza_audio::EditorDescriptor {
                 default_size: EditorSize {
@@ -2693,7 +2700,7 @@ mod tests {
     }
 
     #[test]
-    fn replacing_processor_with_open_editor_waits_for_editor_window_close() {
+    fn replacing_processor_with_open_editor_waits_for_window_close_and_one_settle_frame() {
         let (mut app, target) = app_with_soundfont_track();
         let window_id = app
             .processor_editor_windows
@@ -2717,6 +2724,19 @@ mod tests {
         );
 
         let _ = app.handle_window_closed(window_id);
+
+        assert!(
+            app.playback
+                .as_ref()
+                .expect("playback")
+                .mixer_state()
+                .track(TrackId(0))
+                .expect("track")
+                .instrument_slot()
+                .is_some()
+        );
+
+        let _ = app.handle_frame(std::time::Instant::now());
 
         assert!(
             app.playback
@@ -2763,6 +2783,19 @@ mod tests {
         ));
 
         assert_eq!(*detached.borrow(), 1);
+        assert!(
+            app.playback
+                .as_ref()
+                .expect("playback")
+                .mixer_state()
+                .track(TrackId(0))
+                .expect("track")
+                .instrument_slot()
+                .is_some()
+        );
+
+        let _ = app.handle_frame(std::time::Instant::now());
+
         assert!(
             app.playback
                 .as_ref()

@@ -46,8 +46,7 @@ impl Lilypalooza {
                 lilypalooza_plugin_scan::PluginScanEvent::Vst3Plugins(plugins) => {
                     lilypalooza_vst3::register_plugins(plugins);
                 }
-                lilypalooza_plugin_scan::PluginScanEvent::Finished { summary, cache } => {
-                    let _ = summary;
+                lilypalooza_plugin_scan::PluginScanEvent::Finished { cache, .. } => {
                     self.plugin_scan_cache = cache.clone();
                     tasks.push(Task::perform(
                         save_plugin_scan_cache(cache, plugin_scan_cache_path()),
@@ -67,7 +66,6 @@ impl Lilypalooza {
             Ok(version_check) => {
                 self.lilypond_status = LilypondStatus::Ready {
                     detected: version_check.detected,
-                    min_required: version_check.min_required,
                 };
                 self.logger.push(format!(
                     "LilyPond ready: installed {}, minimum required {}",
@@ -268,9 +266,13 @@ impl Lilypalooza {
         Task::batch(tasks)
     }
 
-    pub(in crate::app) fn handle_frame(&mut self, _now: std::time::Instant) -> Task<Message> {
-        if let Some(message) = self.pending_mixer_message_after_editor_detach.take() {
-            return self.handle_mixer_message(message);
+    pub(in crate::app) fn handle_frame(&mut self, now: std::time::Instant) -> Task<Message> {
+        if let Some(deferred) = self.pending_mixer_message_after_editor_detach.as_mut()
+            && deferred.frames_remaining > 0
+        {
+            deferred.frames_remaining -= 1;
+        } else if let Some(deferred) = self.pending_mixer_message_after_editor_detach.take() {
+            return self.handle_mixer_message(deferred.message);
         }
 
         if self.playback.is_some() {
@@ -281,6 +283,15 @@ impl Lilypalooza {
             .apply_requested_content_resizes(|error| {
                 resize_errors.get_or_insert_with(Vec::new).push(error);
             });
+        for error in self.processor_editor_windows.sync_native_content_resizes() {
+            resize_errors.get_or_insert_with(Vec::new).push(error);
+        }
+        for error in self
+            .processor_editor_windows
+            .expire_deferred_outer_resizes(now)
+        {
+            resize_errors.get_or_insert_with(Vec::new).push(error);
+        }
         if let Some(resize_errors) = resize_errors {
             for error in resize_errors {
                 self.log_processor_editor_error("resize", error);

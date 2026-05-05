@@ -5,10 +5,12 @@ use std::num::{NonZeroIsize, NonZeroU32};
 use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-pub use egui;
-use lilypalooza_egui_baseview::{EguiApp, EguiWindowHandle, EguiWindowOptions, open_parented};
+pub use lilypalooza_egui_baseview::egui;
+use lilypalooza_egui_baseview::{
+    EguiApp, EguiWindowHandle, EguiWindowOptions, EguiWindowResizeHandle, open_parented,
+};
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
     WaylandDisplayHandle, WaylandWindowHandle, Win32WindowHandle, XcbDisplayHandle,
@@ -65,8 +67,9 @@ pub struct EditorHostOptions {
 impl EditorHostOptions {
     #[must_use]
     pub fn new(title: impl Into<String>) -> Self {
+        let title = title.into();
         Self {
-            title: title.into(),
+            title,
             resizable: true,
             owner: None,
         }
@@ -145,6 +148,24 @@ pub fn content_size_from_outer_size(
     }
 }
 
+#[must_use]
+pub fn outer_size_from_content_size(
+    content_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+) -> Size {
+    let layout = host_layout(
+        content_size.width,
+        content_size.height,
+        titlebar_height,
+        frame_thickness,
+    );
+    Size {
+        width: layout.outer_width,
+        height: layout.outer_height,
+    }
+}
+
 fn same_size(a: Size, b: Size) -> bool {
     (a.width - b.width).abs() < 0.5 && (a.height - b.height).abs() < 0.5
 }
@@ -155,10 +176,38 @@ pub struct Size {
     pub height: f64,
 }
 
+#[derive(Debug)]
+struct SharedSize {
+    width: AtomicU64,
+    height: AtomicU64,
+}
+
+impl SharedSize {
+    fn new(size: Size) -> Self {
+        Self {
+            width: AtomicU64::new(size.width.to_bits()),
+            height: AtomicU64::new(size.height.to_bits()),
+        }
+    }
+
+    fn load(&self) -> Size {
+        Size {
+            width: f64::from_bits(self.width.load(Ordering::Relaxed)),
+            height: f64::from_bits(self.height.load(Ordering::Relaxed)),
+        }
+    }
+
+    fn store(&self, size: Size) {
+        self.width.store(size.width.to_bits(), Ordering::Relaxed);
+        self.height.store(size.height.to_bits(), Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditorHostState {
     pub title: String,
     pub resizable: bool,
+    pub zoom_percent: u32,
     pub close_requested: bool,
     pub content_size: Size,
     pub preset: Option<EditorPresetState>,
@@ -198,16 +247,20 @@ pub enum EditorFrameAction {
 pub enum EditorFrameCommand {
     PreviousPreset,
     NextPreset,
+    SetZoomPercent(u32),
     LoadPreset(String),
     RenamePreset { id: String, name: String },
     DeletePreset(String),
     SavePreset,
     TogglePresetBrowser,
-    ResizeContent { width: u32, height: u32 },
 }
 
 pub trait EditorFrame {
     fn layout(&self, content_size: Size) -> EditorFrameLayout;
+
+    fn should_begin_window_drag(&self, _pos: egui::Pos2, _state: &EditorHostState) -> bool {
+        false
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, state: &EditorHostState) -> EditorFrameAction;
 }
@@ -220,8 +273,24 @@ pub struct InstalledHost {
     preset_state: Arc<Mutex<Option<EditorPresetState>>>,
     frame_commands: Arc<Mutex<Vec<EditorFrameCommand>>>,
     frame_window: Option<EguiWindowHandle>,
-    frame_content_size: Arc<Mutex<Size>>,
-    content_size: Size,
+    frame_content_size: Arc<SharedSize>,
+    frame_resizable: Arc<AtomicBool>,
+    frame_zoom_percent: Arc<AtomicU32>,
+    content_size: Arc<SharedSize>,
+    frame_thickness: f64,
+    #[cfg(target_os = "macos")]
+    native_content_resize_observer: Option<macos::NativeContentResizeObserver>,
+}
+
+#[derive(Clone)]
+pub struct InstalledHostResizeHandle {
+    host: WindowSnapshot,
+    content: WindowSnapshot,
+    preset_state: Arc<Mutex<Option<EditorPresetState>>>,
+    frame_window: Option<EguiWindowResizeHandle>,
+    frame_content_size: Arc<SharedSize>,
+    frame_zoom_percent: Arc<AtomicU32>,
+    content_size: Arc<SharedSize>,
     frame_thickness: f64,
 }
 
@@ -238,6 +307,10 @@ impl std::fmt::Debug for InstalledHost {
 
 impl Drop for InstalledHost {
     fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            self.native_content_resize_observer.take();
+        }
         if let Some(mut window) = self.frame_window.take() {
             window.close();
         }
@@ -257,7 +330,39 @@ impl InstalledHost {
 
     #[must_use]
     pub fn content_size(&self) -> Size {
-        self.content_size
+        self.content_size.load()
+    }
+
+    #[must_use]
+    pub fn resize_handle(&self) -> InstalledHostResizeHandle {
+        InstalledHostResizeHandle {
+            host: self.host,
+            content: self.content,
+            preset_state: Arc::clone(&self.preset_state),
+            frame_window: self
+                .frame_window
+                .as_ref()
+                .map(EguiWindowHandle::resize_handle),
+            frame_content_size: Arc::clone(&self.frame_content_size),
+            frame_zoom_percent: Arc::clone(&self.frame_zoom_percent),
+            content_size: Arc::clone(&self.content_size),
+            frame_thickness: self.frame_thickness,
+        }
+    }
+
+    pub fn enable_native_content_resize_tracking(&self) -> Result<(), Error> {
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(observer) = &self.native_content_resize_observer {
+                observer.enable(&self.content)
+            } else {
+                Ok(())
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.content.raw_window_handle().map(|_| ())
+        }
     }
 
     #[must_use]
@@ -273,17 +378,35 @@ impl InstalledHost {
         if let Ok(mut current) = self.preset_state.lock() {
             *current = preset;
         }
-        if self.frame_window.is_some() {
-            let _ = resize_installed_host(
+        if self.frame_window.is_some()
+            && let Err(error) = resize_installed_host(
                 &self.host,
                 &self.content,
-                self.content_size,
+                self.content_size(),
                 self.titlebar_height(),
                 self.frame_thickness,
                 self.frame_window.as_mut(),
                 ResizeAnchor::Bottom,
-            );
+            )
+        {
+            trace_editor_host(|| format!("installed-host preset chrome resize failed: {error}"));
         }
+    }
+
+    pub fn set_resizable(&mut self, resizable: bool) -> Result<(), Error> {
+        self.frame_resizable.store(resizable, Ordering::Relaxed);
+        #[cfg(target_os = "macos")]
+        {
+            sync_host_window_resize_policy(&self.host)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            sync_host_window_resize_policy(&self.host)
+        }
+    }
+
+    pub fn set_zoom_percent(&mut self, percent: u32) {
+        self.frame_zoom_percent.store(percent, Ordering::Relaxed);
     }
 
     pub fn resize_content(&mut self, content_size: Size) -> Result<(), Error> {
@@ -294,21 +417,76 @@ impl InstalledHost {
         self.resize_content_with_anchor(content_size, ResizeAnchor::Top)
     }
 
+    /// Accepts a user-driven outer window resize without writing the same size back to the native window.
+    pub fn adopt_content_size_from_outer_resize(
+        &mut self,
+        content_size: Size,
+    ) -> Result<(), Error> {
+        let current = self.content_size();
+        if same_size(current, content_size) {
+            trace_editor_host(|| {
+                format!(
+                    "installed-host adopt outer resize ignored same size current={:?} requested={content_size:?}",
+                    current
+                )
+            });
+            return Ok(());
+        }
+        let previous = current;
+        self.set_content_size(content_size);
+        if self.frame_window.is_none() {
+            trace_editor_host(|| {
+                format!(
+                    "installed-host adopt outer resize stored without frame current={previous:?} requested={content_size:?}"
+                )
+            });
+            return Ok(());
+        }
+        trace_editor_host(|| {
+            format!(
+                "installed-host adopt outer resize applying current={previous:?} requested={content_size:?}"
+            )
+        });
+        sync_installed_host_layout(
+            &self.host,
+            &self.content,
+            self.content_size(),
+            self.titlebar_height(),
+            self.frame_thickness,
+            self.frame_window.as_mut(),
+        )
+    }
+
+    pub fn preview_outer_resize(&mut self, outer_size: Size) {
+        let content_size = self.content_size_from_outer_size(outer_size);
+        self.set_frame_content_size(content_size);
+        if let Some(frame_window) = self.frame_window.as_mut() {
+            trace_editor_host(|| {
+                format!(
+                    "egui frame preview outer={}x{} content={content_size:?}",
+                    outer_size.width, outer_size.height
+                )
+            });
+            frame_window.resize(outer_size.width, outer_size.height);
+        }
+    }
+
     fn resize_content_with_anchor(
         &mut self,
         content_size: Size,
         anchor: ResizeAnchor,
     ) -> Result<(), Error> {
-        if same_size(self.content_size, content_size) {
+        let current = self.content_size();
+        if same_size(current, content_size) {
             trace_editor_host(|| {
                 format!(
                     "installed-host resize_content ignored same size current={:?} requested={:?} anchor={anchor:?}",
-                    self.content_size, content_size
+                    current, content_size
                 )
             });
             return Ok(());
         }
-        let previous = self.content_size;
+        let previous = current;
         self.set_content_size(content_size);
         if self.frame_window.is_none() {
             trace_editor_host(|| {
@@ -326,7 +504,7 @@ impl InstalledHost {
         resize_installed_host(
             &self.host,
             &self.content,
-            self.content_size,
+            self.content_size(),
             self.titlebar_height(),
             self.frame_thickness,
             self.frame_window.as_mut(),
@@ -335,10 +513,12 @@ impl InstalledHost {
     }
 
     fn set_content_size(&mut self, content_size: Size) {
-        self.content_size = content_size;
-        if let Ok(mut frame_content_size) = self.frame_content_size.lock() {
-            *frame_content_size = content_size;
-        }
+        self.content_size.store(content_size);
+        self.set_frame_content_size(content_size);
+    }
+
+    pub fn set_frame_content_size(&mut self, content_size: Size) {
+        self.frame_content_size.store(content_size);
     }
 
     pub fn resize_outer(&mut self, outer_size: Size) -> Result<Size, Error> {
@@ -353,10 +533,55 @@ impl InstalledHost {
         content_size_from_outer_size(outer_size, self.titlebar_height(), self.frame_thickness)
     }
 
+    pub fn native_content_size(&self) -> Result<Option<Size>, Error> {
+        self.native_content_size_impl()
+    }
+
+    pub fn embedded_content_size(&self) -> Result<Option<Size>, Error> {
+        self.embedded_content_size_impl()
+    }
+
+    pub fn is_live_resizing(&self) -> Result<bool, Error> {
+        self.is_live_resizing_impl()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn native_content_size_impl(&self) -> Result<Option<Size>, Error> {
+        native_content_size(&self.host, self.titlebar_height(), self.frame_thickness)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn native_content_size_impl(&self) -> Result<Option<Size>, Error> {
+        native_content_size(&self.host)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn embedded_content_size_impl(&self) -> Result<Option<Size>, Error> {
+        embedded_content_size(&self.content)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn embedded_content_size_impl(&self) -> Result<Option<Size>, Error> {
+        embedded_content_size(&self.content)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn is_live_resizing_impl(&self) -> Result<bool, Error> {
+        is_host_window_live_resizing(&self.host)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn is_live_resizing_impl(&self) -> Result<bool, Error> {
+        is_host_window_live_resizing(&self.host)
+    }
+
+    #[must_use]
+    pub fn outer_size_from_content_size(&self, content_size: Size) -> Size {
+        outer_size_from_content_size(content_size, self.titlebar_height(), self.frame_thickness)
+    }
+
     fn titlebar_height(&self) -> f64 {
-        self.preset_state()
-            .as_ref()
-            .map_or(34.0, |preset| if preset.expanded { 160.0 } else { 34.0 })
+        titlebar_height_from_preset_state_value(self.preset_state().as_ref())
     }
 
     #[must_use]
@@ -376,7 +601,14 @@ impl InstalledHost {
     }
 
     pub fn set_visible(&mut self, visible: bool) -> Result<(), Error> {
-        set_host_window_visible(&self.host, visible)
+        #[cfg(target_os = "macos")]
+        {
+            set_host_window_visible(&self.host, visible)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            set_host_window_visible(&self.host)
+        }
     }
 
     pub fn set_title(&mut self, title: impl Into<String>) -> Result<(), Error> {
@@ -390,6 +622,77 @@ impl InstalledHost {
     pub fn raise(&mut self) -> Result<(), Error> {
         raise_host_window(&self.host)
     }
+}
+
+impl InstalledHostResizeHandle {
+    pub fn resize_content(&self, content_size: Size) -> Result<(), Error> {
+        self.resize_content_with_anchor(content_size, ResizeAnchor::Bottom)
+    }
+
+    pub fn resize_content_from_top(&self, content_size: Size) -> Result<(), Error> {
+        self.resize_content_with_anchor(content_size, ResizeAnchor::Top)
+    }
+
+    fn resize_content_with_anchor(
+        &self,
+        content_size: Size,
+        anchor: ResizeAnchor,
+    ) -> Result<(), Error> {
+        let current = self.content_size();
+        if same_size(current, content_size) {
+            trace_editor_host(|| {
+                format!(
+                    "installed-host resize handle ignored same size current={current:?} requested={content_size:?} anchor={anchor:?}"
+                )
+            });
+            return Ok(());
+        }
+        self.content_size.store(content_size);
+        self.frame_content_size.store(content_size);
+        trace_editor_host(|| {
+            format!(
+                "installed-host resize handle applying current={current:?} requested={content_size:?} anchor={anchor:?}"
+            )
+        });
+        resize_installed_host_from_handle(
+            &self.host,
+            &self.content,
+            content_size,
+            self.titlebar_height(),
+            self.frame_thickness,
+            self.frame_window.as_ref(),
+            anchor,
+        )
+    }
+
+    #[must_use]
+    pub fn content_size(&self) -> Size {
+        self.content_size.load()
+    }
+
+    #[must_use]
+    pub fn outer_size_from_content_size(&self, content_size: Size) -> Size {
+        outer_size_from_content_size(content_size, self.titlebar_height(), self.frame_thickness)
+    }
+
+    pub fn set_zoom_percent(&self, percent: u32) {
+        self.frame_zoom_percent.store(percent, Ordering::Relaxed);
+    }
+
+    fn titlebar_height(&self) -> f64 {
+        titlebar_height_from_preset_state(&self.preset_state)
+    }
+}
+
+fn titlebar_height_from_preset_state(preset_state: &Arc<Mutex<Option<EditorPresetState>>>) -> f64 {
+    preset_state
+        .lock()
+        .map(|preset| titlebar_height_from_preset_state_value(preset.as_ref()))
+        .unwrap_or(34.0)
+}
+
+fn titlebar_height_from_preset_state_value(preset: Option<&EditorPresetState>) -> f64 {
+    preset.map_or(34.0, |preset| if preset.expanded { 160.0 } else { 34.0 })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -431,9 +734,13 @@ impl InstalledHost {
                 preset_state: Arc::new(Mutex::new(None)),
                 frame_commands,
                 frame_window: None,
-                frame_content_size: Arc::new(Mutex::new(content_size)),
-                content_size,
+                frame_content_size: Arc::new(SharedSize::new(content_size)),
+                frame_resizable: Arc::new(AtomicBool::new(true)),
+                frame_zoom_percent: Arc::new(AtomicU32::new(100)),
+                content_size: Arc::new(SharedSize::new(content_size)),
                 frame_thickness: 4.0,
+                #[cfg(target_os = "macos")]
+                native_content_resize_observer: None,
             },
             commands,
         )
@@ -576,9 +883,8 @@ pub fn install_editor_host(
 pub fn install_editor_host(
     host: &WindowSnapshot,
     options: &EditorHostOptions,
-    frame: impl EditorFrame + Send + 'static,
+    _frame: impl EditorFrame + Send + 'static,
 ) -> Result<InstalledHost, Error> {
-    let _ = frame;
     host.raw_window_handle()?;
     if options.title.contains('\0') {
         return Err(Error::Message("host title contains a NUL byte".to_string()));
@@ -594,11 +900,8 @@ pub fn set_host_window_visible(host: &WindowSnapshot, visible: bool) -> Result<(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn set_host_window_visible(host: &WindowSnapshot, visible: bool) -> Result<(), Error> {
+pub fn set_host_window_visible(host: &WindowSnapshot) -> Result<(), Error> {
     host.raw_window_handle()?;
-    if visible {
-        return Ok(());
-    }
     Ok(())
 }
 
@@ -608,8 +911,11 @@ fn set_host_window_title(host: &WindowSnapshot, title: &str) -> Result<(), Error
 }
 
 #[cfg(not(target_os = "macos"))]
-fn set_host_window_title(host: &WindowSnapshot, _title: &str) -> Result<(), Error> {
+fn set_host_window_title(host: &WindowSnapshot, title: &str) -> Result<(), Error> {
     host.raw_window_handle()?;
+    if title.contains('\0') {
+        return Err(Error::Message("host title contains a NUL byte".to_string()));
+    }
     Ok(())
 }
 
@@ -633,6 +939,54 @@ fn begin_host_window_drag(host: &WindowSnapshot) -> Result<(), Error> {
 fn begin_host_window_drag(host: &WindowSnapshot) -> Result<(), Error> {
     host.raw_window_handle()?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn sync_host_window_resize_policy(host: &WindowSnapshot) -> Result<(), Error> {
+    macos::sync_host_window_resize_policy(host)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sync_host_window_resize_policy(host: &WindowSnapshot) -> Result<(), Error> {
+    host.raw_window_handle()?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn native_content_size(
+    host: &WindowSnapshot,
+    titlebar_height: f64,
+    frame_thickness: f64,
+) -> Result<Option<Size>, Error> {
+    macos::native_content_size(host, titlebar_height, frame_thickness).map(Some)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_content_size(host: &WindowSnapshot) -> Result<Option<Size>, Error> {
+    host.raw_window_handle()?;
+    Ok(None)
+}
+
+#[cfg(target_os = "macos")]
+fn embedded_content_size(content: &WindowSnapshot) -> Result<Option<Size>, Error> {
+    macos::embedded_content_size(content)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn embedded_content_size(content: &WindowSnapshot) -> Result<Option<Size>, Error> {
+    content.raw_window_handle()?;
+    Ok(None)
+}
+
+#[cfg(target_os = "macos")]
+fn is_host_window_live_resizing(host: &WindowSnapshot) -> Result<bool, Error> {
+    macos::is_host_window_live_resizing(host)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_host_window_live_resizing(host: &WindowSnapshot) -> Result<bool, Error> {
+    host.raw_window_handle()?;
+    Ok(false)
 }
 
 fn non_null_ptr(value: usize, name: &str) -> Result<NonNull<c_void>, Error> {
@@ -662,7 +1016,9 @@ pub(crate) fn open_egui_frame(
     let close_requested = Arc::new(AtomicBool::new(false));
     let title = Arc::new(Mutex::new(options.title.clone()));
     let preset_state = Arc::new(Mutex::new(None));
-    let frame_content_size = Arc::new(Mutex::new(content_size));
+    let frame_content_size = Arc::new(SharedSize::new(content_size));
+    let resizable = Arc::new(AtomicBool::new(options.resizable));
+    let zoom_percent = Arc::new(AtomicU32::new(100));
     let frame_commands = Arc::new(Mutex::new(Vec::new()));
     let app = FrameApp {
         frame,
@@ -670,9 +1026,12 @@ pub(crate) fn open_egui_frame(
         title: Arc::clone(&title),
         preset_state: Arc::clone(&preset_state),
         content_size: Arc::clone(&frame_content_size),
+        resizable: Arc::clone(&resizable),
+        zoom_percent: Arc::clone(&zoom_percent),
         state: EditorHostState {
             title: options.title.clone(),
             resizable: options.resizable,
+            zoom_percent: 100,
             close_requested: false,
             content_size,
             preset: None,
@@ -696,6 +1055,8 @@ pub(crate) fn open_egui_frame(
         title,
         preset_state,
         content_size: frame_content_size,
+        resizable,
+        zoom_percent,
         frame_commands,
     })
 }
@@ -705,7 +1066,9 @@ pub(crate) struct EguiFrameHost {
     pub(crate) close_requested: Arc<AtomicBool>,
     pub(crate) title: Arc<Mutex<String>>,
     pub(crate) preset_state: Arc<Mutex<Option<EditorPresetState>>>,
-    pub(crate) content_size: Arc<Mutex<Size>>,
+    pub(crate) content_size: Arc<SharedSize>,
+    pub(crate) resizable: Arc<AtomicBool>,
+    pub(crate) zoom_percent: Arc<AtomicU32>,
     pub(crate) frame_commands: Arc<Mutex<Vec<EditorFrameCommand>>>,
 }
 
@@ -714,14 +1077,64 @@ struct FrameApp<F> {
     host: WindowSnapshot,
     title: Arc<Mutex<String>>,
     preset_state: Arc<Mutex<Option<EditorPresetState>>>,
-    content_size: Arc<Mutex<Size>>,
+    content_size: Arc<SharedSize>,
+    resizable: Arc<AtomicBool>,
+    zoom_percent: Arc<AtomicU32>,
     state: EditorHostState,
     close_requested: Arc<AtomicBool>,
     frame_commands: Arc<Mutex<Vec<EditorFrameCommand>>>,
 }
 
 impl<F: EditorFrame> EguiApp for FrameApp<F> {
-    fn update(&mut self, ctx: &egui::Context) {
+    fn update(&mut self, ui: &mut egui::Ui) {
+        self.sync_state();
+        match self.frame.render(ui, &self.state) {
+            EditorFrameAction::None => {}
+            EditorFrameAction::Close => {
+                self.close_requested.store(true, Ordering::Relaxed);
+            }
+            EditorFrameAction::DragWindow => {
+                trace_editor_host(|| "frame requested render-loop window drag".to_string());
+                if let Err(error) = begin_host_window_drag(&self.host) {
+                    trace_editor_host(|| format!("frame render-loop window drag failed: {error}"));
+                }
+            }
+            EditorFrameAction::Command(command) => {
+                if let Ok(mut commands) = self.frame_commands.lock() {
+                    commands.push(command);
+                }
+            }
+        }
+        ui.ctx().request_repaint();
+    }
+
+    fn mouse_button_pressed(&mut self, pos: egui::Pos2, button: egui::PointerButton) -> bool {
+        if button != egui::PointerButton::Primary {
+            return false;
+        }
+        self.sync_state();
+        let should_drag = self.frame.should_begin_window_drag(pos, &self.state);
+        trace_editor_host(|| {
+            format!(
+                "frame mouse down pos={pos:?} should_begin_window_drag={should_drag} content_size={:?}",
+                self.state.content_size
+            )
+        });
+        if !should_drag {
+            return false;
+        }
+        trace_editor_host(|| "frame starting native window drag from mouse down".to_string());
+        if let Err(error) = begin_host_window_drag(&self.host) {
+            trace_editor_host(|| format!("frame native window drag failed: {error}"));
+            return false;
+        }
+        trace_editor_host(|| "frame native window drag returned".to_string());
+        true
+    }
+}
+
+impl<F: EditorFrame> FrameApp<F> {
+    fn sync_state(&mut self) {
         self.state.close_requested = self.close_requested.load(Ordering::Relaxed);
         if let Ok(title) = self.title.lock() {
             self.state.title.clone_from(&title);
@@ -729,26 +1142,9 @@ impl<F: EditorFrame> EguiApp for FrameApp<F> {
         if let Ok(preset_state) = self.preset_state.lock() {
             self.state.preset.clone_from(&preset_state);
         }
-        if let Ok(content_size) = self.content_size.lock() {
-            self.state.content_size = *content_size;
-        }
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show(ctx, |ui| match self.frame.render(ui, &self.state) {
-                EditorFrameAction::None => {}
-                EditorFrameAction::Close => {
-                    self.close_requested.store(true, Ordering::Relaxed);
-                }
-                EditorFrameAction::DragWindow => {
-                    let _ = begin_host_window_drag(&self.host);
-                }
-                EditorFrameAction::Command(command) => {
-                    if let Ok(mut commands) = self.frame_commands.lock() {
-                        commands.push(command);
-                    }
-                }
-            });
-        ctx.request_repaint();
+        self.state.content_size = self.content_size.load();
+        self.state.resizable = self.resizable.load(Ordering::Relaxed);
+        self.state.zoom_percent = self.zoom_percent.load(Ordering::Relaxed);
     }
 }
 
@@ -788,16 +1184,141 @@ fn resize_installed_host(
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-fn resize_installed_host(
-    _host: &WindowSnapshot,
-    _content: &WindowSnapshot,
+#[cfg(target_os = "macos")]
+fn resize_installed_host_from_handle(
+    host: &WindowSnapshot,
+    content: &WindowSnapshot,
+    content_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+    frame_window: Option<&EguiWindowResizeHandle>,
+    anchor: ResizeAnchor,
+) -> Result<(), Error> {
+    let layout = host_layout(
+        content_size.width,
+        content_size.height,
+        titlebar_height,
+        frame_thickness,
+    );
+    macos::resize_installed_host(
+        host,
+        content,
+        content_size,
+        titlebar_height,
+        frame_thickness,
+        anchor,
+    )?;
+    if let Some(frame_window) = frame_window {
+        trace_editor_host(|| {
+            format!(
+                "egui frame resize handle outer={}x{} content={content_size:?}",
+                layout.outer_width, layout.outer_height
+            )
+        });
+        frame_window.resize(layout.outer_width, layout.outer_height);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn sync_installed_host_layout(
+    host: &WindowSnapshot,
+    content: &WindowSnapshot,
     content_size: Size,
     titlebar_height: f64,
     frame_thickness: f64,
     frame_window: Option<&mut EguiWindowHandle>,
-    _anchor: ResizeAnchor,
 ) -> Result<(), Error> {
+    let layout = host_layout(
+        content_size.width,
+        content_size.height,
+        titlebar_height,
+        frame_thickness,
+    );
+    macos::sync_installed_host_layout(
+        host,
+        content,
+        content_size,
+        titlebar_height,
+        frame_thickness,
+    )?;
+    if let Some(frame_window) = frame_window {
+        trace_editor_host(|| {
+            format!(
+                "egui frame sync outer={}x{} content={content_size:?}",
+                layout.outer_width, layout.outer_height
+            )
+        });
+        frame_window.resize(layout.outer_width, layout.outer_height);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resize_installed_host_from_handle(
+    host: &WindowSnapshot,
+    content: &WindowSnapshot,
+    content_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+    frame_window: Option<&EguiWindowResizeHandle>,
+    anchor: ResizeAnchor,
+) -> Result<(), Error> {
+    host.raw_window_handle()?;
+    content.raw_window_handle()?;
+    match anchor {
+        ResizeAnchor::Top | ResizeAnchor::Bottom => {}
+    }
+    let layout = host_layout(
+        content_size.width,
+        content_size.height,
+        titlebar_height,
+        frame_thickness,
+    );
+    if let Some(frame_window) = frame_window {
+        frame_window.resize(layout.outer_width, layout.outer_height);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sync_installed_host_layout(
+    host: &WindowSnapshot,
+    content: &WindowSnapshot,
+    content_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+    frame_window: Option<&mut EguiWindowHandle>,
+) -> Result<(), Error> {
+    host.raw_window_handle()?;
+    content.raw_window_handle()?;
+    let layout = host_layout(
+        content_size.width,
+        content_size.height,
+        titlebar_height,
+        frame_thickness,
+    );
+    if let Some(frame_window) = frame_window {
+        frame_window.resize(layout.outer_width, layout.outer_height);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resize_installed_host(
+    host: &WindowSnapshot,
+    content: &WindowSnapshot,
+    content_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+    frame_window: Option<&mut EguiWindowHandle>,
+    anchor: ResizeAnchor,
+) -> Result<(), Error> {
+    host.raw_window_handle()?;
+    content.raw_window_handle()?;
+    match anchor {
+        ResizeAnchor::Top | ResizeAnchor::Bottom => {}
+    }
     let layout = host_layout(
         content_size.width,
         content_size.height,
@@ -894,6 +1415,24 @@ mod tests {
     }
 
     #[test]
+    fn outer_size_from_content_size_adds_frame_and_titlebar() {
+        assert_eq!(
+            super::outer_size_from_content_size(
+                Size {
+                    width: 640.0,
+                    height: 480.0,
+                },
+                34.0,
+                2.0,
+            ),
+            Size {
+                width: 644.0,
+                height: 518.0,
+            }
+        );
+    }
+
+    #[test]
     fn editor_frame_trait_is_the_only_frame_customization_api() {
         struct TestFrame;
 
@@ -904,7 +1443,7 @@ mod tests {
 
             fn render(
                 &mut self,
-                _ui: &mut egui::Ui,
+                _ui: &mut super::egui::Ui,
                 _state: &EditorHostState,
             ) -> EditorFrameAction {
                 EditorFrameAction::None
@@ -977,10 +1516,65 @@ mod tests {
         .expect("test host without native window should still update state");
 
         assert_eq!(
-            *host
-                .frame_content_size
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            host.frame_content_size.load(),
+            Size {
+                width: 512.0,
+                height: 384.0,
+            }
+        );
+    }
+
+    #[test]
+    fn installed_host_resize_handle_updates_zoom_percent() {
+        let (host, _) = super::InstalledHost::test_with_frame_commands([]);
+
+        host.resize_handle().set_zoom_percent(125);
+
+        assert_eq!(
+            host.frame_zoom_percent
+                .load(std::sync::atomic::Ordering::Relaxed),
+            125
+        );
+    }
+
+    #[test]
+    fn installed_host_previews_outer_resize_without_accepting_content_size() {
+        let (mut host, _) = super::InstalledHost::test_with_frame_commands([]);
+
+        host.preview_outer_resize(Size {
+            width: 512.0,
+            height: 456.0,
+        });
+
+        assert_eq!(
+            host.content_size(),
+            Size {
+                width: 440.0,
+                height: 360.0,
+            }
+        );
+        assert_eq!(
+            host.frame_content_size.load(),
+            Size {
+                width: 504.0,
+                height: 414.0,
+            }
+        );
+    }
+
+    #[test]
+    fn installed_host_adopts_outer_resize_without_native_writeback() {
+        let (mut host, _) = super::InstalledHost::test_with_frame_commands([]);
+
+        host.adopt_content_size_from_outer_resize(Size {
+            width: 512.0,
+            height: 384.0,
+        })
+        .expect("test host without native window should still update state");
+
+        assert_eq!(host.content_size().width, 512.0);
+        assert_eq!(
+            host.frame_content_size.load(),
             Size {
                 width: 512.0,
                 height: 384.0,
@@ -999,10 +1593,7 @@ mod tests {
         .expect("same size resize should be a no-op");
 
         assert_eq!(
-            *host
-                .frame_content_size
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            host.frame_content_size.load(),
             Size {
                 width: 440.0,
                 height: 360.0,

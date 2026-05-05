@@ -76,9 +76,11 @@ const EDITOR_FRAME_TITLE_ROW_HEIGHT: f32 = 32.0;
 const EDITOR_FRAME_PRESET_ROW_HEIGHT: f32 = 24.0;
 const EDITOR_FRAME_PRESET_BROWSER_HEIGHT: f32 = 116.0;
 const EDITOR_FRAME_ICON_SIZE: f32 = 13.0;
-const EDITOR_FRAME_RESIZE_GRIP_SIZE: f32 = 18.0;
-const EDITOR_FRAME_MIN_CONTENT_WIDTH: f64 = 160.0;
-const EDITOR_FRAME_MIN_CONTENT_HEIGHT: f64 = 120.0;
+const EDITOR_FRAME_ZOOM_CONTROL_WIDTH: f32 = 68.0;
+const EDITOR_FRAME_ZOOM_CONTROL_HEIGHT: f32 = 22.0;
+const EDITOR_FRAME_ZOOM_MIN_PERCENT: u32 = 50;
+const EDITOR_FRAME_ZOOM_MAX_PERCENT: u32 = 200;
+const EDITOR_FRAME_ZOOM_UPDATE_WHILE_EDITING: bool = false;
 const EGUI_ICON_CHEVRON_LEFT: &[u8] = include_bytes!("../assets/icons/chevron-left.svg");
 const EGUI_ICON_CHEVRON_RIGHT: &[u8] = include_bytes!("../assets/icons/chevron-right.svg");
 const EGUI_ICON_CHEVRON_DOWN: &[u8] = include_bytes!("../assets/icons/chevron-down.svg");
@@ -143,8 +145,8 @@ impl AppEditorFrame {
 
 #[derive(Debug, Clone, Copy)]
 struct AppEditorFramePresetLayout {
-    title_row: editor_host::egui::Rect,
     title_text: editor_host::egui::Rect,
+    zoom_row: editor_host::egui::Rect,
     close_button: editor_host::egui::Rect,
     preset_row: editor_host::egui::Rect,
     previous: editor_host::egui::Rect,
@@ -243,22 +245,21 @@ impl editor_host::EditorFrame for AppEditorFrame {
         )
     }
 
+    fn should_begin_window_drag(
+        &self,
+        pos: editor_host::egui::Pos2,
+        state: &editor_host::EditorHostState,
+    ) -> bool {
+        self.should_begin_drag_for_state(pos, state)
+    }
+
     fn render(
         &mut self,
         ui: &mut editor_host::egui::Ui,
         state: &editor_host::EditorHostState,
     ) -> editor_host::EditorFrameAction {
         let live_rect = ui.max_rect();
-        let expected_rect = self.frame_rect(live_rect, state);
-        let rect = self.paint_rect(live_rect, expected_rect);
-        ui.painter().rect_filled(rect, 0.0, self.style.frame_color);
-        ui.painter().rect_stroke(
-            rect.shrink(self.border_width / 2.0),
-            0.0,
-            editor_host::egui::Stroke::new(self.border_width, self.style.border_color),
-            editor_host::egui::StrokeKind::Inside,
-        );
-
+        let rect = self.paint_rect(live_rect);
         let titlebar = editor_host::egui::Rect::from_min_size(
             rect.left_top()
                 + editor_host::egui::vec2(self.frame_thickness as f32, self.frame_thickness as f32),
@@ -267,22 +268,17 @@ impl editor_host::EditorFrame for AppEditorFrame {
                 Self::chrome_height(state) as f32,
             ),
         );
+        ui.painter().rect_filled(rect, 0.0, self.style.frame_color);
+        ui.painter().rect_stroke(
+            rect.shrink(self.border_width / 2.0),
+            0.0,
+            editor_host::egui::Stroke::new(self.border_width, self.style.border_color),
+            editor_host::egui::StrokeKind::Inside,
+        );
         ui.painter()
             .rect_filled(titlebar, 0.0, self.style.titlebar_color);
 
         let preset_layout = self.preset_layout(titlebar);
-        let drag_rect = editor_host::egui::Rect::from_min_max(
-            editor_host::egui::pos2(
-                preset_layout.preset_row.right() + 8.0,
-                preset_layout.title_row.top(),
-            ),
-            editor_host::egui::pos2(
-                preset_layout.close_button.left() - 8.0,
-                preset_layout.title_row.bottom(),
-            ),
-        );
-        let drag = ui.allocate_rect(drag_rect, editor_host::egui::Sense::drag());
-
         let close_rect = preset_layout.close_button;
         let close = ui.allocate_rect(close_rect, editor_host::egui::Sense::click());
         let close_background = if close.hovered() {
@@ -315,14 +311,11 @@ impl editor_host::EditorFrame for AppEditorFrame {
             self.style.title_color,
         );
 
-        let preset_command = self.render_preset_strip(ui, state, titlebar);
-        let resize_command = self.render_resize_grip(ui, rect, state);
-
+        let zoom_command = self.render_zoom_controls(ui, state, &preset_layout);
+        let preset_command = self.render_preset_strip(ui, state, &preset_layout);
         if close.clicked() {
             editor_host::EditorFrameAction::Close
-        } else if drag.drag_started_by(editor_host::egui::PointerButton::Primary) {
-            editor_host::EditorFrameAction::DragWindow
-        } else if let Some(command) = resize_command {
+        } else if let Some(command) = zoom_command {
             editor_host::EditorFrameAction::Command(command)
         } else if let Some(command) = preset_command {
             editor_host::EditorFrameAction::Command(command)
@@ -333,72 +326,47 @@ impl editor_host::EditorFrame for AppEditorFrame {
 }
 
 impl AppEditorFrame {
-    fn render_resize_grip(
+    fn zoom_command(&self, percent: u32) -> editor_host::EditorFrameCommand {
+        editor_host::EditorFrameCommand::SetZoomPercent(
+            percent.clamp(EDITOR_FRAME_ZOOM_MIN_PERCENT, EDITOR_FRAME_ZOOM_MAX_PERCENT),
+        )
+    }
+
+    fn render_zoom_controls(
         &self,
         ui: &mut editor_host::egui::Ui,
-        rect: editor_host::egui::Rect,
         state: &editor_host::EditorHostState,
+        preset_layout: &AppEditorFramePresetLayout,
     ) -> Option<editor_host::EditorFrameCommand> {
         if !state.resizable {
             return None;
         }
-
-        let grip_rect = self.resize_grip_rect(rect);
-        let response = ui.allocate_rect(grip_rect, editor_host::egui::Sense::drag());
-        let tint = if response.hovered() || response.dragged() {
-            self.style.title_color
-        } else {
-            self.style.muted_text
-        };
-        let painter = ui.painter();
-        let stroke = editor_host::egui::Stroke::new(1.0, tint);
-        for offset in [5.0, 9.0, 13.0] {
-            painter.line_segment(
-                [
-                    grip_rect.right_bottom() - editor_host::egui::vec2(offset, 2.0),
-                    grip_rect.right_bottom() - editor_host::egui::vec2(2.0, offset),
-                ],
-                stroke,
-            );
+        if preset_layout.zoom_row.left() < preset_layout.preset_row.right() + 8.0 {
+            return None;
         }
 
-        response.dragged().then(|| {
-            let delta = ui.input(|input| input.pointer.delta());
-            self.resize_command_for_drag(state.content_size, delta)
-        })
-    }
-
-    fn resize_grip_rect(&self, rect: editor_host::egui::Rect) -> editor_host::egui::Rect {
-        editor_host::egui::Rect::from_min_max(
-            rect.right_bottom()
-                - editor_host::egui::vec2(
-                    EDITOR_FRAME_RESIZE_GRIP_SIZE,
-                    EDITOR_FRAME_RESIZE_GRIP_SIZE,
-                ),
-            rect.right_bottom(),
-        )
-    }
-
-    fn resize_command_for_drag(
-        &self,
-        content_size: editor_host::Size,
-        delta: editor_host::egui::Vec2,
-    ) -> editor_host::EditorFrameCommand {
-        let rel_x = f64::from(delta.x) / content_size.width.max(1.0);
-        let rel_y = f64::from(delta.y) / content_size.height.max(1.0);
-        let rel = if rel_x.abs() >= rel_y.abs() {
-            rel_x
-        } else {
-            rel_y
-        };
-        let scale = (1.0 + rel).max(
-            (EDITOR_FRAME_MIN_CONTENT_WIDTH / content_size.width.max(1.0))
-                .max(EDITOR_FRAME_MIN_CONTENT_HEIGHT / content_size.height.max(1.0)),
+        let mut percent = i32::try_from(state.zoom_percent).unwrap_or(100);
+        let response = ui.scope_builder(
+            editor_host::egui::UiBuilder::new().max_rect(preset_layout.zoom_row),
+            |ui| {
+                ui.spacing_mut().item_spacing = editor_host::egui::Vec2::ZERO;
+                ui.add_sized(
+                    preset_layout.zoom_row.size(),
+                    editor_host::egui::DragValue::new(&mut percent)
+                        .range(
+                            EDITOR_FRAME_ZOOM_MIN_PERCENT as i32
+                                ..=EDITOR_FRAME_ZOOM_MAX_PERCENT as i32,
+                        )
+                        .update_while_editing(EDITOR_FRAME_ZOOM_UPDATE_WHILE_EDITING)
+                        .speed(1)
+                        .suffix("%"),
+                )
+            },
         );
-        editor_host::EditorFrameCommand::ResizeContent {
-            width: (content_size.width * scale).round().max(1.0) as u32,
-            height: (content_size.height * scale).round().max(1.0) as u32,
-        }
+        response
+            .inner
+            .changed()
+            .then(|| self.zoom_command(percent as u32))
     }
 
     fn frame_rect(
@@ -418,12 +386,55 @@ impl AppEditorFrame {
         )
     }
 
-    fn paint_rect(
-        &self,
-        available: editor_host::egui::Rect,
-        _expected: editor_host::egui::Rect,
-    ) -> editor_host::egui::Rect {
+    fn paint_rect(&self, available: editor_host::egui::Rect) -> editor_host::egui::Rect {
         available
+    }
+
+    fn titlebar_for_state(&self, state: &editor_host::EditorHostState) -> editor_host::egui::Rect {
+        let rect = self.frame_rect(
+            editor_host::egui::Rect::from_min_size(
+                editor_host::egui::Pos2::ZERO,
+                editor_host::egui::Vec2::ZERO,
+            ),
+            state,
+        );
+        editor_host::egui::Rect::from_min_size(
+            rect.left_top()
+                + editor_host::egui::vec2(self.frame_thickness as f32, self.frame_thickness as f32),
+            editor_host::egui::vec2(
+                rect.width() - (self.frame_thickness * 2.0) as f32,
+                Self::chrome_height(state) as f32,
+            ),
+        )
+    }
+
+    fn should_begin_drag_for_state(
+        &self,
+        pos: editor_host::egui::Pos2,
+        state: &editor_host::EditorHostState,
+    ) -> bool {
+        let titlebar = self.titlebar_for_state(state);
+        if !titlebar.contains(pos) {
+            return false;
+        }
+        let preset_layout = self.preset_layout(titlebar);
+        !Self::header_interactive_rects(&preset_layout)
+            .iter()
+            .any(|rect| rect.expand(2.0).contains(pos))
+    }
+
+    fn header_interactive_rects(
+        preset_layout: &AppEditorFramePresetLayout,
+    ) -> [editor_host::egui::Rect; 7] {
+        [
+            preset_layout.close_button,
+            preset_layout.zoom_row,
+            preset_layout.preset_row,
+            preset_layout.previous,
+            preset_layout.next,
+            preset_layout.name,
+            preset_layout.browser,
+        ]
     }
 
     fn preset_menu_icon(expanded: bool) -> AppEditorFrameIcon {
@@ -503,7 +514,17 @@ impl AppEditorFrame {
             title_row.right_center() - editor_host::egui::vec2(18.0, 0.0),
             editor_host::egui::vec2(20.0, 20.0),
         );
-        let preset_max_width = (close_button.left() - title_gap - 72.0 - left_inset).max(80.0);
+        let zoom_width = EDITOR_FRAME_ZOOM_CONTROL_WIDTH;
+        let zoom_right = close_button.left() - 8.0;
+        let zoom_left = zoom_right - zoom_width;
+        let zoom_row = editor_host::egui::Rect::from_center_size(
+            editor_host::egui::pos2((zoom_left + zoom_right) / 2.0, title_row.center().y),
+            editor_host::egui::vec2(
+                EDITOR_FRAME_ZOOM_CONTROL_WIDTH,
+                EDITOR_FRAME_ZOOM_CONTROL_HEIGHT,
+            ),
+        );
+        let preset_max_width = (zoom_row.left() - title_gap - left_inset).max(80.0);
         let preset_width = (titlebar.width() - 176.0)
             .clamp(188.0, 360.0)
             .min(preset_max_width);
@@ -513,10 +534,10 @@ impl AppEditorFrame {
         );
         let title_text = editor_host::egui::Rect::from_min_max(
             editor_host::egui::pos2(
-                (close_button.left() - 8.0 - title_width).max(preset_row.right() + title_gap),
+                (zoom_row.left() - 8.0 - title_width).max(preset_row.right() + title_gap),
                 title_row.top(),
             ),
-            editor_host::egui::pos2(close_button.left() - 8.0, title_row.bottom()),
+            editor_host::egui::pos2(zoom_row.left() - 8.0, title_row.bottom()),
         );
         let previous = editor_host::egui::Rect::from_min_size(
             preset_row.left_top(),
@@ -535,8 +556,8 @@ impl AppEditorFrame {
             editor_host::egui::vec2(titlebar.width() - 16.0, EDITOR_FRAME_PRESET_BROWSER_HEIGHT),
         );
         AppEditorFramePresetLayout {
-            title_row,
             title_text,
+            zoom_row,
             close_button,
             preset_row,
             previous,
@@ -550,10 +571,9 @@ impl AppEditorFrame {
         &mut self,
         ui: &mut editor_host::egui::Ui,
         state: &editor_host::EditorHostState,
-        titlebar: editor_host::egui::Rect,
+        layout: &AppEditorFramePresetLayout,
     ) -> Option<editor_host::EditorFrameCommand> {
         let preset = state.preset.as_ref()?;
-        let layout = self.preset_layout(titlebar);
 
         ui.painter().rect_filled(
             layout.preset_row,
@@ -1125,7 +1145,7 @@ struct Lilypalooza {
     mixer_redo_stack: Vec<MixerState>,
     pending_mixer_undo_snapshot: Option<MixerState>,
     pending_mixer_message_after_editor_close: Option<(window::Id, MixerMessage)>,
-    pending_mixer_message_after_editor_detach: Option<MixerMessage>,
+    pending_mixer_message_after_editor_detach: Option<DeferredMixerMessage>,
     build_dir: Option<TempDir>,
     compile_requested: bool,
     compile_outputs_loading: bool,
@@ -1255,6 +1275,11 @@ struct Lilypalooza {
     pending_editor_save_as_tab: Option<u64>,
     pending_editor_rename_tab: Option<u64>,
     default_global_state: GlobalState,
+}
+
+struct DeferredMixerMessage {
+    message: MixerMessage,
+    frames_remaining: u8,
 }
 
 struct SelectedScore {
@@ -1390,10 +1415,7 @@ pub(super) struct DockDropTarget {
 
 enum LilypondStatus {
     Checking,
-    Ready {
-        detected: lilypond::Version,
-        min_required: lilypond::Version,
-    },
+    Ready { detected: lilypond::Version },
     Unavailable,
 }
 
@@ -2524,6 +2546,7 @@ mod tests {
         let state = editor_host::EditorHostState {
             title: "Editor".to_string(),
             resizable: true,
+            zoom_percent: 100,
             close_requested: false,
             content_size: editor_host::Size {
                 width: 640.0,
@@ -2556,46 +2579,63 @@ mod tests {
             editor_host::egui::pos2(0.0, 0.0),
             editor_host::egui::vec2(900.0, 700.0),
         );
-        let expected_rect = editor_host::egui::Rect::from_min_size(
-            editor_host::egui::pos2(0.0, 0.0),
-            editor_host::egui::vec2(644.0, 518.0),
-        );
 
-        assert_eq!(frame.paint_rect(live_rect, expected_rect), live_rect);
+        assert_eq!(frame.paint_rect(live_rect), live_rect);
     }
 
     #[test]
-    fn app_editor_frame_resize_grip_stays_at_bottom_right() {
+    fn app_editor_frame_zoom_command_uses_selected_percent() {
         let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
-        let rect = editor_host::egui::Rect::from_min_size(
-            editor_host::egui::pos2(0.0, 0.0),
-            editor_host::egui::vec2(640.0, 480.0),
-        );
-
-        let grip = frame.resize_grip_rect(rect);
-
-        assert_eq!(grip.right(), rect.right());
-        assert_eq!(grip.bottom(), rect.bottom());
-    }
-
-    #[test]
-    fn app_editor_frame_resize_command_preserves_content_aspect() {
-        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
-        let command = frame.resize_command_for_drag(
-            editor_host::Size {
-                width: 640.0,
-                height: 480.0,
-            },
-            editor_host::egui::vec2(120.0, 40.0),
-        );
 
         assert_eq!(
-            command,
-            editor_host::EditorFrameCommand::ResizeContent {
-                width: 760,
-                height: 570,
-            }
+            frame.zoom_command(125),
+            editor_host::EditorFrameCommand::SetZoomPercent(125)
         );
+        assert_eq!(
+            frame.zoom_command(25),
+            editor_host::EditorFrameCommand::SetZoomPercent(50)
+        );
+        assert_eq!(
+            frame.zoom_command(250),
+            editor_host::EditorFrameCommand::SetZoomPercent(200)
+        );
+    }
+
+    #[test]
+    fn app_editor_frame_reserves_visible_zoom_controls() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+        let titlebar = editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(0.0, 0.0),
+            editor_host::egui::vec2(640.0, EDITOR_FRAME_COMPACT_CHROME_HEIGHT as f32),
+        );
+        let layout = frame.preset_layout(titlebar);
+
+        assert!(titlebar.contains_rect(layout.zoom_row));
+        assert!(layout.zoom_row.right() <= layout.close_button.left() - 8.0);
+        assert!(layout.zoom_row.left() >= layout.preset_row.right() + 8.0);
+        assert_eq!(layout.zoom_row.width(), EDITOR_FRAME_ZOOM_CONTROL_WIDTH);
+        assert!(!layout.zoom_row.intersects(layout.title_text));
+        assert!(!layout.zoom_row.intersects(layout.close_button));
+    }
+
+    #[test]
+    fn app_editor_frame_changes_preset_control_width_smoothly_during_resize() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+        let mut previous_width = None;
+
+        for width in [400.0, 480.0, 560.0, 640.0, 720.0] {
+            let titlebar = editor_host::egui::Rect::from_min_size(
+                editor_host::egui::pos2(0.0, 0.0),
+                editor_host::egui::vec2(width, EDITOR_FRAME_COMPACT_CHROME_HEIGHT as f32),
+            );
+            let layout = frame.preset_layout(titlebar);
+
+            if let Some(previous_width) = previous_width {
+                let delta = layout.preset_row.width() - previous_width;
+                assert!((0.0..=80.0).contains(&delta));
+            }
+            previous_width = Some(layout.preset_row.width());
+        }
     }
 
     #[test]
@@ -2719,15 +2759,17 @@ mod tests {
     #[test]
     fn app_editor_frame_compact_preset_controls_live_in_title_row() {
         let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
-        let layout = frame.preset_layout(editor_host::egui::Rect::from_min_size(
+        let titlebar = editor_host::egui::Rect::from_min_size(
             editor_host::egui::pos2(0.0, 0.0),
             editor_host::egui::vec2(640.0, EDITOR_FRAME_COMPACT_CHROME_HEIGHT as f32),
-        ));
+        );
+        let layout = frame.preset_layout(titlebar);
 
-        assert!(layout.title_row.contains_rect(layout.preset_row));
+        assert!(titlebar.contains_rect(layout.preset_row));
         assert!(layout.preset_row.right() <= layout.title_text.left());
-        assert!(layout.title_text.right() <= layout.close_button.left());
-        assert!(layout.browser.top() >= layout.title_row.bottom());
+        assert!(layout.title_text.right() <= layout.zoom_row.left());
+        assert!(layout.zoom_row.right() <= layout.close_button.left());
+        assert!(layout.browser.top() >= titlebar.top() + EDITOR_FRAME_TITLE_ROW_HEIGHT);
     }
 
     #[test]
@@ -2746,6 +2788,46 @@ mod tests {
     }
 
     #[test]
+    fn app_editor_frame_starts_native_drag_only_from_header_gap() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+        let state = editor_host::EditorHostState {
+            title: "Editor".to_string(),
+            resizable: true,
+            zoom_percent: 100,
+            close_requested: false,
+            content_size: editor_host::Size {
+                width: 640.0,
+                height: 480.0,
+            },
+            preset: None,
+        };
+        let titlebar = editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(EDITOR_FRAME_THICKNESS as f32, EDITOR_FRAME_THICKNESS as f32),
+            editor_host::egui::vec2(640.0, EDITOR_FRAME_COMPACT_CHROME_HEIGHT as f32),
+        );
+        let layout = frame.preset_layout(titlebar);
+
+        assert!(editor_host::EditorFrame::should_begin_window_drag(
+            &frame,
+            editor_host::egui::pos2(
+                (layout.preset_row.right() + layout.title_text.left()) / 2.0,
+                layout.title_text.center().y
+            ),
+            &state
+        ));
+        assert!(!editor_host::EditorFrame::should_begin_window_drag(
+            &frame,
+            layout.preset_row.center(),
+            &state
+        ));
+        assert!(!editor_host::EditorFrame::should_begin_window_drag(
+            &frame,
+            layout.close_button.center(),
+            &state
+        ));
+    }
+
+    #[test]
     fn app_editor_frame_previous_button_does_not_overlap_dropdown() {
         let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
         let layout = frame.preset_layout(editor_host::egui::Rect::from_min_size(
@@ -2759,12 +2841,13 @@ mod tests {
     #[test]
     fn app_editor_frame_close_button_stays_in_title_row_when_presets_expand() {
         let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
-        let layout = frame.preset_layout(editor_host::egui::Rect::from_min_size(
+        let titlebar = editor_host::egui::Rect::from_min_size(
             editor_host::egui::pos2(0.0, 0.0),
             editor_host::egui::vec2(640.0, EDITOR_FRAME_EXPANDED_CHROME_HEIGHT as f32),
-        ));
+        );
+        let layout = frame.preset_layout(titlebar);
 
-        assert!(layout.title_row.contains_rect(layout.close_button));
+        assert!(titlebar.contains_rect(layout.close_button));
         assert!(!layout.close_button.intersects(layout.browser));
     }
 

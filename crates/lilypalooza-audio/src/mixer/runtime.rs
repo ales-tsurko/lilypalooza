@@ -3536,7 +3536,7 @@ mod tests {
     #[test]
     fn direct_sine_node_to_bus_preserves_expected_samples() {
         let mut harness = OfflineHarness::new(44_100, 64);
-        let bus_handle = harness.context().with_activation(|| {
+        let _bus_handle = harness.context().with_activation(|| {
             let signal = handle(TestSineGen::new(44_100.0, 440.0));
             let bus_handle = bus(2);
             graph_output(0, bus_handle.channels(2));
@@ -3544,7 +3544,6 @@ mod tests {
             bus_handle
         });
 
-        let _ = bus_handle;
         harness.process_block();
 
         let phase_increment = std::f32::consts::TAU * 440.0 / 44_100.0;

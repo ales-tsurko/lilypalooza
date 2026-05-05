@@ -32,10 +32,10 @@ use clap_sys::process::{CLAP_PROCESS_ERROR, clap_process};
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::{CLAP_VERSION, clap_version_is_compatible};
 use lilypalooza_audio::instrument::{
-    Controller, ControllerError, EditorDescriptor, EditorError, EditorParent, EditorSession,
-    EditorSize, EffectProcessor, EffectRuntimeContext, EffectRuntimeSpec, InstrumentProcessor,
-    InstrumentRuntimeContext, InstrumentRuntimeSpec, MidiEvent, Processor, ProcessorState,
-    ProcessorStateError, RuntimeBinding, RuntimeFactoryError, registry,
+    Controller, ControllerError, EditorDescriptor, EditorError, EditorParent, EditorResizeHandler,
+    EditorSession, EditorSize, EffectProcessor, EffectRuntimeContext, EffectRuntimeSpec,
+    InstrumentProcessor, InstrumentRuntimeContext, InstrumentRuntimeSpec, MidiEvent, Processor,
+    ProcessorState, ProcessorStateError, RuntimeBinding, RuntimeFactoryError, registry,
 };
 use lilypalooza_audio::{ProcessorDescriptor, SlotState};
 use raw_window_handle::RawWindowHandle;
@@ -43,6 +43,15 @@ use serde::{Deserialize, Serialize};
 
 /// Stable adapter backend format.
 pub const FORMAT: &str = "clap";
+
+fn trace_clap_editor(message: impl FnOnce() -> String) {
+    log::trace!(
+        target: "lilypalooza_clap",
+        "clap-editor thread={:?} {}",
+        std::thread::current().id(),
+        message()
+    );
+}
 
 /// One CLAP plugin discovered inside a CLAP binary or bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -519,6 +528,7 @@ struct HostContext {
     version: CString,
     host: clap_host,
     requested_gui_size: Mutex<Option<EditorSize>>,
+    resize_handler: Mutex<Option<Arc<dyn EditorResizeHandler>>>,
     params_flush_requested: AtomicBool,
 }
 
@@ -543,6 +553,7 @@ impl HostContext {
                 request_callback: Some(host_request_callback),
             },
             requested_gui_size: Mutex::new(None),
+            resize_handler: Mutex::new(None),
             params_flush_requested: AtomicBool::new(false),
         });
         let context_ptr = (&mut *context) as *mut Self;
@@ -559,21 +570,68 @@ impl HostContext {
     }
 
     fn take_requested_gui_size(&self) -> Option<EditorSize> {
-        self.requested_gui_size
+        let requested = self
+            .requested_gui_size
             .lock()
             .map(|mut size| size.take())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        trace_clap_editor(|| format!("host take_requested_gui_size {requested:?}"));
+        requested
     }
 
     fn set_requested_gui_size(&self, width: u32, height: u32) -> bool {
         if width == 0 || height == 0 {
+            trace_clap_editor(|| {
+                format!("host request_resize ignored invalid width={width} height={height}")
+            });
             return false;
         }
+        let requested = EditorSize { width, height };
+        if let Some(handler) = self
+            .resize_handler
+            .lock()
+            .ok()
+            .and_then(|handler| handler.as_ref().cloned())
+        {
+            match handler.resize_editor(requested) {
+                Ok(accepted) => {
+                    if let Ok(mut size) = self.requested_gui_size.lock() {
+                        *size = Some(accepted);
+                    }
+                    trace_clap_editor(|| {
+                        format!(
+                            "host request_resize live requested={requested:?} accepted={accepted:?}"
+                        )
+                    });
+                    return true;
+                }
+                Err(error) => {
+                    trace_clap_editor(|| {
+                        format!(
+                            "host request_resize live failed requested={requested:?} error={error}"
+                        )
+                    });
+                    return false;
+                }
+            }
+        }
         if let Ok(mut size) = self.requested_gui_size.lock() {
-            *size = Some(EditorSize { width, height });
+            *size = Some(requested);
+            trace_clap_editor(|| {
+                format!("host request_resize queued width={width} height={height}")
+            });
             true
         } else {
+            trace_clap_editor(|| {
+                format!("host request_resize failed to lock width={width} height={height}")
+            });
             false
+        }
+    }
+
+    fn set_resize_handler(&self, handler: Option<Arc<dyn EditorResizeHandler>>) {
+        if let Ok(mut current) = self.resize_handler.lock() {
+            *current = handler;
         }
     }
 
@@ -1390,7 +1448,19 @@ struct ClapEditorSession {
 }
 
 impl EditorSession for ClapEditorSession {
+    fn resizable(&mut self) -> Result<Option<bool>, EditorError> {
+        let runtime = self
+            .shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(gui) = runtime.plugin_extension::<clap_plugin_gui>(CLAP_EXT_GUI) else {
+            return Ok(None);
+        };
+        Ok(clap_gui_can_resize(gui, runtime.plugin.as_ptr()))
+    }
+
     fn initial_size(&mut self) -> Result<Option<EditorSize>, EditorError> {
+        trace_clap_editor(|| format!("session initial_size {:?}", self.initial_size));
         Ok(self.initial_size)
     }
 
@@ -1399,7 +1469,21 @@ impl EditorSession for ClapEditorSession {
             .shared
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Ok(runtime.host.take_requested_gui_size())
+        let requested = runtime.host.take_requested_gui_size();
+        trace_clap_editor(|| format!("session requested_size {requested:?}"));
+        Ok(requested)
+    }
+
+    fn set_resize_handler(
+        &mut self,
+        handler: Option<Arc<dyn EditorResizeHandler>>,
+    ) -> Result<(), EditorError> {
+        let runtime = self
+            .shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        runtime.host.set_resize_handler(handler);
+        Ok(())
     }
 
     fn attach(&mut self, parent: EditorParent) -> Result<(), EditorError> {
@@ -1439,6 +1523,7 @@ impl EditorSession for ClapEditorSession {
             .host
             .take_requested_gui_size()
             .or_else(|| clap_gui_reported_size(gui, runtime.plugin.as_ptr()));
+        trace_clap_editor(|| format!("session attach initial_size={:?}", self.initial_size));
         self.attached = true;
         Ok(())
     }
@@ -1453,6 +1538,7 @@ impl EditorSession for ClapEditorSession {
         }
         self.created = false;
         self.attached = false;
+        runtime.host.set_resize_handler(None);
         Ok(())
     }
 
@@ -1470,9 +1556,11 @@ impl EditorSession for ClapEditorSession {
         };
         let mut size = size;
         if !clap_gui_adjusted_resize(gui, runtime.plugin.as_ptr(), &mut size) {
+            trace_clap_editor(|| format!("session resize ignored requested={size:?}"));
             return Ok(size);
         }
         self.initial_size = Some(size);
+        trace_clap_editor(|| format!("session resize applied accepted={size:?}"));
         Ok(size)
     }
 }
@@ -1507,16 +1595,18 @@ fn clap_gui_reported_size(gui: &clap_plugin_gui, plugin: *const clap_plugin) -> 
     Some(EditorSize { width, height })
 }
 
+fn clap_gui_can_resize(gui: &clap_plugin_gui, plugin: *const clap_plugin) -> Option<bool> {
+    let can_resize = gui.can_resize?;
+    // SAFETY: The GUI extension belongs to the live plugin.
+    Some(unsafe { can_resize(plugin) })
+}
+
 fn clap_gui_adjusted_resize(
     gui: &clap_plugin_gui,
     plugin: *const clap_plugin,
     size: &mut EditorSize,
 ) -> bool {
-    let Some(can_resize) = gui.can_resize else {
-        return false;
-    };
-    // SAFETY: The GUI extension belongs to the live plugin.
-    if unsafe { !can_resize(plugin) } {
+    if clap_gui_can_resize(gui, plugin) != Some(true) {
         return false;
     }
 
@@ -1799,6 +1889,53 @@ mod tests {
             })
         );
         assert_eq!(host.take_requested_gui_size(), None);
+    }
+
+    struct TestResizeHandler {
+        requested: Mutex<Vec<EditorSize>>,
+        accepted: EditorSize,
+    }
+
+    impl EditorResizeHandler for TestResizeHandler {
+        fn resize_editor(&self, size: EditorSize) -> Result<EditorSize, EditorError> {
+            self.requested.lock().expect("resize log lock").push(size);
+            Ok(self.accepted)
+        }
+    }
+
+    #[test]
+    fn host_gui_request_resize_uses_live_resize_handler() {
+        let host = HostContext::new();
+        let handler = Arc::new(TestResizeHandler {
+            requested: Mutex::new(Vec::new()),
+            accepted: EditorSize {
+                width: 640,
+                height: 480,
+            },
+        });
+        host.set_resize_handler(Some(handler.clone()));
+
+        // SAFETY: `host` owns a valid CLAP host pointer for this test.
+        assert!(unsafe { host_gui_request_resize(host.as_ptr(), 880, 540) });
+
+        assert_eq!(
+            handler
+                .requested
+                .lock()
+                .expect("resize log lock")
+                .as_slice(),
+            &[EditorSize {
+                width: 880,
+                height: 540,
+            }]
+        );
+        assert_eq!(
+            host.take_requested_gui_size(),
+            Some(EditorSize {
+                width: 640,
+                height: 480,
+            })
+        );
     }
 
     #[test]

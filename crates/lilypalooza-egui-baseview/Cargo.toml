@@ -4,14 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-baseview = { git = "https://github.com/vizia/baseview", rev = "77fec022db136fb771d5775ae13d088f4f166c04", features = ["opengl"] }
-egui = "0.33.3"
-egui_glow = "0.33.3"
-glow = "0.16.0"
-keyboard-types = "0.7.0"
+baseview = { version = "0.1.0", features = ["opengl"] }
+egui = "0.34.2"
+egui_glow = "0.34.2"
+glow = "0.17.0"
+keyboard-types = "0.6.2"
+log = "0.4.28"
 raw-window-handle = { version = "0.5.2", package = "raw-window-handle" }
 raw-window-handle-06 = { version = "0.6", package = "raw-window-handle" }
 thiserror = "2.0.18"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.3"
+objc2-app-kit = { version = "0.3.2", features = ["NSView"] }
+objc2-foundation = "0.3.2"
+objc2-quartz-core = { version = "0.3.2", features = ["CATransaction"] }
 
 [lints.rust]
 unsafe_code = "allow"

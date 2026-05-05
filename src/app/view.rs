@@ -87,13 +87,7 @@ fn main_content(app: &Lilypalooza) -> Element<'_, Message> {
         .center_x(Fill)
         .center_y(Fill)
         .into(),
-        super::LilypondStatus::Ready {
-            detected,
-            min_required,
-        } => {
-            let _ = (detected, min_required);
-            dock_view::view(app)
-        }
+        super::LilypondStatus::Ready { .. } => dock_view::view(app),
         super::LilypondStatus::Unavailable => {
             container(text("LilyPond unavailable.").size(crate::ui_style::FONT_SIZE_BODY_MD))
                 .width(Fill)

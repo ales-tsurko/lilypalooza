@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use lilypalooza_audio::instrument::{
-    Controller, ControllerError, EditorError, EditorParent, EditorSession, EditorSize,
-    EffectProcessor, EffectRuntimeContext, EffectRuntimeSpec, InstrumentProcessor,
+    Controller, ControllerError, EditorError, EditorParent, EditorResizeHandler, EditorSession,
+    EditorSize, EffectProcessor, EffectRuntimeContext, EffectRuntimeSpec, InstrumentProcessor,
     InstrumentRuntimeContext, InstrumentRuntimeSpec, MidiEvent, Processor, ProcessorDescriptor,
     ProcessorState, ProcessorStateError, RuntimeBinding, RuntimeFactoryError, SlotState, registry,
 };
@@ -538,12 +538,14 @@ fn plugin_metadata(id: &str) -> Result<Vst3PluginMetadata, Vst3RuntimeError> {
 
 struct Vst3Host {
     requested_size: Mutex<Option<EditorSize>>,
+    resize_handler: Mutex<Option<Arc<dyn EditorResizeHandler>>>,
 }
 
 impl Vst3Host {
     fn new() -> Self {
         Self {
             requested_size: Mutex::new(None),
+            resize_handler: Mutex::new(None),
         }
     }
 
@@ -555,6 +557,27 @@ impl Vst3Host {
             .take();
         trace_vst3_editor(|| format!("host take_requested_size {requested:?}"));
         requested
+    }
+
+    fn set_resize_handler(&self, handler: Option<Arc<dyn EditorResizeHandler>>) {
+        *self
+            .resize_handler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = handler;
+    }
+
+    fn resize_handler(&self) -> Option<Arc<dyn EditorResizeHandler>> {
+        self.resize_handler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn store_requested_size(&self, size: EditorSize) {
+        *self
+            .requested_size
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(size);
     }
 }
 
@@ -584,22 +607,52 @@ impl IHostApplicationTrait for Vst3Host {
 }
 
 impl IPlugFrameTrait for Vst3Host {
-    unsafe fn resizeView(&self, _view: *mut IPlugView, new_size: *mut ViewRect) -> tresult {
+    unsafe fn resizeView(&self, view: *mut IPlugView, new_size: *mut ViewRect) -> tresult {
         // SAFETY: VST3 provides a readable ViewRect pointer or null.
         let Some(rect) = (unsafe { new_size.as_ref() }) else {
             return kInvalidArgument;
         };
         if let Some(size) = editor_size_from_rect(*rect) {
+            if let Some(handler) = self.resize_handler() {
+                let accepted = match handler.resize_editor(size) {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        trace_vst3_editor(|| {
+                            format!(
+                                "IPlugFrame::resizeView live resize failed view={view:p} rect={} size={size:?}: {error}",
+                                format_view_rect(*rect)
+                            )
+                        });
+                        return kResultFalse;
+                    }
+                };
+                // SAFETY: `view` is supplied by the plugin for this resize callback.
+                let on_size_result = unsafe { call_plug_view_on_size(view, accepted) };
+                if on_size_result != kResultOk {
+                    trace_vst3_editor(|| {
+                        format!(
+                            "IPlugFrame::resizeView onSize failed view={view:p} accepted={accepted:?} result={on_size_result}"
+                        )
+                    });
+                    return on_size_result;
+                }
+                self.store_requested_size(accepted);
+                trace_vst3_editor(|| {
+                    format!(
+                        "IPlugFrame::resizeView applied live resize view={view:p} rect={} requested={size:?} accepted={accepted:?}",
+                        format_view_rect(*rect)
+                    )
+                });
+                return kResultOk;
+            }
+            self.store_requested_size(size);
             trace_vst3_editor(|| {
                 format!(
-                    "IPlugFrame::resizeView rect={} size={size:?}",
+                    "IPlugFrame::resizeView queued deferred resize view={view:p} rect={} size={size:?}",
                     format_view_rect(*rect)
                 )
             });
-            *self
-                .requested_size
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(size);
+            return kResultOk;
         } else {
             trace_vst3_editor(|| {
                 format!(
@@ -608,7 +661,7 @@ impl IPlugFrameTrait for Vst3Host {
                 )
             });
         }
-        kResultOk
+        kResultFalse
     }
 }
 
@@ -1443,6 +1496,16 @@ struct Vst3EditorSession {
 }
 
 impl EditorSession for Vst3EditorSession {
+    fn resizable(&mut self) -> Result<Option<bool>, EditorError> {
+        let Some(view) = &self.view else {
+            return Ok(None);
+        };
+        // SAFETY: View is live while attached to this editor session.
+        let resizable = unsafe { view.canResize() == kResultOk };
+        trace_vst3_editor(|| format!("session resizable={resizable}"));
+        Ok(Some(resizable))
+    }
+
     fn initial_size(&mut self) -> Result<Option<EditorSize>, EditorError> {
         trace_vst3_editor(|| format!("session initial_size {:?}", self.current_size));
         Ok(self.current_size)
@@ -1463,6 +1526,18 @@ impl EditorSession for Vst3EditorSession {
             )
         });
         Ok(changed)
+    }
+
+    fn set_resize_handler(
+        &mut self,
+        handler: Option<Arc<dyn EditorResizeHandler>>,
+    ) -> Result<(), EditorError> {
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .host
+            .set_resize_handler(handler);
+        Ok(())
     }
 
     fn attach(&mut self, parent: EditorParent) -> Result<(), EditorError> {
@@ -1510,6 +1585,11 @@ impl EditorSession for Vst3EditorSession {
     }
 
     fn detach(&mut self) -> Result<(), EditorError> {
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .host
+            .set_resize_handler(None);
         if let Some(view) = self.view.take() {
             trace_vst3_editor(|| format!("session detach current_size={:?}", self.current_size));
             // SAFETY: View was attached by this session and can be detached once.
@@ -1620,6 +1700,16 @@ fn rect_from_editor_size(size: EditorSize) -> ViewRect {
         right: size.width as int32,
         bottom: size.height as int32,
     }
+}
+
+unsafe fn call_plug_view_on_size(view: *mut IPlugView, size: EditorSize) -> tresult {
+    if view.is_null() {
+        return kInvalidArgument;
+    }
+    let mut rect = rect_from_editor_size(size);
+    // SAFETY: `view` is supplied by the plugin to `IPlugFrame::resizeView`, and the VST3
+    // resize sequence requires the host to call `IPlugView::onSize` after resizing the frame.
+    unsafe { ((*(*view).vtbl).onSize)(view, &mut rect) }
 }
 
 fn format_view_rect(rect: ViewRect) -> String {
@@ -1783,6 +1873,7 @@ fn instantiate_shared(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lilypalooza_audio::instrument::EditorResizeHandler;
 
     #[test]
     fn vst3_candidate_detection_is_extension_based() {
@@ -1938,5 +2029,172 @@ mod tests {
                 height: 600,
             })
         );
+    }
+
+    #[test]
+    fn vst3_resize_view_without_live_handler_records_deferred_resize_request() {
+        let host = Vst3Host::new();
+        let mut rect = rect_from_editor_size(EditorSize {
+            width: 800,
+            height: 600,
+        });
+
+        // SAFETY: The test passes a live stack-owned ViewRect pointer to the host callback.
+        let result = unsafe { host.resizeView(std::ptr::null_mut(), &raw mut rect) };
+
+        assert_eq!(result, kResultOk);
+        assert_eq!(
+            host.take_requested_size(),
+            Some(EditorSize {
+                width: 800,
+                height: 600,
+            })
+        );
+    }
+
+    #[test]
+    fn vst3_resize_view_resizes_host_and_calls_on_size_synchronously() {
+        let host = Vst3Host::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let handler = Arc::new(TestResizeHandler {
+            events: Arc::clone(&events),
+            ..TestResizeHandler::default()
+        });
+        host.set_resize_handler(Some(handler.clone()));
+        let view = ComWrapper::new(TestPlugView {
+            events: Arc::clone(&events),
+            ..TestPlugView::default()
+        });
+        let view_ptr = view.to_com_ptr::<IPlugView>().expect("test view");
+        let mut rect = rect_from_editor_size(EditorSize {
+            width: 800,
+            height: 600,
+        });
+
+        // SAFETY: The test passes live COM view and ViewRect pointers to the host callback.
+        let result = unsafe { host.resizeView(view_ptr.as_ptr(), &raw mut rect) };
+
+        assert_eq!(result, kResultOk);
+        assert_eq!(
+            handler
+                .requested
+                .lock()
+                .expect("requested sizes")
+                .as_slice(),
+            &[EditorSize {
+                width: 800,
+                height: 600,
+            }]
+        );
+        assert_eq!(
+            view.on_size.lock().expect("onSize calls").as_slice(),
+            &[EditorSize {
+                width: 800,
+                height: 600,
+            }]
+        );
+        assert_eq!(
+            host.take_requested_size(),
+            Some(EditorSize {
+                width: 800,
+                height: 600,
+            })
+        );
+        assert_eq!(
+            events.lock().expect("resize events").as_slice(),
+            &["resize_editor", "onSize"]
+        );
+    }
+
+    #[derive(Default)]
+    struct TestResizeHandler {
+        requested: Mutex<Vec<EditorSize>>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl EditorResizeHandler for TestResizeHandler {
+        fn resize_editor(&self, size: EditorSize) -> Result<EditorSize, EditorError> {
+            self.events
+                .lock()
+                .expect("resize events")
+                .push("resize_editor");
+            self.requested.lock().expect("requested sizes").push(size);
+            Ok(size)
+        }
+    }
+
+    #[derive(Default)]
+    struct TestPlugView {
+        on_size: Mutex<Vec<EditorSize>>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl Class for TestPlugView {
+        type Interfaces = (IPlugView,);
+    }
+
+    impl IPlugViewTrait for TestPlugView {
+        unsafe fn isPlatformTypeSupported(&self, _type: FIDString) -> tresult {
+            kResultOk
+        }
+
+        unsafe fn attached(&self, _parent: *mut c_void, _type: FIDString) -> tresult {
+            kResultOk
+        }
+
+        unsafe fn removed(&self) -> tresult {
+            kResultOk
+        }
+
+        unsafe fn onWheel(&self, _distance: f32) -> tresult {
+            kResultFalse
+        }
+
+        unsafe fn onKeyDown(&self, _key: char16, _key_code: int16, _modifiers: int16) -> tresult {
+            kResultFalse
+        }
+
+        unsafe fn onKeyUp(&self, _key: char16, _key_code: int16, _modifiers: int16) -> tresult {
+            kResultFalse
+        }
+
+        unsafe fn getSize(&self, size: *mut ViewRect) -> tresult {
+            // SAFETY: VST3 supplies a writable ViewRect pointer or null.
+            let Some(size) = (unsafe { size.as_mut() }) else {
+                return kInvalidArgument;
+            };
+            *size = rect_from_editor_size(EditorSize {
+                width: 640,
+                height: 480,
+            });
+            kResultOk
+        }
+
+        unsafe fn onSize(&self, new_size: *mut ViewRect) -> tresult {
+            // SAFETY: VST3 supplies a readable ViewRect pointer or null.
+            let rect = unsafe { new_size.as_ref() };
+            let Some(size) = rect.and_then(|rect| editor_size_from_rect(*rect)) else {
+                return kInvalidArgument;
+            };
+            self.events.lock().expect("resize events").push("onSize");
+            self.on_size.lock().expect("onSize calls").push(size);
+            kResultOk
+        }
+
+        unsafe fn onFocus(&self, _state: TBool) -> tresult {
+            kResultOk
+        }
+
+        unsafe fn setFrame(&self, _frame: *mut IPlugFrame) -> tresult {
+            kResultOk
+        }
+
+        unsafe fn canResize(&self) -> tresult {
+            kResultOk
+        }
+
+        unsafe fn checkSizeConstraint(&self, _rect: *mut ViewRect) -> tresult {
+            kResultOk
+        }
     }
 }

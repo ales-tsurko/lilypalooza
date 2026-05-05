@@ -180,6 +180,12 @@ pub enum EditorError {
     Backend(String),
 }
 
+/// Live host-side editor resize callback.
+pub trait EditorResizeHandler: Send + Sync {
+    /// Resizes the containing editor frame and returns the accepted content size.
+    fn resize_editor(&self, size: EditorSize) -> Result<EditorSize, EditorError>;
+}
+
 /// Live processor controller errors.
 #[derive(thiserror::Error, Debug)]
 pub enum ControllerError {
@@ -284,6 +290,10 @@ pub enum RuntimeFactoryError {
 
 /// Live processor editor session.
 pub trait EditorSession {
+    /// Returns whether the live editor can be resized, when the backend can report it.
+    fn resizable(&mut self) -> Result<Option<bool>, EditorError> {
+        Ok(None)
+    }
     /// Returns a backend-reported initial content size, when available.
     fn initial_size(&mut self) -> Result<Option<EditorSize>, EditorError> {
         Ok(None)
@@ -291,6 +301,17 @@ pub trait EditorSession {
     /// Returns and clears a backend-requested content resize, when available.
     fn requested_size(&mut self) -> Result<Option<EditorSize>, EditorError> {
         Ok(None)
+    }
+    /// Sets a live host resize callback used by plugin-owned resize requests.
+    fn set_resize_handler(
+        &mut self,
+        _handler: Option<Arc<dyn EditorResizeHandler>>,
+    ) -> Result<(), EditorError> {
+        Ok(())
+    }
+    /// Returns whether the host should observe native embedded-view size changes.
+    fn tracks_native_content_resize(&self) -> bool {
+        true
     }
     /// Attaches the editor view to the host parent.
     fn attach(&mut self, parent: EditorParent) -> Result<(), EditorError>;

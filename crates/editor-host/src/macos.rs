@@ -1,21 +1,29 @@
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
+use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2::sel;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSColor, NSView, NSWindow, NSWindowAnimationBehavior,
-    NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode,
+    NSApplication, NSAutoresizingMaskOptions, NSColor, NSEvent, NSView,
+    NSViewBoundsDidChangeNotification, NSViewFrameDidChangeNotification, NSWindow,
+    NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
+    NSWindowTabbingMode,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-use objc2_quartz_core::CALayer;
+use objc2_foundation::{
+    NSNotification, NSNotificationCenter, NSOperationQueue, NSPoint, NSRect, NSSize, NSString,
+};
+use objc2_quartz_core::{CALayer, CATransaction};
 use raw_window_handle::RawWindowHandle;
 
 use crate::{
-    EditorFrame, EditorHostOptions, Error, InstalledHost, ResizeAnchor, Size, WindowHandleSnapshot,
-    WindowSnapshot, host_layout, open_egui_frame, trace_editor_host,
+    EditorFrame, EditorHostOptions, EditorPresetState, Error, InstalledHost, ResizeAnchor,
+    SharedSize, Size, WindowHandleSnapshot, WindowSnapshot, open_egui_frame, trace_editor_host,
 };
+use lilypalooza_egui_baseview::EguiWindowResizeHandle;
 
 pub fn prepare_process() -> Result<(), Error> {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -100,6 +108,21 @@ pub fn install_editor_host(
         }),
     )?;
 
+    let content_size = Size {
+        width: requested_bounds.size.width,
+        height: requested_bounds.size.height,
+    };
+    let content_size = Arc::new(crate::SharedSize::new(content_size));
+    let frame_resize_handle = frame_host.window.resize_handle();
+    let native_content_resize_observer = Some(install_native_content_resize_observer(
+        *host,
+        content,
+        Arc::clone(&frame_host.preset_state),
+        Some(frame_resize_handle),
+        Arc::clone(&frame_host.content_size),
+        Arc::clone(&content_size),
+        layout.content.x,
+    )?);
     Ok(InstalledHost {
         host: *host,
         content,
@@ -107,13 +130,13 @@ pub fn install_editor_host(
         title: frame_host.title,
         preset_state: frame_host.preset_state,
         frame_content_size: frame_host.content_size,
+        frame_resizable: frame_host.resizable,
+        frame_zoom_percent: frame_host.zoom_percent,
         frame_commands: frame_host.frame_commands,
         frame_window: Some(frame_host.window),
-        content_size: Size {
-            width: requested_bounds.size.width,
-            height: requested_bounds.size.height,
-        },
+        content_size,
         frame_thickness: layout.content.x,
+        native_content_resize_observer,
     })
 }
 
@@ -125,7 +148,7 @@ pub fn resize_installed_host(
     frame_thickness: f64,
     anchor: ResizeAnchor,
 ) -> Result<(), Error> {
-    let layout = host_layout(
+    let layout = crate::host_layout(
         content_size.width,
         content_size.height,
         titlebar_height,
@@ -138,17 +161,18 @@ pub fn resize_installed_host(
     let before_window_frame = host_window.frame();
     let before_host_frame = host_view.frame();
     let before_host_bounds = host_view.bounds();
-    resize_host_window_clamped_to_screen(
-        &host_window,
-        layout.outer_width,
-        layout.outer_height,
-        anchor,
-    );
-    host_view.setFrameSize(NSSize::new(layout.outer_width, layout.outer_height));
-
     let content_view = ns_view_from_snapshot(content)?;
     let content_frame = ns_rect(content_frame_for_host(layout, host_view.isFlipped()));
-    content_view.setFrame(content_frame);
+    without_implicit_layer_animations(|| {
+        resize_host_window_clamped_to_screen(
+            &host_window,
+            layout.outer_width,
+            layout.outer_height,
+            anchor,
+        );
+        host_view.setFrameSize(NSSize::new(layout.outer_width, layout.outer_height));
+        content_view.setFrame(content_frame);
+    });
     trace_editor_host(|| {
         format!(
             "macos resize_installed_host anchor={anchor:?} content={content_size:?} window {} -> {} host_frame {} -> {} host_bounds {} -> {} content_frame={}",
@@ -162,6 +186,307 @@ pub fn resize_installed_host(
         )
     });
     Ok(())
+}
+
+pub fn sync_installed_host_layout(
+    host: &WindowSnapshot,
+    content: &WindowSnapshot,
+    content_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+) -> Result<(), Error> {
+    let layout = crate::host_layout(
+        content_size.width,
+        content_size.height,
+        titlebar_height,
+        frame_thickness,
+    );
+    let host_view = ns_view_from_snapshot(host)?;
+    let content_view = ns_view_from_snapshot(content)?;
+    let content_frame = ns_rect(content_frame_for_host(layout, host_view.isFlipped()));
+    without_implicit_layer_animations(|| {
+        content_view.setFrame(content_frame);
+    });
+    trace_editor_host(|| {
+        format!(
+            "macos sync_installed_host_layout content={content_size:?} host_bounds={} content_frame={}",
+            format_rect(host_view.bounds()),
+            format_rect(content_frame)
+        )
+    });
+    Ok(())
+}
+
+pub fn native_content_size(
+    host: &WindowSnapshot,
+    titlebar_height: f64,
+    frame_thickness: f64,
+) -> Result<Size, Error> {
+    let host_view = ns_view_from_snapshot(host)?;
+    let bounds = host_view.bounds();
+    Ok(crate::content_size_from_outer_size(
+        Size {
+            width: bounds.size.width,
+            height: bounds.size.height,
+        },
+        titlebar_height,
+        frame_thickness,
+    ))
+}
+
+pub fn embedded_content_size(content: &WindowSnapshot) -> Result<Option<Size>, Error> {
+    let content_view = ns_view_from_snapshot(content)?;
+    enable_embedded_content_resize_notifications_for_view(&content_view);
+    let size = largest_embedded_subview_size(&content_view);
+    if size.width <= 0.0 || size.height <= 0.0 {
+        return Ok(None);
+    }
+    Ok(Some(size))
+}
+
+pub struct NativeContentResizeObserver {
+    frame_observer: Retained<ProtocolObject<dyn NSObjectProtocol>>,
+    bounds_observer: Retained<ProtocolObject<dyn NSObjectProtocol>>,
+    enabled: Arc<AtomicBool>,
+}
+
+impl NativeContentResizeObserver {
+    pub fn enable(&self, content: &WindowSnapshot) -> Result<(), Error> {
+        self.enabled.store(true, Ordering::Release);
+        enable_embedded_content_resize_notifications(content)
+    }
+}
+
+impl Drop for NativeContentResizeObserver {
+    fn drop(&mut self) {
+        let center = NSNotificationCenter::defaultCenter();
+        remove_notification_observer(&center, &self.frame_observer);
+        remove_notification_observer(&center, &self.bounds_observer);
+    }
+}
+
+fn remove_notification_observer(
+    center: &NSNotificationCenter,
+    observer: &Retained<ProtocolObject<dyn NSObjectProtocol>>,
+) {
+    // SAFETY: The token was returned by NSNotificationCenter and is an Objective-C object accepted
+    // by removeObserver:.
+    let object = unsafe { &*Retained::as_ptr(observer).cast::<AnyObject>() };
+    // SAFETY: The observer token belongs to this notification center.
+    unsafe {
+        center.removeObserver(object);
+    }
+}
+
+#[derive(Clone)]
+struct NativeContentResizeContext {
+    host: WindowSnapshot,
+    content: WindowSnapshot,
+    preset_state: Arc<Mutex<Option<EditorPresetState>>>,
+    frame_window: Option<EguiWindowResizeHandle>,
+    frame_content_size: Arc<SharedSize>,
+    content_size: Arc<SharedSize>,
+    frame_thickness: f64,
+    pending_apply: Arc<AtomicBool>,
+    enabled: Arc<AtomicBool>,
+}
+
+fn install_native_content_resize_observer(
+    host: WindowSnapshot,
+    content: WindowSnapshot,
+    preset_state: Arc<Mutex<Option<EditorPresetState>>>,
+    frame_window: Option<EguiWindowResizeHandle>,
+    frame_content_size: Arc<SharedSize>,
+    content_size: Arc<SharedSize>,
+    frame_thickness: f64,
+) -> Result<NativeContentResizeObserver, Error> {
+    let center = NSNotificationCenter::defaultCenter();
+    let enabled = Arc::new(AtomicBool::new(false));
+    let context = NativeContentResizeContext {
+        host,
+        content,
+        preset_state,
+        frame_window,
+        frame_content_size,
+        content_size,
+        frame_thickness,
+        pending_apply: Arc::new(AtomicBool::new(false)),
+        enabled: Arc::clone(&enabled),
+    };
+    // SAFETY: AppKit exports these notification names as process-wide constant NSStrings.
+    let frame_notification = unsafe { NSViewFrameDidChangeNotification };
+    // SAFETY: AppKit exports these notification names as process-wide constant NSStrings.
+    let bounds_notification = unsafe { NSViewBoundsDidChangeNotification };
+    Ok(NativeContentResizeObserver {
+        frame_observer: create_view_resize_observer(&center, frame_notification, context.clone()),
+        bounds_observer: create_view_resize_observer(&center, bounds_notification, context),
+        enabled,
+    })
+}
+
+fn create_view_resize_observer(
+    center: &NSNotificationCenter,
+    name: &NSString,
+    context: NativeContentResizeContext,
+) -> Retained<ProtocolObject<dyn NSObjectProtocol>> {
+    let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
+        // SAFETY: AppKit passes a live notification object to the observer block.
+        let notification = unsafe { notification.as_ref() };
+        apply_embedded_view_resize_notification(notification, &context);
+    });
+    // SAFETY: The block is retained by the notification center. `object` and `queue` are nil so
+    // AppKit delivers matching view notifications synchronously on the posting thread.
+    unsafe { center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &block) }
+}
+
+fn apply_embedded_view_resize_notification(
+    notification: &NSNotification,
+    context: &NativeContentResizeContext,
+) {
+    if !native_content_resize_tracking_enabled(&context.enabled) {
+        return;
+    }
+    let Some(changed_view) = notification_view(notification) else {
+        return;
+    };
+    let Ok(content_view) = ns_view_from_snapshot(&context.content) else {
+        return;
+    };
+    if !view_is_descendant_of(&changed_view, &content_view) {
+        return;
+    }
+    enable_embedded_content_resize_notifications_for_view(&content_view);
+    schedule_embedded_content_resize_apply(context.clone());
+}
+
+fn schedule_embedded_content_resize_apply(context: NativeContentResizeContext) {
+    if context.pending_apply.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let block = RcBlock::new(move || {
+        apply_embedded_content_resize(&context);
+        context.pending_apply.store(false, Ordering::Release);
+    });
+    let queue = NSOperationQueue::mainQueue();
+    // SAFETY: AppKit view notifications are handled on the main thread. The queued block owns a
+    // cloned context and only touches AppKit objects after returning to the main queue.
+    unsafe {
+        queue.addOperationWithBlock(&block);
+    }
+}
+
+fn apply_embedded_content_resize(context: &NativeContentResizeContext) {
+    if !native_content_resize_tracking_enabled(&context.enabled) {
+        return;
+    }
+    let Ok(Some(measured)) = embedded_content_size(&context.content) else {
+        return;
+    };
+    let current = context.content_size.load();
+    if crate::same_size(current, measured) {
+        return;
+    }
+
+    context.content_size.store(measured);
+    context.frame_content_size.store(measured);
+    let titlebar_height = crate::titlebar_height_from_preset_state(&context.preset_state);
+    trace_editor_host(|| {
+        format!("macos embedded content resize apply current={current:?} measured={measured:?}")
+    });
+    if let Err(error) = crate::resize_installed_host_from_handle(
+        &context.host,
+        &context.content,
+        measured,
+        titlebar_height,
+        context.frame_thickness,
+        context.frame_window.as_ref(),
+        ResizeAnchor::Top,
+    ) {
+        trace_editor_host(|| format!("macos embedded content notification resize failed: {error}"));
+    }
+}
+
+fn native_content_resize_tracking_enabled(enabled: &AtomicBool) -> bool {
+    enabled.load(Ordering::Acquire)
+}
+
+fn notification_view(notification: &NSNotification) -> Option<Retained<NSView>> {
+    let object = notification.object()?;
+    let view = Retained::as_ptr(&object).cast::<NSView>().cast_mut();
+    if view.is_null() {
+        return None;
+    }
+    // SAFETY: NSView frame/bounds notifications are posted by NSView objects.
+    unsafe { Retained::retain(view) }
+}
+
+fn view_is_descendant_of(view: &NSView, ancestor: &NSView) -> bool {
+    let ancestor_ptr = ancestor as *const NSView;
+    // SAFETY: `view` is a live AppKit view retained for the duration of the walk.
+    let mut current = unsafe { Retained::retain(view as *const NSView as *mut NSView) };
+    while let Some(view) = current {
+        if Retained::as_ptr(&view) == ancestor_ptr {
+            return true;
+        }
+        // SAFETY: Walking AppKit superviews is valid on the main thread for live NSView objects.
+        current = unsafe { view.superview() };
+    }
+    false
+}
+
+pub fn enable_embedded_content_resize_notifications(content: &WindowSnapshot) -> Result<(), Error> {
+    let content_view = ns_view_from_snapshot(content)?;
+    enable_embedded_content_resize_notifications_for_view(&content_view);
+    Ok(())
+}
+
+fn largest_embedded_subview_size(view: &NSView) -> Size {
+    let mut size = Size {
+        width: 0.0,
+        height: 0.0,
+    };
+    for subview in view.subviews().to_vec() {
+        let frame = subview.frame();
+        let bounds = subview.bounds();
+        let nested = largest_embedded_subview_size(&subview);
+        let extent = embedded_subview_extent(
+            frame,
+            Size {
+                width: bounds.size.width,
+                height: bounds.size.height,
+            },
+            nested,
+        );
+        size.width = size.width.max(extent.width);
+        size.height = size.height.max(extent.height);
+    }
+    size
+}
+
+fn enable_embedded_content_resize_notifications_for_view(view: &NSView) {
+    for subview in view.subviews().to_vec() {
+        subview.setPostsFrameChangedNotifications(true);
+        subview.setPostsBoundsChangedNotifications(true);
+        enable_embedded_content_resize_notifications_for_view(&subview);
+    }
+}
+
+fn embedded_subview_extent(frame: NSRect, bounds: Size, nested: Size) -> Size {
+    let origin_x = frame.origin.x.max(0.0);
+    let origin_y = frame.origin.y.max(0.0);
+    Size {
+        width: origin_x + bounds.width.max(nested.width),
+        height: origin_y + bounds.height.max(nested.height),
+    }
+}
+
+pub fn is_host_window_live_resizing(host: &WindowSnapshot) -> Result<bool, Error> {
+    let host_view = ns_view_from_snapshot(host)?;
+    let host_window = host_view
+        .window()
+        .ok_or_else(|| Error::Message("host window is missing".to_string()))?;
+    Ok(host_window.inLiveResize())
 }
 
 pub fn set_host_window_visible(host: &WindowSnapshot, visible: bool) -> Result<(), Error> {
@@ -279,12 +604,7 @@ fn ns_view_from_snapshot(snapshot: &WindowSnapshot) -> Result<Retained<NSView>, 
 }
 
 fn configure_window(window: &NSWindow, options: &EditorHostOptions, mtm: MainThreadMarker) {
-    let mut style_mask = window.styleMask();
-    style_mask.insert(NSWindowStyleMask::Closable);
-    style_mask.remove(NSWindowStyleMask::Miniaturizable);
-    // Resizable editors use the app-drawn bottom-right grip. Native borderless resize zones resize
-    // from any edge and fight plugin resize negotiation.
-    style_mask.remove(NSWindowStyleMask::Resizable);
+    let style_mask = editor_window_style_mask(window.styleMask());
 
     let collection_behavior = window.collectionBehavior()
         | NSWindowCollectionBehavior::Auxiliary
@@ -295,12 +615,29 @@ fn configure_window(window: &NSWindow, options: &EditorHostOptions, mtm: MainThr
     window.setTitle(&NSString::from_str(&options.title));
     window.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
     window.setHasShadow(true);
-    window.setMovableByWindowBackground(true);
+    window.setMovableByWindowBackground(false);
     window.setAnimationBehavior(NSWindowAnimationBehavior::UtilityWindow);
     window.setCollectionBehavior(collection_behavior);
     window.setTabbingMode(NSWindowTabbingMode::Disallowed);
     window.invalidateShadow();
     NSWindow::setAllowsAutomaticWindowTabbing(false, mtm);
+}
+
+fn editor_window_style_mask(mut style_mask: NSWindowStyleMask) -> NSWindowStyleMask {
+    style_mask.insert(NSWindowStyleMask::Closable);
+    style_mask.remove(NSWindowStyleMask::Miniaturizable);
+    style_mask.remove(NSWindowStyleMask::Resizable);
+    style_mask
+}
+
+pub fn sync_host_window_resize_policy(host: &WindowSnapshot) -> Result<(), Error> {
+    let host_view = ns_view_from_snapshot(host)?;
+    let host_window = host_view
+        .window()
+        .ok_or_else(|| Error::Message("host window is missing".to_string()))?;
+    host_window.setStyleMask(editor_window_style_mask(host_window.styleMask()));
+    trace_editor_host(|| "macos sync resize policy".to_string());
+    Ok(())
 }
 
 pub fn begin_host_window_drag(host: &WindowSnapshot) -> Result<(), Error> {
@@ -312,7 +649,20 @@ pub fn begin_host_window_drag(host: &WindowSnapshot) -> Result<(), Error> {
         .currentEvent()
         .ok_or_else(|| Error::Message("host window drag event is missing".to_string()))?;
 
+    trace_editor_host(|| {
+        format!(
+            "macos performWindowDragWithEvent start event={} window={}",
+            format_event(&event),
+            format_rect(host_window.frame())
+        )
+    });
     host_window.performWindowDragWithEvent(&event);
+    trace_editor_host(|| {
+        format!(
+            "macos performWindowDragWithEvent end window={}",
+            format_rect(host_window.frame())
+        )
+    });
     host_window.invalidateShadow();
     Ok(())
 }
@@ -344,7 +694,7 @@ fn resize_host_window_clamped_to_screen(
     match anchor {
         ResizeAnchor::Top => resize_host_window_from_top_clamped_to_screen(window, width, height),
         ResizeAnchor::Bottom => {
-            resize_host_window_from_bottom_clamped_to_screen(window, width, height);
+            resize_host_window_from_bottom_clamped_to_screen(window, width, height)
         }
     }
 }
@@ -402,7 +752,7 @@ fn content_view_autoresizing_mask() -> NSAutoresizingMaskOptions {
 }
 
 fn content_view_masks_to_bounds() -> bool {
-    false
+    true
 }
 
 fn content_frame_for_host(layout: crate::EditorFrameLayout, host_is_flipped: bool) -> crate::Rect {
@@ -440,6 +790,14 @@ fn style_view(
     layer.setCornerRadius(corner_radius);
     layer.setMasksToBounds(masks_to_bounds || corner_radius > 0.0);
     view.setLayer(Some(&layer));
+    view.setClipsToBounds(masks_to_bounds);
+}
+
+fn without_implicit_layer_animations(operation: impl FnOnce()) {
+    CATransaction::begin();
+    CATransaction::setDisableActions(true);
+    operation();
+    CATransaction::commit();
 }
 
 fn ns_rect(frame: crate::Rect) -> NSRect {
@@ -456,17 +814,23 @@ fn format_rect(rect: NSRect) -> String {
     )
 }
 
+fn format_event(event: &NSEvent) -> String {
+    format!("type={:?}", event.r#type())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{Rect, host_layout};
-    use objc2_app_kit::NSAutoresizingMaskOptions;
+    use objc2_app_kit::{NSAutoresizingMaskOptions, NSWindowStyleMask};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
     use super::{
         content_frame_for_host, content_view_autoresizing_mask, content_view_masks_to_bounds,
-        host_window_frame_resized_from_bottom, host_window_frame_resized_from_bottom_clamped,
-        host_window_frame_resized_from_top,
+        editor_window_style_mask, embedded_subview_extent, host_window_frame_resized_from_bottom,
+        host_window_frame_resized_from_bottom_clamped, host_window_frame_resized_from_top,
+        native_content_resize_tracking_enabled,
     };
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn content_frame_uses_bottom_left_coordinates_for_normal_appkit_views() {
@@ -519,7 +883,7 @@ mod tests {
     }
 
     #[test]
-    fn content_host_view_autoresizes_with_plugin_owned_resize() {
+    fn content_host_view_autoresizes_with_host_during_native_live_resize() {
         let mask = content_view_autoresizing_mask();
 
         assert!(mask.contains(NSAutoresizingMaskOptions::ViewWidthSizable));
@@ -527,8 +891,105 @@ mod tests {
     }
 
     #[test]
-    fn content_host_view_does_not_clip_plugin_owned_resize() {
-        assert!(!content_view_masks_to_bounds());
+    fn content_host_view_clips_embedded_plugins_to_content_area() {
+        assert!(content_view_masks_to_bounds());
+    }
+
+    #[test]
+    fn plugin_owned_resize_size_includes_subview_origin() {
+        let frame = NSRect::new(NSPoint::new(24.0, 16.0), NSSize::new(800.0, 600.0));
+
+        assert_eq!(
+            embedded_subview_extent(
+                frame,
+                crate::Size {
+                    width: 800.0,
+                    height: 600.0,
+                },
+                crate::Size {
+                    width: 0.0,
+                    height: 0.0,
+                }
+            ),
+            crate::Size {
+                width: 824.0,
+                height: 616.0,
+            }
+        );
+    }
+
+    #[test]
+    fn plugin_owned_resize_size_includes_nested_subview_extent() {
+        let frame = NSRect::new(NSPoint::new(10.0, 20.0), NSSize::new(100.0, 100.0));
+
+        assert_eq!(
+            embedded_subview_extent(
+                frame,
+                crate::Size {
+                    width: 100.0,
+                    height: 100.0,
+                },
+                crate::Size {
+                    width: 180.0,
+                    height: 140.0,
+                }
+            ),
+            crate::Size {
+                width: 190.0,
+                height: 160.0,
+            }
+        );
+    }
+
+    #[test]
+    fn native_content_resize_tracking_is_opt_in() {
+        let enabled = AtomicBool::new(false);
+
+        assert!(!native_content_resize_tracking_enabled(&enabled));
+
+        enabled.store(true, Ordering::Release);
+
+        assert!(native_content_resize_tracking_enabled(&enabled));
+    }
+
+    #[test]
+    fn plugin_owned_resize_size_uses_bounds_when_frame_is_unchanged() {
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(800.0, 600.0));
+
+        assert_eq!(
+            embedded_subview_extent(
+                frame,
+                crate::Size {
+                    width: 512.0,
+                    height: 384.0,
+                },
+                crate::Size {
+                    width: 0.0,
+                    height: 0.0,
+                }
+            ),
+            crate::Size {
+                width: 512.0,
+                height: 384.0,
+            }
+        );
+    }
+
+    #[test]
+    fn resizable_editor_window_uses_app_controlled_resize() {
+        let mask = editor_window_style_mask(NSWindowStyleMask::Miniaturizable);
+
+        assert!(mask.contains(NSWindowStyleMask::Closable));
+        assert!(!mask.contains(NSWindowStyleMask::Resizable));
+        assert!(!mask.contains(NSWindowStyleMask::Miniaturizable));
+    }
+
+    #[test]
+    fn fixed_editor_window_disables_native_resize() {
+        let mask = editor_window_style_mask(NSWindowStyleMask::Resizable);
+
+        assert!(mask.contains(NSWindowStyleMask::Closable));
+        assert!(!mask.contains(NSWindowStyleMask::Resizable));
     }
 
     #[test]

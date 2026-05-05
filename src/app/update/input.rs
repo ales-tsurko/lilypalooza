@@ -901,6 +901,20 @@ impl Lilypalooza {
         size: Size,
     ) -> Task<Message> {
         if window_id != self.main_window_id {
+            log::trace!(
+                target: "lilypalooza::editor_windows",
+                "thread={:?} iced resize event for editor window_id={window_id:?} size={size:?}",
+                std::thread::current().id(),
+            );
+            for error in self.processor_editor_windows.resize_window_outer(
+                window_id,
+                editor_host::Size {
+                    width: f64::from(size.width),
+                    height: f64::from(size.height),
+                },
+            ) {
+                self.log_processor_editor_error("resize", error);
+            }
             return Task::none();
         }
 
