@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install system dependencies
         if: runner.os == 'Linux'
@@ -45,19 +45,28 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
+
+      - name: Install Rust nightly tools
+        run: rustup toolchain install nightly --component miri --component rust-src --component rustfmt
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --check
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install coverage tools
+        run: cargo binstall cargo-llvm-cov cargo-crap --no-confirm
 
       - name: Check
-        run: cargo check
+        run: make check
 
       - name: Run tests
-        run: cargo test
+        run: make test-all
+
+      - name: Coverage and CRAP
+        run: make test-cov
 
       - name: Lint
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: make lint

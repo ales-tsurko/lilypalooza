@@ -104,11 +104,49 @@ routing, and user processor presets.
 
 ## Development Commands
 
+Install local quality tools:
+
 ```bash
-make fmt
-make clippy
-make test-all
+rustup toolchain install nightly --component miri --component rust-src --component rustfmt
+cargo install cargo-binstall
+cargo binstall cargo-llvm-cov cargo-crap --no-confirm
 ```
+
+Linux system dependencies:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  libasound2-dev \
+  libdbus-1-dev \
+  libegl1-mesa-dev \
+  libfontconfig1-dev \
+  libfreetype6-dev \
+  libgtk-3-dev \
+  libwayland-dev \
+  libx11-xcb-dev \
+  libxkbcommon-dev \
+  pkg-config
+```
+
+```bash
+make fmt       # nightly rustfmt, using rustfmt.toml
+make check     # stable cargo check for first-party crates
+make lint      # stable clippy plus nightly rustfmt check
+make clippy    # stable clippy only
+make miri      # nightly Miri for selected callback/scanner crates
+make test-all  # stable workspace tests plus make miri
+make test-cov  # llvm-cov plus cargo-crap report/fail threshold
+```
+
+`make test-cov` writes `target/lilypalooza-lcov.info` and
+`target/lilypalooza-crap.md`. CRAP analysis includes tests and excludes build
+scripts and vendored crates.
+
+Miri is intentionally package-scoped. The current gate covers
+`lilypalooza-clap`, `lilypalooza-plugin-scan`, and
+`lilypalooza-plugin-validator`; audio, VST3, editor-host, and GUI-heavy crates
+need targeted Miri-compatible tests before they should be added.
 
 Build only the validator helper:
 
