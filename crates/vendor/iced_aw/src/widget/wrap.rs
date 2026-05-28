@@ -1,6 +1,8 @@
 //! A widget that displays its children in multiple horizontal or vertical runs.
 //!
 //! *This API requires the following crate features to be activated: `wrap`*
+use std::marker::PhantomData;
+
 use iced_core::{
     Alignment, Clipboard, Element, Event, Layout, Length, Padding, Pixels, Point, Rectangle, Shell,
     Size, Vector, Widget,
@@ -9,7 +11,6 @@ use iced_core::{
     overlay, renderer,
     widget::{Operation, Tree},
 };
-use std::marker::PhantomData;
 
 /// A container that distributes its contents horizontally.
 #[allow(missing_debug_implementations)]

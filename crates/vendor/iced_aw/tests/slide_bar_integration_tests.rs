@@ -9,13 +9,11 @@
 #[macro_use]
 mod common;
 
-use iced::event::Status;
-use iced::mouse::Button;
-use iced::{Element, Event, Length, Point};
+use std::{cell::RefCell, rc::Rc};
+
+use iced::{Element, Event, Length, Point, event::Status, mouse::Button};
 use iced_aw::SlideBar;
 use iced_test::Error;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 #[derive(Clone, Debug)]
 enum Message {

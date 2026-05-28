@@ -2,8 +2,6 @@
 //!
 //! *This API requires the following crate features to be activated: `time_picker`*
 
-use super::overlay::time_picker::{self, TimePickerOverlay, TimePickerOverlayButtons};
-
 use chrono::Local;
 use iced_core::{
     Clipboard, Element, Event, Layout, Length, Point, Rectangle, Shell, Size, Vector, Widget,
@@ -17,6 +15,7 @@ use iced_core::{
 };
 use iced_widget::{Renderer, button, container, text};
 
+use super::overlay::time_picker::{self, TimePickerOverlay, TimePickerOverlayButtons};
 pub use crate::{
     core::time::{Period, Time},
     style::{
@@ -63,7 +62,8 @@ where
     underlay: Element<'a, Message, Theme, Renderer>,
     /// The message that is send if the cancel button of the [`TimePickerOverlay`] is pressed.
     on_cancel: Message,
-    /// The function that produces a message when the submit button of the [`TimePickerOverlay`] is pressed.
+    /// The function that produces a message when the submit button of the [`TimePickerOverlay`] is
+    /// pressed.
     on_submit: Box<dyn Fn(Time) -> Message>,
     /// The style of the [`TimePickerOverlay`].
     class: <Theme as Catalog>::Class<'a>,
@@ -85,11 +85,10 @@ where
     /// It expects:
     ///     * if the overlay of the time picker is visible.
     ///     * the initial time to show.
-    ///     * the underlay [`Element`] on which this [`TimePicker`]
-    ///         will be wrapped around.
+    ///     * the underlay [`Element`] on which this [`TimePicker`] will be wrapped around.
     ///     * a message that will be send when the cancel button of the [`TimePicker`] is pressed.
-    ///     * a function that will be called when the submit button of the [`TimePicker`]
-    ///         is pressed, which takes the picked [`Time`] value.
+    ///     * a function that will be called when the submit button of the [`TimePicker`] is
+    ///       pressed, which takes the picked [`Time`] value.
     pub fn new<U, F>(
         show_picker: bool,
         time: impl Into<Time>,
@@ -332,8 +331,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::{NaiveTime, Timelike};
+
+    use super::*;
 
     #[derive(Clone, Debug)]
     enum TestMessage {

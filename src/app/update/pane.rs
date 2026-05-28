@@ -4,86 +4,58 @@ impl Lilypalooza {
     pub(in crate::app) fn handle_pane_message(&mut self, message: PaneMessage) -> Task<Message> {
         match message {
             PaneMessage::WorkspaceResized(event) => {
-                let ratio = self.constrained_workspace_split_ratio(event.split, event.ratio);
-                self.workspace_panes.resize(event.split, ratio);
-                self.open_header_overflow_menu = None;
-                self.open_editor_menu_section = None;
-                self.sync_dock_layout_from_workspace_state();
-                self.persist_settings();
+                self.handle_workspace_resize(event);
+                Task::none()
             }
-            PaneMessage::WorkspaceTabPressed(kind) => {
-                self.set_active_workspace_pane(kind);
-                self.set_focused_workspace_pane(kind);
-                self.open_header_overflow_menu = None;
-                self.open_editor_menu_section = None;
-                self.pressed_workspace_pane = Some(kind);
-                self.workspace_drag_origin = None;
-                self.dock_drop_target = None;
-                self.persist_settings();
-                return self.restore_runtime_view_state(kind);
-            }
+            PaneMessage::WorkspaceTabPressed(kind) => self.handle_workspace_tab_press(kind),
             PaneMessage::FocusWorkspacePane(kind) => {
                 self.set_focused_workspace_pane(kind);
+                Task::none()
             }
             PaneMessage::WorkspaceTabHovered(kind) => {
                 self.hovered_workspace_pane = kind;
+                Task::none()
             }
             PaneMessage::OpenHeaderOverflowMenu(group_id) => {
-                if let Some(group) = self.workspace_group(group_id) {
-                    self.set_focused_workspace_pane(group.active);
-                }
-                self.open_project_menu = false;
-                self.open_project_menu_section = None;
-                self.open_project_recent = false;
-                self.open_header_overflow_menu = Some(group_id);
-                self.open_editor_menu_section = None;
-                self.open_editor_file_menu_section = None;
-                self.hovered_editor_file_menu_section = None;
+                self.open_header_overflow_menu(group_id);
+                Task::none()
             }
             PaneMessage::SetEditorHeaderMenuSection(section) => {
-                self.open_editor_menu_section = section;
-                if section != Some(super::EditorHeaderMenuSection::File) {
-                    self.open_editor_file_menu_section = None;
-                    self.hovered_editor_file_menu_section = None;
-                }
+                self.set_editor_header_menu_section(section);
+                Task::none()
             }
             PaneMessage::HoverEditorFileMenuSection { section, expanded } => {
                 self.hovered_editor_file_menu_section = section;
                 self.open_editor_file_menu_section = if expanded { section } else { None };
+                Task::none()
             }
             PaneMessage::CloseHeaderOverflowMenu => {
                 self.open_header_overflow_menu = None;
                 self.open_editor_menu_section = None;
                 self.open_editor_file_menu_section = None;
                 self.hovered_editor_file_menu_section = None;
+                Task::none()
             }
             PaneMessage::ToggleProjectMenu => {
-                self.open_header_overflow_menu = None;
-                self.open_editor_menu_section = None;
-                self.open_editor_file_menu_section = None;
-                self.hovered_editor_file_menu_section = None;
-                self.open_project_menu = !self.open_project_menu;
-                self.open_project_menu_section = self
-                    .open_project_menu
-                    .then_some(super::ProjectMenuSection::Project);
-                if !self.open_project_menu {
-                    self.open_project_menu_section = None;
-                    self.open_project_recent = false;
-                }
+                self.toggle_project_menu();
+                Task::none()
             }
             PaneMessage::CloseProjectMenu => {
                 self.open_project_menu = false;
                 self.open_project_menu_section = None;
                 self.open_project_recent = false;
+                Task::none()
             }
             PaneMessage::SetProjectMenuSection(section) => {
                 self.open_project_menu_section = section;
                 if section != Some(super::ProjectMenuSection::Project) {
                     self.open_project_recent = false;
                 }
+                Task::none()
             }
             PaneMessage::SetProjectRecentOpen(open) => {
                 self.open_project_recent = open;
+                Task::none()
             }
             PaneMessage::TooltipHovered(key) => {
                 if self.hovered_tooltip_key == key {
@@ -92,79 +64,181 @@ impl Lilypalooza {
 
                 self.hovered_tooltip_key = key;
                 self.open_tooltip_key = self.hovered_tooltip_key.clone();
+                Task::none()
             }
-            PaneMessage::ToggleWorkspacePane(pane) => {
-                self.open_project_menu = false;
-                self.open_project_menu_section = None;
-                self.open_project_recent = false;
-                self.open_header_overflow_menu = None;
-                self.open_editor_menu_section = None;
-                self.open_editor_file_menu_section = None;
-                self.hovered_editor_file_menu_section = None;
-                let changed = if self.is_pane_folded(pane) {
-                    self.unfold_workspace_pane(pane)
-                } else {
-                    self.fold_workspace_pane(pane)
-                };
-                if changed {
-                    if self.group_for_pane(pane).is_some() {
-                        self.set_focused_workspace_pane(pane);
-                    } else {
-                        self.normalize_focused_workspace_pane();
-                    }
-                    self.persist_settings();
-                    return self.restore_runtime_view_state(pane);
-                }
-            }
+            PaneMessage::ToggleWorkspacePane(pane) => self.toggle_workspace_pane(pane),
             PaneMessage::WorkspaceDragMoved(position) => {
-                if self.dragged_workspace_pane.is_none()
-                    && let Some(pressed_pane) = self.pressed_workspace_pane
-                {
-                    match self.workspace_drag_origin {
-                        Some(origin) if drag_distance(origin, position) >= DRAG_START_THRESHOLD => {
-                            self.dragged_workspace_pane = Some(pressed_pane);
-                            self.dock_drop_target =
-                                self.group_for_pane(pressed_pane)
-                                    .map(|group_id| DockDropTarget {
-                                        group_id,
-                                        region: DockDropRegion::Center,
-                                    });
-                        }
-                        Some(_) => {}
-                        None => {
-                            self.workspace_drag_origin = Some(position);
-                        }
-                    }
-                }
-
-                if self.dragged_workspace_pane.is_some() {
-                    self.dock_drop_target = self.dock_drop_target_for(position);
-                }
+                self.handle_workspace_drag_move(position);
+                Task::none()
             }
-            PaneMessage::WorkspaceDragReleased => {
-                self.pressed_workspace_pane = None;
-
-                if let Some(dragged_pane) = self.dragged_workspace_pane
-                    && let Some(target) = self.dock_drop_target
-                {
-                    self.apply_dock_drop(dragged_pane, target);
-                    self.persist_settings();
-                    self.clear_workspace_drag_state();
-                    self.open_editor_menu_section = None;
-                    self.open_editor_file_menu_section = None;
-                    self.hovered_editor_file_menu_section = None;
-                    return self.restore_runtime_view_state(dragged_pane);
-                }
-
-                self.clear_workspace_drag_state();
-            }
+            PaneMessage::WorkspaceDragReleased => self.handle_workspace_drag_release(),
             PaneMessage::WorkspaceDragExited => {
                 if self.dragged_workspace_pane.is_some() {
                     self.dock_drop_target = None;
                 }
+                Task::none()
+            }
+        }
+    }
+
+    fn handle_workspace_resize(&mut self, event: pane_grid::ResizeEvent) {
+        let ratio = self.constrained_workspace_split_ratio(event.split, event.ratio);
+        self.workspace_panes.resize(event.split, ratio);
+        self.open_header_overflow_menu = None;
+        self.open_editor_menu_section = None;
+        self.sync_dock_layout_from_workspace_state();
+        self.persist_settings();
+    }
+
+    fn handle_workspace_tab_press(&mut self, kind: WorkspacePaneKind) -> Task<Message> {
+        self.set_active_workspace_pane(kind);
+        self.set_focused_workspace_pane(kind);
+        self.open_header_overflow_menu = None;
+        self.open_editor_menu_section = None;
+        self.pressed_workspace_pane = Some(kind);
+        self.workspace_drag_origin = None;
+        self.dock_drop_target = None;
+        self.persist_settings();
+        self.restore_runtime_view_state(kind)
+    }
+
+    fn open_header_overflow_menu(&mut self, group_id: u64) {
+        if let Some(group) = self.workspace_group(group_id) {
+            self.set_focused_workspace_pane(group.active);
+        }
+        self.open_project_menu = false;
+        self.open_project_menu_section = None;
+        self.open_project_recent = false;
+        self.open_header_overflow_menu = Some(group_id);
+        self.open_editor_menu_section = None;
+        self.open_editor_file_menu_section = None;
+        self.hovered_editor_file_menu_section = None;
+    }
+
+    fn set_editor_header_menu_section(&mut self, section: Option<super::EditorHeaderMenuSection>) {
+        self.open_editor_menu_section = section;
+        if section != Some(super::EditorHeaderMenuSection::File) {
+            self.open_editor_file_menu_section = None;
+            self.hovered_editor_file_menu_section = None;
+        }
+    }
+
+    fn toggle_project_menu(&mut self) {
+        self.open_header_overflow_menu = None;
+        self.open_editor_menu_section = None;
+        self.open_editor_file_menu_section = None;
+        self.hovered_editor_file_menu_section = None;
+        self.open_project_menu = !self.open_project_menu;
+        self.open_project_menu_section = self
+            .open_project_menu
+            .then_some(super::ProjectMenuSection::Project);
+        if !self.open_project_menu {
+            self.open_project_menu_section = None;
+            self.open_project_recent = false;
+        }
+    }
+
+    fn toggle_workspace_pane(&mut self, pane: WorkspacePaneKind) -> Task<Message> {
+        self.open_project_menu = false;
+        self.open_project_menu_section = None;
+        self.open_project_recent = false;
+        self.open_header_overflow_menu = None;
+        self.open_editor_menu_section = None;
+        self.open_editor_file_menu_section = None;
+        self.hovered_editor_file_menu_section = None;
+        let changed = if self.group_for_pane(pane).is_some() && !self.is_pane_folded(pane) {
+            self.fold_workspace_pane(pane)
+        } else {
+            self.ensure_workspace_pane_visible(pane)
+        };
+        if !changed {
+            return Task::none();
+        }
+
+        if self.group_for_pane(pane).is_some() {
+            self.set_focused_workspace_pane(pane);
+        } else {
+            self.normalize_focused_workspace_pane();
+        }
+        self.persist_settings();
+        self.restore_runtime_view_state(pane)
+    }
+
+    pub(in crate::app) fn ensure_workspace_pane_visible(
+        &mut self,
+        pane: WorkspacePaneKind,
+    ) -> bool {
+        if self.group_for_pane(pane).is_some() {
+            self.folded_panes.retain(|folded| folded.pane != pane);
+            if pane == WorkspacePaneKind::PianoRoll {
+                self.piano_roll.visible = true;
+            }
+            return true;
+        }
+        self.show_workspace_pane(pane)
+    }
+
+    fn show_workspace_pane(&mut self, pane: WorkspacePaneKind) -> bool {
+        if self.is_pane_folded(pane) {
+            return self.unfold_workspace_pane(pane);
+        }
+        if self.group_for_pane(pane).is_some() {
+            return false;
+        }
+
+        if !self.restore_folded_pane_as_standalone(pane) {
+            return false;
+        }
+        if pane == WorkspacePaneKind::PianoRoll {
+            self.piano_roll.visible = true;
+        }
+        self.rebuild_workspace_panes();
+        self.set_focused_workspace_pane(pane);
+        true
+    }
+
+    fn handle_workspace_drag_move(&mut self, position: iced::Point) {
+        if self.dragged_workspace_pane.is_none()
+            && let Some(pressed_pane) = self.pressed_workspace_pane
+        {
+            match self.workspace_drag_origin {
+                Some(origin) if drag_distance(origin, position) >= DRAG_START_THRESHOLD => {
+                    self.dragged_workspace_pane = Some(pressed_pane);
+                    self.dock_drop_target =
+                        self.group_for_pane(pressed_pane)
+                            .map(|group_id| DockDropTarget {
+                                group_id,
+                                region: DockDropRegion::Center,
+                            });
+                }
+                Some(_) => {}
+                None => {
+                    self.workspace_drag_origin = Some(position);
+                }
             }
         }
 
+        if self.dragged_workspace_pane.is_some() {
+            self.dock_drop_target = self.dock_drop_target_for(position);
+        }
+    }
+
+    fn handle_workspace_drag_release(&mut self) -> Task<Message> {
+        self.pressed_workspace_pane = None;
+
+        if let Some(dragged_pane) = self.dragged_workspace_pane
+            && let Some(target) = self.dock_drop_target
+        {
+            self.apply_dock_drop(dragged_pane, target);
+            self.persist_settings();
+            self.clear_workspace_drag_state();
+            self.open_editor_menu_section = None;
+            self.open_editor_file_menu_section = None;
+            self.hovered_editor_file_menu_section = None;
+            return self.restore_runtime_view_state(dragged_pane);
+        }
+
+        self.clear_workspace_drag_state();
         Task::none()
     }
 
@@ -312,7 +386,9 @@ impl Lilypalooza {
             TabDirection::Next => (active_index + 1) % group.tabs.len(),
         };
 
-        let next_pane = group.tabs[next_index];
+        let Some(next_pane) = group.tabs.get(next_index).copied() else {
+            return false;
+        };
         self.set_active_workspace_pane(next_pane);
         self.set_focused_workspace_pane(next_pane);
         true
@@ -352,8 +428,11 @@ impl Lilypalooza {
             PaneCycleDirection::Next => (current_index + 1) % ordered_groups.len(),
         };
 
+        let Some(next_group_id) = ordered_groups.get(next_index).copied() else {
+            return false;
+        };
         let Some(target_pane) = self
-            .workspace_group(ordered_groups[next_index])
+            .workspace_group(next_group_id)
             .map(|group| group.active)
         else {
             return false;
@@ -428,7 +507,7 @@ impl Lilypalooza {
             else {
                 return false;
             };
-            let _ = remove_pane_from_group(&mut self.dock_groups, group_id, pane);
+            let _group_was_empty = remove_pane_from_group(&mut self.dock_groups, group_id, pane);
             FoldedPaneRestore::Tab { anchor }
         } else {
             self.dock_groups.remove(&group_id);
@@ -474,6 +553,15 @@ impl Lilypalooza {
         };
         let folded = self.folded_panes.remove(index);
 
+        if self.group_for_pane(pane).is_some() {
+            if pane == WorkspacePaneKind::PianoRoll {
+                self.piano_roll.visible = true;
+            }
+            self.rebuild_workspace_panes();
+            self.set_focused_workspace_pane(pane);
+            return true;
+        }
+
         let restored = match folded.restore {
             FoldedPaneRestore::Tab { anchor } => self.restore_folded_pane_as_tab(pane, anchor),
             FoldedPaneRestore::Standalone => self.restore_folded_pane_as_standalone(pane),
@@ -495,7 +583,7 @@ impl Lilypalooza {
 
         if !restored {
             if self.dock_groups.is_empty() {
-                let _ = self.restore_folded_pane_as_standalone(pane);
+                let _pane_was_restored = self.restore_folded_pane_as_standalone(pane);
             } else if let Some(group_id) =
                 self.dock_layout.as_ref().and_then(first_group_id_in_layout)
             {
@@ -624,106 +712,160 @@ impl Lilypalooza {
             return;
         }
 
-        match target.region {
-            DockDropRegion::Center if source_group_id == target.group_id => {
-                if let Some(group) = self.dock_groups.get_mut(&source_group_id) {
-                    move_tab_to_front(&mut group.tabs, dragged);
-                    group.active = dragged;
-                }
-            }
-            DockDropRegion::Center => {
-                let source_empty =
-                    remove_pane_from_group(&mut self.dock_groups, source_group_id, dragged);
-
-                if source_empty {
-                    self.dock_groups.remove(&source_group_id);
-                    let layout = self
-                        .dock_layout
-                        .take()
-                        .unwrap_or(DockNode::Group(target.group_id));
-                    self.dock_layout = Some(prune_group_from_layout(layout, source_group_id));
-                }
-
-                if let Some(target_group) = self.dock_groups.get_mut(&target.group_id) {
-                    target_group.tabs.retain(|pane| *pane != dragged);
-                    target_group.tabs.push(dragged);
-                    target_group.active = dragged;
-                }
-            }
-            region => {
-                if source_group_id == target.group_id
-                    && self
-                        .dock_groups
-                        .get(&source_group_id)
-                        .is_some_and(|group| group.tabs.len() <= 1)
-                {
-                    return;
-                }
-                let target_bounds = self
-                    .workspace_group_bounds()
-                    .get(&target.group_id)
-                    .copied()
-                    .unwrap_or_else(|| self.workspace_bounds());
-
-                let source_empty =
-                    remove_pane_from_group(&mut self.dock_groups, source_group_id, dragged);
-
-                if source_empty && source_group_id != target.group_id {
-                    self.dock_groups.remove(&source_group_id);
-                    let layout = self
-                        .dock_layout
-                        .take()
-                        .unwrap_or(DockNode::Group(target.group_id));
-                    self.dock_layout = Some(prune_group_from_layout(layout, source_group_id));
-                }
-
-                let new_group_id = self.next_dock_group_id;
-                self.next_dock_group_id = self.next_dock_group_id.saturating_add(1);
-                self.dock_groups.insert(
-                    new_group_id,
-                    DockGroup {
-                        tabs: vec![dragged],
-                        active: dragged,
-                    },
-                );
-
-                let (axis, insert_first) = match region {
-                    DockDropRegion::Top => (pane_grid::Axis::Horizontal, true),
-                    DockDropRegion::Bottom => (pane_grid::Axis::Horizontal, false),
-                    DockDropRegion::Left => (pane_grid::Axis::Vertical, true),
-                    DockDropRegion::Right => (pane_grid::Axis::Vertical, false),
-                    DockDropRegion::Center => unreachable!(),
-                };
-                let (first_group_id, second_group_id) = if insert_first {
-                    (new_group_id, target.group_id)
-                } else {
-                    (target.group_id, new_group_id)
-                };
-                let ratio = self.constrained_workspace_group_split_ratio(
-                    axis,
-                    0.5,
-                    first_group_id,
-                    second_group_id,
-                    target_bounds,
-                );
-
-                if let Some(layout) = self.dock_layout.as_mut() {
-                    replace_group_with_split(
-                        layout,
-                        target.group_id,
-                        axis,
-                        ratio,
-                        new_group_id,
-                        insert_first,
-                    );
-                } else {
-                    self.dock_layout = Some(DockNode::Group(new_group_id));
-                }
-            }
+        let applied = if target.region == DockDropRegion::Center {
+            self.apply_center_dock_drop(dragged, source_group_id, target.group_id)
+        } else {
+            self.apply_split_dock_drop(dragged, source_group_id, target)
+        };
+        if !applied {
+            return;
         }
 
         self.rebuild_workspace_panes();
         self.set_focused_workspace_pane(dragged);
+    }
+
+    fn apply_center_dock_drop(
+        &mut self,
+        dragged: WorkspacePaneKind,
+        source_group_id: DockGroupId,
+        target_group_id: DockGroupId,
+    ) -> bool {
+        if source_group_id == target_group_id {
+            if let Some(group) = self.dock_groups.get_mut(&source_group_id) {
+                move_tab_to_front(&mut group.tabs, dragged);
+                group.active = dragged;
+            }
+            return true;
+        }
+
+        let source_empty = remove_pane_from_group(&mut self.dock_groups, source_group_id, dragged);
+        if source_empty {
+            self.remove_empty_source_group(source_group_id, target_group_id);
+        }
+        if let Some(target_group) = self.dock_groups.get_mut(&target_group_id) {
+            target_group.tabs.retain(|pane| *pane != dragged);
+            target_group.tabs.push(dragged);
+            target_group.active = dragged;
+        }
+        true
+    }
+
+    fn apply_split_dock_drop(
+        &mut self,
+        dragged: WorkspacePaneKind,
+        source_group_id: DockGroupId,
+        target: DockDropTarget,
+    ) -> bool {
+        if self.is_last_tab_in_group(source_group_id, target.group_id) {
+            return false;
+        }
+
+        let target_bounds = self
+            .workspace_group_bounds()
+            .get(&target.group_id)
+            .copied()
+            .unwrap_or_else(|| self.workspace_bounds());
+        let source_empty = remove_pane_from_group(&mut self.dock_groups, source_group_id, dragged);
+        if source_empty && source_group_id != target.group_id {
+            self.remove_empty_source_group(source_group_id, target.group_id);
+        }
+
+        let new_group_id = self.create_dock_group_for_pane(dragged);
+        let Some((axis, insert_first)) = split_axis_for_region(target.region) else {
+            return false;
+        };
+        let ratio = self.dock_drop_split_ratio(
+            axis,
+            insert_first,
+            new_group_id,
+            target.group_id,
+            target_bounds,
+        );
+        self.insert_dock_split(target.group_id, axis, ratio, new_group_id, insert_first);
+        true
+    }
+
+    fn is_last_tab_in_group(
+        &self,
+        source_group_id: DockGroupId,
+        target_group_id: DockGroupId,
+    ) -> bool {
+        source_group_id == target_group_id
+            && self
+                .dock_groups
+                .get(&source_group_id)
+                .is_some_and(|group| group.tabs.len() <= 1)
+    }
+
+    fn remove_empty_source_group(
+        &mut self,
+        source_group_id: DockGroupId,
+        fallback_group_id: DockGroupId,
+    ) {
+        self.dock_groups.remove(&source_group_id);
+        let layout = self
+            .dock_layout
+            .take()
+            .unwrap_or(DockNode::Group(fallback_group_id));
+        self.dock_layout = Some(prune_group_from_layout(layout, source_group_id));
+    }
+
+    fn create_dock_group_for_pane(&mut self, pane: WorkspacePaneKind) -> DockGroupId {
+        let new_group_id = self.next_dock_group_id;
+        self.next_dock_group_id = self.next_dock_group_id.saturating_add(1);
+        self.dock_groups.insert(
+            new_group_id,
+            DockGroup {
+                tabs: vec![pane],
+                active: pane,
+            },
+        );
+        new_group_id
+    }
+
+    fn dock_drop_split_ratio(
+        &self,
+        axis: pane_grid::Axis,
+        insert_first: bool,
+        new_group_id: DockGroupId,
+        target_group_id: DockGroupId,
+        target_bounds: Rectangle,
+    ) -> f32 {
+        let (first_group_id, second_group_id) = if insert_first {
+            (new_group_id, target_group_id)
+        } else {
+            (target_group_id, new_group_id)
+        };
+        self.constrained_workspace_group_split_ratio(
+            axis,
+            0.5,
+            first_group_id,
+            second_group_id,
+            target_bounds,
+        )
+    }
+
+    fn insert_dock_split(
+        &mut self,
+        target_group_id: DockGroupId,
+        axis: pane_grid::Axis,
+        ratio: f32,
+        new_group_id: DockGroupId,
+        insert_first: bool,
+    ) {
+        if let Some(layout) = self.dock_layout.as_mut() {
+            replace_group_with_split(
+                layout,
+                target_group_id,
+                axis,
+                ratio,
+                new_group_id,
+                insert_first,
+            );
+        } else {
+            self.dock_layout = Some(DockNode::Group(new_group_id));
+        }
     }
 
     pub(in crate::app) fn clear_workspace_drag_state(&mut self) {
@@ -735,67 +877,25 @@ impl Lilypalooza {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn split_axis_for_region(region: DockDropRegion) -> Option<(pane_grid::Axis, bool)> {
+    horizontal_split_axis_for_region(region).or_else(|| vertical_split_axis_for_region(region))
+}
 
-    #[test]
-    fn dock_drop_split_respects_inserted_pane_minimum_size() {
-        let (mut app, _task) = crate::app::new_with_default_test_state();
-        app.window_width = 900.0;
-        app.window_height = crate::status_bar::HEIGHT
-            + crate::app::transport_bar::HEIGHT
-            + crate::app::dock_view::TOOLBAR_HEIGHT
-            + crate::app::mixer::MIXER_MIN_HEIGHT * 1.5;
-        let target_group = 1;
-        let source_group = 2;
-        app.dock_groups.clear();
-        app.dock_groups.insert(
-            target_group,
-            DockGroup {
-                tabs: vec![WorkspacePaneKind::Score],
-                active: WorkspacePaneKind::Score,
-            },
-        );
-        app.dock_groups.insert(
-            source_group,
-            DockGroup {
-                tabs: vec![WorkspacePaneKind::Mixer],
-                active: WorkspacePaneKind::Mixer,
-            },
-        );
-        app.next_dock_group_id = 3;
-        app.dock_layout = Some(DockNode::Split {
-            axis: pane_grid::Axis::Vertical,
-            ratio: 0.5,
-            first: Box::new(DockNode::Group(target_group)),
-            second: Box::new(DockNode::Group(source_group)),
-        });
-        app.rebuild_workspace_panes();
-
-        app.apply_dock_drop(
-            WorkspacePaneKind::Mixer,
-            DockDropTarget {
-                group_id: target_group,
-                region: DockDropRegion::Top,
-            },
-        );
-
-        let Some(DockNode::Split {
-            axis, ratio, first, ..
-        }) = app.dock_layout.as_ref()
-        else {
-            panic!("drop should create a split");
-        };
-        assert_eq!(*axis, pane_grid::Axis::Horizontal);
-        assert!(matches!(first.as_ref(), DockNode::Group(group_id) if *group_id != source_group));
-        assert!(
-            *ratio > 0.5,
-            "mixer split ratio should be expanded above the default half split"
-        );
-        assert!(
-            *ratio * app.workspace_area_size().height >= crate::app::mixer::MIXER_MIN_HEIGHT,
-            "mixer split should receive its minimum height"
-        );
+fn horizontal_split_axis_for_region(region: DockDropRegion) -> Option<(pane_grid::Axis, bool)> {
+    match region {
+        DockDropRegion::Top => Some((pane_grid::Axis::Horizontal, true)),
+        DockDropRegion::Bottom => Some((pane_grid::Axis::Horizontal, false)),
+        _ => None,
     }
 }
+
+fn vertical_split_axis_for_region(region: DockDropRegion) -> Option<(pane_grid::Axis, bool)> {
+    match region {
+        DockDropRegion::Left => Some((pane_grid::Axis::Vertical, true)),
+        DockDropRegion::Right => Some((pane_grid::Axis::Vertical, false)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests;

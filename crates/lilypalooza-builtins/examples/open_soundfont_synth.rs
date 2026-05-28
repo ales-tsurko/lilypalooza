@@ -1,19 +1,44 @@
-#![allow(missing_docs)]
+#![expect(missing_docs, reason = "example binary does not expose a public API")]
 
-use std::env;
-use std::path::{Path, PathBuf};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 use editor_host::{
-    EditorFrame, EditorFrameAction, EditorHostOptions, EditorHostState, InstalledHost,
-    WindowSnapshot, host_layout,
+    EditorFrame,
+    EditorFrameAction,
+    EditorHostOptions,
+    EditorHostState,
+    InstalledHost,
+    WindowSnapshot,
+    host_layout,
 };
-use iced::widget::{container, text};
-use iced::{Color, Element, Length, Size, Subscription, Task, window};
+use iced::{
+    Color,
+    Element,
+    Length,
+    Size,
+    Subscription,
+    Task,
+    widget::{container, text},
+    window,
+};
 use lilypalooza_audio::{
-    AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, EditorDescriptor, EditorParent,
-    EditorSession, MixerState, SlotAddress, SlotState, SoundfontResource, TrackId,
+    AudioEngine,
+    AudioEngineOptions,
+    BUILTIN_SOUNDFONT_ID,
+    EditorDescriptor,
+    EditorParent,
+    EditorSession,
+    MixerState,
+    SlotAddress,
+    SlotState,
+    SoundfontResource,
+    TrackId,
 };
 use lilypalooza_builtins::soundfont_synth;
+use num_traits::ToPrimitive;
 
 const SOUNDFONT_ID: &str = "debug";
 
@@ -87,7 +112,7 @@ where
         .ok_or_else(|| format!("missing value for {option}"))?
         .to_string_lossy()
         .parse()
-        .map_err(|_| format!("invalid value for {option}"))
+        .map_err(|_error| format!("invalid value for {option}"))
 }
 
 struct SoundfontRuntime {
@@ -205,7 +230,9 @@ fn update(app: &mut SoundfontEditorApp, message: Message) -> Task<Message> {
                 if let Ok(runtime) = &mut app.runtime
                     && let Some(mut session) = runtime.session.take()
                 {
-                    let _ = session.detach();
+                    match session.detach() {
+                        Ok(()) | Err(_) => {}
+                    }
                 }
                 return iced::exit();
             }
@@ -213,12 +240,16 @@ fn update(app: &mut SoundfontEditorApp, message: Message) -> Task<Message> {
         }
         Message::CloseRequested => {
             if let Some(host) = app.host.as_mut() {
-                let _ = host.set_visible(false);
+                match host.set_visible(false) {
+                    Ok(()) | Err(_) => {}
+                }
             }
             if let Ok(runtime) = &mut app.runtime
                 && let Some(session) = runtime.session.as_mut()
             {
-                let _ = session.set_visible(false);
+                match session.set_visible(false) {
+                    Ok(()) | Err(_) => {}
+                }
             }
             Task::none()
         }
@@ -316,7 +347,8 @@ fn title(app: &SoundfontEditorApp) -> String {
 
 fn print_usage() {
     eprintln!(
-        "Usage: cargo run -p lilypalooza-builtins --example open_soundfont_synth -- <soundfont.sf2> [--bank N] [--program N]"
+        "Usage: cargo run -p lilypalooza-builtins --example open_soundfont_synth -- \
+         <soundfont.sf2> [--bank N] [--program N]"
     );
 }
 
@@ -493,7 +525,10 @@ fn egui_color(color: Color) -> editor_host::egui::Color32 {
 }
 
 fn color_channel_u8(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+    (value.clamp(0.0, 1.0) * 255.0)
+        .round()
+        .to_u8()
+        .unwrap_or(255)
 }
 
 fn mix_iced_color(a: Color, b: Color, amount: f32) -> Color {
@@ -527,8 +562,7 @@ fn soundfont_name(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
-    use std::path::PathBuf;
+    use std::{ffi::OsString, path::PathBuf};
 
     use super::Options;
 

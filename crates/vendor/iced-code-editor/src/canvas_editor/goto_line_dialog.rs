@@ -1,9 +1,11 @@
-use iced::widget::{Tooltip, button, column, container, row, text, text_input, tooltip};
-use iced::{Element, Length};
 use std::time::Duration;
 
-use super::Message;
-use super::goto_line::GotoLineState;
+use iced::{
+    Element, Length,
+    widget::{Tooltip, button, column, container, row, text, text_input, tooltip},
+};
+
+use super::{Message, goto_line::GotoLineState};
 
 const POPUP_TEXT_SIZE: f32 = 12.0;
 const POPUP_META_TEXT_SIZE: f32 = 11.0;

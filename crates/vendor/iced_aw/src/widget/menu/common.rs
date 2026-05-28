@@ -5,8 +5,10 @@ use iced_core::{
     widget::Tree,
 };
 
-use super::menu_bar::{GlobalState, MenuBarTask};
-use super::menu_tree::{Item, MenuState};
+use super::{
+    menu_bar::{GlobalState, MenuBarTask},
+    menu_tree::{Item, MenuState},
+};
 use crate::style::menu_bar::Catalog;
 
 ///
@@ -81,7 +83,6 @@ pub(super) type Index = Option<usize>;
 /// but has not entered the child menu yet,
 /// in this case the parent menu should process the event,
 /// but close check is not needed.
-///
 #[derive(Debug, Clone, Copy)]
 pub(super) enum RecEvent {
     Event,
@@ -239,8 +240,8 @@ pub(super) fn try_open_menu<'a, 'b, Message, Theme: Catalog, Renderer: renderer:
 
 /// Schedules a close on click task if applicable
 ///
-/// This function assumes that a mouse::Event::ButtonPressed(mouse::Button::Left) event has occurred,
-/// make sure to check the event before calling this function.
+/// This function assumes that a mouse::Event::ButtonPressed(mouse::Button::Left) event has
+/// occurred, make sure to check the event before calling this function.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_close_on_click<
     'a,
@@ -302,7 +303,14 @@ pub(super) fn schedule_close_on_click<
 }
 
 macro_rules! itl_iter_slice {
-    ($slice:expr, $items:expr;$iter_0:ident, $item_trees:expr;$iter_1:ident, $slice_layout:expr) => {
+    (
+        $slice:expr,
+        $items:expr;
+        $iter_0:ident,
+        $item_trees:expr;
+        $iter_1:ident,
+        $slice_layout:expr
+    ) => {
         $items[$slice.start_index..=$slice.end_index]
             .$iter_0()
             .zip($item_trees[$slice.start_index..=$slice.end_index].$iter_1())

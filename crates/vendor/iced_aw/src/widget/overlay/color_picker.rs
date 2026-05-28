@@ -2,11 +2,7 @@
 //!
 //! *This API requires the following crate features to be activated: `color_picker`*
 
-use crate::{
-    color_picker,
-    core::color::{HexString, Hsv},
-    style::{self, Status, color_picker::Style, style_state::StyleState},
-};
+use std::collections::HashMap;
 
 use iced_core::{
     Alignment, Border, Clipboard, Color, Element, Event, Layout, Length, Overlay, Padding, Pixels,
@@ -26,7 +22,12 @@ use iced_widget::{
     graphics::geometry::Renderer as _,
     text::{self, Wrapping},
 };
-use std::collections::HashMap;
+
+use crate::{
+    color_picker,
+    core::color::{HexString, Hsv},
+    style::{self, Status, color_picker::Style, style_state::StyleState},
+};
 
 /// The padding around the elements.
 const PADDING: Padding = Padding::new(8.0);
@@ -62,7 +63,8 @@ where
     submit_button: Button<'a, Message, Theme, Renderer>,
     /// The function that produces a message when the submit button of the [`ColorPickerOverlay`].
     on_submit: &'a dyn Fn(Color) -> Message,
-    /// Optional function that produces a message when the color changes during selection (real-time updates).
+    /// Optional function that produces a message when the color changes during selection
+    /// (real-time updates).
     on_color_change: Option<&'a dyn Fn(Color) -> Message>,
     /// The style of the [`ColorPickerOverlay`].
     class: &'a <Theme as style::color_picker::Catalog>::Class<'b>,
@@ -622,7 +624,7 @@ where
 
         let (width, height) = if bounds.width > bounds.height {
             (
-                block1_node.size().width + block2_node.size().width + SPACING.0, // + (2.0 * PADDING as f32),
+                block1_node.size().width + block2_node.size().width + SPACING.0, /* + (2.0 * PADDING as f32), */
                 block2_node.size().height,
             )
         } else {
@@ -1038,7 +1040,8 @@ where
     block1_node.move_to(Point::new(bounds.x + PADDING.left, bounds.y + PADDING.top))
 }
 
-/// Defines the layout of the 2. block of the color picker containing the RGBA part, Hex and buttons.
+/// Defines the layout of the 2. block of the color picker containing the RGBA part, Hex and
+/// buttons.
 fn block2_layout<'a, Message, Theme>(
     color_picker: &mut ColorPickerOverlay<'_, '_, Message, Theme>,
     renderer: &Renderer,
@@ -2170,8 +2173,9 @@ impl Focus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::Theme;
+
+    use super::*;
 
     #[test]
     fn cancel_button_text_is_bright_and_hover_changes_style() {

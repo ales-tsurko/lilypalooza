@@ -1,18 +1,19 @@
 //! Iced UI view and rendering logic.
 
-use iced::Size;
-use iced::advanced::input_method;
-use iced::widget::canvas::Canvas;
-use iced::widget::{Column, Row, Scrollable, Space, container, scrollable};
-use iced::{Background, Color, Element, Length, Rectangle, Shadow, Vector};
-
-use super::completion;
-use super::goto_line_dialog;
-use super::ime_requester::ImeRequester;
-use super::search_dialog;
-use super::wrapping::{self, WrappingCalculator};
-use super::{CodeEditor, GUTTER_WIDTH, Message};
 use std::rc::Rc;
+
+use iced::{
+    Background, Color, Element, Length, Rectangle, Shadow, Size, Vector,
+    advanced::input_method,
+    widget::{Column, Row, Scrollable, Space, canvas::Canvas, container, scrollable},
+};
+
+use super::{
+    CodeEditor, GUTTER_WIDTH, Message, completion, goto_line_dialog,
+    ime_requester::ImeRequester,
+    search_dialog,
+    wrapping::{self, WrappingCalculator},
+};
 
 const NATIVE_SCROLLBAR_SIZE: f32 = 10.0;
 

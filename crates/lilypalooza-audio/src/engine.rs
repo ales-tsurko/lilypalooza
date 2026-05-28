@@ -1,24 +1,31 @@
 //! Top-level audio engine state.
-#![allow(missing_docs)]
 
-use std::ops::Range;
-use std::thread;
-use std::time::Duration;
+use std::{ops::Range, thread, time::Duration};
 
-use knyst::audio_backend::{AudioBackend, AudioBackendError};
-use knyst::audio_backend::{CpalBackend, CpalBackendOptions};
-use knyst::modal_interface::{KnystContext, SphereError};
-use knyst::prelude::{
-    Beats, KnystCommands, KnystSphere, MultiThreadedKnystCommands, SphereSettings,
+use knyst::{
+    audio_backend::{AudioBackend, AudioBackendError, CpalBackend, CpalBackendOptions},
+    modal_interface::{KnystContext, SphereError},
+    prelude::{Beats, KnystCommands, KnystSphere, MultiThreadedKnystCommands, SphereSettings},
 };
 
-use crate::instrument::Controller;
-use crate::mixer::{
-    Mixer, MixerError, MixerHandle, MixerMeterSnapshot, MixerMeterSnapshotWindow, MixerState,
-    SlotAddress,
+#[cfg(feature = "test-support")]
+use crate::test_support::TestSupportBackend;
+#[cfg(all(test, not(feature = "test-support")))]
+use crate::test_utils::TestBackend as TestSupportBackend;
+use crate::{
+    instrument::Controller,
+    mixer::{
+        Mixer,
+        MixerError,
+        MixerHandle,
+        MixerMeterSnapshot,
+        MixerMeterSnapshotWindow,
+        MixerState,
+        SlotAddress,
+    },
+    sequencer::{Sequencer, SequencerError, SequencerHandle},
+    transport::Transport,
 };
-use crate::sequencer::{Sequencer, SequencerError, SequencerHandle};
-use crate::transport::Transport;
 
 const CONTROLLER_BARRIER_TIMEOUT: Duration = Duration::from_millis(250);
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -54,10 +61,19 @@ pub struct AudioEngine {
     backend: Box<dyn AudioBackend>,
     settings: AudioEngineSettings,
     // Keeps the Knyst runtime alive; context and commands do not own it.
-    #[allow(dead_code)]
-    sphere: KnystSphere,
+    _sphere: KnystSphere,
     context: KnystContext,
     commands: MultiThreadedKnystCommands,
+}
+
+impl std::fmt::Debug for AudioEngine {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AudioEngine")
+            .field("sequencer", &self.sequencer)
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Errors returned by the audio engine facade.
@@ -89,6 +105,21 @@ pub struct EngineObservabilitySnapshot {
 }
 
 impl AudioEngine {
+    /// Starts the audio engine on the deterministic in-process test backend.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn start_test(
+        mixer: MixerState,
+        options: AudioEngineOptions,
+    ) -> Result<Self, AudioEngineError> {
+        let sample_rate = options.sample_rate.unwrap_or(44_100);
+        let block_size = options.block_size.unwrap_or(64);
+        Self::start(
+            mixer,
+            TestSupportBackend::new(sample_rate, block_size, 2),
+            options,
+        )
+    }
+
     /// Starts the audio engine on the default CPAL output backend.
     pub fn start_cpal(
         mixer: MixerState,
@@ -131,7 +162,7 @@ impl AudioEngine {
             sequencer,
             backend: Box::new(backend),
             settings,
-            sphere,
+            _sphere: sphere,
             context,
             commands,
         })
@@ -161,10 +192,12 @@ impl AudioEngine {
         )
     }
 
+    /// Returns the current persistent mixer state.
     pub fn mixer_state(&self) -> &MixerState {
         &self.mixer.state
     }
 
+    /// Creates a controller for the processor at `address`, when available.
     pub fn controller(
         &self,
         address: SlotAddress,
@@ -172,6 +205,7 @@ impl AudioEngine {
         self.mixer.controller(address)
     }
 
+    /// Refreshes processor latency compensation from live plugin bindings.
     pub fn sync_processor_latencies(&mut self) -> Result<(), AudioEngineError> {
         self.mixer().sync_processor_latencies()
     }
@@ -181,10 +215,12 @@ impl AudioEngine {
         SequencerHandle::new(&self.sequencer, &mut self.commands)
     }
 
+    /// Returns the latest full mixer meter snapshot.
     pub fn meter_snapshot(&self) -> MixerMeterSnapshot {
         self.mixer.meter_snapshot()
     }
 
+    /// Returns the latest meter snapshot for visible track and bus ranges.
     pub fn meter_snapshot_window(
         &self,
         track_range: Range<usize>,
@@ -193,6 +229,7 @@ impl AudioEngine {
         self.mixer.meter_snapshot_window(track_range, bus_range)
     }
 
+    /// Requests an audio callback observability snapshot from the audio thread.
     pub fn observability_snapshot(&mut self) -> Option<EngineObservabilitySnapshot> {
         let receiver = self.commands.request_observability_snapshot();
         receiver
@@ -206,23 +243,28 @@ impl AudioEngine {
             })
     }
 
+    /// Clears the currently loaded score and resets transport state.
     pub fn clear_score(&mut self) {
         self.prepare_for_score_reload();
         self.sequencer().clear();
     }
 
+    /// Enables or disables metronome playback.
     pub fn set_metronome_enabled(&mut self, enabled: bool) {
         self.sequencer.set_metronome_enabled(enabled);
     }
 
+    /// Sets the metronome gain in decibels.
     pub fn set_metronome_gain_db(&mut self, gain_db: f32) {
         self.mixer.runtime.set_metronome_gain_db(gain_db);
     }
 
+    /// Sets the metronome pitch multiplier.
     pub fn set_metronome_pitch(&mut self, pitch: f32) {
         self.mixer.runtime.set_metronome_pitch(pitch);
     }
 
+    /// Replaces the score with MIDI bytes and resets sequencer state.
     pub fn replace_score_from_midi_bytes(&mut self, bytes: &[u8]) -> Result<(), SequencerError> {
         self.prepare_for_score_reload();
         {
@@ -236,7 +278,9 @@ impl AudioEngine {
     /// Flushes pending runtime configuration changes through the running graph.
     pub fn flush(&mut self) {
         let receiver = self.commands.request_graph_settled();
-        let _ = receiver.recv_timeout(SETTLE_TIMEOUT);
+        match receiver.recv_timeout(SETTLE_TIMEOUT) {
+            Ok(()) | Err(_) => {}
+        }
     }
 
     fn prepare_for_score_reload(&mut self) {
@@ -274,30 +318,21 @@ impl AudioEngine {
 }
 
 fn wait_for_transport_reset(commands: &mut MultiThreadedKnystCommands) {
-    for _ in 0..50 {
-        let Some(snapshot) = commands.current_transport_snapshot() else {
-            thread::sleep(Duration::from_millis(2));
-            continue;
-        };
-
-        if snapshot.state == knyst::prelude::TransportState::Paused
-            && snapshot.beats.unwrap_or(Beats::ZERO) == Beats::ZERO
-        {
-            return;
-        }
-
-        thread::sleep(Duration::from_millis(2));
-    }
+    wait_for_transport_reset_to(commands, Beats::ZERO);
 }
 
 fn wait_for_controller_barrier(commands: &mut MultiThreadedKnystCommands) {
     let receiver = commands.request_transport_snapshot();
-    let _ = receiver.recv_timeout(CONTROLLER_BARRIER_TIMEOUT);
+    match receiver.recv_timeout(CONTROLLER_BARRIER_TIMEOUT) {
+        Ok(_) | Err(_) => {}
+    }
 }
 
 fn wait_for_transport_settled(commands: &mut MultiThreadedKnystCommands) {
     let receiver = commands.request_transport_settled();
-    let _ = receiver.recv_timeout(SETTLE_TIMEOUT);
+    match receiver.recv_timeout(SETTLE_TIMEOUT) {
+        Ok(()) | Err(_) => {}
+    }
 }
 
 fn wait_for_transport_advance(commands: &mut MultiThreadedKnystCommands, timeout: Duration) {
@@ -316,7 +351,6 @@ fn wait_for_transport_advance(commands: &mut MultiThreadedKnystCommands, timeout
     }
 }
 
-#[cfg(test)]
 fn wait_for_transport_reset_to(commands: &mut MultiThreadedKnystCommands, target: Beats) {
     for _ in 0..50 {
         let Some(snapshot) = commands.current_transport_snapshot() else {
@@ -343,7 +377,9 @@ impl From<crate::mixer::runtime::MixerRuntimeError> for AudioEngineError {
 impl Drop for AudioEngine {
     fn drop(&mut self) {
         self.commands.clear_scheduler_extension();
-        let _ = self.backend.stop();
+        match self.backend.stop() {
+            Ok(()) | Err(_) => {}
+        }
     }
 }
 

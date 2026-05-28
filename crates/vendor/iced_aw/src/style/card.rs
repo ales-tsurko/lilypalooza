@@ -2,8 +2,9 @@
 //!
 //! *This API requires the following crate features to be activated: card*
 
-use super::{Status, StyleFn, colors};
 use iced_core::{Background, Color, Theme};
+
+use super::{Status, StyleFn, colors};
 
 /// The appearance of a [`Card`](crate::widget::card::Card).
 #[derive(Clone, Copy, Debug)]
@@ -170,8 +171,9 @@ fn backing_only(theme: &Theme, color: Color) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::{Background, Color, Theme};
+
+    use super::*;
 
     #[test]
     fn style_default() {

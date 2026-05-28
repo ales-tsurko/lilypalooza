@@ -1,8 +1,10 @@
 use iced::Color;
 use tree_sitter_highlight::{Highlight, HighlightConfiguration, HighlightEvent, Highlighter};
 
-use crate::language::{self, HighlightBackend, TreeSitterBackend};
-use crate::theme::Style;
+use crate::{
+    language::{self, HighlightBackend, TreeSitterBackend},
+    theme::Style,
+};
 
 const TREE_SITTER_HIGHLIGHT_NAMES: &[&str] = &[
     "comment",
@@ -436,7 +438,8 @@ mod tests {
                 spans
                     .iter()
                     .any(|span| span.start_col >= 1 && span.color != style.text_color),
-                "expected embedded Scheme text after `#` to be highlighted for `{source}`; tree = {}; spans = {:?}",
+                "expected embedded Scheme text after `#` to be highlighted for `{source}`; tree = \
+                 {}; spans = {:?}",
                 lilypond_sexp(source),
                 spans
             );

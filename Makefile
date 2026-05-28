@@ -1,4 +1,4 @@
-.PHONY: run build validator check test-all test test-cov miri lint clippy fmt
+.PHONY: run build validator check test-all test-cov miri lint fmt fmt-vendor-check
 
 SOUNDFONT ?= assets/soundfonts/FluidR3_GM.sf2
 SCORE ?= ../after-the-void/main.ly
@@ -18,7 +18,23 @@ MIRI_FLAGS := -Zmiri-disable-isolation -Zmiri-tree-borrows
 MIRI_PACKAGES := lilypalooza-clap lilypalooza-plugin-scan lilypalooza-plugin-validator
 COVERAGE_LCOV := target/lilypalooza-lcov.info
 CRAP_REPORT := target/lilypalooza-crap.md
-CRAP_EXCLUDES := --exclude '**/build.rs' --exclude 'crates/vendor/**'
+CRAP_EXCLUDES := --exclude '**/build.rs' --exclude '**/benches/**' --exclude '**/examples/**' --exclude 'crates/vendor/**'
+SIMILARITY_PATHS := \
+	src \
+	crates/editor-host/src \
+	crates/lilypalooza-audio/src \
+	crates/lilypalooza-builtins/src \
+	crates/lilypalooza-clap/src \
+	crates/lilypalooza-egui-baseview/src \
+	crates/lilypalooza-plugin-scan/src \
+	crates/lilypalooza-plugin-validator/src \
+	crates/lilypalooza-vst3/src
+SIMILARITY_ARGS := $(SIMILARITY_PATHS) --threshold 0.92 --min-lines 12 --min-tokens 80 --fail-on-duplicates
+VENDOR_MANIFESTS := \
+	crates/vendor/iced-code-editor/Cargo.toml \
+	crates/vendor/iced_aw/Cargo.toml \
+	crates/vendor/tree-sitter-lilypond/Cargo.toml
+VENDOR_RUSTFMT_CONFIG := rustfmt.vendor.toml
 
 run: validator
 	cargo run -- $(if $(RUN_ARGS),$(RUN_ARGS),$(DEFAULT_RUN_ARGS))
@@ -36,8 +52,6 @@ test-all:
 	cargo test $(CARGO_PACKAGES) --all-features --all-targets
 	$(MAKE) miri
 
-test: test-all
-
 test-cov:
 	cargo llvm-cov $(CARGO_PACKAGES) --all-features --all-targets --lcov --output-path $(COVERAGE_LCOV)
 	cargo crap --workspace --lcov $(COVERAGE_LCOV) $(CRAP_EXCLUDES) --format markdown --output $(CRAP_REPORT)
@@ -47,14 +61,25 @@ miri:
 	@set -e; for package in $(MIRI_PACKAGES); do MIRIFLAGS="$(MIRI_FLAGS)" cargo +nightly miri test -p "$$package" --all-features; done
 
 lint:
-	cargo clippy $(CARGO_PACKAGES) --all-targets --all-features -- -D warnings
-	cargo +nightly fmt --check $(CARGO_PACKAGES)
-
-clippy:
-	cargo clippy $(CARGO_PACKAGES) --all-targets --all-features -- -D warnings
+	@status=0; \
+	cargo clippy $(CARGO_PACKAGES) --all-targets --all-features -- -D warnings || status=$$?; \
+	cargo +nightly fmt --check $(CARGO_PACKAGES) || status=$$?; \
+	similarity-rs $(SIMILARITY_ARGS) || status=$$?; \
+	cargo machete --skip-target-dir || status=$$?; \
+	exit $$status
 
 fmt:
 	cargo +nightly fmt $(CARGO_PACKAGES)
+
+fmt-vendor-check:
+	@set -e; \
+	for manifest in $(VENDOR_MANIFESTS); do \
+		dir=$$(dirname "$$manifest"); \
+		config="$(VENDOR_RUSTFMT_CONFIG)"; \
+		if [ -f "$$dir/rustfmt.toml" ]; then config="$$dir/rustfmt.toml"; fi; \
+		if [ -f "$$dir/.rustfmt.toml" ]; then config="$$dir/.rustfmt.toml"; fi; \
+		cargo fmt --manifest-path "$$manifest" --check -- --config-path "$$config"; \
+	done
 
 ifeq ($(firstword $(MAKECMDGOALS)),run)
 .PHONY: $(RUN_ARGS)

@@ -3,11 +3,14 @@
 //! Provides [`LspOverlayState`] for storing overlay display state and
 //! [`view_lsp_overlay`] for rendering it on top of a [`CodeEditor`].
 
-use crate::CodeEditor;
-use iced::widget::{
-    Id, Space, button, column, container, markdown, mouse_area, row, scrollable, stack, text,
+use iced::{
+    Background, Border, Color, Element, Length, Point, Shadow, Theme,
+    widget::{
+        Id, Space, button, column, container, markdown, mouse_area, row, scrollable, stack, text,
+    },
 };
-use iced::{Background, Border, Color, Element, Length, Point, Shadow, Theme};
+
+use crate::CodeEditor;
 
 /// Maximum number of completion items shown at once in the menu.
 const MAX_COMPLETION_ITEMS: usize = 8;
@@ -164,10 +167,7 @@ impl LspOverlayState {
     /// use iced_code_editor::LspOverlayState;
     ///
     /// let mut state = LspOverlayState::new();
-    /// state.set_completions(
-    ///     vec!["foo".to_string(), "bar".to_string()],
-    ///     Point::ORIGIN,
-    /// );
+    /// state.set_completions(vec!["foo".to_string(), "bar".to_string()], Point::ORIGIN);
     /// assert_eq!(state.completion_items.len(), 2);
     /// ```
     pub fn set_completions(&mut self, items: Vec<String>, position: Point) {
@@ -210,10 +210,7 @@ impl LspOverlayState {
     /// use iced_code_editor::LspOverlayState;
     ///
     /// let mut state = LspOverlayState::new();
-    /// state.set_completions(
-    ///     vec!["foo".to_string(), "bar".to_string()],
-    ///     Point::ORIGIN,
-    /// );
+    /// state.set_completions(vec!["foo".to_string(), "bar".to_string()], Point::ORIGIN);
     /// state.completion_filter = "fo".to_string();
     /// state.filter_completions();
     /// assert_eq!(state.completion_items, vec!["foo".to_string()]);
@@ -357,9 +354,7 @@ fn measure_hover_width(editor: &CodeEditor, text: &str) -> f32 {
 /// # Example
 ///
 /// ```no_run
-/// use iced_code_editor::{
-///     CodeEditor, LspOverlayMessage, LspOverlayState, view_lsp_overlay,
-/// };
+/// use iced_code_editor::{CodeEditor, LspOverlayMessage, LspOverlayState, view_lsp_overlay};
 ///
 /// struct App {
 ///     editor: CodeEditor,
@@ -730,8 +725,9 @@ fn empty_overlay<'a, M: 'a>() -> Element<'a, M> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced::Point;
+
+    use super::*;
 
     #[test]
     fn test_lsp_overlay_state_new() {

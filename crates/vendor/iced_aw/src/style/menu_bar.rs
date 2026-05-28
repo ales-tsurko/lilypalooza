@@ -1,6 +1,7 @@
 //! Change the appearance of menu bars and their menus.
-use super::{Status, StyleFn};
 use iced_core::{Background, Border, Color, Shadow, Theme, Vector};
+
+use super::{Status, StyleFn};
 
 /// The appearance of a menu bar and its menus.
 #[derive(Debug, Clone, Copy)]
@@ -93,8 +94,9 @@ pub fn primary(theme: &Theme, _status: Status) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::{Background, Theme};
+
+    use super::*;
 
     #[test]
     fn style_default() {

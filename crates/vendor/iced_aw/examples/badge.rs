@@ -6,7 +6,6 @@ use iced::{
     Alignment, Element, Length,
     widget::{Column, Container, Row, Text},
 };
-
 use iced_aw::{helpers::badge, style, style::status::Status};
 
 const BADGE_TEXT_SIZE: u32 = 15;

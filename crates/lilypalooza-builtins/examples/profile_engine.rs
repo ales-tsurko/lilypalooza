@@ -3,21 +3,36 @@
 //! This example starts the engine without the desktop UI and periodically prints
 //! callback-load observability plus master meter activity.
 
-use std::env;
-use std::ffi::OsString;
-use std::fs;
-use std::path::PathBuf;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::{
+    env,
+    ffi::OsString,
+    fs,
+    path::PathBuf,
+    thread,
+    time::{Duration, Instant},
+};
 
 use lilypalooza_audio::{
-    AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, MixerState, SlotState,
-    SoundfontResource, TrackId,
+    AudioEngine,
+    AudioEngineOptions,
+    BUILTIN_SOUNDFONT_ID,
+    MixerState,
+    SlotState,
+    SoundfontResource,
+    TrackId,
 };
 use lilypalooza_builtins::soundfont_synth;
-use midly::num::{u4, u7, u15, u24, u28};
 use midly::{
-    Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
+    Format,
+    Header,
+    MetaMessage,
+    MidiMessage,
+    Smf,
+    Timing,
+    Track,
+    TrackEvent,
+    TrackEventKind,
+    num::{u4, u7, u15, u24, u28},
 };
 
 fn soundfont_slot(soundfont_id: &str, program: u8) -> SlotState {
@@ -69,7 +84,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("pid={}", std::process::id());
     eprintln!(
-        "soundfont={:?} midi={:?} synthetic_midi={} assign_tracks={} base_program={} play={} duration={}s report={}ms",
+        "soundfont={:?} midi={:?} synthetic_midi={} assign_tracks={} base_program={} play={} \
+         duration={}s report={}ms",
         options.soundfont,
         options.midi,
         options.synthetic_midi,
@@ -220,9 +236,9 @@ fn simple_midi_bytes(ppq: u16) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use std::{ffi::OsString, path::PathBuf};
+
     use super::options_from_iter;
-    use std::ffi::OsString;
-    use std::path::PathBuf;
 
     #[test]
     fn parses_profile_engine_options() {

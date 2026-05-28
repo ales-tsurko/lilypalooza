@@ -1,6 +1,9 @@
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
+use std::{
+    collections::HashMap,
+    fs,
+    io,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct MidiRollFile {
@@ -59,6 +62,13 @@ pub(crate) fn collect_midi_roll_files(
     build_dir: &Path,
     score_stem: &str,
 ) -> Result<Vec<MidiRollFile>, String> {
+    collect_midi_roll_paths(build_dir, score_stem)?
+        .into_iter()
+        .map(load_midi_roll_file)
+        .collect()
+}
+
+fn collect_midi_roll_paths(build_dir: &Path, score_stem: &str) -> Result<Vec<PathBuf>, String> {
     let entries = fs::read_dir(build_dir).map_err(|error| {
         format!(
             "Failed to read build directory {}: {error}",
@@ -69,58 +79,146 @@ pub(crate) fn collect_midi_roll_files(
     let mut midi_paths = Vec::new();
 
     for entry in entries {
-        let entry =
-            entry.map_err(|error| format!("Failed to read build artifact entry: {error}"))?;
-        let path = entry.path();
-
-        if !is_midi_file(&path) {
-            continue;
-        }
-
-        let Some(file_stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        if !is_score_midi_stem(file_stem, score_stem) {
-            continue;
-        }
-
-        let sort_index = midi_file_index(file_stem, score_stem).unwrap_or(u32::MAX);
-        midi_paths.push((sort_index, path));
+        push_midi_roll_path(entry, score_stem, &mut midi_paths)?;
     }
 
     midi_paths.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
 
-    let mut result = Vec::new();
+    Ok(midi_paths
+        .into_iter()
+        .map(|(_sort_index, path)| path)
+        .collect())
+}
 
-    for (_sort_index, path) in midi_paths {
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| {
-                format!(
-                    "MIDI artifact has invalid UTF-8 file name: {}",
-                    path.display()
-                )
-            })?
-            .to_string();
+fn push_midi_roll_path(
+    entry: io::Result<fs::DirEntry>,
+    score_stem: &str,
+    midi_paths: &mut Vec<(u32, PathBuf)>,
+) -> Result<(), String> {
+    let entry = entry.map_err(|error| format!("Failed to read build artifact entry: {error}"))?;
+    let path = entry.path();
+    let Some(file_stem) = matching_midi_file_stem(&path, score_stem) else {
+        return Ok(());
+    };
 
-        let data = parse_midi_roll_file(&path)?;
-        result.push(MidiRollFile {
-            path,
-            file_name,
-            data,
-        });
-    }
+    let sort_index = midi_file_index(file_stem, score_stem).unwrap_or(u32::MAX);
+    midi_paths.push((sort_index, path));
+    Ok(())
+}
 
-    Ok(result)
+fn matching_midi_file_stem<'a>(path: &'a Path, score_stem: &str) -> Option<&'a str> {
+    let file_stem = path.file_stem()?.to_str()?;
+    (is_midi_file(path) && is_score_midi_stem(file_stem, score_stem)).then_some(file_stem)
+}
+
+fn load_midi_roll_file(path: PathBuf) -> Result<MidiRollFile, String> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            format!(
+                "MIDI artifact has invalid UTF-8 file name: {}",
+                path.display()
+            )
+        })?
+        .to_string();
+    let data = parse_midi_roll_file(&path)?;
+    Ok(MidiRollFile {
+        path,
+        file_name,
+        data,
+    })
 }
 
 pub(crate) fn parse_midi_roll_file(path: &Path) -> Result<MidiRollData, String> {
     let bytes = fs::read(path)
         .map_err(|error| format!("Failed to read MIDI file {}: {error}", path.display()))?;
-
     let mut reader = ByteReader::new(&bytes);
 
+    let header = parse_midi_header(&mut reader, path)?;
+    let mut notes = Vec::new();
+    let mut parsed_tracks = Vec::new();
+    let mut tempo_changes = Vec::new();
+    let mut time_signatures = Vec::new();
+    let mut total_ticks = 0_u64;
+
+    for track_index in 0..header.track_count {
+        let track_bytes = read_midi_track_chunk(&mut reader, path)?;
+        let track = parse_midi_track(track_index, track_bytes, path)?;
+        total_ticks = total_ticks.max(track.total_ticks);
+        notes.extend(track.notes);
+        parsed_tracks.push(track.track);
+        tempo_changes.extend(track.tempo_changes);
+        time_signatures.extend(track.time_signatures);
+    }
+
+    let tracks = compact_tracks_and_notes(&parsed_tracks, &mut notes);
+
+    notes.sort_by(|left, right| {
+        left.start_tick
+            .cmp(&right.start_tick)
+            .then_with(|| left.pitch.cmp(&right.pitch))
+            .then_with(|| left.track_index.cmp(&right.track_index))
+    });
+
+    if let Some(last_note) = notes.last() {
+        total_ticks = total_ticks.max(last_note.end_tick);
+    }
+
+    tempo_changes = normalize_tempos(tempo_changes);
+    time_signatures = normalize_time_signatures(time_signatures);
+
+    let bar_lines = build_bar_lines(total_ticks, header.ppq, &time_signatures);
+
+    let (min_pitch, max_pitch) = note_pitch_range(&notes);
+
+    Ok(MidiRollData {
+        ppq: header.ppq,
+        total_ticks,
+        notes,
+        tracks,
+        time_signatures,
+        tempo_changes,
+        bar_lines,
+        min_pitch,
+        max_pitch,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MidiHeader {
+    track_count: u16,
+    ppq: u16,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedMidiTrackEvents {
+    track: ParsedMidiTrack,
+    notes: Vec<MidiNote>,
+    tempo_changes: Vec<TempoChange>,
+    time_signatures: Vec<TimeSignatureChange>,
+    total_ticks: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActiveNote {
+    start_tick: u64,
+    track_index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MidiEventStatus {
+    status: u8,
+    first_data: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MidiTrackFlow {
+    Continue,
+    End,
+}
+
+fn parse_midi_header(reader: &mut ByteReader<'_>, path: &Path) -> Result<MidiHeader, String> {
     let header_tag = reader
         .read_exact(4)
         .ok_or_else(|| format!("MIDI file {} is missing MThd header", path.display()))?;
@@ -143,7 +241,7 @@ pub(crate) fn parse_midi_roll_file(path: &Path) -> Result<MidiRollData, String> 
         ));
     }
 
-    let _format = reader
+    reader
         .read_u16_be()
         .ok_or_else(|| format!("MIDI file {} is missing format", path.display()))?;
     let track_count = reader
@@ -153,262 +251,416 @@ pub(crate) fn parse_midi_roll_file(path: &Path) -> Result<MidiRollData, String> 
         .read_u16_be()
         .ok_or_else(|| format!("MIDI file {} is missing division", path.display()))?;
 
-    if header_length > 6 {
-        let extra_len = usize::try_from(header_length - 6)
-            .map_err(|_| format!("MIDI file {} has unsupported header length", path.display()))?;
-        let _ = reader
-            .read_exact(extra_len)
-            .ok_or_else(|| format!("MIDI file {} has truncated extended header", path.display()))?;
+    skip_extended_header(reader, path, header_length)?;
+    validate_midi_division(path, division)?;
+
+    Ok(MidiHeader {
+        track_count,
+        ppq: division,
+    })
+}
+
+fn skip_extended_header(
+    reader: &mut ByteReader<'_>,
+    path: &Path,
+    header_length: u32,
+) -> Result<(), String> {
+    let Some(extra_len) = header_length.checked_sub(6) else {
+        return Ok(());
+    };
+
+    let extra_len = usize::try_from(extra_len).map_err(|error| {
+        format!(
+            "MIDI file {} has unsupported header length: {error}",
+            path.display()
+        )
+    })?;
+    reader
+        .read_exact(extra_len)
+        .ok_or_else(|| format!("MIDI file {} has truncated extended header", path.display()))?;
+    Ok(())
+}
+
+fn validate_midi_division(path: &Path, division: u16) -> Result<(), String> {
+    if (division & 0x8000) == 0 {
+        return Ok(());
     }
 
-    if (division & 0x8000) != 0 {
+    Err(format!(
+        "MIDI file {} uses SMPTE timing which is not supported",
+        path.display()
+    ))
+}
+
+fn read_midi_track_chunk<'a>(reader: &mut ByteReader<'a>, path: &Path) -> Result<&'a [u8], String> {
+    let track_tag = reader
+        .read_exact(4)
+        .ok_or_else(|| format!("MIDI file {} has truncated track header", path.display()))?;
+
+    if track_tag != b"MTrk" {
         return Err(format!(
-            "MIDI file {} uses SMPTE timing which is not supported",
+            "MIDI file {} has invalid track chunk",
             path.display()
         ));
     }
 
-    let ppq = division;
+    let track_len = reader
+        .read_u32_be()
+        .ok_or_else(|| format!("MIDI file {} has truncated track length", path.display()))?;
+    let track_len = usize::try_from(track_len).map_err(|error| {
+        format!(
+            "MIDI file {} has oversized track length: {error}",
+            path.display()
+        )
+    })?;
 
-    let mut notes = Vec::new();
-    let mut parsed_tracks = Vec::new();
-    let mut tempo_changes = Vec::new();
-    let mut time_signatures = Vec::new();
+    reader
+        .read_exact(track_len)
+        .ok_or_else(|| format!("MIDI file {} has truncated track data", path.display()))
+}
 
-    let mut total_ticks = 0_u64;
+fn parse_midi_track(
+    track_index: u16,
+    track_bytes: &[u8],
+    path: &Path,
+) -> Result<ParsedMidiTrackEvents, String> {
+    let mut reader = ByteReader::new(track_bytes);
+    let mut state = MidiTrackState::new(track_index);
 
-    for track_index in 0..track_count {
-        let track_tag = reader
-            .read_exact(4)
-            .ok_or_else(|| format!("MIDI file {} has truncated track header", path.display()))?;
-
-        if track_tag != b"MTrk" {
-            return Err(format!(
-                "MIDI file {} has invalid track chunk",
-                path.display()
-            ));
+    while !reader.is_eof() {
+        if state.read_event(&mut reader, path)? == MidiTrackFlow::End {
+            break;
         }
+    }
 
-        let track_len = reader
-            .read_u32_be()
-            .ok_or_else(|| format!("MIDI file {} has truncated track length", path.display()))?;
-        let track_len = usize::try_from(track_len)
-            .map_err(|_| format!("MIDI file {} has oversized track length", path.display()))?;
+    state.finish();
+    Ok(state.into_events())
+}
 
-        let track_bytes = reader
-            .read_exact(track_len)
-            .ok_or_else(|| format!("MIDI file {} has truncated track data", path.display()))?;
+struct MidiTrackState {
+    track_index: u16,
+    absolute_tick: u64,
+    running_status: Option<u8>,
+    track_name: Option<String>,
+    instrument_name: Option<String>,
+    active_notes: HashMap<(u8, u8), Vec<ActiveNote>>,
+    notes: Vec<MidiNote>,
+    tempo_changes: Vec<TempoChange>,
+    time_signatures: Vec<TimeSignatureChange>,
+}
 
-        let mut track_reader = ByteReader::new(track_bytes);
-        let mut absolute_tick = 0_u64;
-        let mut running_status: Option<u8> = None;
-        let mut track_name: Option<String> = None;
-        let mut instrument_name: Option<String> = None;
-        let mut active_notes: HashMap<(u8, u8), Vec<ActiveNote>> = HashMap::new();
-        while !track_reader.is_eof() {
-            let delta = track_reader
-                .read_vlq()
-                .ok_or_else(|| format!("MIDI file {} has invalid delta time", path.display()))?;
-            absolute_tick = absolute_tick.saturating_add(u64::from(delta));
+impl MidiTrackState {
+    fn new(track_index: u16) -> Self {
+        Self {
+            track_index,
+            absolute_tick: 0,
+            running_status: None,
+            track_name: None,
+            instrument_name: None,
+            active_notes: HashMap::new(),
+            notes: Vec::new(),
+            tempo_changes: Vec::new(),
+            time_signatures: Vec::new(),
+        }
+    }
 
-            let status_or_data = track_reader
-                .read_u8()
-                .ok_or_else(|| format!("MIDI file {} has truncated event", path.display()))?;
+    fn read_event(
+        &mut self,
+        reader: &mut ByteReader<'_>,
+        path: &Path,
+    ) -> Result<MidiTrackFlow, String> {
+        let delta = reader
+            .read_vlq()
+            .ok_or_else(|| format!("MIDI file {} has invalid delta time", path.display()))?;
+        self.absolute_tick = self.absolute_tick.saturating_add(u64::from(delta));
 
-            let (status, first_data) = if status_or_data < 0x80 {
-                let Some(status) = running_status else {
-                    return Err(format!(
-                        "MIDI file {} uses running status before status byte",
-                        path.display()
-                    ));
-                };
-                (status, Some(status_or_data))
-            } else {
-                if status_or_data < 0xF0 {
-                    running_status = Some(status_or_data);
-                } else {
-                    running_status = None;
-                }
-                (status_or_data, None)
-            };
+        let event = read_midi_event_status(reader, path, &mut self.running_status)?;
+        self.dispatch_event(reader, path, event)
+    }
 
-            match status {
-                0xFF => {
-                    let meta_type = track_reader.read_u8().ok_or_else(|| {
-                        format!("MIDI file {} has truncated meta event", path.display())
-                    })?;
-                    let data_len = track_reader.read_vlq().ok_or_else(|| {
-                        format!("MIDI file {} has invalid meta event length", path.display())
-                    })?;
-                    let data_len = usize::try_from(data_len).map_err(|_| {
-                        format!("MIDI file {} has oversized meta event", path.display())
-                    })?;
-                    let data = track_reader.read_exact(data_len).ok_or_else(|| {
-                        format!("MIDI file {} has truncated meta event data", path.display())
-                    })?;
-
-                    match meta_type {
-                        0x2F => break,
-                        0x03 => {
-                            let raw_name = String::from_utf8_lossy(data).trim().to_string();
-                            if !raw_name.is_empty() {
-                                track_name = Some(raw_name);
-                            }
-                        }
-                        0x04 => {
-                            let raw_name = String::from_utf8_lossy(data).trim().to_string();
-                            if !raw_name.is_empty() && instrument_name.is_none() {
-                                instrument_name = Some(raw_name);
-                            }
-                        }
-                        0x51 if data.len() == 3 => {
-                            let micros_per_quarter = (u32::from(data[0]) << 16)
-                                | (u32::from(data[1]) << 8)
-                                | u32::from(data[2]);
-                            tempo_changes.push(TempoChange {
-                                tick: absolute_tick,
-                                micros_per_quarter,
-                            });
-                        }
-                        0x58 if data.len() >= 2 => {
-                            let numerator = data[0].max(1);
-                            let denominator = 2_u8.pow(u32::from(data[1])).max(1);
-                            time_signatures.push(TimeSignatureChange {
-                                tick: absolute_tick,
-                                numerator,
-                                denominator,
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-                0xF0 | 0xF7 => {
-                    let data_len = track_reader.read_vlq().ok_or_else(|| {
-                        format!("MIDI file {} has invalid sysex length", path.display())
-                    })?;
-                    let data_len = usize::try_from(data_len).map_err(|_| {
-                        format!("MIDI file {} has oversized sysex event", path.display())
-                    })?;
-                    let _ = track_reader.read_exact(data_len).ok_or_else(|| {
-                        format!("MIDI file {} has truncated sysex event", path.display())
-                    })?;
-                }
-                _ => {
-                    let event_type = status & 0xF0;
-                    let channel = status & 0x0F;
-
-                    let data_len = if matches!(event_type, 0xC0 | 0xD0) {
-                        1
-                    } else {
-                        2
-                    };
-                    let data1 = if let Some(first_data) = first_data {
-                        first_data
-                    } else {
-                        track_reader.read_u8().ok_or_else(|| {
-                            format!("MIDI file {} has truncated channel event", path.display())
-                        })?
-                    };
-                    let data2 = if data_len == 2 {
-                        Some(track_reader.read_u8().ok_or_else(|| {
-                            format!("MIDI file {} has truncated channel event", path.display())
-                        })?)
-                    } else {
-                        None
-                    };
-
-                    match event_type {
-                        0x80 => {
-                            finish_active_note(
-                                &mut active_notes,
-                                &mut notes,
-                                channel,
-                                data1,
-                                absolute_tick,
-                            );
-                        }
-                        0x90 => {
-                            let velocity = data2.unwrap_or(0);
-
-                            if velocity == 0 {
-                                finish_active_note(
-                                    &mut active_notes,
-                                    &mut notes,
-                                    channel,
-                                    data1,
-                                    absolute_tick,
-                                );
-                            } else {
-                                active_notes.entry((channel, data1)).or_default().push(
-                                    ActiveNote {
-                                        start_tick: absolute_tick,
-                                        track_index: usize::from(track_index),
-                                    },
-                                );
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+    fn dispatch_event(
+        &mut self,
+        reader: &mut ByteReader<'_>,
+        path: &Path,
+        event: MidiEventStatus,
+    ) -> Result<MidiTrackFlow, String> {
+        match event.status {
+            0xFF => self.read_meta_event(reader, path),
+            0xF0 | 0xF7 => {
+                skip_sysex_event(reader, path)?;
+                Ok(MidiTrackFlow::Continue)
+            }
+            _ => {
+                self.read_channel_event(reader, path, event)?;
+                Ok(MidiTrackFlow::Continue)
             }
         }
+    }
 
-        for ((_, pitch), mut stack) in active_notes {
+    fn read_meta_event(
+        &mut self,
+        reader: &mut ByteReader<'_>,
+        path: &Path,
+    ) -> Result<MidiTrackFlow, String> {
+        let meta_type = reader
+            .read_u8()
+            .ok_or_else(|| format!("MIDI file {} has truncated meta event", path.display()))?;
+        let data = read_length_prefixed_event_data(reader, path, "meta event")?;
+
+        Ok(self.apply_meta_event(meta_type, data))
+    }
+
+    fn apply_meta_event(&mut self, meta_type: u8, data: &[u8]) -> MidiTrackFlow {
+        match meta_type {
+            0x2F => MidiTrackFlow::End,
+            0x03 => {
+                self.track_name = non_empty_meta_text(data);
+                MidiTrackFlow::Continue
+            }
+            0x04 => {
+                if self.instrument_name.is_none() {
+                    self.instrument_name = non_empty_meta_text(data);
+                }
+                MidiTrackFlow::Continue
+            }
+            0x51 => {
+                self.tempo_changes
+                    .extend(meta_tempo(self.absolute_tick, data));
+                MidiTrackFlow::Continue
+            }
+            0x58 => {
+                self.time_signatures
+                    .extend(meta_time_signature(self.absolute_tick, data));
+                MidiTrackFlow::Continue
+            }
+            _ => MidiTrackFlow::Continue,
+        }
+    }
+
+    fn read_channel_event(
+        &mut self,
+        reader: &mut ByteReader<'_>,
+        path: &Path,
+        event: MidiEventStatus,
+    ) -> Result<(), String> {
+        let payload = read_channel_event_payload(reader, path, event)?;
+        self.apply_channel_event(event.status, payload);
+        Ok(())
+    }
+
+    fn apply_channel_event(&mut self, status: u8, payload: ChannelEventPayload) {
+        let event_type = status & 0xF0;
+        let channel = status & 0x0F;
+
+        match event_type {
+            0x80 => self.finish_active_note(channel, payload.data1),
+            0x90 if payload.data2 == Some(0) => self.finish_active_note(channel, payload.data1),
+            0x90 => self.start_active_note(channel, payload.data1),
+            _ => {}
+        }
+    }
+
+    fn start_active_note(&mut self, channel: u8, pitch: u8) {
+        self.active_notes
+            .entry((channel, pitch))
+            .or_default()
+            .push(ActiveNote {
+                start_tick: self.absolute_tick,
+                track_index: usize::from(self.track_index),
+            });
+    }
+
+    fn finish_active_note(&mut self, channel: u8, pitch: u8) {
+        finish_active_note(
+            &mut self.active_notes,
+            &mut self.notes,
+            channel,
+            pitch,
+            self.absolute_tick,
+        );
+    }
+
+    fn finish(&mut self) {
+        for ((_, pitch), mut stack) in self.active_notes.drain() {
             while let Some(active) = stack.pop() {
-                notes.push(MidiNote {
+                self.notes.push(MidiNote {
                     start_tick: active.start_tick,
-                    end_tick: absolute_tick.max(active.start_tick.saturating_add(1)),
+                    end_tick: self.absolute_tick.max(active.start_tick.saturating_add(1)),
                     pitch,
                     track_index: active.track_index,
                 });
             }
         }
-
-        total_ticks = total_ticks.max(absolute_tick);
-
-        parsed_tracks.push(ParsedMidiTrack {
-            raw_index: usize::from(track_index),
-            explicit_label: explicit_track_label(track_name.as_deref(), instrument_name.as_deref()),
-        });
     }
 
-    let tracks = compact_tracks_and_notes(&parsed_tracks, &mut notes);
-
-    notes.sort_by(|left, right| {
-        left.start_tick
-            .cmp(&right.start_tick)
-            .then_with(|| left.pitch.cmp(&right.pitch))
-            .then_with(|| left.track_index.cmp(&right.track_index))
-    });
-
-    if let Some(last_note) = notes.last() {
-        total_ticks = total_ticks.max(last_note.end_tick);
+    fn into_events(self) -> ParsedMidiTrackEvents {
+        ParsedMidiTrackEvents {
+            track: ParsedMidiTrack {
+                raw_index: usize::from(self.track_index),
+                explicit_label: explicit_track_label(
+                    self.track_name.as_deref(),
+                    self.instrument_name.as_deref(),
+                ),
+            },
+            notes: self.notes,
+            tempo_changes: self.tempo_changes,
+            time_signatures: self.time_signatures,
+            total_ticks: self.absolute_tick,
+        }
     }
-
-    tempo_changes = normalize_tempos(tempo_changes);
-    time_signatures = normalize_time_signatures(time_signatures);
-
-    let bar_lines = build_bar_lines(total_ticks, ppq, &time_signatures);
-
-    let (min_pitch, max_pitch) = note_pitch_range(&notes);
-
-    Ok(MidiRollData {
-        ppq,
-        total_ticks,
-        notes,
-        tracks,
-        time_signatures,
-        tempo_changes,
-        bar_lines,
-        min_pitch,
-        max_pitch,
-    })
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ActiveNote {
-    start_tick: u64,
-    track_index: usize,
+struct ChannelEventPayload {
+    data1: u8,
+    data2: Option<u8>,
+}
+
+fn read_midi_event_status(
+    reader: &mut ByteReader<'_>,
+    path: &Path,
+    running_status: &mut Option<u8>,
+) -> Result<MidiEventStatus, String> {
+    let status_or_data = reader
+        .read_u8()
+        .ok_or_else(|| format!("MIDI file {} has truncated event", path.display()))?;
+
+    if status_or_data < 0x80 {
+        return running_status_event(path, *running_status, status_or_data);
+    }
+
+    update_running_status(status_or_data, running_status);
+    Ok(MidiEventStatus {
+        status: status_or_data,
+        first_data: None,
+    })
+}
+
+fn running_status_event(
+    path: &Path,
+    running_status: Option<u8>,
+    first_data: u8,
+) -> Result<MidiEventStatus, String> {
+    let Some(status) = running_status else {
+        return Err(format!(
+            "MIDI file {} uses running status before status byte",
+            path.display()
+        ));
+    };
+
+    Ok(MidiEventStatus {
+        status,
+        first_data: Some(first_data),
+    })
+}
+
+fn update_running_status(status: u8, running_status: &mut Option<u8>) {
+    *running_status = if status < 0xF0 { Some(status) } else { None };
+}
+
+fn skip_sysex_event(reader: &mut ByteReader<'_>, path: &Path) -> Result<(), String> {
+    read_length_prefixed_event_data(reader, path, "sysex event").map(|_| ())
+}
+
+fn read_length_prefixed_event_data<'a>(
+    reader: &mut ByteReader<'a>,
+    path: &Path,
+    event_name: &str,
+) -> Result<&'a [u8], String> {
+    let data_len = reader.read_vlq().ok_or_else(|| {
+        format!(
+            "MIDI file {} has invalid {event_name} length",
+            path.display()
+        )
+    })?;
+    let data_len = usize::try_from(data_len).map_err(|error| {
+        format!(
+            "MIDI file {} has oversized {event_name}: {error}",
+            path.display()
+        )
+    })?;
+
+    reader.read_exact(data_len).ok_or_else(|| {
+        format!(
+            "MIDI file {} has truncated {event_name} data",
+            path.display()
+        )
+    })
+}
+
+fn non_empty_meta_text(data: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(data).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+fn meta_tempo(tick: u64, data: &[u8]) -> Option<TempoChange> {
+    let [hi, mid, lo] = data else {
+        return None;
+    };
+
+    Some(TempoChange {
+        tick,
+        micros_per_quarter: (u32::from(*hi) << 16) | (u32::from(*mid) << 8) | u32::from(*lo),
+    })
+}
+
+fn meta_time_signature(tick: u64, data: &[u8]) -> Option<TimeSignatureChange> {
+    let (&numerator, &denominator_power) = data.first().zip(data.get(1))?;
+
+    Some(TimeSignatureChange {
+        tick,
+        numerator: numerator.max(1),
+        denominator: 2_u8.pow(u32::from(denominator_power)).max(1),
+    })
+}
+
+fn read_channel_event_payload(
+    reader: &mut ByteReader<'_>,
+    path: &Path,
+    event: MidiEventStatus,
+) -> Result<ChannelEventPayload, String> {
+    let data_len = channel_event_data_len(event.status);
+    let data1 = read_channel_data1(reader, path, event)?;
+    let data2 = read_channel_data2(reader, path, data_len)?;
+
+    Ok(ChannelEventPayload { data1, data2 })
+}
+
+fn channel_event_data_len(status: u8) -> usize {
+    if matches!(status & 0xF0, 0xC0 | 0xD0) {
+        1
+    } else {
+        2
+    }
+}
+
+fn read_channel_data1(
+    reader: &mut ByteReader<'_>,
+    path: &Path,
+    event: MidiEventStatus,
+) -> Result<u8, String> {
+    if let Some(first_data) = event.first_data {
+        return Ok(first_data);
+    }
+
+    reader
+        .read_u8()
+        .ok_or_else(|| format!("MIDI file {} has truncated channel event", path.display()))
+}
+
+fn read_channel_data2(
+    reader: &mut ByteReader<'_>,
+    path: &Path,
+    data_len: usize,
+) -> Result<Option<u8>, String> {
+    if data_len != 2 {
+        return Ok(None);
+    }
+
+    reader
+        .read_u8()
+        .map(Some)
+        .ok_or_else(|| format!("MIDI file {} has truncated channel event", path.display()))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -434,12 +686,12 @@ impl<'a> ByteReader<'a> {
 
     fn read_u16_be(&mut self) -> Option<u16> {
         let bytes = self.read_exact(2)?;
-        Some(u16::from_be_bytes([bytes[0], bytes[1]]))
+        Some(u16::from_be_bytes(bytes.try_into().ok()?))
     }
 
     fn read_u32_be(&mut self) -> Option<u32> {
         let bytes = self.read_exact(4)?;
-        Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        Some(u32::from_be_bytes(bytes.try_into().ok()?))
     }
 
     fn read_exact(&mut self, len: usize) -> Option<&'a [u8]> {
@@ -571,7 +823,7 @@ fn normalize_tempos(mut tempos: Vec<TempoChange>) -> Vec<TempoChange> {
         }
     }
 
-    if normalized.is_empty() || normalized[0].tick != 0 {
+    if normalized.first().is_none_or(|tempo| tempo.tick != 0) {
         normalized.insert(
             0,
             TempoChange {
@@ -599,7 +851,10 @@ fn normalize_time_signatures(mut signatures: Vec<TimeSignatureChange>) -> Vec<Ti
         }
     }
 
-    if normalized.is_empty() || normalized[0].tick != 0 {
+    if normalized
+        .first()
+        .is_none_or(|signature| signature.tick != 0)
+    {
         normalized.insert(
             0,
             TimeSignatureChange {
@@ -671,91 +926,4 @@ fn note_pitch_range(notes: &[MidiNote]) -> (u8, u8) {
 }
 
 #[cfg(test)]
-mod tests {
-    use midly::num::{u4, u7, u15, u24, u28};
-    use midly::{
-        Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
-    };
-    use tempfile::NamedTempFile;
-
-    use super::{midi_file_index, parse_midi_roll_file};
-
-    #[test]
-    fn midi_index_matches_primary_and_suffix() {
-        assert_eq!(midi_file_index("score", "score"), Some(1));
-        assert_eq!(midi_file_index("score-2", "score"), Some(2));
-    }
-
-    #[test]
-    fn midi_index_ignores_non_matching_stem() {
-        assert_eq!(midi_file_index("other", "score"), None);
-        assert_eq!(midi_file_index("score-final", "score"), None);
-    }
-
-    #[test]
-    fn parse_midi_roll_compacts_non_musical_tracks() {
-        let header = Header::new(Format::Parallel, Timing::Metrical(u15::from(480)));
-        let tempo_track: Track<'static> = vec![
-            TrackEvent {
-                delta: u28::from(0),
-                kind: TrackEventKind::Meta(MetaMessage::TrackName(b"Tempo".as_slice())),
-            },
-            TrackEvent {
-                delta: u28::from(0),
-                kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::from(500_000))),
-            },
-            TrackEvent {
-                delta: u28::from(0),
-                kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
-            },
-        ];
-        let note_track: Track<'static> = vec![
-            TrackEvent {
-                delta: u28::from(0),
-                kind: TrackEventKind::Meta(MetaMessage::TrackName(b"Violin".as_slice())),
-            },
-            TrackEvent {
-                delta: u28::from(0),
-                kind: TrackEventKind::Midi {
-                    channel: u4::from(0),
-                    message: MidiMessage::NoteOn {
-                        key: u7::from(60),
-                        vel: u7::from(100),
-                    },
-                },
-            },
-            TrackEvent {
-                delta: u28::from(480),
-                kind: TrackEventKind::Midi {
-                    channel: u4::from(0),
-                    message: MidiMessage::NoteOff {
-                        key: u7::from(60),
-                        vel: u7::from(0),
-                    },
-                },
-            },
-            TrackEvent {
-                delta: u28::from(0),
-                kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
-            },
-        ];
-        let smf = Smf {
-            header,
-            tracks: vec![tempo_track, note_track],
-        };
-        let mut bytes = Vec::new();
-        smf.write_std(&mut bytes)
-            .expect("test midi should serialize");
-
-        let file = NamedTempFile::new().expect("temp midi file should exist");
-        std::fs::write(file.path(), bytes).expect("temp midi bytes should write");
-
-        let data = parse_midi_roll_file(file.path()).expect("midi should parse");
-
-        assert_eq!(data.tracks.len(), 1);
-        assert_eq!(data.tracks[0].index, 0);
-        assert_eq!(data.tracks[0].label, "Violin");
-        assert_eq!(data.notes.len(), 1);
-        assert_eq!(data.notes[0].track_index, 0);
-    }
-}
+mod tests;

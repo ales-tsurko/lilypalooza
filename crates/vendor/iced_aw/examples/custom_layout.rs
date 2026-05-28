@@ -1,6 +1,7 @@
 /// Takes three child elements and places them in a row. The elements are placed left center right.
-/// The widget in the middle is placed in the center of the whole row rather than in the middle between the other two widgets.
-/// This means that the middle element is placed in the absolute center, not depending on the size of the other widgets.   
+/// The widget in the middle is placed in the center of the whole row rather than in the middle
+/// between the other two widgets. This means that the middle element is placed in the absolute
+/// center, not depending on the size of the other widgets.
 pub fn three_split_row<'a, Message: 'a>(
     left: impl Into<iced::Element<'a, Message>>,
     middle: impl Into<iced::Element<'a, Message>>,

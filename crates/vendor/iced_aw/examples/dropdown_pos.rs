@@ -1,11 +1,11 @@
+use std::{fmt, str::FromStr};
+
 use iced::{
     Alignment, Element,
     Length::{Fill, FillPortion, Shrink},
     widget::{button, column, container, row, scrollable, text},
 };
 use iced_aw::{DropDown, drop_down};
-use std::fmt;
-use std::str::FromStr;
 
 fn main() -> iced::Result {
     iced::application(App::default, App::update, App::view).run()

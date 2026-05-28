@@ -3,27 +3,35 @@
 //! This module provides a custom Canvas widget that handles all text rendering
 //! and input directly, bypassing Iced's higher-level widgets for optimal speed.
 
-use iced::advanced::text::{Alignment, Paragraph, Renderer as TextRenderer, Text};
-use iced::widget::operation::{RelativeOffset, scroll_to, snap_to};
-use iced::widget::{Id, canvas};
-use std::cell::{Cell, RefCell};
-use std::cmp::Ordering as CmpOrdering;
-use std::ops::Range;
-use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
-use unicode_width::UnicodeWidthChar;
+use std::{
+    cell::{Cell, RefCell},
+    cmp::Ordering as CmpOrdering,
+    ops::Range,
+    path::PathBuf,
+    rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
-use crate::i18n::Translations;
-use crate::language::{self, LanguageConfig};
-use crate::text_buffer::TextBuffer;
-use crate::theme::Style;
 pub use history::CommandHistory;
-
+use iced::{
+    advanced::text::{Alignment, Paragraph, Renderer as TextRenderer, Text},
+    widget::{
+        Id, canvas,
+        operation::{RelativeOffset, scroll_to, snap_to},
+    },
+};
+use unicode_width::UnicodeWidthChar;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
+
+use crate::{
+    i18n::Translations,
+    language::{self, LanguageConfig},
+    text_buffer::TextBuffer,
+    theme::Style,
+};
 
 /// Global counter for generating unique editor IDs (starts at 1)
 static EDITOR_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -857,8 +865,7 @@ impl CodeEditor {
     /// ```
     /// use iced_code_editor::CodeEditor;
     ///
-    /// let editor = CodeEditor::new("fn main() {}", "rs")
-    ///     .with_viewport_height(500.0);
+    /// let editor = CodeEditor::new("fn main() {}", "rs").with_viewport_height(500.0);
     /// ```
     #[must_use]
     pub fn with_viewport_height(mut self, height: f32) -> Self {
@@ -1307,7 +1314,8 @@ impl CodeEditor {
             idx = idx.saturating_sub(1);
         }
 
-        // If current char is not a word char, check if previous was (we might be just after the word)
+        // If current char is not a word char, check if previous was (we might be just after the
+        // word)
         if !Self::is_word_char(chars[idx]) {
             if idx > 0 && Self::is_word_char(chars[idx - 1]) {
                 // We are just after a word, so idx is the end (exclusive)
@@ -1690,8 +1698,7 @@ impl CodeEditor {
     /// ```
     /// use iced_code_editor::CodeEditor;
     ///
-    /// let editor = CodeEditor::new("fn main() {}", "rs")
-    ///     .with_wrap_enabled(false);
+    /// let editor = CodeEditor::new("fn main() {}", "rs").with_wrap_enabled(false);
     /// ```
     #[must_use]
     pub fn with_wrap_enabled(mut self, enabled: bool) -> Self {
@@ -1771,8 +1778,7 @@ impl CodeEditor {
     /// ```
     /// use iced_code_editor::CodeEditor;
     ///
-    /// let editor = CodeEditor::new("fn main() {}", "rs")
-    ///     .with_line_numbers_enabled(false);
+    /// let editor = CodeEditor::new("fn main() {}", "rs").with_line_numbers_enabled(false);
     /// ```
     #[must_use]
     pub fn with_line_numbers_enabled(mut self, enabled: bool) -> Self {
@@ -1983,8 +1989,8 @@ impl CodeEditor {
     ///
     /// # Returns
     ///
-    /// `true` if the request was successfully sent (i.e., a valid position was found and an LSP client is active),
-    /// `false` otherwise.
+    /// `true` if the request was successfully sent (i.e., a valid position was found and an LSP
+    /// client is active), `false` otherwise.
     pub fn lsp_request_definition_at(&mut self, point: iced::Point) -> bool {
         let Some(position) = self.lsp_position_from_point(point) else {
             return false;
@@ -2001,9 +2007,9 @@ impl CodeEditor {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
     use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
     #[test]
     fn test_compare_floats() {

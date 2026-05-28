@@ -1,5 +1,4 @@
 //! A context menu for showing actions on right click.
-//!
 use iced_core::{
     Clipboard, Element, Event, Layout, Length, Point, Rectangle, Shell, Vector, Widget,
     layout::{Limits, Node},
@@ -12,7 +11,6 @@ pub use crate::style::{
     context_menu::{Catalog, Style},
     status::{Status, StyleFn},
 };
-
 use crate::widget::overlay::ContextMenuOverlay;
 
 /// A context menu
@@ -69,7 +67,8 @@ where
     ///
     /// `underlay`: The underlying element.
     ///
-    /// `overlay`: The content of [`ContextMenuOverlay`] which will be displayed when `underlay` is clicked.
+    /// `overlay`: The content of [`ContextMenuOverlay`] which will be displayed when `underlay` is
+    /// clicked.
     pub fn new<U>(underlay: U, overlay: Overlay) -> Self
     where
         U: Into<Element<'a, Message, Theme, Renderer>>,

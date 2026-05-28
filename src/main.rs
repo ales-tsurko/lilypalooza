@@ -2,9 +2,7 @@
 //!
 //! This binary wires the UI modules and starts the Iced runtime.
 
-use std::env;
-use std::ffi::OsString;
-use std::path::PathBuf;
+use std::{env, ffi::OsString, path::PathBuf};
 
 mod app;
 mod browser_file_watcher;
@@ -16,6 +14,7 @@ mod icons;
 mod lilypond;
 mod logger;
 mod midi;
+mod number;
 mod score_watcher;
 mod settings;
 mod shortcuts;
@@ -25,6 +24,30 @@ mod track_colors;
 mod track_names;
 mod ui_style;
 
+#[cfg(test)]
+mod test_assertions {
+    macro_rules! assert_float_eq {
+        ($actual:expr, $expected:expr $(,)?) => {{
+            let actual = $actual;
+            let expected = $expected;
+            assert!(
+                (actual - expected).abs() <= 1.0e-4,
+                "expected {actual:?} to equal {expected:?}"
+            );
+        }};
+        ($actual:expr, $expected:expr, $($arg:tt)+) => {{
+            let actual = $actual;
+            let expected = $expected;
+            assert!(
+                (actual - expected).abs() <= 1.0e-4,
+                $($arg)+
+            );
+        }};
+    }
+
+    pub(crate) use assert_float_eq;
+}
+
 fn main() -> iced::Result {
     init_logging();
     lilypalooza_builtins::register_all();
@@ -33,7 +56,9 @@ fn main() -> iced::Result {
 }
 
 fn init_logging() {
-    let _ = env_logger::Builder::from_env(env_logger::Env::default()).try_init();
+    if let Err(error) = env_logger::Builder::from_env(env_logger::Env::default()).try_init() {
+        eprintln!("Logger initialization skipped: {error}");
+    }
 }
 
 struct StartupOptions {
@@ -138,8 +163,9 @@ fn is_empty_os_string(value: &OsString) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::startup_options_from_iter;
     use std::ffi::OsString;
+
+    use super::startup_options_from_iter;
 
     #[test]
     fn parses_no_audio_flag() {

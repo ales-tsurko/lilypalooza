@@ -4,10 +4,10 @@
 //! when line wrapping is enabled. It supports both viewport-based wrapping
 //! (dynamic) and fixed column wrapping.
 
-use crate::text_buffer::TextBuffer;
 use std::cmp::Ordering;
 
 use super::compare_floats;
+use crate::text_buffer::TextBuffer;
 
 /// Represents a visual line segment in the editor.
 ///
@@ -115,7 +115,8 @@ impl WrappingCalculator {
     ///
     /// * `text_buffer` - The text buffer to wrap
     /// * `viewport_width` - Width of the viewport in pixels (used if wrap_column is None)
-    /// * `gutter_width` - Width of the line number gutter in pixels (subtracted from available width)
+    /// * `gutter_width` - Width of the line number gutter in pixels (subtracted from available
+    ///   width)
     ///
     /// # Returns
     ///
@@ -162,8 +163,8 @@ impl WrappingCalculator {
                     super::measure_char_width(c, self.full_char_width, self.char_width);
 
                 // If adding the current character exceeds wrap width, wrap at the previous char.
-                // Ensure at least one character per segment even if a single char exceeds wrap_width.
-                // Use epsilon to handle floating-point error.
+                // Ensure at least one character per segment even if a single char exceeds
+                // wrap_width. Use epsilon to handle floating-point error.
                 if compare_floats(current_width + char_width, wrap_width_pixels)
                     == Ordering::Greater
                     && i > current_segment_start_col

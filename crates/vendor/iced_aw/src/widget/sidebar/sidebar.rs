@@ -7,14 +7,8 @@
 //! [`SidebarWithContent`] is a single widget containing both the sidebar and content area,
 //! and it manages the displaying of the content.
 
-use super::column::FlushColumn;
-use crate::{
-    ICED_AW_FONT, iced_aw_font,
-    style::{
-        Status, StyleFn,
-        sidebar::{self, Catalog, Style},
-    },
-};
+use std::marker::PhantomData;
+
 use iced_core::{
     Alignment, Background, Border, Clipboard, Color, Element, Event, Font, Layout, Length, Padding,
     Pixels, Point, Rectangle, Shadow, Shell, Size, Vector, Widget,
@@ -31,7 +25,15 @@ use iced_widget::{
     Row, Text,
     text::{self, LineHeight, Wrapping},
 };
-use std::marker::PhantomData;
+
+use super::column::FlushColumn;
+use crate::{
+    ICED_AW_FONT, iced_aw_font,
+    style::{
+        Status, StyleFn,
+        sidebar::{self, Catalog, Style},
+    },
+};
 
 /// The default icon size.
 const DEFAULT_ICON_SIZE: f32 = 16.0;
@@ -162,8 +164,8 @@ where
     ///
     /// It expects:
     ///     * the index of the currently active tab.
-    ///     * the function that will be called if a tab is selected by the user.
-    ///         It takes the index of the selected tab.
+    ///     * the function that will be called if a tab is selected by the user. It takes the index
+    ///       of the selected tab.
     pub fn new<F>(on_select: F) -> Self
     where
         F: 'static + Fn(TabId) -> Message,
@@ -176,8 +178,8 @@ where
     /// It expects:
     ///     * the index of the currently active tab.
     ///     * a vector containing the [`TabLabel`]s of the [`Sidebar`].
-    ///     * the function that will be called if a tab is selected by the user.
-    ///         It takes the index of the selected tab.
+    ///     * the function that will be called if a tab is selected by the user. It takes the index
+    ///       of the selected tab.
     pub fn with_tab_labels<F>(tab_labels: Vec<(TabId, TabLabel)>, on_select: F) -> Self
     where
         F: 'static + Fn(TabId) -> Message,
@@ -1111,7 +1113,6 @@ pub enum SidebarPosition {
 /// .push(TabId::Three, TabLabel::Text(String::from("Three")), Text::new(String::from("Three")))
 /// .set_active_tab(&TabId::Two);
 /// ```
-///
 #[allow(missing_debug_implementations)]
 pub struct SidebarWithContent<
     'a,
@@ -1149,8 +1150,8 @@ where
     ///
     /// It expects:
     ///     * the index of the currently active tab.
-    ///     * the function that will be called if a tab is selected by the user.
-    ///         It takes the index of the selected tab.
+    ///     * the function that will be called if a tab is selected by the user. It takes the index
+    ///       of the selected tab.
     pub fn new<F>(on_select: F) -> Self
     where
         F: 'static + Fn(TabId) -> Message,
@@ -1163,10 +1164,10 @@ where
     ///
     /// It expects:
     ///     * the index of the currently active tab.
-    ///     * a vector containing the [`TabLabel`]s along with the content
-    ///         [`Element`]s of the [`SidebarWithContent`].
-    ///     * the function that will be called if a tab is selected by the user.
-    ///         It takes the index of the selected tab.
+    ///     * a vector containing the [`TabLabel`]s along with the content [`Element`]s of the
+    ///       [`SidebarWithContent`].
+    ///     * the function that will be called if a tab is selected by the user. It takes the index
+    ///       of the selected tab.
     pub fn new_with_tabs<F>(
         tabs: Vec<(TabId, TabLabel, Element<'a, Message, Theme, Renderer>)>,
         on_select: F,

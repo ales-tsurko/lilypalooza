@@ -1,5 +1,4 @@
 //! [`Item`] and [`Menu`]
-//!
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::wildcard_imports)]
@@ -10,25 +9,25 @@
 #![allow(clippy::pedantic)]
 #![allow(clippy::similar_names)]
 
-use super::common::*;
-use super::flex;
+use std::iter::once;
+
 use iced_core::{
     Clipboard, Element, Event, Length, Padding, Pixels, Point, Rectangle, Shell, Size, Vector,
     alignment,
     layout::{Layout, Limits, Node},
     mouse, renderer,
     time::Instant,
-    widget::Operation,
-    widget::tree::{self, Tree},
+    widget::{
+        Operation,
+        tree::{self, Tree},
+    },
     window,
 };
-use std::iter::once;
-
-use super::menu_bar::*;
-use crate::style::menu_bar::*;
-
 #[cfg(feature = "debug_log")]
 use log::{debug, warn};
+
+use super::{common::*, flex, menu_bar::*};
+use crate::style::menu_bar::*;
 
 /*
 menu tree:
@@ -438,7 +437,7 @@ where
                                     .nth(active_in_slice)
                                     .expect(
                                         "Index (in slice space) is not within the slice layout. \
-                                        This should not happen, please report this issue",
+                                         This should not happen, please report this issue",
                                     )
                                     .bounds()
                                     .center();
@@ -520,9 +519,9 @@ where
                         assert!(
                             menu_state.active.is_none(),
                             "
-                        Menu::open_event() is called only when RecEvent::Close is returned, \
-                        which means no child menu should be open (menu_state.active must be None). \
-                        If this assert fails, please report this issue.
+                        Menu::open_event() is called only when RecEvent::Close is returned, which \
+                             means no child menu should be open (menu_state.active must be None). \
+                             If this assert fails, please report this issue.
                     "
                         );
 
@@ -704,8 +703,8 @@ where
                 .children()
                 .nth(active_in_slice)
                 .expect(
-                    "Index (in slice space) is not within the slice layout. \
-                    This should not happen, please report this issue",
+                    "Index (in slice space) is not within the slice layout. This should not \
+                     happen, please report this issue",
                 )
                 .bounds();
 
@@ -824,7 +823,6 @@ where
     }
 
     /// tree: Tree{stateless, \[widget_tree, menu_tree]}
-    ///
     pub(super) fn update(
         &mut self,
         tree: &mut Tree,
@@ -851,7 +849,6 @@ where
     }
 
     /// tree: Tree{stateless, \[widget_tree, menu_tree]}
-    ///
     pub(super) fn mouse_interaction(
         &self,
         tree: &Tree,
@@ -869,7 +866,6 @@ where
     }
 
     /// tree: Tree{stateless, \[widget_tree, menu_tree]}
-    ///
     pub(super) fn draw(
         &self,
         tree: &Tree,

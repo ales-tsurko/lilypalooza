@@ -1,11 +1,25 @@
-use iced::advanced::layout;
-use iced::advanced::renderer;
-use iced::advanced::svg as advanced_svg;
-use iced::advanced::widget::{Tree, Widget};
-use iced::advanced::{Clipboard, Layout, Shell};
-use iced::mouse;
-use iced::widget::svg;
-use iced::{ContentFit, Element, Event, Length, Point, Rectangle, Size, Theme, Vector};
+use iced::{
+    ContentFit,
+    Element,
+    Event,
+    Length,
+    Point,
+    Rectangle,
+    Size,
+    Theme,
+    Vector,
+    advanced::{
+        Clipboard,
+        Layout,
+        Shell,
+        layout,
+        renderer,
+        svg as advanced_svg,
+        widget::{Tree, Widget},
+    },
+    mouse,
+    widget::svg,
+};
 
 pub(crate) struct ControlIcon<'a> {
     handle: svg::Handle,

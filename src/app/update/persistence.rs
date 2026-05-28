@@ -1,6 +1,10 @@
 use super::*;
 use crate::settings::WorkspaceLayoutSettings;
 
+fn migrate_loaded_workspace_layout(workspace_layout: &mut WorkspaceLayoutSettings) {
+    migrate_workspace_layout(&mut workspace_layout.root, &workspace_layout.folded_panes);
+}
+
 impl Lilypalooza {
     pub(in crate::app) fn current_project_state(&self) -> ProjectState {
         ProjectState {
@@ -67,55 +71,57 @@ impl Lilypalooza {
         }
 
         match next_project_root {
-            Some(project_root) => {
-                let project_state = match state::load_project(&project_root) {
-                    Ok(mut state) => {
-                        migrate_workspace_layout(
-                            &mut state.workspace_layout.root,
-                            &state.workspace_layout.folded_panes,
-                        );
-                        state
-                    }
-                    Err(error) => {
-                        self.show_prompt(
-                            ErrorPrompt::new(
-                                "Project Load Error",
-                                error,
-                                ErrorFatality::Recoverable,
-                                PromptButtons::Ok,
-                            ),
-                            None,
-                        );
-                        ProjectState::default()
-                    }
-                };
-                self.apply_project_state(project_root, project_state);
+            Some(project_root) => self.attach_project_persistence_context(project_root),
+            None => self.attach_global_persistence_context(),
+        }
+    }
+
+    fn attach_project_persistence_context(&mut self, project_root: PathBuf) {
+        let project_state = self.load_project_state_or_default(&project_root);
+        self.apply_project_state(project_root, project_state);
+    }
+
+    fn attach_global_persistence_context(&mut self) {
+        let global_state = self.load_global_state_or_default();
+        self.apply_global_state(global_state);
+    }
+
+    fn load_project_state_or_default(&mut self, project_root: &Path) -> ProjectState {
+        match state::load_project(project_root) {
+            Ok(mut state) => {
+                migrate_loaded_workspace_layout(&mut state.workspace_layout);
+                state
             }
-            None => {
-                let global_state = match state::load_global() {
-                    Ok(mut state) => {
-                        migrate_workspace_layout(
-                            &mut state.workspace_layout.root,
-                            &state.workspace_layout.folded_panes,
-                        );
-                        state
-                    }
-                    Err(error) => {
-                        self.show_prompt(
-                            ErrorPrompt::new(
-                                "State Load Error",
-                                error,
-                                ErrorFatality::Recoverable,
-                                PromptButtons::Ok,
-                            ),
-                            None,
-                        );
-                        GlobalState::default()
-                    }
-                };
-                self.apply_global_state(global_state);
+            Err(error) => {
+                self.show_load_error_prompt("Project Load Error", error);
+                ProjectState::default()
             }
         }
+    }
+
+    fn load_global_state_or_default(&mut self) -> GlobalState {
+        match state::load_global() {
+            Ok(mut state) => {
+                migrate_loaded_workspace_layout(&mut state.workspace_layout);
+                state
+            }
+            Err(error) => {
+                self.show_load_error_prompt("State Load Error", error);
+                GlobalState::default()
+            }
+        }
+    }
+
+    fn show_load_error_prompt(&mut self, title: &'static str, error: impl ToString) {
+        self.show_prompt(
+            ErrorPrompt::new(
+                title,
+                error.to_string(),
+                ErrorFatality::Recoverable,
+                PromptButtons::Ok,
+            ),
+            None,
+        );
     }
 
     pub(in crate::app) fn apply_global_state(&mut self, state: GlobalState) {
@@ -203,8 +209,8 @@ impl Lilypalooza {
             if playback.mixer().replace_state(state.clone()).is_ok() {
                 for (track_id, track) in state.tracks_with_ids() {
                     let index = track_id.index();
-                    let _ = self.piano_roll.set_track_muted(index, track.state.muted);
-                    let _ = self.piano_roll.set_track_soloed(index, track.state.soloed);
+                    let _track_exists = self.piano_roll.set_track_muted(index, track.state.muted);
+                    let _track_exists = self.piano_roll.set_track_soloed(index, track.state.soloed);
                 }
                 self.piano_roll.set_global_solo_active(
                     state.tracks().iter().any(|track| track.state.soloed)
@@ -254,6 +260,7 @@ impl Lilypalooza {
                 },
             });
         }
+        normalize_loaded_folded_panes(&self.dock_groups, &mut self.folded_panes);
 
         self.piano_roll.visible = !self.is_pane_folded(WorkspacePaneKind::PianoRoll);
         self.piano_roll
@@ -400,59 +407,13 @@ impl Lilypalooza {
         &mut self,
         project_root: PathBuf,
     ) -> Task<Message> {
-        if self.pending_editor_action.is_none() && self.editor.has_dirty_tabs() {
-            return self.begin_pending_editor_action(
-                self.editor.tabs_requiring_resolution(),
-                EditorContinuation::LoadProject(project_root),
-            );
-        }
-        if self.pending_editor_action.is_none()
-            && self.project_root.as_ref() != Some(&project_root)
-            && self.project_is_dirty()
-        {
-            return self
-                .begin_pending_project_action(EditorContinuation::LoadProject(project_root));
+        if let Some(task) = self.defer_project_load_if_needed(&project_root) {
+            return task;
         }
 
-        self.open_project_menu = false;
-        self.open_project_menu_section = None;
-        self.open_project_recent = false;
-        if !state::project_file_path(&project_root).is_file() {
-            self.show_prompt(
-                ErrorPrompt::new(
-                    "Project Load Error",
-                    format!(
-                        "No project file found at {}",
-                        state::project_file_path(&project_root).display()
-                    ),
-                    ErrorFatality::Recoverable,
-                    PromptButtons::Ok,
-                ),
-                None,
-            );
+        self.close_project_menu_state();
+        let Some(project_state) = self.load_project_state_or_prompt(&project_root) else {
             return Task::none();
-        }
-
-        let project_state = match state::load_project(&project_root) {
-            Ok(mut state) => {
-                migrate_workspace_layout(
-                    &mut state.workspace_layout.root,
-                    &state.workspace_layout.folded_panes,
-                );
-                state
-            }
-            Err(error) => {
-                self.show_prompt(
-                    ErrorPrompt::new(
-                        "Project Load Error",
-                        error,
-                        ErrorFatality::Recoverable,
-                        PromptButtons::Ok,
-                    ),
-                    None,
-                );
-                return Task::none();
-            }
         };
 
         let main_score_path = project_state
@@ -460,20 +421,77 @@ impl Lilypalooza {
             .as_ref()
             .map(|path| project_root.join(path));
         self.apply_project_state(project_root, project_state);
+        self.load_project_main_score(main_score_path)
+    }
 
+    fn defer_project_load_if_needed(&mut self, project_root: &Path) -> Option<Task<Message>> {
+        if self.pending_editor_action.is_some() {
+            return None;
+        }
+        if self.editor.has_dirty_tabs() {
+            return Some(self.begin_pending_editor_action(
+                self.editor.tabs_requiring_resolution(),
+                EditorContinuation::LoadProject(project_root.to_path_buf()),
+            ));
+        }
+        self.dirty_project_load_continuation(project_root)
+            .map(|continuation| self.begin_pending_project_action(continuation))
+    }
+
+    fn dirty_project_load_continuation(&self, project_root: &Path) -> Option<EditorContinuation> {
+        (self.project_root.as_deref() != Some(project_root) && self.project_is_dirty())
+            .then(|| EditorContinuation::LoadProject(project_root.to_path_buf()))
+    }
+
+    fn close_project_menu_state(&mut self) {
+        self.open_project_menu = false;
+        self.open_project_menu_section = None;
+        self.open_project_recent = false;
+    }
+
+    fn load_project_state_or_prompt(&mut self, project_root: &Path) -> Option<ProjectState> {
+        let project_file = state::project_file_path(project_root);
+        if !project_file.is_file() {
+            self.show_project_load_error(format!(
+                "No project file found at {}",
+                project_file.display()
+            ));
+            return None;
+        }
+
+        match state::load_project(project_root) {
+            Ok(mut state) => {
+                migrate_workspace_layout(
+                    &mut state.workspace_layout.root,
+                    &state.workspace_layout.folded_panes,
+                );
+                Some(state)
+            }
+            Err(error) => {
+                self.show_project_load_error(error);
+                None
+            }
+        }
+    }
+
+    fn show_project_load_error(&mut self, error: String) {
+        self.show_prompt(
+            ErrorPrompt::new(
+                "Project Load Error",
+                error,
+                ErrorFatality::Recoverable,
+                PromptButtons::Ok,
+            ),
+            None,
+        );
+    }
+
+    fn load_project_main_score(&mut self, main_score_path: Option<PathBuf>) -> Task<Message> {
         if let Some(path) = main_score_path {
             match selected_score_from_path(path) {
                 Ok(selected_score) => self.activate_score(selected_score),
                 Err(error) => {
-                    self.show_prompt(
-                        ErrorPrompt::new(
-                            "Project Load Error",
-                            error,
-                            ErrorFatality::Recoverable,
-                            PromptButtons::Ok,
-                        ),
-                        None,
-                    );
+                    self.show_project_load_error(error);
                     Task::none()
                 }
             }

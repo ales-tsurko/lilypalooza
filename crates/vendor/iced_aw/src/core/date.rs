@@ -1,8 +1,8 @@
 //! Helper functions for calculating dates
 
+use std::{fmt::Display, sync::LazyLock};
+
 use chrono::{Datelike, Duration, Local, NaiveDate};
-use std::fmt::Display;
-use std::sync::LazyLock;
 
 /// The date value
 #[derive(Clone, Copy, Debug)]

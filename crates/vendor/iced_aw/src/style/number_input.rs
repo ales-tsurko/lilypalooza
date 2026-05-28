@@ -2,9 +2,10 @@
 //!
 //! *This API requires the following crate features to be activated: `number_input`*
 
-use super::{Status, StyleFn};
 use iced_core::{Background, Color, Theme};
 use iced_widget::{container, text, text_input};
+
+use super::{Status, StyleFn};
 
 /// The appearance of a [`NumberInput`](crate::widget::number_input::NumberInput).
 #[derive(Clone, Copy, Debug)]
@@ -97,8 +98,9 @@ pub fn primary(theme: &Theme, status: Status) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::Theme;
+
+    use super::*;
 
     #[test]
     fn style_default() {

@@ -1,6 +1,12 @@
 //! Display fields that can only be filled with numeric type.
 //!
 //! A [`NumberInput`] has some local [`State`].
+use std::{
+    fmt::Display,
+    ops::{Bound, RangeBounds},
+    str::FromStr,
+};
+
 use iced_core::{
     Alignment, Background, Border, Clipboard, Color, Element, Event, Layout, Length, Padding,
     Point, Rectangle, Shadow, Shell, Size, Widget,
@@ -20,19 +26,16 @@ use iced_widget::{
     text_input::{self, Value, cursor},
 };
 use num_traits::{Num, NumAssignOps, bounds::Bounded};
-use std::{
-    fmt::Display,
-    ops::{Bound, RangeBounds},
-    str::FromStr,
-};
 
-use crate::iced_aw_font::advanced_text::{down_open, up_open};
-use crate::style::{self, Status};
 pub use crate::style::{
     StyleFn,
     number_input::{self, Catalog, Style},
 };
-use crate::widget::typed_input::TypedInput;
+use crate::{
+    iced_aw_font::advanced_text::{down_open, up_open},
+    style::{self, Status},
+    widget::typed_input::TypedInput,
+};
 
 /// The default padding
 const DEFAULT_PADDING: Padding = Padding::new(5.0);
@@ -157,7 +160,8 @@ where
 
     /// Sets the message that should be produced when some valid text is typed into [`NumberInput`]
     ///
-    /// If neither this method nor [`on_submit`](Self::on_submit) is called, the [`NumberInput`] will be disabled
+    /// If neither this method nor [`on_submit`](Self::on_submit) is called, the [`NumberInput`]
+    /// will be disabled
     #[must_use]
     pub fn on_input<F>(mut self, callback: F) -> Self
     where
@@ -168,9 +172,11 @@ where
         self
     }
 
-    /// Sets the message that should be produced when some text is typed into the [`NumberInput`], if `Some`.
+    /// Sets the message that should be produced when some text is typed into the [`NumberInput`],
+    /// if `Some`.
     ///
-    /// If this is `None`, and there is no [`on_submit`](Self::on_submit) callback, the [`NumberInput`] will be disabled.
+    /// If this is `None`, and there is no [`on_submit`](Self::on_submit) callback, the
+    /// [`NumberInput`] will be disabled.
     #[must_use]
     pub fn on_input_maybe<F>(mut self, callback: Option<F>) -> Self
     where
@@ -204,7 +210,8 @@ where
     /// Sets the message that should be produced when the [`NumbertInput`] is
     /// focused and the enter key is pressed, if `Some`.
     ///
-    /// If this is `None`, and there is no [`on_change`](Self::on_input) callback, the [`NumberInput`] will be disabled.
+    /// If this is `None`, and there is no [`on_change`](Self::on_input) callback, the
+    /// [`NumberInput`] will be disabled.
     #[must_use]
     pub fn on_submit_maybe(mut self, message: Option<Message>) -> Self {
         if let Some(message) = message {
@@ -228,7 +235,8 @@ where
         self
     }
 
-    /// Sets the message that should be produced when some text is pasted into the [`NumberInput`], resulting in a valid value
+    /// Sets the message that should be produced when some text is pasted into the [`NumberInput`],
+    /// resulting in a valid value
     #[must_use]
     pub fn on_paste<F>(mut self, callback: F) -> Self
     where
@@ -239,7 +247,8 @@ where
         self
     }
 
-    /// Sets the message that should be produced when some text is pasted into the [`NumberInput`], resulting in a valid value, if `Some`
+    /// Sets the message that should be produced when some text is pasted into the [`NumberInput`],
+    /// resulting in a valid value, if `Some`
     #[must_use]
     pub fn on_paste_maybe<F>(mut self, callback: Option<F>) -> Self
     where
@@ -333,6 +342,7 @@ where
         self.class = (Box::new(style) as StyleFn<'a, Theme, Style>).into();
         self
     }
+
     /// Sets the style of the input of the [`NumberInput`].
     #[must_use]
     pub fn input_style(
@@ -361,7 +371,8 @@ where
     /// ```
     /// use iced_aw::widget::number_input;
     /// // Creates a range from -5 till 5.
-    /// let input: iced_aw::NumberInput<'_, _, _, iced_widget::Theme, iced::Renderer> = number_input(&4 /* my_value */, 0..=4, |_| () /* my_message */).bounds(-5..=5);
+    /// let input: iced_aw::NumberInput<'_, _, _, iced_widget::Theme, iced::Renderer> =
+    ///     number_input(&4 /* my_value */, 0..=4, |_| () /* my_message */).bounds(-5..=5);
     /// ```
     #[must_use]
     pub fn bounds(mut self, bounds: impl RangeBounds<T>) -> Self {
@@ -378,8 +389,8 @@ where
         self
     }
 
-    /// Enable or disable increase and decrease buttons of the [`NumberInput`], by default this is set to
-    /// ``false``.
+    /// Enable or disable increase and decrease buttons of the [`NumberInput`], by default this is
+    /// set to ``false``.
     #[must_use]
     pub fn ignore_buttons(mut self, ignore: bool) -> Self {
         self.ignore_buttons = ignore;
@@ -496,6 +507,7 @@ where
     fn tag(&self) -> Tag {
         Tag::of::<ModifierState>()
     }
+
     fn state(&self) -> State {
         State::new(ModifierState::default())
     }
@@ -754,8 +766,8 @@ where
                     } => {
                         let cursor = text_input.cursor();
 
-                        // If true, ignore Arrow/Home/End keys - they are coming from numpad and are just
-                        // mislabeled. See the core PR:
+                        // If true, ignore Arrow/Home/End keys - they are coming from numpad and are
+                        // just mislabeled. See the core PR:
                         // https://github.com/iced-rs/iced/pull/2278
                         let has_value = !modifiers.command()
                             && text
@@ -1227,8 +1239,9 @@ fn sorted_range<T: PartialOrd>(a: T, b: T) -> std::ops::Range<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_widget::Renderer;
+
+    use super::*;
 
     #[derive(Clone, Debug)]
     #[allow(dead_code)]

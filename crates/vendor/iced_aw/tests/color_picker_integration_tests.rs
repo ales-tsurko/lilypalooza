@@ -8,8 +8,7 @@ mod common;
 
 use iced::Color;
 use iced_aw::ColorPicker;
-use iced_widget::button;
-use iced_widget::text::Text;
+use iced_widget::{button, text::Text};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Message {

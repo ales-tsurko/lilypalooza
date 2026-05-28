@@ -1,12 +1,6 @@
 //! A modal for showing elements as an overlay on top of another.
 //!
 //! *This API requires the following crate features to be activated: ``context_menu``*
-use crate::context_menu;
-pub use crate::style::{
-    context_menu::{Catalog, Style},
-    status::{self, StyleFn},
-};
-
 use iced_core::{
     Border, Clipboard, Color, Element, Event, Layout, Point, Shell, Size, keyboard,
     layout::{Limits, Node},
@@ -14,6 +8,12 @@ use iced_core::{
     overlay, renderer, touch,
     widget::Tree,
     window,
+};
+
+use crate::context_menu;
+pub use crate::style::{
+    context_menu::{Catalog, Style},
+    status::{self, StyleFn},
 };
 
 /// The overlay of the [`ContextMenu`](crate::widget::ContextMenu).
@@ -38,7 +38,8 @@ pub struct ContextMenuOverlay<
     content: Element<'a, Message, Theme, Renderer>,
     /// The style of the [`ContextMenuOverlay`].
     class: &'a Theme::Class<'b>,
-    /// The state shared between [`ContextMenu`](crate::widget::ContextMenu) and [`ContextMenuOverlay`].
+    /// The state shared between [`ContextMenu`](crate::widget::ContextMenu) and
+    /// [`ContextMenuOverlay`].
     state: &'a mut context_menu::State,
 }
 
@@ -263,9 +264,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::Point;
     use iced_widget::text::Text;
+
+    use super::*;
 
     #[derive(Clone)]
     enum TestMessage {}

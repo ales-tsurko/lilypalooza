@@ -1,13 +1,13 @@
 // This example demonstrates how to use the selection list widget
 //
-// It was written by Héctor Ramón Jiménez <hector0193@gmail.com> and Andrew Wheeler <genusistimelord@gmail.com>
+// It was written by Héctor Ramón Jiménez <hector0193@gmail.com> and Andrew Wheeler
+// <genusistimelord@gmail.com>
 
 use iced::{
     Alignment, Element, Font, Length,
     widget::{Column, Container, Text, button},
 };
-use iced_aw::ICED_AW_FONT_BYTES;
-use iced_aw::{selection_list::SelectionList, style::selection_list::primary};
+use iced_aw::{ICED_AW_FONT_BYTES, selection_list::SelectionList, style::selection_list::primary};
 
 pub fn main() -> iced::Result {
     iced::application(Example::default, Example::update, Example::view)

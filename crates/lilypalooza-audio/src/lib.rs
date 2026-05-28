@@ -13,26 +13,61 @@ pub mod sequencer;
 pub mod soundfont;
 pub mod transport;
 
+#[cfg(feature = "test-support")]
+mod test_support;
+
 #[cfg(test)]
 mod test_utils;
 
 pub use engine::{
-    AudioEngine, AudioEngineError, AudioEngineOptions, AudioEngineSettings,
+    AudioEngine,
+    AudioEngineError,
+    AudioEngineOptions,
+    AudioEngineSettings,
     EngineObservabilitySnapshot,
 };
 pub use instrument::{
-    BUILTIN_GAIN_ID, BUILTIN_METRONOME_ID, BUILTIN_NONE_ID, BUILTIN_SOUNDFONT_ID, Controller,
-    ControllerError, EditorDescriptor, EditorError, EditorParent, EditorResizeHandler,
-    EditorSession, EditorSize, EffectProcessor, EffectRuntimeHandle, InstrumentProcessor,
-    InstrumentRuntimeHandle, MidiEvent, ParameterDescriptor, Processor, ProcessorDescriptor,
-    ProcessorKind, ProcessorState, ProcessorStateError, SharedAudioValue, SlotState,
+    BUILTIN_GAIN_ID,
+    BUILTIN_METRONOME_ID,
+    BUILTIN_NONE_ID,
+    BUILTIN_SOUNDFONT_ID,
+    Controller,
+    ControllerError,
+    EditorDescriptor,
+    EditorError,
+    EditorParent,
+    EditorResizeHandler,
+    EditorSession,
+    EditorSize,
+    EffectProcessor,
+    EffectRuntimeHandle,
+    InstrumentProcessor,
+    InstrumentRuntimeHandle,
+    MidiEvent,
+    ParameterDescriptor,
+    Processor,
+    ProcessorDescriptor,
+    ProcessorKind,
+    ProcessorState,
+    ProcessorStateError,
+    SharedAudioValue,
+    SlotState,
     SmoothedAudioValue,
 };
 pub use mixer::{
-    BusId, BusSend, INSTRUMENT_TRACK_COUNT, SlotAddress, Track, TrackId, TrackRoute, TrackRouting,
+    BusId,
+    BusSend,
+    INSTRUMENT_TRACK_COUNT,
+    MixerError,
+    MixerHandle,
+    MixerState,
+    SlotAddress,
+    Track,
+    TrackId,
+    TrackRoute,
+    TrackRouting,
     TrackState,
 };
-pub use mixer::{MixerError, MixerHandle, MixerState};
 pub use sequencer::{Sequencer, SequencerError, SequencerHandle};
 pub use soundfont::{LoadedSoundfont, SoundfontPreset, SoundfontResource, SoundfontSynthSettings};
 pub use transport::{PlaybackState, Transport, TransportError, TransportSnapshot};

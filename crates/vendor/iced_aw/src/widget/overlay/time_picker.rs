@@ -2,21 +2,8 @@
 //!
 //! *This API requires the following crate features to be activated: `time_picker`*
 
-use crate::iced_aw_font::advanced_text::{cancel, down_open, ok, up_open};
-use crate::{
-    core::clock::{
-        HOUR_RADIUS_PERCENTAGE, HOUR_RADIUS_PERCENTAGE_NO_SECONDS, MINUTE_RADIUS_PERCENTAGE,
-        MINUTE_RADIUS_PERCENTAGE_NO_SECONDS, NearestRadius, PERIOD_PERCENTAGE,
-        SECOND_RADIUS_PERCENTAGE,
-    },
-    core::{clock, overlay::Position, time::Period},
-    style::{
-        Status,
-        style_state::StyleState,
-        time_picker::{Catalog, Style},
-    },
-    time_picker::{self, Time},
-};
+use std::collections::HashMap;
+
 use chrono::{Duration, Local, NaiveTime, Timelike};
 use iced_core::{
     Alignment, Border, Clipboard, Color, Element, Event, Layout, Length, Overlay, Padding, Pixels,
@@ -37,7 +24,26 @@ use iced_widget::{
     graphics::geometry::Renderer as _,
     text::{self, Wrapping},
 };
-use std::collections::HashMap;
+
+use crate::{
+    core::{
+        clock,
+        clock::{
+            HOUR_RADIUS_PERCENTAGE, HOUR_RADIUS_PERCENTAGE_NO_SECONDS, MINUTE_RADIUS_PERCENTAGE,
+            MINUTE_RADIUS_PERCENTAGE_NO_SECONDS, NearestRadius, PERIOD_PERCENTAGE,
+            SECOND_RADIUS_PERCENTAGE,
+        },
+        overlay::Position,
+        time::Period,
+    },
+    iced_aw_font::advanced_text::{cancel, down_open, ok, up_open},
+    style::{
+        Status,
+        style_state::StyleState,
+        time_picker::{Catalog, Style},
+    },
+    time_picker::{self, Time},
+};
 
 /// The padding around the elements.
 const PADDING: Padding = Padding::new(10.0);
@@ -64,7 +70,8 @@ where
     cancel_button: Button<'a, Message, Theme, Renderer>,
     /// The submit button of the [`TimePickerOverlay`].
     submit_button: Button<'a, Message, Theme, Renderer>,
-    /// The function that produces a message when the submit button of the [`TimePickerOverlay`] is pressed.
+    /// The function that produces a message when the submit button of the [`TimePickerOverlay`] is
+    /// pressed.
     on_submit: &'a dyn Fn(Time) -> Message,
     /// The position of the [`TimePickerOverlay`].
     position: Point,

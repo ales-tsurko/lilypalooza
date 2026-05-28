@@ -9,6 +9,7 @@ bincode = "1.3.3"
 knyst = { git = "https://github.com/ales-tsurko/knyst", rev = "be8df5331539c922ab362b57621563186e789c89", default-features = false, features = ["cpal"] }
 lilypalooza-audio = { path = "../lilypalooza-audio" }
 lilypalooza-egui-baseview = { path = "../lilypalooza-egui-baseview" }
+num-traits = "0.2.19"
 rustysynth = "1.3.6"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0.18"

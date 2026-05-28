@@ -1,6 +1,8 @@
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver, TryRecvError},
+};
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -18,7 +20,9 @@ impl EditorFileWatcher {
         let (event_tx, event_rx) = mpsc::channel();
 
         let watcher = notify::recommended_watcher(move |event| {
-            let _ = event_tx.send(event);
+            if event_tx.send(event).is_err() {
+                log::trace!("editor file watcher receiver was dropped");
+            }
         })?;
 
         Ok(Self {

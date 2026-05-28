@@ -1,18 +1,18 @@
 //! Cursor movement and positioning logic.
 
-use iced::widget::operation::scroll_to;
-use iced::widget::scrollable;
-use iced::{Point, Task};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
+use iced::{
+    Point, Task,
+    widget::{operation::scroll_to, scrollable},
+};
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-use super::measure_text_width;
-
-use super::wrapping::WrappingCalculator;
-use super::{ArrowDirection, CodeEditor, Message};
+use super::{
+    ArrowDirection, CodeEditor, Message, measure_text_width, wrapping::WrappingCalculator,
+};
 
 impl CodeEditor {
     pub(crate) fn sync_preferred_column(&mut self) {

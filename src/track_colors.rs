@@ -18,7 +18,10 @@ pub(crate) fn default_track_color(track_index: usize) -> Color {
         Color::from_rgb(0.77, 0.43, 0.48),
     ];
 
-    COLORS[track_index % COLORS.len()]
+    COLORS
+        .get(track_index % COLORS.len())
+        .copied()
+        .unwrap_or(Color::WHITE)
 }
 
 pub(crate) fn effective_track_color(track_index: usize, user_override: Option<Color>) -> Color {

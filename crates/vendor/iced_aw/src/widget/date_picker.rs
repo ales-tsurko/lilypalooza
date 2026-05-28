@@ -2,8 +2,6 @@
 //!
 //! *This API requires the following crate features to be activated: `date_picker`*
 
-use super::overlay::date_picker::{self, DatePickerOverlay, DatePickerOverlayButtons};
-
 use chrono::Local;
 use iced_core::{
     Clipboard, Element, Event, Layout, Length, Pixels, Point, Rectangle, Shell, Size, Vector,
@@ -19,6 +17,7 @@ use iced_core::{
 };
 use iced_widget::Renderer;
 
+use super::overlay::date_picker::{self, DatePickerOverlay, DatePickerOverlayButtons};
 pub use crate::{
     core::date::Date,
     style::{Status, StyleFn, date_picker::Style},
@@ -62,7 +61,8 @@ where
     underlay: Element<'a, Message, Theme, Renderer>,
     /// The message that is send if the cancel button of the [`DatePickerOverlay`] is pressed.
     on_cancel: Message,
-    /// The function that produces a message when the submit button of the [`DatePickerOverlay`] is pressed.
+    /// The function that produces a message when the submit button of the [`DatePickerOverlay`] is
+    /// pressed.
     on_submit: Box<dyn Fn(Date) -> Message>,
     /// The style of the [`DatePickerOverlay`].
     class: <Theme as crate::style::date_picker::Catalog>::Class<'a>,
@@ -87,12 +87,10 @@ where
     /// It expects:
     ///     * if the overlay of the date picker is visible.
     ///     * the initial date to show.
-    ///     * the underlay [`Element`] on which this [`DatePicker`]
-    ///         will be wrapped around.
-    ///     * a message that will be send when the cancel button of the [`DatePicker`]
-    ///         is pressed.
-    ///     * a function that will be called when the submit button of the [`DatePicker`]
-    ///         is pressed, which takes the picked [`Date`] value.
+    ///     * the underlay [`Element`] on which this [`DatePicker`] will be wrapped around.
+    ///     * a message that will be send when the cancel button of the [`DatePicker`] is pressed.
+    ///     * a function that will be called when the submit button of the [`DatePicker`] is
+    ///       pressed, which takes the picked [`Date`] value.
     pub fn new<U, F>(
         show_picker: bool,
         date: impl Into<Date>,
@@ -338,8 +336,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::Datelike;
+
+    use super::*;
 
     #[derive(Clone, Debug)]
     #[allow(dead_code)]

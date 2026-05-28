@@ -2,11 +2,6 @@
 //!
 //! *This API requires the following crate features to be activated: card*
 
-use crate::iced_aw_font::advanced_text::cancel;
-pub use crate::style::{
-    card::{Catalog, Style},
-    status::{Status, StyleFn},
-};
 use iced_core::{
     Alignment, Border, Clipboard, Color, Element, Event, Layout, Length, Padding, Point, Rectangle,
     Shadow, Shell, Size, Vector, Widget,
@@ -16,6 +11,12 @@ use iced_core::{
     widget::{Operation, Tree},
 };
 use iced_widget::button;
+
+use crate::iced_aw_font::advanced_text::cancel;
+pub use crate::style::{
+    card::{Catalog, Style},
+    status::{Status, StyleFn},
+};
 
 /// The default padding of a [`Card`].
 const DEFAULT_PADDING: Padding = Padding::new(10.0);
@@ -44,7 +45,6 @@ const CLOSE_BUTTON_SPACING: f32 = 1.0;
 /// )
 /// .foot(Text::new("Foot"))
 /// .on_close(Message::ClosingCard);
-///
 /// ```
 #[allow(missing_debug_implementations)]
 pub struct Card<'a, Message, Theme = iced_widget::Theme, Renderer = iced_widget::Renderer>

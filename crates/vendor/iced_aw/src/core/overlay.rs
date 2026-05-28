@@ -39,8 +39,9 @@ impl Position for layout::Node {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::layout::Node;
+
+    use super::*;
 
     #[test]
     fn center_within_bounds() {

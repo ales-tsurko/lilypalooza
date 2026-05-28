@@ -1,7 +1,11 @@
 use std::cell::OnceCell;
 
-use iced::widget::{container, scrollable, text_editor};
-use iced::{Element, Fill, Shrink};
+use iced::{
+    Element,
+    Fill,
+    Shrink,
+    widget::{container, scrollable, text_editor},
+};
 
 use crate::{fonts, ui_style};
 
@@ -105,8 +109,8 @@ impl Logger {
 
     fn ensure_text_mut(&mut self) -> &mut text_editor::Content {
         if self.text.get().is_none() {
-            let content = text_editor::Content::with_text(&self.lines.join("\n"));
-            let _ = self.text.set(content);
+            self.text
+                .get_or_init(|| text_editor::Content::with_text(&self.lines.join("\n")));
         }
         self.text
             .get_mut()

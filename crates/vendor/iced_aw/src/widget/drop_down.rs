@@ -475,8 +475,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_widget::text::Text;
+
+    use super::*;
 
     #[derive(Clone, Debug)]
     #[allow(dead_code)]

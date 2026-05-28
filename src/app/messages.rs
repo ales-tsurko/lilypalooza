@@ -1,15 +1,25 @@
 use std::path::PathBuf;
 
 use editor_host::WindowSnapshot;
-use iced::event;
-use iced::time::Instant;
-use iced::widget::{pane_grid, text_editor};
-use iced::{Color, Size, keyboard, mouse, window};
+use iced::{
+    Color,
+    Size,
+    event,
+    keyboard,
+    mouse,
+    time::Instant,
+    widget::{pane_grid, text_editor},
+    window,
+};
 use iced_code_editor::Message as EditorWidgetMessage;
 use iced_core::image;
 
 use super::{
-    EditorFileMenuSection, EditorHeaderMenuSection, ProjectMenuSection, WorkspacePaneKind, mixer,
+    EditorFileMenuSection,
+    EditorHeaderMenuSection,
+    ProjectMenuSection,
+    WorkspacePaneKind,
+    mixer,
 };
 #[derive(Debug, Clone)]
 pub(super) enum Message {
@@ -326,15 +336,6 @@ pub(super) enum MixerMessage {
         from_effect_index: usize,
         to_effect_index: usize,
     },
-    #[allow(dead_code)]
-    ToggleTrackInstrumentBrowser(usize),
-    #[allow(dead_code)]
-    CloseTrackInstrumentBrowser,
-    #[allow(dead_code)]
-    InstrumentBrowserSearchChanged(String),
-    #[allow(dead_code)]
-    SelectTrackInstrument(usize, super::mixer::InstrumentChoice),
-    #[allow(dead_code)]
     OpenEditor(super::processor_editor_windows::EditorTarget),
     ResetBusMeter(u16),
     SetBusGain(u16, f32),

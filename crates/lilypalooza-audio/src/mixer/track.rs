@@ -196,7 +196,7 @@ impl Track {
     /// Returns all effect slots.
     #[must_use]
     pub fn effects(&self) -> &[SlotState] {
-        &self.slots[1..]
+        self.slots.get(1..).unwrap_or(&[])
     }
 
     /// Returns all effect slots as typed states.

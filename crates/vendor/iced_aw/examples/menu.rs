@@ -1,17 +1,21 @@
 // This example demonstrates how to use the menu widget
 
-use iced::border::Radius;
-use iced::widget::{
-    Space, button, checkbox, column as col, container, pick_list, row, scrollable, slider, space,
-    text, text_input, toggler, tooltip, vertical_slider,
+use iced::{
+    Border, Color, Element, Length, Padding, Size, Theme, alignment,
+    border::Radius,
+    theme,
+    widget::{
+        Space, button, checkbox, column as col, container, pick_list, row, scrollable, slider,
+        space, text, text_input, toggler, tooltip, vertical_slider,
+    },
 };
-use iced::{Border, Color, Element, Length, Padding, Size, Theme, alignment, theme};
-
-use iced_aw::menu::{self, Item, Menu};
-use iced_aw::style::{Status, menu_bar::primary};
-use iced_aw::{ICED_AW_FONT_BYTES, iced_aw_font, menu_bar, menu_items};
-use iced_aw::{quad, widgets::InnerBounds};
-
+use iced_aw::{
+    ICED_AW_FONT_BYTES, iced_aw_font,
+    menu::{self, Item, Menu},
+    menu_bar, menu_items, quad,
+    style::{Status, menu_bar::primary},
+    widgets::InnerBounds,
+};
 #[cfg(feature = "debug_log")]
 use log::debug;
 

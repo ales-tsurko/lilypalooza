@@ -421,8 +421,7 @@ fn number_input_scroll_respects_boundaries() -> Result<(), Error> {
 
 #[test]
 fn number_input_multiple_increment_clicks() -> Result<(), Error> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     let value = Rc::new(RefCell::new(10u32));
     let value_clone = value.clone();
@@ -469,8 +468,7 @@ fn number_input_multiple_increment_clicks() -> Result<(), Error> {
 
 #[test]
 fn number_input_multiple_decrement_clicks() -> Result<(), Error> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     let value = Rc::new(RefCell::new(50u32));
     let value_clone = value.clone();

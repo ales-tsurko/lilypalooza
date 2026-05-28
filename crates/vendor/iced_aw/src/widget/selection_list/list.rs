@@ -1,6 +1,11 @@
 //! Build and show dropdown `ListMenus`.
 
-use crate::selection_list::Catalog;
+use std::{
+    collections::hash_map::DefaultHasher,
+    fmt::Display,
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+};
 
 use iced_core::{
     Border, Clipboard, Color, Element, Event, Layout, Length, Padding, Pixels, Point, Rectangle,
@@ -9,18 +14,14 @@ use iced_core::{
     layout::{Limits, Node},
     mouse::{self, Cursor},
     renderer, touch,
-    widget::text::{LineHeight, Wrapping},
     widget::{
         Tree,
+        text::{LineHeight, Wrapping},
         tree::{State, Tag},
     },
 };
-use std::{
-    collections::hash_map::DefaultHasher,
-    fmt::Display,
-    hash::{Hash, Hasher},
-    marker::PhantomData,
-};
+
+use crate::selection_list::Catalog;
 
 /// The Private [`List`] Handles the Actual list rendering.
 #[allow(missing_debug_implementations)]
@@ -285,8 +286,7 @@ where
         renderer: &Renderer,
         operation: &mut dyn iced_core::widget::Operation<()>,
     ) {
-        use iced_core::layout::Node;
-        use iced_core::{Size, Vector};
+        use iced_core::{Size, Vector, layout::Node};
 
         // Expose all option text for testing by creating virtual Text widgets
         // Create a layout for each text option

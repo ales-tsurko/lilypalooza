@@ -1,4 +1,5 @@
-//! This module provides a [`LabeledFrame`] widget which allows you to draw a border with a title around some content.
+//! This module provides a [`LabeledFrame`] widget which allows you to draw a border with a title
+//! around some content.
 
 use iced_core::{Length, Pixels, Rectangle};
 

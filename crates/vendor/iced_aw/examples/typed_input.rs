@@ -6,8 +6,7 @@ use iced::{
     Alignment, Element, Length,
     widget::{Container, Row, Text},
 };
-use iced_aw::ICED_AW_FONT_BYTES;
-use iced_aw::widgets::typed_input;
+use iced_aw::{ICED_AW_FONT_BYTES, widgets::typed_input};
 
 #[derive(Default, Debug)]
 pub struct TypedInputDemo {

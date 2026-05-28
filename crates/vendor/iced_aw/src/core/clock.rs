@@ -1,7 +1,8 @@
 //! Helper functions for calculating the clock
 
-use iced_core::Point;
 use std::fmt::Display;
+
+use iced_core::Point;
 
 /// The size of the period on the clock based on the clock's size.
 pub const PERIOD_PERCENTAGE: f32 = 0.1;

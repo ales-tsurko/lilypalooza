@@ -1,13 +1,17 @@
 //! Message handling and update logic.
 
-use iced::Task;
-use iced::widget::operation::{focus, select_all};
-
-use super::command::{
-    Command, CompositeCommand, DeleteCharCommand, DeleteForwardCommand, InsertCharCommand,
-    ReplaceRangeCommand, ReplaceTextCommand,
+use iced::{
+    Task,
+    widget::operation::{focus, select_all},
 };
-use super::{ArrowDirection, CURSOR_BLINK_INTERVAL, CodeEditor, ImePreedit, Message};
+
+use super::{
+    ArrowDirection, CURSOR_BLINK_INTERVAL, CodeEditor, ImePreedit, Message,
+    command::{
+        Command, CompositeCommand, DeleteCharCommand, DeleteForwardCommand, InsertCharCommand,
+        ReplaceRangeCommand, ReplaceTextCommand,
+    },
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WordClass {
@@ -2287,7 +2291,8 @@ impl CodeEditor {
     /// * `message` - The message to process for updating the editor state
     ///
     /// # Returns
-    /// A `Task<Message>` for any asynchronous operations, such as scrolling to keep the cursor visible after state updates
+    /// A `Task<Message>` for any asynchronous operations, such as scrolling to keep the cursor
+    /// visible after state updates
     pub fn update(&mut self, message: &Message) -> Task<Message> {
         if matches!(
             message,

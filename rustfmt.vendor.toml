@@ -1,0 +1,1 @@
+# Intentionally empty: vendored crates use default rustfmt unless they carry their own config.

@@ -1,9 +1,14 @@
-use iced::widget::{button, column, container, opaque, row, svg, text};
-use iced::{Color, Element, Fill, Length, Theme, alignment};
+use iced::{
+    Color,
+    Element,
+    Fill,
+    Length,
+    Theme,
+    alignment,
+    widget::{button, column, container, opaque, row, svg, text},
+};
 
-use crate::fonts;
-use crate::icons;
-use crate::ui_style;
+use crate::{fonts, icons, ui_style};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorFatality {
@@ -172,93 +177,7 @@ impl ErrorPrompt {
         .width(Fill)
         .style(move |theme: &Theme| ui_style::prompt_message(theme, is_critical));
 
-        let action_row = match self.buttons {
-            PromptButtons::Ok => {
-                let Some((label, message)) = actions.ok.clone() else {
-                    unreachable!("OK prompt requires confirm action");
-                };
-                row![
-                    button(text(label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(prompt_button_style(
-                            if is_critical {
-                                ui_style::button_danger
-                            } else {
-                                ui_style::button_active
-                            },
-                            actions.selected == PromptSelectedButton::Ok,
-                        ))
-                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
-                        .on_press(message)
-                ]
-                .spacing(ui_style::SPACE_SM)
-            }
-            PromptButtons::OkCancel => {
-                let Some((ok_label, ok_message)) = actions.ok.clone() else {
-                    unreachable!("OK/Cancel prompt requires confirm action");
-                };
-                let Some((cancel_label, cancel_message)) = actions.cancel.clone() else {
-                    unreachable!("OK/Cancel prompt requires cancel action");
-                };
-
-                row![
-                    button(text(cancel_label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(prompt_button_style(
-                            ui_style::button_neutral,
-                            actions.selected == PromptSelectedButton::Cancel,
-                        ))
-                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
-                        .on_press(cancel_message),
-                    button(text(ok_label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(prompt_button_style(
-                            if is_critical {
-                                ui_style::button_danger
-                            } else {
-                                ui_style::button_active
-                            },
-                            actions.selected == PromptSelectedButton::Ok,
-                        ))
-                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
-                        .on_press(ok_message)
-                ]
-                .spacing(ui_style::SPACE_SM)
-            }
-            PromptButtons::SaveDiscardCancel => {
-                let Some((save_label, save_message)) = actions.ok.clone() else {
-                    unreachable!("Save/Discard/Cancel prompt requires save action");
-                };
-                let Some((discard_label, discard_message)) = actions.discard.clone() else {
-                    unreachable!("Save/Discard/Cancel prompt requires discard action");
-                };
-                let Some((cancel_label, cancel_message)) = actions.cancel.clone() else {
-                    unreachable!("Save/Discard/Cancel prompt requires cancel action");
-                };
-
-                row![
-                    button(text(cancel_label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(prompt_button_style(
-                            ui_style::button_neutral,
-                            actions.selected == PromptSelectedButton::Cancel,
-                        ))
-                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
-                        .on_press(cancel_message),
-                    button(text(discard_label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(prompt_button_style(
-                            ui_style::button_neutral,
-                            actions.selected == PromptSelectedButton::Discard,
-                        ))
-                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
-                        .on_press(discard_message),
-                    button(text(save_label).size(ui_style::FONT_SIZE_UI_SM))
-                        .style(prompt_button_style(
-                            ui_style::button_active,
-                            actions.selected == PromptSelectedButton::Ok,
-                        ))
-                        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
-                        .on_press(save_message)
-                ]
-                .spacing(ui_style::SPACE_SM)
-            }
-        };
+        let action_row = self.prompt_action_row(actions, is_critical);
 
         let actions = container(action_row)
             .width(Fill)
@@ -323,6 +242,48 @@ impl ErrorPrompt {
 
         opaque(backdrop)
     }
+
+    fn prompt_action_row<'a, Message>(
+        &self,
+        actions: PromptActions<Message>,
+        is_critical: bool,
+    ) -> Element<'a, Message>
+    where
+        Message: Clone + 'a,
+    {
+        match self.buttons {
+            PromptButtons::Ok => prompt_action_buttons(
+                actions
+                    .ok
+                    .map(|ok| {
+                        vec![prompt_action_spec(
+                            ok,
+                            critical_ok_button_style(is_critical),
+                            actions.selected == PromptSelectedButton::Ok,
+                        )]
+                    })
+                    .unwrap_or_default(),
+            ),
+            PromptButtons::OkCancel => {
+                let (Some(cancel), Some(ok)) = (actions.cancel, actions.ok) else {
+                    return empty_prompt_action_row();
+                };
+                prompt_action_buttons(vec![
+                    prompt_action_spec(
+                        cancel,
+                        ui_style::button_neutral,
+                        actions.selected == PromptSelectedButton::Cancel,
+                    ),
+                    prompt_action_spec(
+                        ok,
+                        critical_ok_button_style(is_critical),
+                        actions.selected == PromptSelectedButton::Ok,
+                    ),
+                ])
+            }
+            PromptButtons::SaveDiscardCancel => save_discard_cancel_prompt_action_row(actions),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -331,6 +292,109 @@ struct PromptActions<Message> {
     ok: Option<(String, Message)>,
     discard: Option<(String, Message)>,
     cancel: Option<(String, Message)>,
+}
+
+fn save_discard_cancel_prompt_action_row<'a, Message>(
+    actions: PromptActions<Message>,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    let (Some(cancel), Some(discard), Some(save)) = (actions.cancel, actions.discard, actions.ok)
+    else {
+        return empty_prompt_action_row();
+    };
+
+    prompt_action_buttons([
+        PromptActionButton {
+            label: cancel.0,
+            message: cancel.1,
+            style: ui_style::button_neutral,
+            selected: actions.selected == PromptSelectedButton::Cancel,
+        },
+        PromptActionButton {
+            label: discard.0,
+            message: discard.1,
+            style: ui_style::button_neutral,
+            selected: actions.selected == PromptSelectedButton::Discard,
+        },
+        PromptActionButton {
+            label: save.0,
+            message: save.1,
+            style: ui_style::button_active,
+            selected: actions.selected == PromptSelectedButton::Ok,
+        },
+    ])
+}
+
+struct PromptActionButton<Message> {
+    label: String,
+    message: Message,
+    style: fn(&Theme, button::Status) -> button::Style,
+    selected: bool,
+}
+
+fn prompt_action_spec<Message>(
+    action: (String, Message),
+    style: fn(&Theme, button::Status) -> button::Style,
+    selected: bool,
+) -> PromptActionButton<Message> {
+    PromptActionButton {
+        label: action.0,
+        message: action.1,
+        style,
+        selected,
+    }
+}
+
+fn prompt_action_buttons<'a, Message>(
+    buttons: impl IntoIterator<Item = PromptActionButton<Message>>,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    buttons
+        .into_iter()
+        .fold(row![].spacing(ui_style::SPACE_SM), |row, button| {
+            row.push(prompt_action_button(
+                button.label,
+                button.message,
+                button.style,
+                button.selected,
+            ))
+        })
+        .into()
+}
+
+fn prompt_action_button<'a, Message>(
+    label: String,
+    message: Message,
+    style: fn(&Theme, button::Status) -> button::Style,
+    selected: bool,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    button(text(label).size(ui_style::FONT_SIZE_UI_SM))
+        .style(prompt_button_style(style, selected))
+        .padding([ui_style::PADDING_BUTTON_V, ui_style::PADDING_BUTTON_H])
+        .on_press(message)
+        .into()
+}
+
+fn empty_prompt_action_row<'a, Message>() -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    row![].spacing(ui_style::SPACE_SM).into()
+}
+
+fn critical_ok_button_style(is_critical: bool) -> fn(&Theme, button::Status) -> button::Style {
+    if is_critical {
+        ui_style::button_danger
+    } else {
+        ui_style::button_active
+    }
 }
 
 fn prompt_button_style(

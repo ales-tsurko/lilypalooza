@@ -1,17 +1,13 @@
-use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, stack, text, text_input,
+use iced::{
+    Element,
+    Fill,
+    Length,
+    alignment,
+    widget::{button, column, container, mouse_area, row, scrollable, stack, text, text_input},
 };
-use iced::{Element, Fill, Length, alignment};
 
-use super::dock_view;
-use super::messages::ShortcutsMessage;
-use super::{Lilypalooza, Message, PromptMessage};
-use crate::error_prompt::PromptButtons;
-use crate::fonts;
-use crate::icons;
-use crate::shortcuts;
-use crate::status_bar;
-use crate::ui_style;
+use super::{Lilypalooza, Message, PromptMessage, dock_view, messages::ShortcutsMessage};
+use crate::{error_prompt::PromptButtons, fonts, icons, shortcuts, status_bar, ui_style};
 
 pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     let tail_message = app.logger.last_line().unwrap_or("No log messages");

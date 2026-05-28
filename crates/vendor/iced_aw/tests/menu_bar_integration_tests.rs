@@ -11,8 +11,7 @@
 #[macro_use]
 mod common;
 
-use iced_aw::menu::Menu;
-use iced_aw::{menu_bar, menu_items};
+use iced_aw::{menu::Menu, menu_bar, menu_items};
 use iced_test::Error;
 use iced_widget::{button, text::Text};
 
@@ -224,8 +223,8 @@ fn menu_bar_clicking_outside_closes_menu() -> Result<(), Error> {
     ui.click("File")?;
     assert!(ui.find("New").is_ok(), "Menu should be open");
 
-    // Note: Clicking outside would require the simulator to support clicking at specific coordinates
-    // This test is a placeholder for that functionality
+    // Note: Clicking outside would require the simulator to support clicking at specific
+    // coordinates This test is a placeholder for that functionality
 
     Ok(())
 }

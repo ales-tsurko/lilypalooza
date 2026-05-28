@@ -1,7 +1,6 @@
 //! Isolated plugin validation helper.
 
-use std::io;
-use std::path::PathBuf;
+use std::{io, path::PathBuf};
 
 /// Structured validation report for any supported plugin format.
 #[derive(Debug, serde::Serialize)]

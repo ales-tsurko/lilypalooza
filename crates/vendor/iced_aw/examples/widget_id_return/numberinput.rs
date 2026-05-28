@@ -1,10 +1,8 @@
+use std::{fmt::Display, marker::PhantomData, str::FromStr};
+
 use iced::Element;
-use iced_aw::NumberInput;
-use iced_aw::style::number_input::Style;
+use iced_aw::{NumberInput, style::number_input::Style};
 use num_traits::{Num, NumAssignOps, bounds::Bounded};
-use std::fmt::Display;
-use std::marker::PhantomData;
-use std::str::FromStr;
 
 #[derive(Debug, Default)]
 pub struct NumInput<V, M> {

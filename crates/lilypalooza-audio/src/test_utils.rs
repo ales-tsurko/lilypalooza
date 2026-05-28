@@ -1,30 +1,45 @@
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
-
-use knyst::KnystError;
-use knyst::audio_backend::{AudioBackend, AudioBackendError};
-use knyst::controller::Controller;
-use knyst::controller::KnystCommands;
-use knyst::graph::{Graph, RunGraph, RunGraphSettings};
-use knyst::inspection::GraphInspection;
-use knyst::modal_interface::KnystContext;
-use knyst::prelude::{Beats, KnystSphere, MultiThreadedKnystCommands, Sample, SphereSettings};
-use knyst::resources::{Resources, ResourcesSettings};
-use midly::num::{u4, u7, u15, u24, u28};
-use midly::{
-    Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
+    time::Duration,
 };
 
-use crate::engine::AudioEngineSettings;
-use crate::soundfont::SoundfontResource;
+type KnystErrorHandler = Box<dyn FnMut(KnystError) + Send + 'static>;
+
+use knyst::{
+    KnystError,
+    audio_backend::{AudioBackend, AudioBackendError},
+    controller::{Controller, KnystCommands},
+    graph::{Graph, RunGraph, RunGraphSettings},
+    inspection::GraphInspection,
+    modal_interface::KnystContext,
+    prelude::{Beats, KnystSphere, MultiThreadedKnystCommands, Sample, SphereSettings},
+    resources::{Resources, ResourcesSettings},
+};
+use midly::{
+    Format,
+    Header,
+    MetaMessage,
+    MidiMessage,
+    Smf,
+    Timing,
+    Track,
+    TrackEvent,
+    TrackEventKind,
+    num::{u4, u7, u15, u24, u28},
+};
+
+use crate::{engine::AudioEngineSettings, soundfont::SoundfontResource};
 
 pub(crate) struct OfflineHarness {
     backend: TestBackend,
     controller: Controller,
-    sphere: KnystSphere,
+    _sphere: KnystSphere,
     commands: MultiThreadedKnystCommands,
     context: KnystContext,
     errors: Arc<Mutex<Vec<String>>>,
@@ -64,7 +79,7 @@ impl OfflineHarness {
         let mut harness = Self {
             backend,
             controller,
-            sphere,
+            _sphere: sphere,
             commands,
             context,
             errors,
@@ -159,11 +174,6 @@ impl OfflineHarness {
             }
         }
         panic!("inspection should be returned");
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn sphere(&self) -> &KnystSphere {
-        &self.sphere
     }
 }
 
@@ -449,7 +459,9 @@ impl Drop for SharedTestBackendDriver {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            match thread.join() {
+                Ok(()) | Err(_) => {}
+            }
         }
     }
 }
@@ -477,28 +489,44 @@ impl TestBackend {
     }
 }
 
+fn start_test_backend_processing(
+    run_graph_slot: &mut Option<RunGraph>,
+    mut graph: Graph,
+    resources: Resources,
+    run_graph_settings: RunGraphSettings,
+    error_handler: KnystErrorHandler,
+) -> Result<Controller, AudioBackendError> {
+    if run_graph_slot.is_some() {
+        return Err(AudioBackendError::BackendAlreadyRunning);
+    }
+
+    let (run_graph, resources_command_sender, resources_command_receiver) =
+        RunGraph::new(&mut graph, resources, run_graph_settings)?;
+    let controller = Controller::new(
+        graph,
+        error_handler,
+        resources_command_sender,
+        resources_command_receiver,
+    );
+    *run_graph_slot = Some(run_graph);
+    Ok(controller)
+}
+
 impl AudioBackend for TestBackend {
     fn start_processing_return_controller(
         &mut self,
-        mut graph: Graph,
+        graph: Graph,
         resources: Resources,
         run_graph_settings: RunGraphSettings,
-        error_handler: Box<dyn FnMut(knyst::KnystError) + Send + 'static>,
+        error_handler: KnystErrorHandler,
     ) -> Result<Controller, AudioBackendError> {
-        if self.run_graph.is_some() {
-            return Err(AudioBackendError::BackendAlreadyRunning);
-        }
-
-        let (run_graph, resources_command_sender, resources_command_receiver) =
-            RunGraph::new(&mut graph, resources, run_graph_settings)?;
-        let controller = Controller::new(
+        start_test_backend_processing(
+            &mut self.run_graph,
             graph,
+            resources,
+            run_graph_settings,
             error_handler,
-            resources_command_sender,
-            resources_command_receiver,
-        );
-        self.run_graph = Some(run_graph);
-        Ok(controller)
+        )
     }
 
     fn stop(&mut self) -> Result<(), AudioBackendError> {
@@ -529,36 +557,29 @@ impl AudioBackend for TestBackend {
 impl AudioBackend for SharedTestBackend {
     fn start_processing_return_controller(
         &mut self,
-        mut graph: Graph,
+        graph: Graph,
         resources: Resources,
         run_graph_settings: RunGraphSettings,
-        error_handler: Box<dyn FnMut(knyst::KnystError) + Send + 'static>,
+        error_handler: KnystErrorHandler,
     ) -> Result<Controller, AudioBackendError> {
         let mut shared = self
             .shared
             .lock()
-            .expect("shared test backend state should not be poisoned");
-        if shared.run_graph.is_some() {
-            return Err(AudioBackendError::BackendAlreadyRunning);
-        }
-
-        let (run_graph, resources_command_sender, resources_command_receiver) =
-            RunGraph::new(&mut graph, resources, run_graph_settings)?;
-        let controller = Controller::new(
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        start_test_backend_processing(
+            &mut shared.run_graph,
             graph,
+            resources,
+            run_graph_settings,
             error_handler,
-            resources_command_sender,
-            resources_command_receiver,
-        );
-        shared.run_graph = Some(run_graph);
-        Ok(controller)
+        )
     }
 
     fn stop(&mut self) -> Result<(), AudioBackendError> {
         let mut shared = self
             .shared
             .lock()
-            .expect("shared test backend state should not be poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if shared.run_graph.take().is_some() {
             Ok(())
         } else {

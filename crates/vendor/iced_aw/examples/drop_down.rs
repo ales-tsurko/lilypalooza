@@ -9,7 +9,6 @@ use iced::{
     alignment::Vertical,
     widget::{Button, Column, Row, Text, scrollable},
 };
-
 use iced_aw::{DropDown, drop_down};
 
 fn main() -> iced::Result {

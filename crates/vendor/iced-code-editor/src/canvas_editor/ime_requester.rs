@@ -22,10 +22,14 @@
 //! - Exists solely to call `shell.request_input_method()` on each frame
 //! - Synchronizes IME state (enabled/disabled, cursor position, preedit text) with the OS
 
-use iced::advanced::input_method;
-use iced::advanced::widget::{Widget, tree};
-use iced::advanced::{Renderer, Shell};
-use iced::{Event, Length, Rectangle, Size, Vector, mouse, window};
+use iced::{
+    Event, Length, Rectangle, Size, Vector,
+    advanced::{
+        Renderer, Shell, input_method,
+        widget::{Widget, tree},
+    },
+    mouse, window,
+};
 
 /// An invisible widget that manages Input Method Editor (IME) state.
 ///
@@ -79,12 +83,12 @@ impl ImeRequester {
     ///
     /// # Arguments
     ///
-    /// * `enabled` - Whether IME interaction is enabled. Typically `true` when the editor
-    ///   has both Iced focus and internal canvas focus, `false` otherwise.
-    /// * `cursor` - The visual cursor position and size in widget-relative coordinates.
-    ///   This will be converted to window-relative coordinates before being sent to the OS.
-    /// * `preedit` - The current pre-edit (composition) text state. `None` if no text
-    ///   is currently being composed.
+    /// * `enabled` - Whether IME interaction is enabled. Typically `true` when the editor has both
+    ///   Iced focus and internal canvas focus, `false` otherwise.
+    /// * `cursor` - The visual cursor position and size in widget-relative coordinates. This will
+    ///   be converted to window-relative coordinates before being sent to the OS.
+    /// * `preedit` - The current pre-edit (composition) text state. `None` if no text is currently
+    ///   being composed.
     ///
     /// # Returns
     ///
@@ -194,12 +198,12 @@ where
     /// # Why RedrawRequested?
     ///
     /// - Iced's IME protocol requires explicit state updates each frame or when changes occur
-    /// - `RedrawRequested` marks the start of the render cycle, ensuring the OS receives
-    ///   the latest cursor position so the candidate window tracks cursor movement accurately
-    /// - Updating on input events (like `KeyPressed`) would use stale cursor positions from
-    ///   the previous frame, since the widget hasn't been rebuilt with new state yet
-    /// - `RedrawRequested` guarantees we're using the fresh cursor position calculated in
-    ///   the latest `view()` pass
+    /// - `RedrawRequested` marks the start of the render cycle, ensuring the OS receives the latest
+    ///   cursor position so the candidate window tracks cursor movement accurately
+    /// - Updating on input events (like `KeyPressed`) would use stale cursor positions from the
+    ///   previous frame, since the widget hasn't been rebuilt with new state yet
+    /// - `RedrawRequested` guarantees we're using the fresh cursor position calculated in the
+    ///   latest `view()` pass
     ///
     /// # Arguments
     ///
@@ -310,8 +314,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced::{Length, Point, Size};
+
+    use super::*;
 
     /// Tests the initialization of ImeRequester.
     ///

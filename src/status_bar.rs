@@ -1,5 +1,10 @@
-use iced::widget::{container, row, text};
-use iced::{Color, Element, Fill, Theme};
+use iced::{
+    Color,
+    Element,
+    Fill,
+    Theme,
+    widget::{container, row, text},
+};
 
 use crate::{fonts, ui_style};
 

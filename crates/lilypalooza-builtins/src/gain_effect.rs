@@ -1,15 +1,24 @@
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
 
-use lilypalooza_audio::instrument::{
-    EffectRuntimeContext, EffectRuntimeSpec, RuntimeBinding, RuntimeFactoryError,
-};
 use lilypalooza_audio::{
-    BUILTIN_GAIN_ID, Controller, ControllerError, EffectProcessor, ParameterDescriptor, Processor,
-    ProcessorDescriptor, ProcessorKind, ProcessorState, ProcessorStateError, SlotState,
+    BUILTIN_GAIN_ID,
+    Controller,
+    ControllerError,
+    EffectProcessor,
+    ParameterDescriptor,
+    Processor,
+    ProcessorDescriptor,
+    ProcessorKind,
+    ProcessorState,
+    ProcessorStateError,
+    SlotState,
     SmoothedAudioValue,
+    instrument::{EffectRuntimeContext, EffectRuntimeSpec, RuntimeBinding, RuntimeFactoryError},
 };
+use serde::{Deserialize, Serialize};
 
 pub(crate) const MIN_GAIN_DB: f32 = -60.0;
 const MAX_GAIN_DB: f32 = 12.0;
@@ -262,18 +271,24 @@ impl EffectProcessor for GainEffectProcessor {
                 .as_ref()
                 .map_or(self.state.gain_db, SharedGainState::gain_db),
         ));
-        for frame in 0..out_left.len() {
+        for ((in_left, in_right), (out_left, out_right)) in in_left
+            .iter()
+            .copied()
+            .zip(in_right.iter().copied())
+            .zip(out_left.iter_mut().zip(out_right.iter_mut()))
+        {
             let gain = self.gain.next_sample();
-            out_left[frame] = in_left[frame] * gain;
-            out_right[frame] = in_right[frame] * gain;
+            *out_left = in_left * gain;
+            *out_right = in_right * gain;
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GAIN_RANGE_DB, GainEffectProcessor, MIN_GAIN_DB};
     use lilypalooza_audio::{EffectProcessor, Processor, ProcessorState};
+
+    use super::{GAIN_RANGE_DB, GainEffectProcessor, MIN_GAIN_DB};
 
     #[test]
     fn gain_effect_scales_expected_signal() {

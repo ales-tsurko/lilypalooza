@@ -1,15 +1,19 @@
-use std::env;
-use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::{
+    env,
+    fs,
+    io,
+    path::{Path, PathBuf},
+};
 
 use directories::ProjectDirs;
 use lilypalooza_audio::MixerState;
 use ron::ser::PrettyConfig;
 use serde::{Deserialize, Serialize};
 
-use crate::app::processor_presets::ProcessorPresetLibrary;
-use crate::settings::{PianoRollViewSettings, ScoreViewSettings, WorkspaceLayoutSettings};
+use crate::{
+    app::processor_presets::ProcessorPresetLibrary,
+    settings::{PianoRollViewSettings, ScoreViewSettings, WorkspaceLayoutSettings},
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub(crate) struct TrackColorOverride {
@@ -77,18 +81,26 @@ pub(crate) struct ProjectState {
 
 pub(crate) fn load_global() -> Result<GlobalState, String> {
     let path = global_state_load_path()?;
+    let Some(contents) = read_global_state(&path)? else {
+        return Ok(GlobalState::default());
+    };
+    let mut state: GlobalState = ron::from_str(&contents)
+        .map_err(|error| format!("Failed to parse state {}: {error}", path.display()))?;
+    normalize_loaded_global_state(&mut state);
+    Ok(state)
+}
 
-    match fs::read_to_string(&path) {
-        Ok(contents) => {
-            let mut state: GlobalState = ron::from_str(&contents)
-                .map_err(|error| format!("Failed to parse state {}: {error}", path.display()))?;
-            normalize_unique_paths(&mut state.editor_recent_files);
-            normalize_unique_paths(&mut state.recent_projects);
-            Ok(state)
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(GlobalState::default()),
+fn read_global_state(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("Failed to read state {}: {error}", path.display())),
     }
+}
+
+fn normalize_loaded_global_state(state: &mut GlobalState) {
+    normalize_unique_paths(&mut state.editor_recent_files);
+    normalize_unique_paths(&mut state.recent_projects);
 }
 
 pub(crate) fn save_global(state: &GlobalState) -> Result<(), String> {
@@ -168,9 +180,9 @@ pub(crate) fn main_score_relative_to(
     score_path
         .strip_prefix(project_root)
         .map(Path::to_path_buf)
-        .map_err(|_| {
+        .map_err(|error| {
             format!(
-                "Main score {} is outside the selected project directory {}",
+                "Main score {} is outside the selected project directory {}: {error}",
                 score_path.display(),
                 project_root.display()
             )

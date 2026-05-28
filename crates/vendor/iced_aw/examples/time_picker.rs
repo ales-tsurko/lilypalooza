@@ -6,8 +6,7 @@ use iced::{
     Alignment, Element, Length,
     widget::{Button, Container, Row, Text},
 };
-use iced_aw::ICED_AW_FONT_BYTES;
-use iced_aw::{TimePicker, time_picker::Time};
+use iced_aw::{ICED_AW_FONT_BYTES, TimePicker, time_picker::Time};
 
 fn main() -> iced::Result {
     iced::application(

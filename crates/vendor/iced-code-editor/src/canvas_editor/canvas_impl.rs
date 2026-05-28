@@ -1,17 +1,21 @@
 //! Canvas rendering implementation using Iced's `canvas::Program`.
 
+use std::{borrow::Cow, rc::Rc, sync::OnceLock};
+
+use iced::{
+    Color, Event, Point, Rectangle, Size, Theme,
+    advanced::input_method,
+    keyboard, mouse,
+    widget::canvas::{self, Geometry},
+};
+use syntect::{
+    easy::HighlightLines,
+    highlighting::{Style, ThemeSet},
+    parsing::SyntaxSet,
+};
+
 use super::highlighting::{self, HighlightedDocument, StyledSpan};
 use crate::language;
-use iced::advanced::input_method;
-use iced::mouse;
-use iced::widget::canvas::{self, Geometry};
-use iced::{Color, Event, Point, Rectangle, Size, Theme, keyboard};
-use std::borrow::Cow;
-use std::rc::Rc;
-use std::sync::OnceLock;
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{Style, ThemeSet};
-use syntect::parsing::SyntaxSet;
 
 /// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
 ///
@@ -85,12 +89,13 @@ fn expand_tabs(text: &str, tab_width: usize) -> Cow<'_, str> {
     Cow::Owned(expanded)
 }
 
-use super::wrapping::{VisualLine, WrappingCalculator};
+use iced::widget::canvas::Action;
+
 use super::{
     ArrowDirection, CodeEditor, DOUBLE_CLICK_DISTANCE, DOUBLE_CLICK_INTERVAL, Message,
     measure_text_width,
+    wrapping::{VisualLine, WrappingCalculator},
 };
-use iced::widget::canvas::Action;
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
@@ -801,10 +806,10 @@ impl CodeEditor {
         // -------------------------------------------------------------------------
         // Core notes:
         // 1. Choose the drawing path based on whether IME preedit is present.
-        // 2. Require both `is_focused()` (Iced focus) and `has_canvas_focus()` (internal focus)
-        //    so the cursor is drawn only in the active editor, avoiding multiple cursors.
-        // 3. Use `WrappingCalculator` to map logical (line, col) to visual (x, y)
-        //    for correct cursor positioning with line wrapping.
+        // 2. Require both `is_focused()` (Iced focus) and `has_canvas_focus()` (internal focus) so
+        //    the cursor is drawn only in the active editor, avoiding multiple cursors.
+        // 3. Use `WrappingCalculator` to map logical (line, col) to visual (x, y) for correct
+        //    cursor positioning with line wrapping.
         // -------------------------------------------------------------------------
         if self.show_cursor && self.cursor_visible && self.has_focus() && self.ime_preedit.is_some()
         {
@@ -985,7 +990,8 @@ impl CodeEditor {
     ///
     /// # Returns
     ///
-    /// `true` if the editor has both Iced focus and internal canvas focus and is not focus-locked; `false` otherwise
+    /// `true` if the editor has both Iced focus and internal canvas focus and is not focus-locked;
+    /// `false` otherwise
     pub(crate) fn has_focus(&self) -> bool {
         // Check if this editor has Iced focus
         let focused_id = super::FOCUSED_EDITOR_ID.load(std::sync::atomic::Ordering::Relaxed);
@@ -1520,8 +1526,8 @@ impl CodeEditor {
 impl canvas::Program<Message> for CodeEditor {
     type State = ();
 
-    /// Renders the code editor's visual elements on the canvas, including text layout, syntax highlighting,
-    /// cursor positioning, and other graphical aspects.
+    /// Renders the code editor's visual elements on the canvas, including text layout, syntax
+    /// highlighting, cursor positioning, and other graphical aspects.
     ///
     /// # Arguments
     ///
@@ -1700,7 +1706,8 @@ impl canvas::Program<Message> for CodeEditor {
         vec![content_geometry, overlay_geometry]
     }
 
-    /// Handles Canvas trait events, specifically keyboard input events and focus management for the code editor widget.
+    /// Handles Canvas trait events, specifically keyboard input events and focus management for the
+    /// code editor widget.
     ///
     /// # Arguments
     ///
@@ -1790,9 +1797,10 @@ fn validate_selection_indices(content: &str, start: usize, end: usize) -> Option
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
     use super::*;
     use crate::canvas_editor::{CHAR_WIDTH, FONT_SIZE, compare_floats};
-    use std::cmp::Ordering;
 
     #[test]
     fn test_calculate_segment_geometry_ascii() {

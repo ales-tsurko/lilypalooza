@@ -6,8 +6,7 @@ use iced::{
     Alignment, Element, Length,
     widget::{Container, Row, Text},
 };
-use iced_aw::ICED_AW_FONT_BYTES;
-use iced_aw::number_input;
+use iced_aw::{ICED_AW_FONT_BYTES, number_input};
 
 #[derive(Default, Debug)]
 pub struct NumberInputDemo {

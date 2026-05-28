@@ -1,14 +1,21 @@
-#![allow(missing_docs)]
+#![expect(missing_docs, reason = "example binary does not expose a public API")]
 
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::Duration;
+use std::{
+    env,
+    fs,
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
 
 use lilypalooza_audio::{
-    AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, MixerState, SlotState,
-    SoundfontResource, TrackId,
+    AudioEngine,
+    AudioEngineOptions,
+    BUILTIN_SOUNDFONT_ID,
+    MixerState,
+    SlotState,
+    SoundfontResource,
+    TrackId,
 };
 use lilypalooza_builtins::soundfont_synth;
 

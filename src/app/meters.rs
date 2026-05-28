@@ -1,11 +1,26 @@
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::{
+    collections::HashMap,
+    hash::{Hash, Hasher},
+};
 
 use bytemuck::{Pod, Zeroable};
-use iced::widget::canvas::{self as canvas_widget, Path, Stroke, Text};
-use iced::widget::{canvas, row, shader, shader as shader_widget};
-use iced::{Color, Element, Length, Pixels, Rectangle, Renderer, Theme, alignment};
-
+use iced::{
+    Color,
+    Element,
+    Length,
+    Pixels,
+    Rectangle,
+    Renderer,
+    Theme,
+    alignment,
+    widget::{
+        canvas,
+        canvas::{self as canvas_widget, Path, Stroke, Text},
+        row,
+        shader,
+        shader as shader_widget,
+    },
+};
 use lilypalooza_audio::mixer::{STRIP_METER_MAX_DB, STRIP_METER_MIN_DB, StripMeterSnapshot};
 
 use super::controls::fader_rail_layout;
@@ -209,8 +224,8 @@ impl MeterProgram {
 }
 
 impl<Message> shader::Program<Message> for MeterProgram {
-    type State = ();
     type Primitive = MeterPrimitive;
+    type State = ();
 
     fn draw(
         &self,
@@ -338,7 +353,7 @@ fn visible_scale_marks(height: f32) -> Vec<f32> {
     let stride = if base_gap <= 0.0 {
         SCALE_DB_MARKS.len()
     } else {
-        (SCALE_LABEL_MIN_GAP / base_gap).ceil().max(1.0) as usize
+        crate::number::f32_to_usize((SCALE_LABEL_MIN_GAP / base_gap).ceil().max(1.0))
     };
 
     let mut marks = Vec::with_capacity(SCALE_DB_MARKS.len());
@@ -350,11 +365,14 @@ fn visible_scale_marks(height: f32) -> Vec<f32> {
         }
     }
 
-    if marks.first().copied() != Some(SCALE_DB_MARKS[0]) {
-        marks.insert(0, SCALE_DB_MARKS[0]);
+    if let Some(first_mark) = SCALE_DB_MARKS.first().copied()
+        && marks.first().copied() != Some(first_mark)
+    {
+        marks.insert(0, first_mark);
     }
-    let last_mark = SCALE_DB_MARKS[SCALE_DB_MARKS.len() - 1];
-    if marks.last().copied() != Some(last_mark) {
+    if let Some(last_mark) = SCALE_DB_MARKS.last().copied()
+        && marks.last().copied() != Some(last_mark)
+    {
         marks.push(last_mark);
     }
 
@@ -597,13 +615,22 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
 
 #[cfg(test)]
 mod tests {
+    use lilypalooza_audio::mixer::{ChannelMeterSnapshot, StripMeterSnapshot};
+
     use super::{
-        FADER_HANDLE_VISUAL_WIDTH, METER_TOTAL_WIDTH, MeterColors, SCALE_DB_MARKS,
-        SCALE_LABEL_MIN_GAP, brighten_color, meter_db_to_normalized, meter_gradient_color,
-        meter_rail_layout, meter_shader_data, visible_scale_marks,
+        FADER_HANDLE_VISUAL_WIDTH,
+        METER_TOTAL_WIDTH,
+        MeterColors,
+        SCALE_DB_MARKS,
+        SCALE_LABEL_MIN_GAP,
+        brighten_color,
+        meter_db_to_normalized,
+        meter_gradient_color,
+        meter_rail_layout,
+        meter_shader_data,
+        visible_scale_marks,
     };
     use crate::app::controls::fader_rail_layout;
-    use lilypalooza_audio::mixer::{ChannelMeterSnapshot, StripMeterSnapshot};
 
     #[test]
     fn meter_shader_data_is_compact_and_preserves_values() {
@@ -623,18 +650,18 @@ mod tests {
 
         let data = meter_shader_data(snapshot, 120.0);
 
-        assert_eq!(data.left_level, 0.25);
-        assert_eq!(data.left_hold, 0.5);
-        assert_eq!(data.right_level, 0.75);
-        assert_eq!(data.right_hold, 0.9);
-        assert_eq!(data.clip_latched, 1.0);
+        crate::test_assertions::assert_float_eq!(data.left_level, 0.25);
+        crate::test_assertions::assert_float_eq!(data.left_hold, 0.5);
+        crate::test_assertions::assert_float_eq!(data.right_level, 0.75);
+        crate::test_assertions::assert_float_eq!(data.right_hold, 0.9);
+        crate::test_assertions::assert_float_eq!(data.clip_latched, 1.0);
         assert!(data.rail_height > 0.0);
     }
 
     #[test]
     fn db_scale_normalizes_endpoints() {
-        assert_eq!(meter_db_to_normalized(-60.0), 0.0);
-        assert_eq!(meter_db_to_normalized(0.0), 1.0);
+        crate::test_assertions::assert_float_eq!(meter_db_to_normalized(-60.0), 0.0);
+        crate::test_assertions::assert_float_eq!(meter_db_to_normalized(0.0), 1.0);
     }
 
     #[test]
@@ -670,7 +697,7 @@ mod tests {
 
     #[test]
     fn meter_total_width_matches_fader_handle_width() {
-        assert_eq!(METER_TOTAL_WIDTH, FADER_HANDLE_VISUAL_WIDTH);
+        crate::test_assertions::assert_float_eq!(METER_TOTAL_WIDTH, FADER_HANDLE_VISUAL_WIDTH);
     }
 
     #[test]
@@ -717,7 +744,7 @@ mod tests {
         assert!(brighter.r > color.r);
         assert!(brighter.g > color.g);
         assert!(brighter.b > color.b);
-        assert_eq!(brighter.a, color.a);
+        crate::test_assertions::assert_float_eq!(brighter.a, color.a);
     }
 
     #[test]

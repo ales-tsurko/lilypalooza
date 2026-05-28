@@ -6,8 +6,7 @@ use iced::{
     Alignment, Element, Length,
     widget::{Button, Container, Row, Text},
 };
-use iced_aw::ICED_AW_FONT_BYTES;
-use iced_aw::{date_picker::Date, helpers::date_picker};
+use iced_aw::{ICED_AW_FONT_BYTES, date_picker::Date, helpers::date_picker};
 
 fn main() -> iced::Result {
     iced::application(

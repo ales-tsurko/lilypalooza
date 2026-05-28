@@ -1,9 +1,11 @@
-use std::fmt;
-use std::io::{self, BufRead, BufReader, Read};
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::thread;
+use std::{
+    fmt,
+    io::{self, BufRead, BufReader, Read},
+    path::PathBuf,
+    process::{Command, Stdio},
+    sync::mpsc::{self, Receiver, Sender, TryRecvError},
+    thread,
+};
 
 use thiserror::Error;
 
@@ -93,20 +95,28 @@ pub fn spawn_compile(request: CompileRequest) -> Result<CompileSession, Lilypond
     thread::spawn(move || {
         let wait_result = child.wait();
 
-        let _ = stdout_handle.join();
-        let _ = stderr_handle.join();
+        match stdout_handle.join() {
+            Ok(()) | Err(_) => {}
+        }
+        match stderr_handle.join() {
+            Ok(()) | Err(_) => {}
+        }
 
         match wait_result {
             Ok(status) => {
-                let _ = event_tx.send(CompileEvent::Finished {
+                match event_tx.send(CompileEvent::Finished {
                     success: status.success(),
                     exit_code: status.code(),
-                });
+                }) {
+                    Ok(()) | Err(_) => {}
+                }
             }
             Err(error) => {
-                let _ = event_tx.send(CompileEvent::ProcessError(format!(
+                match event_tx.send(CompileEvent::ProcessError(format!(
                     "failed to wait for LilyPond process: {error}"
-                )));
+                ))) {
+                    Ok(()) | Err(_) => {}
+                }
             }
         }
     });
@@ -253,9 +263,11 @@ where
                     }
                 }
                 Err(error) => {
-                    let _ = event_tx.send(CompileEvent::ProcessError(format!(
+                    match event_tx.send(CompileEvent::ProcessError(format!(
                         "failed to read LilyPond log: {error}"
-                    )));
+                    ))) {
+                        Ok(()) | Err(_) => {}
+                    }
                     break;
                 }
             }

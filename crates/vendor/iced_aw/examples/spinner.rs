@@ -2,13 +2,11 @@
 //
 // This was written by Iohann Rabeson <irabeson42@gmail.com>
 
-use iced::widget::PickList;
 use iced::{
     Element, Length, Theme,
-    widget::{column, container},
+    widget::{PickList, column, container},
 };
-use iced_aw::ICED_AW_FONT_BYTES;
-use iced_aw::Spinner;
+use iced_aw::{ICED_AW_FONT_BYTES, Spinner};
 
 struct SpinnerExample {
     theme: Theme,

@@ -1,10 +1,20 @@
-use std::f32::consts::TAU;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::{
+    f32::consts::TAU,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+};
 
 use crate::instrument::{
-    InstrumentProcessor, MidiEvent, ParameterDescriptor, Processor, ProcessorDescriptor,
-    ProcessorState, ProcessorStateError, SmoothedAudioValue,
+    InstrumentProcessor,
+    MidiEvent,
+    ParameterDescriptor,
+    Processor,
+    ProcessorDescriptor,
+    ProcessorState,
+    ProcessorStateError,
+    SmoothedAudioValue,
 };
 
 const MIN_GAIN_DB: f32 = -36.0;
@@ -87,11 +97,12 @@ pub(crate) struct MetronomeProcessor {
 }
 
 impl MetronomeProcessor {
-    pub(crate) fn new(sample_rate: f32, shared: SharedMetronomeState) -> Self {
+    pub(crate) fn new(sample_rate: usize, shared: SharedMetronomeState) -> Self {
         let gain = knyst::db_to_amplitude(shared.gain_db());
+        let sample_rate = sample_rate.max(1);
         Self {
             shared,
-            sample_rate: sample_rate.max(1.0),
+            sample_rate: sample_rate as f32,
             phase: 0.0,
             body_env: 0.0,
             noise_env: 0.0,
@@ -101,7 +112,7 @@ impl MetronomeProcessor {
             noise_state: 0x1234_5678,
             noise_prev: 0.0,
             noise_hp: 0.0,
-            gain: SmoothedAudioValue::new(gain, sample_rate as usize),
+            gain: SmoothedAudioValue::new(gain, sample_rate),
         }
     }
 
@@ -224,7 +235,7 @@ mod tests {
     #[test]
     fn metronome_trigger_outputs_signal() {
         let shared = SharedMetronomeState::default();
-        let mut processor = MetronomeProcessor::new(48_000.0, shared);
+        let mut processor = MetronomeProcessor::new(48_000, shared);
         let mut left = [0.0; 64];
         let mut right = [0.0; 64];
         processor.handle_midi(MidiEvent::NoteOn {
@@ -244,8 +255,8 @@ mod tests {
     fn metronome_pitch_changes_output_shape() {
         let low = SharedMetronomeState::new(-12.0, 0.1);
         let high = SharedMetronomeState::new(-12.0, 0.9);
-        let mut low_processor = MetronomeProcessor::new(48_000.0, low);
-        let mut high_processor = MetronomeProcessor::new(48_000.0, high);
+        let mut low_processor = MetronomeProcessor::new(48_000, low);
+        let mut high_processor = MetronomeProcessor::new(48_000, high);
         let mut low_left = [0.0; 64];
         let mut high_left = [0.0; 64];
         let mut scratch = [0.0; 64];
@@ -260,6 +271,11 @@ mod tests {
         low_processor.render(&mut low_left, &mut scratch);
         high_processor.render(&mut high_left, &mut scratch);
 
-        assert_ne!(low_left, high_left);
+        assert!(
+            low_left
+                .iter()
+                .zip(high_left)
+                .any(|(low, high)| (*low - high).abs() > f32::EPSILON)
+        );
     }
 }

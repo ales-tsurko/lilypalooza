@@ -2,8 +2,10 @@
 
 use iced::Task;
 
-use super::command::{Command, DeleteRangeCommand, InsertTextCommand};
-use super::{CodeEditor, Message};
+use super::{
+    CodeEditor, Message,
+    command::{Command, DeleteRangeCommand, InsertTextCommand},
+};
 
 impl CodeEditor {
     /// Copies selected text to clipboard.

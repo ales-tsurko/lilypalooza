@@ -1,5 +1,7 @@
-use iced::widget::{button, checkbox, container, text_input};
-use iced::{Background, Border, Color, Shadow, Theme, Vector};
+use iced::{
+    Background, Border, Color, Shadow, Theme, Vector,
+    widget::{button, checkbox, container, text_input},
+};
 use palette::{FromColor, LinSrgb, OklabHue, Oklch, Srgb};
 
 const RADIUS_UI: f32 = 6.0;
@@ -995,7 +997,8 @@ mod tests {
                 // Light theme: line numbers should be between text (dark) and background (bright)
                 assert!(
                     line_num_brightness > text_brightness && line_num_brightness < bg_brightness,
-                    "Light theme line numbers should be between text and background. Text: {}, Line num: {}, Bg: {}",
+                    "Light theme line numbers should be between text and background. Text: {}, \
+                     Line num: {}, Bg: {}",
                     text_brightness,
                     line_num_brightness,
                     bg_brightness

@@ -7,16 +7,6 @@
 //! *This API requires the following crate features to be activated: tabs*
 
 pub mod tab_bar_position;
-pub use crate::tab_bar::Position;
-use crate::{
-    TabLabel,
-    style::{
-        Status, StyleFn,
-        tab_bar::{Catalog, Style},
-    },
-    widget::tab_bar::TabBar,
-};
-
 use iced_core::{
     Clipboard, Element, Event, Font, Layout, Length, Padding, Pixels, Point, Rectangle, Shell,
     Size, Vector, Widget,
@@ -29,8 +19,17 @@ use iced_core::{
     },
 };
 use iced_widget::{Row, text};
-
 pub use tab_bar_position::TabBarPosition;
+
+pub use crate::tab_bar::Position;
+use crate::{
+    TabLabel,
+    style::{
+        Status, StyleFn,
+        tab_bar::{Catalog, Style},
+    },
+    widget::tab_bar::TabBar,
+};
 
 /// A [`Tabs`] widget for showing a [`TabBar`]
 /// along with the tab's content.
@@ -58,7 +57,6 @@ pub use tab_bar_position::TabBarPosition;
 /// .push(TabId::Three, TabLabel::Text(String::from("Three")), Text::new(String::from("Three")))
 /// .set_active_tab(&TabId::Two);Theme
 /// ```
-///
 #[allow(missing_debug_implementations)]
 pub struct Tabs<'a, Message, TabId, Theme = iced_widget::Theme, Renderer = iced_widget::Renderer>
 where
@@ -93,8 +91,8 @@ where
     ///
     /// It expects:
     ///     * the index of the currently active tab.
-    ///     * the function that will be called if a tab is selected by the user.
-    ///         It takes the index of the selected tab.
+    ///     * the function that will be called if a tab is selected by the user. It takes the index
+    ///       of the selected tab.
     pub fn new<F>(on_select: F) -> Self
     where
         F: 'static + Fn(TabId) -> Message,
@@ -107,10 +105,10 @@ where
     ///
     /// It expects:
     ///     * the index of the currently active tab.
-    ///     * a vector containing the [`TabLabel`]s along with the content
-    ///         [`Element`]s of the [`Tabs`].
-    ///     * the function that will be called if a tab is selected by the user.
-    ///         It takes the index of the selected tab.
+    ///     * a vector containing the [`TabLabel`]s along with the content [`Element`]s of the
+    ///       [`Tabs`].
+    ///     * the function that will be called if a tab is selected by the user. It takes the index
+    ///       of the selected tab.
     pub fn new_with_tabs<F>(
         tabs: impl IntoIterator<Item = (TabId, TabLabel, Element<'a, Message, Theme, Renderer>)>,
         on_select: F,

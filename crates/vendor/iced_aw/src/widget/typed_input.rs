@@ -2,18 +2,19 @@
 //!
 //! *This API requires the following crate features to be activated: `typed_input`*
 
-use iced_core::layout::{Layout, Limits, Node};
-use iced_core::mouse::{self, Cursor};
-use iced_core::widget::{
-    Operation, Tree, Widget,
-    tree::{State, Tag},
-};
-use iced_core::{Clipboard, Shell, widget};
-use iced_core::{Element, Length, Padding, Pixels, Rectangle};
-use iced_core::{Event, Size};
-use iced_widget::text_input::{self, TextInput};
-
 use std::{fmt::Display, str::FromStr};
+
+use iced_core::{
+    Clipboard, Element, Event, Length, Padding, Pixels, Rectangle, Shell, Size,
+    layout::{Layout, Limits, Node},
+    mouse::{self, Cursor},
+    widget,
+    widget::{
+        Operation, Tree, Widget,
+        tree::{State, Tag},
+    },
+};
+use iced_widget::text_input::{self, TextInput};
 
 /// The default padding
 const DEFAULT_PADDING: Padding = Padding::new(5.0);
@@ -111,7 +112,8 @@ where
 
     /// Sets the message that should be produced when some valid text is typed into [`TypedInput`]
     ///
-    /// If neither this method nor [`on_submit`](Self::on_submit) is called, the [`TypedInput`] will be disabled
+    /// If neither this method nor [`on_submit`](Self::on_submit) is called, the [`TypedInput`] will
+    /// be disabled
     #[must_use]
     pub fn on_input<F>(mut self, callback: F) -> Self
     where
@@ -122,9 +124,11 @@ where
         self
     }
 
-    /// Sets the message that should be produced when some text is typed into the [`TypedInput`], if `Some`.
+    /// Sets the message that should be produced when some text is typed into the [`TypedInput`], if
+    /// `Some`.
     ///
-    /// If this is `None`, and there is no [`on_submit`](Self::on_submit) callback, the [`TypedInput`] will be disabled.
+    /// If this is `None`, and there is no [`on_submit`](Self::on_submit) callback, the
+    /// [`TypedInput`] will be disabled.
     #[must_use]
     pub fn on_input_maybe<F>(mut self, callback: Option<F>) -> Self
     where
@@ -149,7 +153,8 @@ where
     /// Sets the message that should be produced when the [`TypedtInput`] is
     /// focused and the enter key is pressed.
     ///
-    /// If neither this method nor [`on_input`](Self::on_input) is called, the [`TypedInput`] will be disabled
+    /// If neither this method nor [`on_input`](Self::on_input) is called, the [`TypedInput`] will
+    /// be disabled
     #[must_use]
     pub fn on_submit<F>(mut self, callback: F) -> Self
     where
@@ -166,7 +171,8 @@ where
     /// Sets the message that should be produced when the [`TypedtInput`] is
     /// focused and the enter key is pressed, if `Some`.
     ///
-    /// If this is `None`, and there is no [`on_change`](Self::on_input) callback, the [`TypedInput`] will be disabled.
+    /// If this is `None`, and there is no [`on_change`](Self::on_input) callback, the
+    /// [`TypedInput`] will be disabled.
     #[must_use]
     pub fn on_submit_maybe<F>(mut self, callback: Option<F>) -> Self
     where
@@ -196,7 +202,8 @@ where
         self
     }
 
-    /// Sets the message that should be produced when some text is pasted into the [`TypedInput`], resulting in a valid value
+    /// Sets the message that should be produced when some text is pasted into the [`TypedInput`],
+    /// resulting in a valid value
     #[must_use]
     pub fn on_paste<F>(mut self, callback: F) -> Self
     where
@@ -207,7 +214,8 @@ where
         self
     }
 
-    /// Sets the message that should be produced when some text is pasted into the [`TypedInput`], resulting in a valid value, if `Some`
+    /// Sets the message that should be produced when some text is pasted into the [`TypedInput`],
+    /// resulting in a valid value, if `Some`
     #[must_use]
     pub fn on_paste_maybe<F>(mut self, callback: Option<F>) -> Self
     where
@@ -313,6 +321,7 @@ where
     fn tag(&self) -> Tag {
         <TextInput<_, _, _> as Widget<_, _, _>>::tag(&self.text_input)
     }
+
     fn state(&self) -> State {
         <TextInput<_, _, _> as Widget<_, _, _>>::state(&self.text_input)
     }
@@ -489,8 +498,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_widget::Renderer;
+
+    use super::*;
 
     #[derive(Clone, Debug)]
     #[allow(dead_code)]

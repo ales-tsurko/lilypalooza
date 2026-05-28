@@ -247,8 +247,8 @@ macro_rules! test_helpers {
         ///
         /// # Arguments
         /// * `ui` - Mutable reference to the simulator
-        /// * `baseline_name` - Name for the baseline files (without extension)
-        ///   Files will be created as: `tests/snapshots/{baseline_name}-{renderer}.{png,sha256}`
+        /// * `baseline_name` - Name for the baseline files (without extension) Files will be
+        ///   created as: `tests/snapshots/{baseline_name}-{renderer}.{png,sha256}`
         ///
         /// # Example
         /// ```ignore
@@ -304,8 +304,8 @@ macro_rules! test_helpers {
         ///
         /// # Arguments
         /// * `ui` - Mutable reference to the simulator
-        /// * `baseline_name` - Name for the baseline file (without extension)
-        ///   File will be created as: `tests/snapshots/{baseline_name}-{renderer}.sha256`
+        /// * `baseline_name` - Name for the baseline file (without extension) File will be created
+        ///   as: `tests/snapshots/{baseline_name}-{renderer}.sha256`
         ///
         /// # Example
         /// ```ignore

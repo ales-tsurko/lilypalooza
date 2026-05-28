@@ -1,15 +1,14 @@
 //! widget Helpers.
-//!
-//!
-#[cfg(feature = "selection_list")]
-use crate::style::{Status, StyleFn};
-#[allow(unused_imports)]
-use iced_core::{self, Color, Element, Padding, renderer};
-
-#[cfg(feature = "number_input")]
-use num_traits::bounds::Bounded;
 #[allow(unused_imports)]
 use std::{borrow::Cow, fmt::Display, hash::Hash, ops::RangeBounds};
+
+#[allow(unused_imports)]
+use iced_core::{self, Color, Element, Padding, renderer};
+#[cfg(feature = "number_input")]
+use num_traits::bounds::Bounded;
+
+#[cfg(feature = "selection_list")]
+use crate::style::{Status, StyleFn};
 
 /// Creates a horizontal [`Wrap`] with the given children.
 ///

@@ -5,8 +5,10 @@
 //! provides functionality to resolve the correct server command based on environment
 //! variables and system availability.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 /// Represents a language supported by an LSP server.
 ///
@@ -190,6 +192,7 @@ pub fn lsp_language_for_extension(extension: &str) -> Option<LspLanguage> {
 ///
 /// ```
 /// use std::path::Path;
+///
 /// use iced_code_editor::lsp_language_for_path;
 ///
 /// let lang = lsp_language_for_path(Path::new("main.rs"));
@@ -308,7 +311,8 @@ fn resolve_rust_analyzer_command() -> Result<String, String> {
         }
     }
     Err(
-        "rust-analyzer not found. Please run rustup component add rust-analyzer or brew install rust-analyzer"
+        "rust-analyzer not found. Please run rustup component add rust-analyzer or brew install \
+         rust-analyzer"
             .to_string(),
     )
 }

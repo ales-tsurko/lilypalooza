@@ -23,8 +23,7 @@ mod common;
 use iced::{Color, Theme};
 use iced_aw::ContextMenu;
 use iced_test::Error;
-use iced_widget::text::Text;
-use iced_widget::{Button, button};
+use iced_widget::{Button, button, text::Text};
 
 #[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
@@ -744,7 +743,8 @@ fn context_menu_emoji_text_is_searchable() -> Result<(), Error> {
 
 #[test]
 fn context_menu_long_text_is_searchable() -> Result<(), Error> {
-    let long_text = "This is a very long text that might be used as an underlay for a context menu widget to test the operate functionality";
+    let long_text = "This is a very long text that might be used as an underlay for a context \
+                     menu widget to test the operate functionality";
 
     let (mut app, _) = App::new(move || {
         let underlay = Text::new(long_text);
@@ -890,8 +890,7 @@ fn context_menu_forced_closed_hides_overlay() -> Result<(), Error> {
 
 #[test]
 fn context_menu_right_click_toggles_menu_open() -> Result<(), Error> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     let menu_open = Rc::new(RefCell::new(false));
     let menu_open_clone = menu_open.clone();
@@ -951,8 +950,7 @@ fn context_menu_right_click_toggles_menu_open() -> Result<(), Error> {
 
 #[test]
 fn context_menu_right_click_toggles_menu_closed() -> Result<(), Error> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     // Use RefCell to allow mutation through closures
     let menu_open = Rc::new(RefCell::new(true));
@@ -1073,8 +1071,7 @@ fn context_menu_right_click_outside_underlay_does_not_open_menu() -> Result<(), 
 
 #[test]
 fn context_menu_left_click_outside_closes_menu() -> Result<(), Error> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     let menu_open = Rc::new(RefCell::new(true));
     let menu_open_clone = menu_open.clone();
@@ -1132,8 +1129,7 @@ fn context_menu_left_click_outside_closes_menu() -> Result<(), Error> {
 
 #[test]
 fn context_menu_right_click_outside_closes_menu() -> Result<(), Error> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     let menu_open = Rc::new(RefCell::new(true));
     let menu_open_clone = menu_open.clone();
@@ -1191,9 +1187,9 @@ fn context_menu_right_click_outside_closes_menu() -> Result<(), Error> {
 
 #[test]
 fn context_menu_middle_click_outside_closes_menu() -> Result<(), Error> {
+    use std::{cell::RefCell, rc::Rc};
+
     use iced_core::mouse;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
     let menu_open = Rc::new(RefCell::new(true));
     let menu_open_clone = menu_open.clone();
@@ -1253,8 +1249,7 @@ fn context_menu_middle_click_outside_closes_menu() -> Result<(), Error> {
 
 #[test]
 fn context_menu_touch_outside_closes_menu() -> Result<(), Error> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     let menu_open = Rc::new(RefCell::new(true));
     let menu_open_clone = menu_open.clone();
@@ -1316,8 +1311,7 @@ fn context_menu_touch_outside_closes_menu() -> Result<(), Error> {
 
 #[test]
 fn context_menu_escape_key_closes_menu() -> Result<(), Error> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     let menu_open = Rc::new(RefCell::new(true));
     let menu_open_clone = menu_open.clone();
@@ -1413,10 +1407,10 @@ fn context_menu_click_button_inside_menu_produces_message() -> Result<(), Error>
 
 #[test]
 fn context_menu_left_button_release_closes_menu() -> Result<(), Error> {
+    use std::{cell::RefCell, rc::Rc};
+
     use iced::Event;
     use iced_core::mouse;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
     let menu_open = Rc::new(RefCell::new(true));
     let menu_open_clone = menu_open.clone();

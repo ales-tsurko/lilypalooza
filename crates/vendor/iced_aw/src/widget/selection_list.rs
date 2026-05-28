@@ -1,9 +1,6 @@
 //! Display a dropdown list of selectable values.
 pub mod list;
-use crate::style::{
-    Status, StyleFn,
-    selection_list::{Catalog, Style},
-};
+use std::{fmt::Display, hash::Hash, marker::PhantomData};
 
 use iced_core::{
     Border, Clipboard, Element, Event, Font, Layout, Length, Padding, Pixels, Rectangle, Shell,
@@ -19,9 +16,12 @@ use iced_widget::{
     Container, Scrollable, container, scrollable,
     text::{self, LineHeight, Wrapping},
 };
-use std::{fmt::Display, hash::Hash, marker::PhantomData};
-
 pub use list::List;
+
+use crate::style::{
+    Status, StyleFn,
+    selection_list::{Catalog, Style},
+};
 
 /// A widget for selecting a single value from a dynamic scrollable list of options.
 #[allow(missing_debug_implementations)]

@@ -1,26 +1,53 @@
 //! Manual audio engine block cost benchmark.
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
-use knyst::KnystError;
-use knyst::audio_backend::{AudioBackend, AudioBackendError};
-use knyst::controller::Controller as KnystController;
-use knyst::graph::{Graph, RunGraph, RunGraphSettings};
-use knyst::prelude::{Sample, SphereSettings};
-use knyst::resources::Resources;
-use lilypalooza_audio::instrument::{
-    InstrumentRuntimeContext, InstrumentRuntimeSpec, RuntimeBinding, RuntimeFactoryError,
+use knyst::{
+    KnystError,
+    audio_backend::{AudioBackend, AudioBackendError},
+    controller::Controller as KnystController,
+    graph::{Graph, RunGraph, RunGraphSettings},
+    prelude::{Sample, SphereSettings},
+    resources::Resources,
 };
 use lilypalooza_audio::{
-    AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, Controller, ControllerError,
-    InstrumentProcessor, MidiEvent, MixerState, Processor, ProcessorDescriptor, ProcessorState,
-    ProcessorStateError, SlotState, SoundfontResource, TrackId,
+    AudioEngine,
+    AudioEngineOptions,
+    BUILTIN_SOUNDFONT_ID,
+    Controller,
+    ControllerError,
+    InstrumentProcessor,
+    MidiEvent,
+    MixerState,
+    Processor,
+    ProcessorDescriptor,
+    ProcessorState,
+    ProcessorStateError,
+    SlotState,
+    SoundfontResource,
+    TrackId,
+    instrument::{
+        InstrumentRuntimeContext,
+        InstrumentRuntimeSpec,
+        RuntimeBinding,
+        RuntimeFactoryError,
+    },
 };
-use midly::num::{u4, u7, u15, u24, u28};
 use midly::{
-    Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
+    Format,
+    Header,
+    MetaMessage,
+    MidiMessage,
+    Smf,
+    Timing,
+    Track,
+    TrackEvent,
+    TrackEventKind,
+    num::{u4, u7, u15, u24, u28},
 };
 
 struct BenchBackend {
@@ -72,7 +99,7 @@ impl BenchBackendHandle {
         let mut shared = self
             .shared
             .lock()
-            .expect("bench backend should not be poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(run_graph) = &mut shared.run_graph {
             run_graph.run_resources_communication(10_000);
             run_graph.process_block();
@@ -91,7 +118,7 @@ impl AudioBackend for BenchBackend {
         let mut shared = self
             .shared
             .lock()
-            .expect("bench backend should not be poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if shared.run_graph.is_some() {
             return Err(AudioBackendError::BackendAlreadyRunning);
         }
@@ -112,7 +139,7 @@ impl AudioBackend for BenchBackend {
         let mut shared = self
             .shared
             .lock()
-            .expect("bench backend should not be poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if shared.run_graph.take().is_some() {
             Ok(())
         } else {
@@ -292,11 +319,13 @@ fn main() {
 
 fn register_bench_processors() {
     lilypalooza_audio::instrument::registry::register([
-        lilypalooza_audio::instrument::registry::Entry::builtin_instrument(
+        lilypalooza_audio::instrument::registry::Entry::built_in_processor(
             BUILTIN_SOUNDFONT_ID,
             "SoundFont",
             soundfont_descriptor(),
-            create_test_soundfont_runtime,
+            lilypalooza_audio::instrument::registry::RuntimeFactory::Instrument(
+                create_test_soundfont_runtime,
+            ),
         ),
     ]);
 }

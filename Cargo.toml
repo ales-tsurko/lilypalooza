@@ -40,6 +40,7 @@ lilypalooza-vst3 = { path = "crates/lilypalooza-vst3" }
 env_logger = "0.11.9"
 log = "0.4.28"
 notify = "8.2.0"
+num-traits = "0.2.19"
 resvg = "0.45.1"
 ron = "0.8.1"
 rfd = "0.15"
@@ -50,6 +51,7 @@ toml = "0.8"
 
 [dev-dependencies]
 iced_test = "0.14.0"
+lilypalooza-audio = { path = "crates/lilypalooza-audio", features = ["test-support"] }
 midly = "0.5.3"
 
 [lints]

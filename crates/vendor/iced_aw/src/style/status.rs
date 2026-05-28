@@ -1,5 +1,4 @@
 //! Status Enum of an mouse Event.
-//!
 /// The Status of a widget event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {

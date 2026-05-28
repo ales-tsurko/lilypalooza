@@ -5,10 +5,11 @@
 //! - Multiple match detection
 //! - Position tracking for highlighting
 
-use crate::text_buffer::TextBuffer;
+use std::{borrow::Cow, thread};
+
 use iced::widget::Id;
-use std::borrow::Cow;
-use std::thread;
+
+use crate::text_buffer::TextBuffer;
 
 /// Represents a search match position in the buffer.
 ///
@@ -260,7 +261,8 @@ pub fn find_matches(
     let line_count = buffer.line_count();
 
     // Use parallel search for larger files
-    // Threshold can be tuned, but PARALLEL_SEARCH_THRESHOLD lines is a reasonable start to offset thread creation overhead
+    // Threshold can be tuned, but PARALLEL_SEARCH_THRESHOLD lines is a reasonable start to offset
+    // thread creation overhead
     if line_count > PARALLEL_SEARCH_THRESHOLD {
         let num_threads = std::thread::available_parallelism()
             .map(|n| n.get())
@@ -399,7 +401,8 @@ fn find_matches_in_range(
             });
 
             // Move past this match to find next occurrence
-            // Use search_query.len() to avoid overlapping matches and ensure we land on UTF-8 character boundary
+            // Use search_query.len() to avoid overlapping matches and ensure we land on UTF-8
+            // character boundary
             start_pos = absolute_pos + search_query.len();
         }
     }

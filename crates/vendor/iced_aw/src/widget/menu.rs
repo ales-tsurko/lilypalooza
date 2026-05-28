@@ -49,7 +49,6 @@
 //! );
 //!
 //! let menu_bar = MenuBar::new(vec![root_1, root_2]);
-//!
 //! ```
 //!
 //! Alternatively you can use the helper macros
@@ -145,7 +144,6 @@
 //!
 //! For a more detailed example please
 //! take a look at the menu example in the iced_aw repo
-//!
 
 mod common;
 mod flex;
@@ -153,7 +151,8 @@ mod menu_bar;
 mod menu_bar_overlay;
 mod menu_tree;
 
-pub use crate::style::menu_bar::{Catalog, Style, primary};
 pub use common::{DrawPath, ScrollSpeed};
 pub use menu_bar::MenuBar;
 pub use menu_tree::{Item, Menu};
+
+pub use crate::style::menu_bar::{Catalog, Style, primary};

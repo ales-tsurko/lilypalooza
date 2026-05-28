@@ -44,8 +44,9 @@ impl CodeEditor {
             // - Rust strings are UTF-8 bytes; slicing by character indices can panic.
             // - Convert character indices to byte indices via char_indices() before slicing.
             // Convert UTF-8 character indices to byte indices for safe slicing
-            // Validate that character indices are within the valid range before attempting to slice.
-            // This prevents potential issues if start.1 or end.1 exceed the actual character count.
+            // Validate that character indices are within the valid range before attempting to
+            // slice. This prevents potential issues if start.1 or end.1 exceed the
+            // actual character count.
             if let Some((start_byte, _)) = line.char_indices().nth(start.1) {
                 let end_byte = line
                     .char_indices()
@@ -58,8 +59,9 @@ impl CodeEditor {
             // First line
             let first_line = self.buffer.line(start.0);
             // First line: convert the starting character index to a byte index and slice safely
-            // Validate that character indices are within the valid range before attempting to slice.
-            // This prevents potential issues if start.1 exceed the actual character count.
+            // Validate that character indices are within the valid range before attempting to
+            // slice. This prevents potential issues if start.1 exceed the actual
+            // character count.
             if let Some((start_byte, _)) = first_line.char_indices().nth(start.1) {
                 result.push_str(&first_line[start_byte..]);
                 result.push('\n');
@@ -157,11 +159,12 @@ mod tests {
         // Middle line (line2) is included.
         // Last line is included up to index 3 ("lin").
         // Result: "\nline2\nlin" (The newline from first line is pushed if start is valid?
-        // Let's check logic: if start is invalid, nothing from first line is pushed, including newline)
-        // Actually, looking at the code:
-        // if let Some((start_byte, _)) = first_line.char_indices().nth(start.1) { ... result.push('\n'); }
-        // So if start is out of bounds, NO newline is added for the first line.
-        // Wait, if first line is skipped entirely, we just get middle lines and last line.
+        // Let's check logic: if start is invalid, nothing from first line is pushed, including
+        // newline) Actually, looking at the code:
+        // if let Some((start_byte, _)) = first_line.char_indices().nth(start.1) { ...
+        // result.push('\n'); } So if start is out of bounds, NO newline is added for the
+        // first line. Wait, if first line is skipped entirely, we just get middle lines and
+        // last line.
         assert_eq!(text, Some("line2\nlin".to_string()));
 
         // Now test end out of bounds
@@ -178,8 +181,8 @@ mod tests {
         // "世界" (world in Chinese)
         let mut editor = CodeEditor::new("你好\n世界", "txt");
 
-        // Select '好' (index 1 on line 0) to '世' (index 1 on line 1, exclusive? No, end is exclusive usually)
-        // Wait, end index is character index.
+        // Select '好' (index 1 on line 0) to '世' (index 1 on line 1, exclusive? No, end is
+        // exclusive usually) Wait, end index is character index.
         // Line 0: 你(0) 好(1)
         // Line 1: 世(0) 界(1)
 

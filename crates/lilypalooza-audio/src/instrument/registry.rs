@@ -1,13 +1,22 @@
 //! Processor registry.
 
-use std::borrow::Cow;
-use std::sync::{OnceLock, RwLock};
+use std::{
+    borrow::Cow,
+    sync::{OnceLock, RwLock},
+};
 
 use serde::{Deserialize, Serialize};
 
 use crate::instrument::{
-    BUILTIN_NONE_ID, EffectRuntimeContext, EffectRuntimeSpec, InstrumentRuntimeContext,
-    InstrumentRuntimeSpec, ProcessorDescriptor, ProcessorKind, RuntimeFactoryError, SlotState,
+    BUILTIN_NONE_ID,
+    EffectRuntimeContext,
+    EffectRuntimeSpec,
+    InstrumentRuntimeContext,
+    InstrumentRuntimeSpec,
+    ProcessorDescriptor,
+    ProcessorKind,
+    RuntimeFactoryError,
+    SlotState,
 };
 
 /// Stable processor identifier type used by the registry catalog.
@@ -62,6 +71,81 @@ struct Factory {
     create_effect: Option<CreateEffect>,
 }
 
+impl Factory {
+    const fn empty_instrument() -> Self {
+        Self {
+            is_empty: true,
+            create_instrument: None,
+            create_effect: None,
+        }
+    }
+
+    const fn instrument(create: CreateInstrument) -> Self {
+        Self {
+            is_empty: false,
+            create_instrument: Some(create),
+            create_effect: None,
+        }
+    }
+
+    const fn instrument_descriptor() -> Self {
+        Self {
+            is_empty: false,
+            create_instrument: None,
+            create_effect: None,
+        }
+    }
+
+    const fn effect(create: CreateEffect) -> Self {
+        Self {
+            is_empty: false,
+            create_instrument: None,
+            create_effect: Some(create),
+        }
+    }
+}
+
+/// Runtime factory attached to a registry entry.
+#[derive(Debug, Clone, Copy)]
+pub enum RuntimeFactory {
+    /// Empty instrument slot placeholder.
+    EmptyInstrument,
+    /// Instrument runtime factory.
+    Instrument(CreateInstrument),
+    /// Instrument descriptor without a runtime factory.
+    InstrumentDescriptor,
+    /// Effect runtime factory.
+    Effect(CreateEffect),
+}
+
+impl RuntimeFactory {
+    const fn role(self) -> Role {
+        match self {
+            Self::EmptyInstrument | Self::Instrument(_) | Self::InstrumentDescriptor => {
+                Role::Instrument
+            }
+            Self::Effect(_) => Role::Effect,
+        }
+    }
+
+    const fn category(self) -> &'static str {
+        match self {
+            Self::EmptyInstrument => "Utility",
+            Self::Instrument(_) | Self::InstrumentDescriptor => Role::Instrument.category(),
+            Self::Effect(_) => Role::Effect.category(),
+        }
+    }
+
+    const fn into_factory(self) -> Factory {
+        match self {
+            Self::EmptyInstrument => Factory::empty_instrument(),
+            Self::Instrument(create) => Factory::instrument(create),
+            Self::InstrumentDescriptor => Factory::instrument_descriptor(),
+            Self::Effect(create) => Factory::effect(create),
+        }
+    }
+}
+
 /// Instrument runtime factory callback.
 pub type CreateInstrument = fn(
     &SlotState,
@@ -72,98 +156,63 @@ pub type CreateEffect =
     fn(&SlotState, &EffectRuntimeContext) -> Result<Option<EffectRuntimeSpec>, RuntimeFactoryError>;
 
 impl Entry {
-    /// Creates an empty built-in instrument entry.
-    #[must_use]
-    pub const fn empty_builtin(
+    const fn built_in(
         id: Id,
         name: &'static str,
+        role: Role,
+        category: &'static str,
         descriptor: &'static ProcessorDescriptor,
+        factory: Factory,
     ) -> Self {
         Self {
             id: Cow::Borrowed(id),
             name: Cow::Borrowed(name),
-            role: Role::Instrument,
+            role,
             backend: Backend::BuiltIn,
-            category: Cow::Borrowed("Utility"),
+            category: Cow::Borrowed(category),
             manufacturer: Cow::Borrowed("Lilypalooza"),
             descriptor,
-            factory: Factory {
-                is_empty: true,
-                create_instrument: None,
-                create_effect: None,
-            },
+            factory,
         }
     }
 
-    /// Creates a built-in instrument entry.
-    #[must_use]
-    pub const fn builtin_instrument(
-        id: Id,
-        name: &'static str,
+    fn plugin(
+        id: String,
+        name: String,
+        role: Role,
+        backend: Backend,
+        manufacturer: Option<String>,
         descriptor: &'static ProcessorDescriptor,
-        create: CreateInstrument,
+        factory: Factory,
     ) -> Self {
         Self {
-            id: Cow::Borrowed(id),
-            name: Cow::Borrowed(name),
-            role: Role::Instrument,
-            backend: Backend::BuiltIn,
-            category: Cow::Borrowed("Instrument"),
-            manufacturer: Cow::Borrowed("Lilypalooza"),
+            id: Cow::Owned(id),
+            name: Cow::Owned(name),
+            role,
+            backend,
+            category: Cow::Borrowed(role.category()),
+            manufacturer: plugin_manufacturer(manufacturer),
             descriptor,
-            factory: Factory {
-                is_empty: false,
-                create_instrument: Some(create),
-                create_effect: None,
-            },
+            factory,
         }
     }
 
-    /// Creates a built-in instrument catalog entry without a runtime factory.
+    /// Creates a built-in processor entry.
     #[must_use]
-    pub const fn builtin_instrument_descriptor(
+    pub const fn built_in_processor(
         id: Id,
         name: &'static str,
         descriptor: &'static ProcessorDescriptor,
+        runtime: RuntimeFactory,
     ) -> Self {
-        Self {
-            id: Cow::Borrowed(id),
-            name: Cow::Borrowed(name),
-            role: Role::Instrument,
-            backend: Backend::BuiltIn,
-            category: Cow::Borrowed("Instrument"),
-            manufacturer: Cow::Borrowed("Lilypalooza"),
+        Self::built_in(
+            id,
+            name,
+            runtime.role(),
+            runtime.category(),
             descriptor,
-            factory: Factory {
-                is_empty: false,
-                create_instrument: None,
-                create_effect: None,
-            },
-        }
-    }
-
-    /// Creates a built-in effect entry.
-    #[must_use]
-    pub const fn builtin_effect(
-        id: Id,
-        name: &'static str,
-        descriptor: &'static ProcessorDescriptor,
-        create: CreateEffect,
-    ) -> Self {
-        Self {
-            id: Cow::Borrowed(id),
-            name: Cow::Borrowed(name),
-            role: Role::Effect,
-            backend: Backend::BuiltIn,
-            category: Cow::Borrowed("Effect"),
-            manufacturer: Cow::Borrowed("Lilypalooza"),
-            descriptor,
-            factory: Factory {
-                is_empty: false,
-                create_instrument: None,
-                create_effect: Some(create),
-            },
-        }
+            runtime.into_factory(),
+        )
     }
 
     /// Overrides the picker category for a built-in processor entry.
@@ -180,63 +229,42 @@ impl Entry {
         self
     }
 
-    /// Creates a dynamically discovered plugin effect entry.
+    /// Creates a dynamically discovered plugin processor entry.
     #[must_use]
-    pub fn plugin_effect(
+    pub fn plugin_processor(
         id: String,
         name: String,
         backend: Backend,
         manufacturer: Option<String>,
         descriptor: &'static ProcessorDescriptor,
-        create: CreateEffect,
+        runtime: RuntimeFactory,
     ) -> Self {
-        Self {
-            id: Cow::Owned(id),
-            name: Cow::Owned(name),
-            role: Role::Effect,
+        Self::plugin(
+            id,
+            name,
+            runtime.role(),
             backend,
-            category: Cow::Borrowed("Effect"),
-            manufacturer: manufacturer
-                .filter(|value| !value.trim().is_empty())
-                .map(Cow::Owned)
-                .unwrap_or(Cow::Borrowed("Unknown Manufacturer")),
+            manufacturer,
             descriptor,
-            factory: Factory {
-                is_empty: false,
-                create_instrument: None,
-                create_effect: Some(create),
-            },
-        }
+            runtime.into_factory(),
+        )
     }
+}
 
-    /// Creates a dynamically discovered plugin instrument entry.
-    #[must_use]
-    pub fn plugin_instrument(
-        id: String,
-        name: String,
-        backend: Backend,
-        manufacturer: Option<String>,
-        descriptor: &'static ProcessorDescriptor,
-        create: CreateInstrument,
-    ) -> Self {
-        Self {
-            id: Cow::Owned(id),
-            name: Cow::Owned(name),
-            role: Role::Instrument,
-            backend,
-            category: Cow::Borrowed("Instrument"),
-            manufacturer: manufacturer
-                .filter(|value| !value.trim().is_empty())
-                .map(Cow::Owned)
-                .unwrap_or(Cow::Borrowed("Unknown Manufacturer")),
-            descriptor,
-            factory: Factory {
-                is_empty: false,
-                create_instrument: Some(create),
-                create_effect: None,
-            },
+impl Role {
+    const fn category(self) -> &'static str {
+        match self {
+            Self::Instrument => "Instrument",
+            Self::Effect => "Effect",
         }
     }
+}
+
+fn plugin_manufacturer(manufacturer: Option<String>) -> Cow<'static, str> {
+    manufacturer
+        .filter(|value| !value.trim().is_empty())
+        .map(Cow::Owned)
+        .unwrap_or(Cow::Borrowed("Unknown Manufacturer"))
 }
 
 const NONE_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
@@ -245,7 +273,12 @@ const NONE_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
     editor: None,
 };
 
-const NONE: Entry = Entry::empty_builtin(BUILTIN_NONE_ID, "None", &NONE_DESCRIPTOR);
+const NONE: Entry = Entry::built_in_processor(
+    BUILTIN_NONE_ID,
+    "None",
+    &NONE_DESCRIPTOR,
+    RuntimeFactory::EmptyInstrument,
+);
 
 static ENTRIES: OnceLock<RwLock<Vec<Entry>>> = OnceLock::new();
 
@@ -332,9 +365,13 @@ pub(crate) fn create_effect_runtime(
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, Entry, Role, all, entry, is_empty, register};
+    use super::{Backend, Entry, Role, RuntimeFactory, all, entry, is_empty, register};
     use crate::instrument::{
-        BUILTIN_GAIN_ID, ProcessorDescriptor, ProcessorKind, ProcessorState, SlotState,
+        BUILTIN_GAIN_ID,
+        ProcessorDescriptor,
+        ProcessorKind,
+        ProcessorState,
+        SlotState,
     };
 
     const TEST_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
@@ -345,11 +382,11 @@ mod tests {
 
     #[test]
     fn external_builtins_can_register_in_catalog() {
-        register([Entry::builtin_effect(
+        register([Entry::built_in_processor(
             BUILTIN_GAIN_ID,
             "Gain",
             &TEST_DESCRIPTOR,
-            |_, _| Ok(None),
+            RuntimeFactory::Effect(|_, _| Ok(None)),
         )]);
         let entries = all();
 
@@ -360,11 +397,11 @@ mod tests {
 
     #[test]
     fn built_in_lookup_resolves_from_kind() {
-        register([Entry::builtin_effect(
+        register([Entry::built_in_processor(
             BUILTIN_GAIN_ID,
             "Gain",
             &TEST_DESCRIPTOR,
-            |_, _| Ok(None),
+            RuntimeFactory::Effect(|_, _| Ok(None)),
         )]);
         let kind = ProcessorKind::BuiltIn {
             processor_id: BUILTIN_GAIN_ID.to_string(),
@@ -387,13 +424,13 @@ mod tests {
 
     #[test]
     fn dynamic_plugin_entry_can_be_registered_and_resolved() {
-        register([Entry::plugin_effect(
+        register([Entry::plugin_processor(
             "clap:/tmp/test.clap#org.test.gain".to_string(),
             "Test Gain".to_string(),
             Backend::Clap,
             Some("Test Vendor".to_string()),
             &TEST_DESCRIPTOR,
-            |_, _| Ok(None),
+            RuntimeFactory::Effect(|_, _| Ok(None)),
         )]);
 
         let kind = ProcessorKind::Plugin {

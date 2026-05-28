@@ -1,10 +1,13 @@
-use crate::{Icon, Message, Tab};
 use iced::{
     Element,
     widget::{Column, Container, Radio, Text},
 };
-use iced_aw::sidebar::TabLabel;
-use iced_aw::style::{StyleFn, sidebar};
+use iced_aw::{
+    sidebar::TabLabel,
+    style::{StyleFn, sidebar},
+};
+
+use crate::{Icon, Message, Tab};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SidebarPosition {
     #[default]

@@ -1,210 +1,50 @@
 use std::time::Duration;
 
-use iced::widget::{button, container, mouse_area, row, slider, svg, text, tooltip};
-use iced::{ContentFit, Element, Fill, Length, alignment};
+use iced::{
+    ContentFit,
+    Element,
+    Fill,
+    Length,
+    alignment,
+    widget::{button, container, mouse_area, row, slider, svg, text, tooltip},
+};
 use iced_aw::{DropDown, drop_down};
 
 use super::{Lilypalooza, Message, PianoRollMessage, controls};
-use crate::fonts;
-use crate::icons;
-use crate::midi::{MidiRollData, TimeSignatureChange};
-use crate::shortcuts::{self, ShortcutAction};
-use crate::ui_style;
+use crate::{
+    fonts,
+    icons,
+    midi::{MidiRollData, TimeSignatureChange},
+    shortcuts::{self, ShortcutAction},
+    ui_style,
+};
 
 pub(super) const HEIGHT: f32 = ui_style::grid_f32(9);
 const ICON_BUTTON_WIDTH: f32 = ui_style::grid_f32(9);
 const ICON_BUTTON_HEIGHT: f32 = ui_style::grid_f32(6);
 const ICON_SIZE: f32 = ui_style::grid_f32(4);
 
+struct TransportReadout {
+    total_ticks: u64,
+    normalized_position: f32,
+    time_label: String,
+    musical_clock_label: String,
+    tempo_label: String,
+    meter_label: String,
+}
+
 pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
-    let is_playing = app.piano_roll.playback_is_playing();
-    let seek_preview = app
-        .transport_seek_preview
-        .map(|value| value.clamp(0.0, 1.0));
-
-    let (
-        total_ticks,
-        normalized_position,
-        time_label,
-        musical_clock_label,
-        tempo_label,
-        meter_label,
-    ) = if let Some(file) = app.piano_roll.current_file() {
-        let total_ticks = file.data.total_ticks;
-        let normalized =
-            seek_preview.unwrap_or_else(|| app.piano_roll.playback_position_normalized());
-        let tick = ((total_ticks as f32) * normalized).round() as u64;
-        let tick = tick.min(total_ticks);
-        let current_time = format_duration(ticks_to_duration(&file.data, tick));
-        let total_time = format_duration(ticks_to_duration(&file.data, total_ticks));
-        let musical_clock = musical_clock_short(&file.data, tick);
-        let current_bpm = tempo_bpm_at_tick(&file.data, tick);
-        let time_signature = time_signature_at_tick(&file.data, tick);
-
-        (
-            total_ticks,
-            normalized,
-            format!("{current_time} / {total_time}"),
-            musical_clock,
-            format!("{current_bpm:.1}"),
-            format!(
-                "{}/{}",
-                time_signature.numerator, time_signature.denominator
-            ),
-        )
-    } else {
-        (
-            0,
-            0.0,
-            "00:00.000 / 00:00.000".to_string(),
-            "--:--".to_string(),
-            "--.-".to_string(),
-            "--/--".to_string(),
-        )
-    };
-
-    let can_transport = app.playback.is_some() && total_ticks > 0;
-
-    let play_pause_button = button(
-        container(transport_icon(if is_playing {
-            icons::pause()
-        } else {
-            icons::play()
-        }))
-        .width(Fill)
-        .height(Fill)
-        .center_x(Fill)
-        .center_y(Fill),
-    )
-    .style(if is_playing {
-        ui_style::button_active
-    } else {
-        ui_style::button_window_control
-    })
-    .padding(0)
-    .width(Length::Fixed(ICON_BUTTON_WIDTH))
-    .height(Length::Fixed(ICON_BUTTON_HEIGHT));
-    let play_pause_button = if can_transport {
-        play_pause_button.on_press(Message::PianoRoll(PianoRollMessage::TransportPlayPause))
-    } else {
-        play_pause_button
-    };
-    let play_pause_button = super::dock_view::delayed_tooltip(
-        app,
-        "transport-play-pause",
-        play_pause_button.into(),
-        text(
-            shortcuts::label_for_action(&app.shortcut_settings, ShortcutAction::TransportPlayPause)
-                .map(|shortcut| format!("Play ({shortcut})"))
-                .unwrap_or_else(|| "Play".to_string()),
-        )
-        .size(ui_style::FONT_SIZE_UI_XS)
-        .into(),
-        tooltip::Position::Top,
-    );
-
-    let rewind_button = button(
-        container(transport_icon(icons::skip_back()))
-            .width(Fill)
-            .height(Fill)
-            .center_x(Fill)
-            .center_y(Fill),
-    )
-    .style(ui_style::button_window_control)
-    .padding(0)
-    .width(Length::Fixed(ICON_BUTTON_WIDTH))
-    .height(Length::Fixed(ICON_BUTTON_HEIGHT));
-    let rewind_button = if can_transport {
-        rewind_button.on_press(Message::PianoRoll(PianoRollMessage::TransportRewind))
-    } else {
-        rewind_button
-    };
-    let rewind_button = super::dock_view::delayed_tooltip(
-        app,
-        "transport-rewind",
-        rewind_button.into(),
-        text(
-            shortcuts::label_for_action(&app.shortcut_settings, ShortcutAction::TransportRewind)
-                .map(|shortcut| format!("Rewind ({shortcut})"))
-                .unwrap_or_else(|| "Rewind".to_string()),
-        )
-        .size(ui_style::FONT_SIZE_UI_XS)
-        .into(),
-        tooltip::Position::Top,
-    );
-
-    let seek_slider = slider(0.0..=1.0, normalized_position, |value| {
+    let readout = transport_readout(app);
+    let can_transport = app.playback.is_some() && readout.total_ticks > 0;
+    let play_pause_button = play_pause_control(app, can_transport);
+    let rewind_button = rewind_control(app, can_transport);
+    let seek_slider = slider(0.0..=1.0, readout.normalized_position, |value| {
         Message::PianoRoll(PianoRollMessage::TransportSeekNormalized(value))
     })
     .on_release(Message::PianoRoll(PianoRollMessage::TransportSeekReleased))
     .step(0.001)
     .width(Fill);
-
-    let metronome_button = button(
-        container(transport_icon(icons::metronome()))
-            .width(Fill)
-            .height(Fill)
-            .center_x(Fill)
-            .center_y(Fill),
-    )
-    .style(if app.metronome.enabled {
-        ui_style::button_active
-    } else {
-        ui_style::button_window_control
-    })
-    .padding(0)
-    .width(Length::Fixed(ICON_BUTTON_WIDTH))
-    .height(Length::Fixed(ICON_BUTTON_HEIGHT))
-    .on_press(Message::PianoRoll(
-        PianoRollMessage::TransportToggleMetronome,
-    ));
-    let metronome_button = mouse_area(metronome_button).on_right_press(Message::PianoRoll(
-        PianoRollMessage::TransportOpenMetronomeMenu,
-    ));
-    let metronome_popup = container(
-        iced::widget::column![
-            metronome_setting_row("Gain", app.metronome.gain_db, "", "dB"),
-            controls::horizontal_slider(app.metronome.gain_db, -36.0, 6.0, 0.5, -12.0, |value| {
-                Message::PianoRoll(PianoRollMessage::TransportMetronomeGainChanged(value))
-            }),
-            metronome_setting_row("Pitch", app.metronome.pitch * 100.0, "", "%"),
-            controls::horizontal_slider(app.metronome.pitch, 0.0, 1.0, 0.01, 0.5, |value| {
-                Message::PianoRoll(PianoRollMessage::TransportMetronomePitchChanged(value))
-            }),
-        ]
-        .spacing(ui_style::SPACE_XS),
-    )
-    .width(Length::Fixed(ui_style::grid_f32(56)))
-    .padding(ui_style::PADDING_SM)
-    .style(ui_style::popup_surface);
-    let metronome_control: Element<'_, Message> =
-        DropDown::new(metronome_button, metronome_popup, app.metronome_menu_open)
-            .width(Length::Shrink)
-            .on_dismiss(Message::PianoRoll(
-                PianoRollMessage::TransportCloseMetronomeMenu,
-            ))
-            .alignment(drop_down::Alignment::Top)
-            .into();
-    let metronome_control = if app.metronome_menu_open {
-        metronome_control
-    } else {
-        super::dock_view::delayed_tooltip(
-            app,
-            "transport-metronome",
-            metronome_control,
-            text(
-                shortcuts::label_for_action(
-                    &app.shortcut_settings,
-                    ShortcutAction::ToggleMetronome,
-                )
-                .map(|shortcut| format!("Metronome ({shortcut})\nRight-click for settings"))
-                .unwrap_or_else(|| "Metronome\nRight-click for settings".to_string()),
-            )
-            .size(ui_style::FONT_SIZE_UI_XS)
-            .into(),
-            tooltip::Position::Top,
-        )
-    };
+    let metronome_control = metronome_control(app);
 
     container(
         iced::widget::column![
@@ -217,22 +57,22 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
                     row![play_pause_button, rewind_button]
                         .spacing(ui_style::SPACE_XS)
                         .align_y(alignment::Vertical::Center),
-                    text(time_label)
+                    text(readout.time_label)
                         .size(ui_style::FONT_SIZE_UI_XS)
                         .font(fonts::MONO),
-                    text(musical_clock_label)
+                    text(readout.musical_clock_label)
                         .size(ui_style::FONT_SIZE_UI_XS)
                         .font(fonts::MONO),
                     seek_slider,
                     row![
                         metronome_control,
-                        text(tempo_label)
+                        text(readout.tempo_label)
                             .size(ui_style::FONT_SIZE_UI_XS)
                             .font(fonts::MONO),
                     ]
                     .spacing(ui_style::SPACE_XS)
                     .align_y(alignment::Vertical::Center),
-                    text(meter_label)
+                    text(readout.meter_label)
                         .size(ui_style::FONT_SIZE_UI_XS)
                         .font(fonts::MONO),
                 ]
@@ -257,6 +97,205 @@ pub(super) fn view(app: &Lilypalooza) -> Element<'_, Message> {
     .width(Fill)
     .height(Length::Fixed(HEIGHT))
     .into()
+}
+
+fn transport_readout(app: &Lilypalooza) -> TransportReadout {
+    let seek_preview = app
+        .transport_seek_preview
+        .map(|value| value.clamp(0.0, 1.0));
+
+    let Some(file) = app.piano_roll.current_file() else {
+        return TransportReadout {
+            total_ticks: 0,
+            normalized_position: 0.0,
+            time_label: "00:00.000 / 00:00.000".to_string(),
+            musical_clock_label: "--:--".to_string(),
+            tempo_label: "--.-".to_string(),
+            meter_label: "--/--".to_string(),
+        };
+    };
+
+    let total_ticks = file.data.total_ticks;
+    let normalized_position =
+        seek_preview.unwrap_or_else(|| app.piano_roll.playback_position_normalized());
+    let tick = crate::number::f32_to_u64((total_ticks as f32) * normalized_position);
+    let tick = tick.min(total_ticks);
+    let current_time = format_duration(ticks_to_duration(&file.data, tick));
+    let total_time = format_duration(ticks_to_duration(&file.data, total_ticks));
+    let musical_clock_label = musical_clock_short(&file.data, tick);
+    let current_bpm = tempo_bpm_at_tick(&file.data, tick);
+    let time_signature = time_signature_at_tick(&file.data, tick);
+
+    TransportReadout {
+        total_ticks,
+        normalized_position,
+        time_label: format!("{current_time} / {total_time}"),
+        musical_clock_label,
+        tempo_label: format!("{current_bpm:.1}"),
+        meter_label: format!(
+            "{}/{}",
+            time_signature.numerator, time_signature.denominator
+        ),
+    }
+}
+
+fn play_pause_control(app: &Lilypalooza, can_transport: bool) -> Element<'_, Message> {
+    let is_playing = app.piano_roll.playback_is_playing();
+    transport_button_with_tooltip(
+        app,
+        "transport-play-pause",
+        if is_playing {
+            icons::pause()
+        } else {
+            icons::play()
+        },
+        if is_playing {
+            ui_style::button_active
+        } else {
+            ui_style::button_window_control
+        },
+        can_transport.then_some(Message::PianoRoll(PianoRollMessage::TransportPlayPause)),
+        ShortcutAction::TransportPlayPause,
+        "Play",
+    )
+}
+
+fn rewind_control(app: &Lilypalooza, can_transport: bool) -> Element<'_, Message> {
+    transport_button_with_tooltip(
+        app,
+        "transport-rewind",
+        icons::skip_back(),
+        ui_style::button_window_control,
+        can_transport.then_some(Message::PianoRoll(PianoRollMessage::TransportRewind)),
+        ShortcutAction::TransportRewind,
+        "Rewind",
+    )
+}
+
+fn transport_button_with_tooltip<'a>(
+    app: &'a Lilypalooza,
+    tooltip_id: &'static str,
+    icon: svg::Handle,
+    style: fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style,
+    on_press: Option<Message>,
+    shortcut_action: ShortcutAction,
+    fallback_label: &'static str,
+) -> Element<'a, Message> {
+    let button = button(
+        container(transport_icon(icon))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill),
+    )
+    .style(style)
+    .padding(0)
+    .width(Length::Fixed(ICON_BUTTON_WIDTH))
+    .height(Length::Fixed(ICON_BUTTON_HEIGHT));
+    let button = if let Some(message) = on_press {
+        button.on_press(message)
+    } else {
+        button
+    };
+    super::dock_view::delayed_tooltip(
+        app,
+        tooltip_id,
+        button.into(),
+        text(
+            shortcuts::label_for_action(&app.shortcut_settings, shortcut_action)
+                .map(|shortcut| format!("{fallback_label} ({shortcut})"))
+                .unwrap_or_else(|| fallback_label.to_string()),
+        )
+        .size(ui_style::FONT_SIZE_UI_XS)
+        .into(),
+        tooltip::Position::Top,
+    )
+}
+
+fn metronome_control(app: &Lilypalooza) -> Element<'_, Message> {
+    let metronome_button = button(
+        container(transport_icon(icons::metronome()))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill),
+    )
+    .style(if app.metronome.enabled {
+        ui_style::button_active
+    } else {
+        ui_style::button_window_control
+    })
+    .padding(0)
+    .width(Length::Fixed(ICON_BUTTON_WIDTH))
+    .height(Length::Fixed(ICON_BUTTON_HEIGHT))
+    .on_press(Message::PianoRoll(
+        PianoRollMessage::TransportToggleMetronome,
+    ));
+    let metronome_button = mouse_area(metronome_button).on_right_press(Message::PianoRoll(
+        PianoRollMessage::TransportOpenMetronomeMenu,
+    ));
+    let metronome_popup = container(
+        iced::widget::column![
+            metronome_setting_row("Gain", app.metronome.gain_db, "", "dB"),
+            controls::horizontal_slider(
+                controls::HorizontalSliderSpec {
+                    value: app.metronome.gain_db,
+                    min: -36.0,
+                    max: 6.0,
+                    step: 0.5,
+                    default_value: -12.0,
+                    metrics: controls::HORIZONTAL_SLIDER_METRICS,
+                    scale: controls::HorizontalSliderScale::Linear,
+                },
+                |value| Message::PianoRoll(PianoRollMessage::TransportMetronomeGainChanged(value)),
+            ),
+            metronome_setting_row("Pitch", app.metronome.pitch * 100.0, "", "%"),
+            controls::horizontal_slider(
+                controls::HorizontalSliderSpec {
+                    value: app.metronome.pitch,
+                    min: 0.0,
+                    max: 1.0,
+                    step: 0.01,
+                    default_value: 0.5,
+                    metrics: controls::HORIZONTAL_SLIDER_METRICS,
+                    scale: controls::HorizontalSliderScale::Linear,
+                },
+                |value| Message::PianoRoll(PianoRollMessage::TransportMetronomePitchChanged(value)),
+            ),
+        ]
+        .spacing(ui_style::SPACE_XS),
+    )
+    .width(Length::Fixed(ui_style::grid_f32(56)))
+    .padding(ui_style::PADDING_SM)
+    .style(ui_style::popup_surface);
+    let metronome_control: Element<'_, Message> =
+        DropDown::new(metronome_button, metronome_popup, app.metronome_menu_open)
+            .width(Length::Shrink)
+            .on_dismiss(Message::PianoRoll(
+                PianoRollMessage::TransportCloseMetronomeMenu,
+            ))
+            .alignment(drop_down::Alignment::Top)
+            .into();
+    if app.metronome_menu_open {
+        metronome_control
+    } else {
+        super::dock_view::delayed_tooltip(
+            app,
+            "transport-metronome",
+            metronome_control,
+            text(
+                shortcuts::label_for_action(
+                    &app.shortcut_settings,
+                    ShortcutAction::ToggleMetronome,
+                )
+                .map(|shortcut| format!("Metronome ({shortcut})\nRight-click for settings"))
+                .unwrap_or_else(|| "Metronome\nRight-click for settings".to_string()),
+            )
+            .size(ui_style::FONT_SIZE_UI_XS)
+            .into(),
+            tooltip::Position::Top,
+        )
+    }
 }
 
 fn transport_icon(icon: svg::Handle) -> Element<'static, Message> {

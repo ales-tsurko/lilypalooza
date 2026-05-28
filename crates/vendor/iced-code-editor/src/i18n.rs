@@ -206,7 +206,10 @@ impl Translations {
     /// use iced_code_editor::{Language, Translations};
     ///
     /// let en = Translations::new(Language::English);
-    /// assert_eq!(en.previous_match_tooltip(), "Previous match (Shift+F3 / Shift+Enter)");
+    /// assert_eq!(
+    ///     en.previous_match_tooltip(),
+    ///     "Previous match (Shift+F3 / Shift+Enter)"
+    /// );
     /// ```
     #[must_use]
     pub fn previous_match_tooltip(&self) -> String {
@@ -225,7 +228,10 @@ impl Translations {
     /// use iced_code_editor::{Language, Translations};
     ///
     /// let es = Translations::new(Language::Spanish);
-    /// assert_eq!(es.next_match_tooltip(), "Siguiente coincidencia (F3 / Enter)");
+    /// assert_eq!(
+    ///     es.next_match_tooltip(),
+    ///     "Siguiente coincidencia (F3 / Enter)"
+    /// );
     /// ```
     #[must_use]
     pub fn next_match_tooltip(&self) -> String {

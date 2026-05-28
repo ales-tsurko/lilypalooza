@@ -15,8 +15,9 @@ pub enum StyleState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashMap;
+
+    use super::*;
 
     #[test]
     fn style_state_active_exists() {

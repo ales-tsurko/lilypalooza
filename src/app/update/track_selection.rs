@@ -1,6 +1,8 @@
 use super::*;
-use crate::app::mixer::{instrument_scroll_id, instrument_track_scroll_x};
-use crate::app::piano_roll::{track_list_scroll_id, track_list_scroll_y};
+use crate::app::{
+    mixer::{instrument_scroll_id, instrument_track_scroll_x},
+    piano_roll::{track_list_scroll_id, track_list_scroll_y},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) enum TrackSelectionOrigin {
@@ -67,7 +69,7 @@ mod tests {
     fn piano_roll_track_selection_updates_shared_state() {
         let (mut app, _task) = super::super::super::new_with_default_test_state();
 
-        let _ = update(
+        let _task = update(
             &mut app,
             Message::PianoRoll(PianoRollMessage::SelectTrack(3)),
         );
@@ -79,7 +81,7 @@ mod tests {
     fn mixer_track_selection_updates_shared_state_without_playback() {
         let (mut app, _task) = super::super::super::new_with_default_test_state();
 
-        let _ = update(&mut app, Message::Mixer(MixerMessage::SelectTrack(5)));
+        let _task = update(&mut app, Message::Mixer(MixerMessage::SelectTrack(5)));
 
         assert_eq!(app.selected_track_index, Some(5));
     }

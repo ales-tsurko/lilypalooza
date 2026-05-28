@@ -2,8 +2,9 @@
 //!
 //! *This API requires the following crate features to be activated: `time_picker`*
 
-use chrono::{Local, Timelike};
 use std::fmt::Display;
+
+use chrono::{Local, Timelike};
 
 /// The time value
 #[derive(Clone, Copy, Debug)]

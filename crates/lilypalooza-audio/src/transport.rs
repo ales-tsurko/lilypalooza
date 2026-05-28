@@ -4,8 +4,7 @@ use std::time::Duration;
 
 use knyst::prelude::{Beats, KnystCommands, MultiThreadedKnystCommands, Seconds, TransportState};
 
-use crate::mixer::Mixer;
-use crate::sequencer::Sequencer;
+use crate::{mixer::Mixer, sequencer::Sequencer};
 
 const CONTROLLER_BARRIER_TIMEOUT: Duration = Duration::from_millis(250);
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -82,6 +81,16 @@ pub struct Transport<'a> {
     commands: &'a mut MultiThreadedKnystCommands,
     mixer: Option<&'a mut Mixer>,
     sequencer: Option<&'a Sequencer>,
+}
+
+impl std::fmt::Debug for Transport<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Transport")
+            .field("has_mixer", &self.mixer.is_some())
+            .field("has_sequencer", &self.sequencer.is_some())
+            .finish()
+    }
 }
 
 impl<'a> Transport<'a> {
@@ -245,112 +254,63 @@ impl<'a> Transport<'a> {
 
     /// Seeks transport to an absolute seconds position.
     pub fn seek_seconds(&mut self, position: f64) {
-        let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
-        let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
-        let position = Seconds::from_seconds_f64(position.max(0.0));
-        if let Some(sequencer) = self.sequencer {
-            sequencer.set_playing(false);
-        }
-        if let Some(mixer) = self.mixer.as_deref() {
-            mixer.reset_meters();
-        }
-        if !has_loaded_score {
-            self.commands.transport_pause();
-            wait_for_transport_settled(self.commands);
-            wait_for_transport_state(self.commands, TransportState::Paused);
-            self.commands.transport_seek_to_seconds(position);
-            wait_for_transport_settled(self.commands);
-            wait_for_transport_seconds(self.commands, position);
-            if was_playing {
-                self.commands.transport_play();
-                wait_for_transport_settled(self.commands);
-                wait_for_transport_state(self.commands, TransportState::Playing);
-            }
-            return;
-        }
-        self.commands.clear_scheduled_changes();
-        wait_for_controller_barrier(self.commands);
-        if was_playing
-            && has_loaded_score
-            && let Some(sequencer) = self.sequencer
-        {
-            sequencer.prepare_for_pause_immediate(self.commands);
-        }
-        self.commands.transport_pause();
-        wait_for_transport_settled(self.commands);
-        wait_for_transport_state(self.commands, TransportState::Paused);
-        self.commands.transport_seek_to_seconds(position);
-        wait_for_transport_settled(self.commands);
-        wait_for_transport_seconds(self.commands, position);
-        let target_beat = self
-            .snapshot()
-            .ok()
-            .map(|snapshot| snapshot.beats_position)
-            .unwrap_or(Beats::ZERO);
-        if has_loaded_score && let Some(sequencer) = self.sequencer {
-            sequencer.mark_dirty_for_seek(target_beat, was_playing);
-            sequencer.set_playing(false);
-        }
-        if was_playing {
-            self.commands.transport_play();
-            wait_for_transport_settled(self.commands);
-            wait_for_transport_state(self.commands, TransportState::Playing);
-            if has_loaded_score && let Some(sequencer) = self.sequencer {
-                sequencer.set_playing(true);
-            }
-        }
+        self.seek_settled(TransportSeekTarget::Seconds(Seconds::from_seconds_f64(
+            position.max(0.0),
+        )));
     }
 
     /// Seeks transport to an absolute beats position.
     pub fn seek_beats(&mut self, position: f64) {
+        self.seek_settled(TransportSeekTarget::Beats(Beats::from_beats_f64(
+            position.max(0.0),
+        )));
+    }
+
+    fn seek_settled(&mut self, target: TransportSeekTarget) {
         let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
         let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
-        let position = Beats::from_beats_f64(position.max(0.0));
+        self.begin_transport_seek();
+
+        if !has_loaded_score {
+            self.seek_without_loaded_score(target, was_playing);
+            return;
+        }
+
+        self.seek_loaded_score(target, was_playing);
+    }
+
+    fn begin_transport_seek(&mut self) {
         if let Some(sequencer) = self.sequencer {
             sequencer.set_playing(false);
         }
         if let Some(mixer) = self.mixer.as_deref() {
             mixer.reset_meters();
         }
-        if !has_loaded_score {
-            self.commands.transport_pause();
-            wait_for_transport_settled(self.commands);
-            wait_for_transport_state(self.commands, TransportState::Paused);
-            self.commands.transport_seek_to_beats(position);
-            wait_for_transport_settled(self.commands);
-            wait_for_transport_beats(self.commands, position);
-            if was_playing {
-                self.commands.transport_play();
-                wait_for_transport_settled(self.commands);
-                wait_for_transport_state(self.commands, TransportState::Playing);
-            }
-            return;
-        }
+    }
+
+    fn seek_without_loaded_score(&mut self, target: TransportSeekTarget, was_playing: bool) {
+        pause_transport_and_wait(self.commands);
+        target.seek_and_wait(self.commands);
+        resume_transport_if_needed(self.commands, was_playing);
+    }
+
+    fn seek_loaded_score(&mut self, target: TransportSeekTarget, was_playing: bool) {
         self.commands.clear_scheduled_changes();
         wait_for_controller_barrier(self.commands);
-        if was_playing
-            && has_loaded_score
-            && let Some(sequencer) = self.sequencer
-        {
+        if was_playing && let Some(sequencer) = self.sequencer {
             sequencer.prepare_for_pause_immediate(self.commands);
         }
-        self.commands.transport_pause();
-        wait_for_transport_settled(self.commands);
-        wait_for_transport_state(self.commands, TransportState::Paused);
-        self.commands.transport_seek_to_beats(position);
-        wait_for_transport_settled(self.commands);
-        wait_for_transport_beats(self.commands, position);
-        if has_loaded_score && let Some(sequencer) = self.sequencer {
-            sequencer.mark_dirty_for_seek(position, was_playing);
+
+        pause_transport_and_wait(self.commands);
+        target.seek_and_wait(self.commands);
+        let target_beat = target.dirty_beat(self);
+        if let Some(sequencer) = self.sequencer {
+            sequencer.mark_dirty_for_seek(target_beat, was_playing);
             sequencer.set_playing(false);
         }
-        if was_playing {
-            self.commands.transport_play();
-            wait_for_transport_settled(self.commands);
-            wait_for_transport_state(self.commands, TransportState::Playing);
-            if has_loaded_score && let Some(sequencer) = self.sequencer {
-                sequencer.set_playing(true);
-            }
+        resume_transport_if_needed(self.commands, was_playing);
+        if was_playing && let Some(sequencer) = self.sequencer {
+            sequencer.set_playing(true);
         }
     }
 
@@ -362,27 +322,47 @@ impl<'a> Transport<'a> {
         let was_playing = self.sequencer.is_some_and(Sequencer::is_playing);
         let has_loaded_score = self.sequencer.is_some_and(Sequencer::has_loaded_score);
         let position = Beats::from_beats_f64(position.max(0.0));
-        if let Some(sequencer) = self.sequencer {
-            sequencer.set_playing(false);
-        }
-        if let Some(mixer) = self.mixer.as_deref() {
-            mixer.reset_meters();
-        }
+
+        self.begin_transport_seek();
         self.commands.clear_scheduled_changes();
-        if was_playing
-            && has_loaded_score
-            && let Some(sequencer) = self.sequencer
-        {
+        self.prepare_loaded_score_for_immediate_seek(has_loaded_score, was_playing);
+        self.seek_transport_beats_immediate(position, was_playing);
+        self.mark_loaded_score_seek_immediate(has_loaded_score, position, was_playing);
+    }
+
+    fn prepare_loaded_score_for_immediate_seek(
+        &mut self,
+        has_loaded_score: bool,
+        was_playing: bool,
+    ) {
+        if !was_playing || !has_loaded_score {
+            return;
+        }
+
+        if let Some(sequencer) = self.sequencer {
             sequencer.prepare_for_pause_immediate(self.commands);
         }
+    }
+
+    fn seek_transport_beats_immediate(&mut self, position: Beats, was_playing: bool) {
         self.commands.transport_pause();
         self.commands.transport_seek_to_beats(position);
-        if has_loaded_score && let Some(sequencer) = self.sequencer {
+        resume_transport_if_needed(self.commands, was_playing);
+    }
+
+    fn mark_loaded_score_seek_immediate(
+        &mut self,
+        has_loaded_score: bool,
+        position: Beats,
+        was_playing: bool,
+    ) {
+        if !has_loaded_score {
+            return;
+        }
+
+        if let Some(sequencer) = self.sequencer {
             sequencer.mark_dirty_for_seek(position, was_playing);
             sequencer.set_playing(was_playing);
-        }
-        if was_playing {
-            self.commands.transport_play();
         }
     }
 
@@ -403,27 +383,72 @@ impl<'a> Transport<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum TransportSeekTarget {
+    Seconds(Seconds),
+    Beats(Beats),
+}
+
+impl TransportSeekTarget {
+    fn seek_and_wait(self, commands: &mut MultiThreadedKnystCommands) {
+        match self {
+            Self::Seconds(position) => {
+                commands.transport_seek_to_seconds(position);
+                wait_for_transport_settled(commands);
+                wait_for_transport_seconds(commands, position);
+            }
+            Self::Beats(position) => {
+                commands.transport_seek_to_beats(position);
+                wait_for_transport_settled(commands);
+                wait_for_transport_beats(commands, position);
+            }
+        }
+    }
+
+    fn dirty_beat(self, transport: &mut Transport<'_>) -> Beats {
+        match self {
+            Self::Seconds(_) => transport
+                .snapshot()
+                .ok()
+                .map(|snapshot| snapshot.beats_position)
+                .unwrap_or(Beats::ZERO),
+            Self::Beats(position) => position,
+        }
+    }
+}
+
+fn pause_transport_and_wait(commands: &mut MultiThreadedKnystCommands) {
+    commands.transport_pause();
+    wait_for_transport_settled(commands);
+    wait_for_transport_state(commands, TransportState::Paused);
+}
+
+fn resume_transport_if_needed(commands: &mut MultiThreadedKnystCommands, should_resume: bool) {
+    if !should_resume {
+        return;
+    }
+
+    commands.transport_play();
+    wait_for_transport_settled(commands);
+    wait_for_transport_state(commands, TransportState::Playing);
+}
+
 fn wait_for_controller_barrier(commands: &mut MultiThreadedKnystCommands) {
     let receiver = commands.request_transport_snapshot();
-    let _ = receiver.recv_timeout(CONTROLLER_BARRIER_TIMEOUT);
+    match receiver.recv_timeout(CONTROLLER_BARRIER_TIMEOUT) {
+        Ok(_) | Err(_) => {}
+    }
 }
 
 fn wait_for_transport_settled(commands: &mut MultiThreadedKnystCommands) {
     let receiver = commands.request_transport_settled();
-    let _ = receiver.recv_timeout(SETTLE_TIMEOUT);
+    match receiver.recv_timeout(SETTLE_TIMEOUT) {
+        Ok(()) | Err(_) => {}
+    }
 }
 
 fn wait_for_transport_state(commands: &mut MultiThreadedKnystCommands, expected: TransportState) {
-    let start = std::time::Instant::now();
-    while start.elapsed() < SETTLE_TIMEOUT {
-        if commands
-            .current_transport_snapshot()
-            .is_some_and(|snapshot| snapshot.state == expected)
-        {
-            return;
-        }
-        std::thread::sleep(TRANSPORT_POLL_INTERVAL);
-    }
+    wait_for_transport_snapshot(commands, |snapshot| snapshot.state == expected);
 }
 
 fn wait_for_transport_beats(commands: &mut MultiThreadedKnystCommands, expected: Beats) {
@@ -441,11 +466,17 @@ fn wait_for_transport_beats(commands: &mut MultiThreadedKnystCommands, expected:
 }
 
 fn wait_for_transport_seconds(commands: &mut MultiThreadedKnystCommands, expected: Seconds) {
+    wait_for_transport_snapshot(commands, |snapshot| snapshot.seconds == expected);
+}
+
+fn wait_for_transport_snapshot(
+    commands: &mut MultiThreadedKnystCommands,
+    mut matches: impl FnMut(knyst::graph::TransportSnapshot) -> bool,
+) {
     let start = std::time::Instant::now();
     while start.elapsed() < SETTLE_TIMEOUT {
-        if commands
-            .current_transport_snapshot()
-            .is_some_and(|snapshot| snapshot.seconds == expected)
+        if let Some(snapshot) = commands.current_transport_snapshot()
+            && matches(snapshot)
         {
             return;
         }

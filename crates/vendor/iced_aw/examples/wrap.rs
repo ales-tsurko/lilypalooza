@@ -8,8 +8,7 @@ use iced::{
     Element,
     widget::{Button, Column, Container, PickList, Row, Text},
 };
-use iced_aw::ICED_AW_FONT_BYTES;
-use iced_aw::{NumberInput, Wrap};
+use iced_aw::{ICED_AW_FONT_BYTES, NumberInput, Wrap};
 use rand::RngExt;
 
 fn main() -> iced::Result {

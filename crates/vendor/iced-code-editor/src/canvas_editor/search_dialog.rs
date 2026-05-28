@@ -2,15 +2,18 @@
 //!
 //! This module provides the visual interface for the search/replace functionality.
 
-use iced::widget::{
-    Space, Tooltip, button, checkbox, column, container, row, text, text_input, tooltip,
-};
-use iced::{Element, Length};
-use iced_font_awesome::fa_icon_solid;
 use std::time::Duration;
 
-use super::Message;
-use super::search::{MAX_MATCHES, SearchState};
+use iced::{
+    Element, Length,
+    widget::{Space, Tooltip, button, checkbox, column, container, row, text, text_input, tooltip},
+};
+use iced_font_awesome::fa_icon_solid;
+
+use super::{
+    Message,
+    search::{MAX_MATCHES, SearchState},
+};
 use crate::i18n::Translations;
 
 const POPUP_TEXT_SIZE: f32 = 12.0;

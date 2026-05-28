@@ -1,6 +1,4 @@
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{fs, path::PathBuf, sync::Arc};
 
 use rustysynth::SoundFont;
 use serde::{Deserialize, Serialize};

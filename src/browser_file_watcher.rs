@@ -1,5 +1,7 @@
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver, TryRecvError},
+};
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -17,7 +19,9 @@ impl BrowserFileWatcher {
         let (event_tx, event_rx) = mpsc::channel();
 
         let mut watcher = notify::recommended_watcher(move |event| {
-            let _ = event_tx.send(event);
+            if event_tx.send(event).is_err() {
+                log::trace!("browser file watcher receiver was dropped");
+            }
         })?;
         watcher.watch(&watched_root, RecursiveMode::Recursive)?;
 

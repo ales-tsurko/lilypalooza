@@ -6,9 +6,7 @@ use iced::{
     Alignment, Color, Element, Length,
     widget::{Button, Container, Row, Text},
 };
-
-use iced_aw::ICED_AW_FONT_BYTES;
-use iced_aw::helpers::color_picker;
+use iced_aw::{ICED_AW_FONT_BYTES, helpers::color_picker};
 fn main() -> iced::Result {
     iced::application(
         ColorPickerExample::default,

@@ -6,7 +6,6 @@ use iced::{
     Element, Length,
     widget::{Column, Container, Text},
 };
-
 use iced_aw::{ICED_AW_FONT_BYTES, SlideBar};
 
 fn main() -> iced::Result {

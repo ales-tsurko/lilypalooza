@@ -1,8 +1,9 @@
 //! Use a badge for color highlighting important information.
 //!
 //! *This API requires the following crate features to be activated: badge*
-use super::{Status, StyleFn};
 use iced_core::{Background, Color, Theme};
+
+use super::{Status, StyleFn};
 
 /// The style of a [`ContextMenu`](crate::widget::ContextMenu).
 #[derive(Clone, Copy, Debug)]
@@ -60,8 +61,9 @@ pub fn primary(theme: &Theme, _status: Status) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::{Background, Theme};
+
+    use super::*;
 
     #[test]
     fn style_default() {

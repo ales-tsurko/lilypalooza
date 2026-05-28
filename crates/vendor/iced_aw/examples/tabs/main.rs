@@ -8,8 +8,7 @@ use iced::{
     alignment::{Horizontal, Vertical},
     widget::{Column, Container, Text},
 };
-use iced_aw::ICED_AW_FONT_BYTES;
-use iced_aw::{TabLabel, Tabs};
+use iced_aw::{ICED_AW_FONT_BYTES, TabLabel, Tabs};
 use login::{LoginMessage, LoginTab};
 
 mod ferris;

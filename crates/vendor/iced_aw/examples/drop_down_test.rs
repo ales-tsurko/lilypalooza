@@ -7,7 +7,6 @@ use iced::{
     Element, Length,
     widget::{Button, Column, Container, Row, Text, scrollable},
 };
-
 use iced_aw::{DropDown, drop_down};
 
 fn main() -> iced::Result {

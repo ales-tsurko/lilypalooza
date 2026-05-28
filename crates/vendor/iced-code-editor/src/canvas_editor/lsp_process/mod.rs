@@ -15,17 +15,24 @@ const METHOD_WORK_DONE_PROGRESS_CREATE: &str = "window/workDoneProgress/create";
 /// Progress `kind` value that signals the end of a work-done sequence.
 const PROGRESS_KIND_END: &str = "end";
 
+use std::{
+    collections::HashMap,
+    io::{BufRead, BufReader, Read, Write},
+    process::{Child, Command, Stdio},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    thread,
+};
+
+use serde_json::json;
+
 use self::config::{
     LspCommand, ensure_rust_analyzer_config, lsp_server_config, resolve_lsp_command,
 };
 use crate::canvas_editor::lsp::{LspClient, LspDocument, LspPosition, LspTextChange};
-use serde_json::json;
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
 
 // =============================================================================
 // Text Model - Internal document representation for tracking text changes
@@ -205,14 +212,12 @@ pub enum LspEvent {
 ///
 /// ```no_run
 /// use std::sync::mpsc;
-/// use iced_code_editor::{LspProcessClient, LspEvent};
+///
+/// use iced_code_editor::{LspEvent, LspProcessClient};
 ///
 /// let (tx, rx) = mpsc::channel::<LspEvent>();
-/// let client = LspProcessClient::new_with_server(
-///     "file:///home/user/project",
-///     tx,
-///     "lua-language-server",
-/// );
+/// let client =
+///     LspProcessClient::new_with_server("file:///home/user/project", tx, "lua-language-server");
 /// ```
 ///
 /// [`CodeEditor`]: crate::CodeEditor
@@ -253,14 +258,12 @@ impl LspProcessClient {
     ///
     /// ```no_run
     /// use std::sync::mpsc;
-    /// use iced_code_editor::{LspProcessClient, LspEvent};
+    ///
+    /// use iced_code_editor::{LspEvent, LspProcessClient};
     ///
     /// let (tx, _rx) = mpsc::channel::<LspEvent>();
-    /// let client = LspProcessClient::new_with_server(
-    ///     "file:///tmp/project",
-    ///     tx,
-    ///     "lua-language-server",
-    /// );
+    /// let client =
+    ///     LspProcessClient::new_with_server("file:///tmp/project", tx, "lua-language-server");
     /// assert!(client.is_ok());
     /// ```
     pub fn new_with_server(
@@ -302,7 +305,9 @@ impl LspProcessClient {
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     if command.program == "rust-analyzer" {
-                        "LSP server program rust-analyzer not found. Please install rust-analyzer or set RUST_ANALYZER/RUST_ANALYZER_PATH environment variable".to_string()
+                        "LSP server program rust-analyzer not found. Please install rust-analyzer \
+                         or set RUST_ANALYZER/RUST_ANALYZER_PATH environment variable"
+                            .to_string()
                     } else {
                         format!("LSP server program {} not found", command.program)
                     }

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use iced::{
     Element, Length, Task,
     widget::{button, column, container, stack, text},
@@ -6,7 +8,6 @@ use iced_aw::{
     sidebar::{SidebarPosition, TabLabel},
     widget::SidebarWithContent,
 };
-use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum TabId {

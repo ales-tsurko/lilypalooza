@@ -5,30 +5,35 @@ mod metronome_synth;
 /// Built-in SoundFont synth state helpers and runtime.
 pub mod soundfont_synth;
 
-use lilypalooza_audio::instrument::registry::{self, Entry};
-use lilypalooza_audio::{BUILTIN_GAIN_ID, BUILTIN_METRONOME_ID, BUILTIN_SOUNDFONT_ID};
+use lilypalooza_audio::{
+    BUILTIN_GAIN_ID,
+    BUILTIN_METRONOME_ID,
+    BUILTIN_SOUNDFONT_ID,
+    instrument::registry::{self, Entry, RuntimeFactory},
+};
 
 /// Registers all built-in processors with the host registry.
 pub fn register_all() {
     registry::register([
-        Entry::builtin_instrument(
+        Entry::built_in_processor(
             BUILTIN_SOUNDFONT_ID,
             "SF-01",
             soundfont_synth::DESCRIPTOR,
-            soundfont_synth::create_runtime,
+            RuntimeFactory::Instrument(soundfont_synth::create_runtime),
         )
         .with_category("Sampler"),
-        Entry::builtin_effect(
+        Entry::built_in_processor(
             BUILTIN_GAIN_ID,
             "Gain",
             gain_effect::DESCRIPTOR,
-            gain_effect::create_runtime,
+            RuntimeFactory::Effect(gain_effect::create_runtime),
         )
         .with_category("Utility"),
-        Entry::builtin_instrument_descriptor(
+        Entry::built_in_processor(
             BUILTIN_METRONOME_ID,
             "Metronome",
             metronome_synth::DESCRIPTOR,
+            RuntimeFactory::InstrumentDescriptor,
         )
         .with_category("Utility"),
     ]);

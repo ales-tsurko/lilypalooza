@@ -6,7 +6,6 @@ use iced::{
     Alignment, Element,
     widget::{Button, Container, Row, Text, column},
 };
-
 use iced_aw::ContextMenu;
 
 fn main() -> iced::Result {

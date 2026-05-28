@@ -320,8 +320,7 @@ fn card_with_empty_content_renders() {
 
 #[test]
 fn card_close_button_can_be_clicked() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     #[derive(Clone)]
     struct StatefulApp {
@@ -379,8 +378,7 @@ fn card_close_button_can_be_clicked() {
 
 #[test]
 fn card_with_custom_close_size_can_be_clicked() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     #[derive(Clone)]
     struct StatefulApp {

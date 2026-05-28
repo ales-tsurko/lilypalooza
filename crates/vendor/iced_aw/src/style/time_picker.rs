@@ -2,8 +2,9 @@
 //!
 //! *This API requires the following crate features to be activated: `time_picker`*
 #![allow(clippy::doc_markdown)]
-use super::{Status, StyleFn};
 use iced_core::{Background, Color, Theme};
+
+use super::{Status, StyleFn};
 
 /// The style of a [`TimePicker`](crate::widget::TimePicker).
 #[derive(Clone, Copy, Debug)]
@@ -108,8 +109,9 @@ pub fn primary(theme: &Theme, status: Status) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::{Background, Theme};
+
+    use super::*;
 
     #[test]
     fn primary_theme_active() {

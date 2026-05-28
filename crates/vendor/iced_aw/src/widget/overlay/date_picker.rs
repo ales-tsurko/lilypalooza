@@ -2,15 +2,8 @@
 //!
 //! *This API requires the following crate features to be activated: `date_picker`*
 
-use crate::iced_aw_font::advanced_text::{cancel, left_open, ok, right_open};
-use crate::{
-    core::{
-        date::{Date, IsInMonth},
-        overlay::Position,
-    },
-    date_picker,
-    style::{Status, date_picker::Style, style_state::StyleState},
-};
+use std::collections::HashMap;
+
 use chrono::{Datelike, Local, NaiveDate};
 use iced_core::{
     Alignment, Border, Clipboard, Color, Element, Event, Layout, Length, Overlay, Padding, Pixels,
@@ -28,7 +21,16 @@ use iced_widget::{
     Button, Column, Container, Renderer, Row, Text,
     text::{self, Wrapping},
 };
-use std::collections::HashMap;
+
+use crate::{
+    core::{
+        date::{Date, IsInMonth},
+        overlay::Position,
+    },
+    date_picker,
+    iced_aw_font::advanced_text::{cancel, left_open, ok, right_open},
+    style::{Status, date_picker::Style, style_state::StyleState},
+};
 
 /// The padding around the elements.
 const PADDING: Padding = Padding::new(10.0);
@@ -53,7 +55,8 @@ where
     cancel_button: Button<'a, Message, Theme, Renderer>,
     /// The submit button of the [`DatePickerOverlay`].
     submit_button: Button<'a, Message, Theme, Renderer>,
-    /// The function that produces a message when the submit button of the [`DatePickerOverlay`] is pressed.
+    /// The function that produces a message when the submit button of the [`DatePickerOverlay`] is
+    /// pressed.
     on_submit: &'a dyn Fn(Date) -> Message,
     /// The position of the [`DatePickerOverlay`].
     position: Point,
@@ -85,7 +88,8 @@ where
         position: Point,
         class: &'a <Theme as crate::style::date_picker::Catalog>::Class<'b>,
         tree: &'a mut Tree,
-        //button_style: impl Clone +  Into<<Renderer as button::Renderer>::Style>, // clone not satisfied
+        //button_style: impl Clone +  Into<<Renderer as button::Renderer>::Style>, // clone not
+        // satisfied
         font_size: Pixels,
         viewport: Rectangle,
     ) -> Self {
@@ -1550,7 +1554,8 @@ fn day_table(
 
             renderer.fill_text(
                 iced_core::Text {
-                    content: format!("{number:02}"), // Todo: is there some way of static format as this has a fixed size?
+                    content: format!("{number:02}"), /* Todo: is there some way of static format
+                                                      * as this has a fixed size? */
                     bounds: Size::new(bounds.width, bounds.height),
                     size: font_size,
                     font: renderer.default_font(),

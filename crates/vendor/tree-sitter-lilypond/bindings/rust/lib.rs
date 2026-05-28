@@ -1,4 +1,5 @@
-//! This crate provides LilyPond and LilyPond Scheme language support for the [tree-sitter][] parsing library.
+//! This crate provides LilyPond and LilyPond Scheme language support for the [tree-sitter][]
+//! parsing library.
 //!
 //! Typically, you will use the [language][language func] function to add this language to a
 //! tree-sitter [Parser][], and then use the parser to parse some code:

@@ -1,5 +1,4 @@
 //! Common types for reuse.
-//!
 
 use iced_core::{Padding, Rectangle};
 

@@ -13,13 +13,12 @@ use iced_core::{
     widget::{Operation, Tree, tree},
     window,
 };
+#[cfg(feature = "debug_log")]
+use log::debug;
 
 use super::{common::*, flex, menu_bar_overlay::MenuBarOverlay, menu_tree::*};
 use crate::style::menu_bar::*;
 pub use crate::style::status::{Status, StyleFn};
-
-#[cfg(feature = "debug_log")]
-use log::debug;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum MenuBarTask {
@@ -608,8 +607,8 @@ where
                 .children()
                 .nth(active_in_slice)
                 .expect(
-                    "Index (in slice space) is not within the menu bar layout. \
-                    This should not happen, please report this issue",
+                    "Index (in slice space) is not within the menu bar layout. This should not \
+                     happen, please report this issue",
                 )
                 .bounds();
 
@@ -719,8 +718,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_widget::text::Text;
+
+    use super::*;
 
     #[derive(Clone, Debug)]
     #[allow(dead_code)]

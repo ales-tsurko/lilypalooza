@@ -2,6 +2,8 @@
 //!
 //! *This API requires the following crate features to be activated: `quad`*
 
+use std::ops::RangeInclusive;
+
 use iced_core::{
     Border, Clipboard, Color, Element, Event, Layout, Length, Point, Rectangle, Shadow, Shell,
     Size, Widget,
@@ -13,8 +15,6 @@ use iced_core::{
         tree::{self, Tree},
     },
 };
-
-use std::ops::RangeInclusive;
 
 /// Constant Default height of `SlideBar`.
 pub const DEFAULT_HEIGHT: f32 = 30.0;
@@ -63,7 +63,6 @@ where
     ///   * the current value of the [`SlideBar`]
     ///   * a function that will be called when the [`SlideBar`] is dragged.
     ///   * the new value of the [`SlideBar`] and must produce a `Message`.
-    ///
     pub fn new<F>(range: RangeInclusive<T>, value: T, on_change: F) -> Self
     where
         F: 'a + Fn(T) -> Message,

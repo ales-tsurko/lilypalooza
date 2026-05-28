@@ -57,9 +57,10 @@
 // below would never actually occur in practice
 #![allow(clippy::missing_panics_doc)]
 
+use std::sync::{Arc, Mutex};
+
 use super::command::{Command, CompositeCommand};
 use crate::text_buffer::TextBuffer;
-use std::sync::{Arc, Mutex};
 
 /// Manages command history for undo/redo operations.
 ///

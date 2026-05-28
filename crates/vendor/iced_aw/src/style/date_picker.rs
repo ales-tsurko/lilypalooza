@@ -1,8 +1,9 @@
 //! Use a date picker as an input element for picking dates.
 //!
 //! *This API requires the following crate features to be activated: `date_picker`*
-use super::{Status, StyleFn};
 use iced_core::{Background, Color, Theme};
+
+use super::{Status, StyleFn};
 
 /// The appearance of a [`DatePicker`](crate::widget::DatePicker).
 #[derive(Clone, Copy, Debug)]
@@ -95,8 +96,9 @@ pub fn primary(theme: &Theme, status: Status) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::{Background, Theme};
+
+    use super::*;
 
     #[test]
     fn primary_theme_active() {

@@ -1,7 +1,6 @@
 //! A container widget that allows you to specify the layout of its children.
 
 use iced_core::{Length, Rectangle, Widget};
-
 #[allow(unused_imports)]
 pub use iced_core::{
     Renderer,
@@ -201,8 +200,9 @@ impl<'b, Message: 'b, Theme: 'b, Renderer: iced_core::Renderer + 'b>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::{Size, layout::Node};
+
+    use super::*;
 
     #[derive(Clone)]
     enum TestMessage {}

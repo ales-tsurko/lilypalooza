@@ -1,10 +1,11 @@
-use std::collections::HashSet;
-use std::fs;
-use std::path::Path;
+use std::{collections::HashSet, fs, path::Path};
 
-use iced::widget::operation::scroll_to;
-use iced::widget::{Space, button, column, container, row, scrollable, stack, text};
-use iced::{Alignment, Background, Color, Element, Length, Point, Theme};
+use iced::{
+    Alignment, Background, Color, Element, Length, Point, Theme,
+    widget::{
+        Space, button, column, container, operation::scroll_to, row, scrollable, stack, text,
+    },
+};
 
 use super::{CodeEditor, Message};
 

@@ -14,12 +14,11 @@ use iced_core::{
     widget::{Operation, Tree},
     window,
 };
+#[cfg(feature = "debug_log")]
+use log::{debug, trace, warn};
 
 use super::{common::*, menu_bar::*, menu_tree::*};
 use crate::style::{Status, menu_bar::*};
-
-#[cfg(feature = "debug_log")]
-use log::{debug, trace, warn};
 
 pub(super) struct MenuBarOverlay<'a, 'b, Message, Theme, Renderer>
 where

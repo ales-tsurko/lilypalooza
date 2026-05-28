@@ -2,12 +2,6 @@
 //!
 //! *This API requires the following crate features to be activated: `color_picker`*
 
-use self::style::{Status, StyleFn};
-
-use super::overlay::color_picker::{
-    self, ColorBarDragged, ColorPickerOverlay, ColorPickerOverlayButtons,
-};
-
 use iced_core::{
     Clipboard, Color, Element, Event, Layout, Length, Rectangle, Shell, Vector, Widget,
     layout::{Limits, Node},
@@ -20,6 +14,10 @@ use iced_core::{
 };
 use iced_widget::Renderer;
 
+use self::style::{Status, StyleFn};
+use super::overlay::color_picker::{
+    self, ColorBarDragged, ColorPickerOverlay, ColorPickerOverlayButtons,
+};
 pub use crate::style::{self, color_picker::Style};
 
 //TODO: Remove ignore when Null is updated. Temp fix for Test runs
@@ -60,9 +58,11 @@ where
     underlay: Element<'a, Message, Theme, Renderer>,
     /// The message that is sent if the cancel button of the [`ColorPickerOverlay`] is pressed.
     on_cancel: Message,
-    /// The function that produces a message when the submit button of the [`ColorPickerOverlay`] is pressed.
+    /// The function that produces a message when the submit button of the [`ColorPickerOverlay`]
+    /// is pressed.
     on_submit: Box<dyn Fn(Color) -> Message>,
-    /// Optional function that produces a message when the color changes during selection (real-time updates).
+    /// Optional function that produces a message when the color changes during selection
+    /// (real-time updates).
     on_color_change: Option<Box<dyn Fn(Color) -> Message>>,
     /// The style of the [`ColorPickerOverlay`].
     class: <Theme as style::color_picker::Catalog>::Class<'a>,
@@ -83,12 +83,10 @@ where
     /// It expects:
     ///     * if the overlay of the color picker is visible.
     ///     * the initial color to show.
-    ///     * the underlay [`Element`] on which this [`ColorPicker`]
-    ///         will be wrapped around.
-    ///     * a message that will be send when the cancel button of the [`ColorPicker`]
-    ///         is pressed.
-    ///     * a function that will be called when the submit button of the [`ColorPicker`]
-    ///         is pressed, which takes the picked [`Color`] value.
+    ///     * the underlay [`Element`] on which this [`ColorPicker`] will be wrapped around.
+    ///     * a message that will be send when the cancel button of the [`ColorPicker`] is pressed.
+    ///     * a function that will be called when the submit button of the [`ColorPicker`] is
+    ///       pressed, which takes the picked [`Color`] value.
     pub fn new<U, F>(
         show_picker: bool,
         color: Color,
@@ -112,7 +110,8 @@ where
         }
     }
 
-    /// Sets a callback that will be called whenever the color changes during selection (real-time updates).
+    /// Sets a callback that will be called whenever the color changes during selection (real-time
+    /// updates).
     #[must_use]
     pub fn on_color_change<F>(mut self, on_color_change: F) -> Self
     where

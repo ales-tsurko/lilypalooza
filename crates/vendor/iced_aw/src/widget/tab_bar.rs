@@ -7,6 +7,8 @@
 
 pub mod tab_label;
 
+use std::marker::PhantomData;
+
 use iced_core::{
     Alignment, Background, Border, Clipboard, Color, Element, Event, Font, Layout, Length, Padding,
     Pixels, Point, Rectangle, Shadow, Shell, Size, Widget,
@@ -21,15 +23,13 @@ use iced_widget::{
     Column, Row, Text,
     text::{self, LineHeight, Wrapping},
 };
-
-use std::marker::PhantomData;
+pub use tab_label::TabLabel;
 
 pub use crate::style::{
     Status, StyleFn,
     tab_bar::{self, Catalog, Style},
 };
 use crate::{ICED_AW_FONT, iced_aw_font::advanced_text::cancel};
-pub use tab_label::TabLabel;
 
 /// The default icon size.
 const DEFAULT_ICON_SIZE: f32 = 16.0;
@@ -118,7 +118,8 @@ where
 }
 
 #[derive(Clone, Copy, Default)]
-/// The [`Position`] of the icon relative to text, this enum is only relative if [`TabLabel::IconText`] is used.
+/// The [`Position`] of the icon relative to text, this enum is only relative if
+/// [`TabLabel::IconText`] is used.
 pub enum Position {
     /// Icon is placed above of the text.
     Top,
@@ -142,8 +143,8 @@ where
     ///
     /// It expects:
     ///     * the index of the currently active tab.
-    ///     * the function that will be called if a tab is selected by the user.
-    ///         It takes the index of the selected tab.
+    ///     * the function that will be called if a tab is selected by the user. It takes the index
+    ///       of the selected tab.
     pub fn new<F>(on_select: F) -> Self
     where
         F: 'static + Fn(TabId) -> Message,
@@ -156,8 +157,8 @@ where
     /// It expects:
     ///     * the index of the currently active tab.
     ///     * a vector containing the [`TabLabel`]s of the [`TabBar`].
-    ///     * the function that will be called if a tab is selected by the user.
-    ///         It takes the index of the selected tab.
+    ///     * the function that will be called if a tab is selected by the user. It takes the index
+    ///       of the selected tab.
     pub fn with_tab_labels<F>(tab_labels: Vec<(TabId, TabLabel)>, on_select: F) -> Self
     where
         F: 'static + Fn(TabId) -> Message,
@@ -557,10 +558,18 @@ where
                             self.on_close
                                 .as_ref()
                                 .filter(|_on_close| {
-                                    let tab_layout = layout.children().nth(new_selected).expect("widget: Layout should have a tab layout at the selected index");
-                                    let cross_layout = tab_layout.children().nth(1).expect("widget: Layout should have a close layout");
+                                    let tab_layout = layout.children().nth(new_selected).expect(
+                                        "widget: Layout should have a tab layout at the selected \
+                                         index",
+                                    );
+                                    let cross_layout = tab_layout
+                                        .children()
+                                        .nth(1)
+                                        .expect("widget: Layout should have a close layout");
 
-                                    cursor.position().is_some_and(|pos| cross_layout.bounds().contains(pos))
+                                    cursor
+                                        .position()
+                                        .is_some_and(|pos| cross_layout.bounds().contains(pos))
                                 })
                                 .map_or_else(
                                     || (self.on_select)(self.tab_indices[new_selected].clone()),

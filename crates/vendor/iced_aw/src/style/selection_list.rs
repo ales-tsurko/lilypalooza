@@ -2,8 +2,9 @@
 //!
 //! *This API requires the following crate features to be activated: `selection_list`*
 
-use super::{Status, StyleFn};
 use iced_core::{Background, Color, Theme};
+
+use super::{Status, StyleFn};
 
 /// The appearance of a menu.
 #[derive(Debug, Clone, Copy)]
@@ -71,8 +72,9 @@ pub fn primary(theme: &Theme, status: Status) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iced_core::{Background, Theme};
+
+    use super::*;
 
     #[test]
     fn primary_theme_active() {

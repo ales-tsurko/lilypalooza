@@ -1,11 +1,17 @@
-use iced::Color;
-use iced::Task;
-use iced::widget::Id;
-use iced::widget::operation::{focus, select_all};
+use iced::{
+    Color,
+    Task,
+    widget::{
+        Id,
+        operation::{focus, select_all},
+    },
+};
 
 use super::*;
-use crate::app::RenameTarget;
-use crate::track_names::{effective_track_name, normalized_track_name_override};
+use crate::{
+    app::RenameTarget,
+    track_names::{effective_track_name, normalized_track_name_override},
+};
 
 impl Lilypalooza {
     fn resolved_track_color(&self, track_index: usize) -> Color {
@@ -140,8 +146,9 @@ impl Lilypalooza {
         match target {
             RenameTarget::Track(track_index) => {
                 self.track_name_overrides.resize(track_index + 1, None);
-                self.track_name_overrides[track_index] =
-                    normalized_track_name_override(&self.track_rename_value);
+                if let Some(override_name) = self.track_name_overrides.get_mut(track_index) {
+                    *override_name = normalized_track_name_override(&self.track_rename_value);
+                }
                 self.track_rename_was_focused = false;
                 self.track_rename_value.clear();
                 self.track_rename_color_picker_open = false;
@@ -158,10 +165,13 @@ impl Lilypalooza {
                 self.track_color_picker_target = None;
                 if !name.is_empty()
                     && let Some(playback) = self.playback.as_mut()
-                {
-                    let _ = playback
+                    && let Err(error) = playback
                         .mixer()
-                        .set_bus_name(lilypalooza_audio::BusId(bus_id), name);
+                        .set_bus_name(lilypalooza_audio::BusId(bus_id), name)
+                {
+                    self.logger.push(format!(
+                        "[mixer:error] Failed to rename bus {bus_id}: {error}"
+                    ));
                 }
             }
         }
@@ -214,9 +224,14 @@ impl Lilypalooza {
         let Some(playback) = self.playback.as_mut() else {
             return;
         };
-        let _ = playback
+        if let Err(error) = playback
             .mixer()
-            .set_track_name(lilypalooza_audio::TrackId(track_index as u16), name);
+            .set_track_name(lilypalooza_audio::TrackId(track_index as u16), name)
+        {
+            self.logger.push(format!(
+                "[mixer:error] Failed to rename track {track_index}: {error}"
+            ));
+        }
     }
 
     fn sync_processor_editor_titles_for_strip(&mut self, strip_index: usize) {
@@ -293,7 +308,9 @@ impl Lilypalooza {
 
         self.track_rename_color_value = color;
         self.track_color_overrides.resize(track_index + 1, None);
-        self.track_color_overrides[track_index] = Some(color);
+        if let Some(override_color) = self.track_color_overrides.get_mut(track_index) {
+            *override_color = Some(color);
+        }
         self.persist_settings();
     }
 }

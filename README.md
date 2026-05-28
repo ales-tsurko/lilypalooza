@@ -109,7 +109,7 @@ Install local quality tools:
 ```bash
 rustup toolchain install nightly --component miri --component rust-src --component rustfmt
 cargo install cargo-binstall
-cargo binstall cargo-llvm-cov cargo-crap --no-confirm
+cargo binstall cargo-llvm-cov cargo-crap similarity-rs cargo-machete --no-confirm
 ```
 
 Linux system dependencies:
@@ -132,12 +132,19 @@ sudo apt-get install -y \
 ```bash
 make fmt       # nightly rustfmt, using rustfmt.toml
 make check     # stable cargo check for first-party crates
-make lint      # stable clippy plus nightly rustfmt check
-make clippy    # stable clippy only
+make lint      # clippy, rustfmt check, duplicated code, unused deps
+make fmt-vendor-check # vendored crates with upstream/default rustfmt
 make miri      # nightly Miri for selected callback/scanner crates
 make test-all  # stable workspace tests plus make miri
 make test-cov  # llvm-cov plus cargo-crap report/fail threshold
 ```
+
+`make fmt` and `make lint` format first-party crates with the repository
+`rustfmt.toml`. Vendored crates are checked separately with their own
+`rustfmt.toml` when present, otherwise default rustfmt settings.
+
+`make lint` runs `similarity-rs` on Rust functions. It compares structural
+similarity, not behavior; treat the report as refactoring leads.
 
 `make test-cov` writes `target/lilypalooza-lcov.info` and
 `target/lilypalooza-crap.md`. CRAP analysis includes tests and excludes build
