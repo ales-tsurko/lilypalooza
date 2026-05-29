@@ -52,9 +52,26 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@main
+
+      - name: Cache cargo quality tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-llvm-cov*
+            ~/.cargo/bin/cargo-crap*
+            ~/.cargo/bin/similarity-rs*
+            ~/.cargo/bin/cargo-machete*
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cache/cargo-binstall
+            ~/Library/Caches/cargo-binstall
+            ~/AppData/Local/cargo-binstall
+          key: cargo-quality-tools-${{ runner.os }}-v1-${{ hashFiles('.github/workflows/ci.yml') }}
 
       - name: Install quality tools
         run: cargo binstall cargo-llvm-cov cargo-crap similarity-rs cargo-machete --no-confirm
