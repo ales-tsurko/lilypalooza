@@ -331,6 +331,51 @@ fn vst3_resize_view_resizes_host_and_calls_on_size_synchronously() {
     );
 }
 
+#[test]
+fn vst3_missing_native_resize_does_not_override_static_editor_resizability() {
+    let view = ComWrapper::new(TestPlugView {
+        native_resizable: false,
+        ..TestPlugView::default()
+    });
+    let view_ptr = view.to_com_ptr::<IPlugView>().expect("test view");
+
+    assert_eq!(vst3_editor_view_resizability(&view_ptr), Some(false));
+}
+
+#[test]
+fn vst3_resize_without_native_resize_does_not_call_content_scale() {
+    let view = ComWrapper::new(TestPlugView {
+        native_resizable: false,
+        content_scale_result: kResultFalse,
+        ..TestPlugView::default()
+    });
+    let view_ptr = view.to_com_ptr::<IPlugView>().expect("test view");
+
+    let accepted = resize_vst3_editor_view(
+        &view_ptr,
+        EditorSize {
+            width: 960,
+            height: 720,
+        },
+    )
+    .expect("resize should use content scale support");
+
+    assert_eq!(
+        accepted,
+        EditorSize {
+            width: 960,
+            height: 720,
+        }
+    );
+    assert_eq!(view.on_size.lock().expect("onSize calls").as_slice(), &[]);
+    assert!(
+        view.content_scale_factors
+            .lock()
+            .expect("content scale factors")
+            .is_empty()
+    );
+}
+
 #[derive(Default)]
 struct TestResizeHandler {
     requested: Mutex<Vec<EditorSize>>,
@@ -351,14 +396,28 @@ impl EditorResizeHandler for TestResizeHandler {
     }
 }
 
-#[derive(Default)]
 struct TestPlugView {
+    native_resizable: bool,
+    content_scale_result: tresult,
     on_size: Mutex<Vec<EditorSize>>,
+    content_scale_factors: Mutex<Vec<f32>>,
     events: Arc<Mutex<Vec<&'static str>>>,
 }
 
+impl Default for TestPlugView {
+    fn default() -> Self {
+        Self {
+            native_resizable: true,
+            content_scale_result: kResultOk,
+            on_size: Mutex::default(),
+            content_scale_factors: Mutex::default(),
+            events: Arc::default(),
+        }
+    }
+}
+
 impl Class for TestPlugView {
-    type Interfaces = (IPlugView,);
+    type Interfaces = (IPlugView, IPlugViewContentScaleSupport);
 }
 
 impl IPlugViewTrait for TestPlugView {
@@ -418,10 +477,24 @@ impl IPlugViewTrait for TestPlugView {
     }
 
     unsafe fn canResize(&self) -> tresult {
-        kResultOk
+        if self.native_resizable {
+            kResultOk
+        } else {
+            kResultFalse
+        }
     }
 
     unsafe fn checkSizeConstraint(&self, _rect: *mut ViewRect) -> tresult {
         kResultOk
+    }
+}
+
+impl IPlugViewContentScaleSupportTrait for TestPlugView {
+    unsafe fn setContentScaleFactor(&self, factor: f32) -> tresult {
+        self.content_scale_factors
+            .lock()
+            .expect("content scale factors")
+            .push(factor);
+        self.content_scale_result
     }
 }

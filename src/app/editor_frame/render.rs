@@ -159,7 +159,7 @@ impl AppEditorFrame {
         if !titlebar.contains(pos) {
             return false;
         }
-        let preset_layout = self.preset_layout(titlebar);
+        let preset_layout = self.preset_layout_for_state(titlebar, state);
         !Self::header_interactive_rects(&preset_layout)
             .iter()
             .any(|rect| rect.expand(2.0).contains(pos))
@@ -249,9 +249,26 @@ impl AppEditorFrame {
             })
     }
 
+    #[cfg(test)]
     pub(super) fn preset_layout(
         &self,
         titlebar: editor_host::egui::Rect,
+    ) -> AppEditorFramePresetLayout {
+        self.preset_layout_with_zoom(titlebar, true)
+    }
+
+    pub(super) fn preset_layout_for_state(
+        &self,
+        titlebar: editor_host::egui::Rect,
+        state: &editor_host::EditorHostState,
+    ) -> AppEditorFramePresetLayout {
+        self.preset_layout_with_zoom(titlebar, state.resizable)
+    }
+
+    pub(super) fn preset_layout_with_zoom(
+        &self,
+        titlebar: editor_host::egui::Rect,
+        reserve_zoom: bool,
     ) -> AppEditorFramePresetLayout {
         let left_inset = 8.0;
         let title_gap = 10.0;
@@ -275,7 +292,17 @@ impl AppEditorFrame {
                 EDITOR_FRAME_ZOOM_CONTROL_HEIGHT,
             ),
         );
-        let preset_max_width = (zoom_row.left() - title_gap - left_inset).max(80.0);
+        let right_control_left = if reserve_zoom {
+            zoom_row.left()
+        } else {
+            close_button.left()
+        };
+        let zoom_row = if reserve_zoom {
+            zoom_row
+        } else {
+            editor_host::egui::Rect::NOTHING
+        };
+        let preset_max_width = (right_control_left - title_gap - left_inset).max(80.0);
         let preset_width = (titlebar.width() - 176.0)
             .clamp(188.0, 360.0)
             .min(preset_max_width);
@@ -285,10 +312,10 @@ impl AppEditorFrame {
         );
         let title_text = editor_host::egui::Rect::from_min_max(
             editor_host::egui::pos2(
-                (zoom_row.left() - 8.0 - title_width).max(preset_row.right() + title_gap),
+                (right_control_left - 8.0 - title_width).max(preset_row.right() + title_gap),
                 title_row.top(),
             ),
-            editor_host::egui::pos2(zoom_row.left() - 8.0, title_row.bottom()),
+            editor_host::egui::pos2(right_control_left - 8.0, title_row.bottom()),
         );
         let previous = editor_host::egui::Rect::from_min_size(
             preset_row.left_top(),

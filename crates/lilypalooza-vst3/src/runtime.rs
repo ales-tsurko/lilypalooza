@@ -736,10 +736,9 @@ impl EditorSession for Vst3EditorSession {
         let Some(view) = &self.view else {
             return Ok(None);
         };
-        // SAFETY: View is live while attached to this editor session.
-        let resizable = unsafe { view.canResize() == kResultOk };
-        trace_vst3_editor(|| format!("session resizable={resizable}"));
-        Ok(Some(resizable))
+        let resizable = vst3_editor_view_resizability(view);
+        trace_vst3_editor(|| format!("session resizable={resizable:?}"));
+        Ok(resizable)
     }
 
     fn initial_size(&mut self) -> Result<Option<EditorSize>, EditorError> {
@@ -803,30 +802,8 @@ impl EditorSession for Vst3EditorSession {
         let Some(view) = &self.view else {
             return Ok(size);
         };
-        let mut rect = rect_from_editor_size(size);
-        trace_vst3(|| format!("editor resize canResize start requested={size:?}"));
-        // SAFETY: View is live for this editor session.
-        if unsafe { view.canResize() } == kResultOk {
-            trace_vst3(|| "editor resize checkSizeConstraint start".to_string());
-            // SAFETY: View receives a stack-owned size rectangle.
-            let _ = unsafe { view.checkSizeConstraint(&mut rect) };
-            trace_vst3(|| {
-                format!(
-                    "editor resize onSize start constrained_rect={}",
-                    format_view_rect(rect)
-                )
-            });
-            // SAFETY: View receives a stack-owned size rectangle.
-            let _ = unsafe { view.onSize(&mut rect) };
-            trace_vst3(|| "editor resize onSize done".to_string());
-        }
-        let accepted = editor_size_from_rect(rect).unwrap_or(size);
-        trace_vst3_editor(|| {
-            format!(
-                "session resize requested={size:?} accepted={accepted:?} rect={}",
-                format_view_rect(rect)
-            )
-        });
+        let accepted = resize_vst3_editor_view(view, size)?;
+        trace_vst3_editor(|| format!("session resize requested={size:?} accepted={accepted:?}"));
         self.current_size = Some(accepted);
         Ok(accepted)
     }

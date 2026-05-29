@@ -55,7 +55,7 @@ fn cache_marks_changed_candidate_as_stale() {
 }
 
 #[test]
-fn cache_marks_changed_validator_as_stale() {
+fn cache_ignores_changed_validator_binary_fingerprint() {
     let (_dir, path) = test_path("test.clap");
     let candidate = PluginCandidateFingerprint {
         modified_millis: 10,
@@ -81,7 +81,7 @@ fn cache_marks_changed_validator_as_stale() {
     );
 
     assert!(!cache.is_stale_for_validator(&path, candidate, old_validator));
-    assert!(cache.is_stale_for_validator(&path, candidate, new_validator));
+    assert!(!cache.is_stale_for_validator(&path, candidate, new_validator));
 }
 
 #[test]

@@ -246,7 +246,7 @@ impl editor_host::EditorFrame for AppEditorFrame {
         ui.painter()
             .rect_filled(titlebar, 0.0, self.style.titlebar_color);
 
-        let preset_layout = self.preset_layout(titlebar);
+        let preset_layout = self.preset_layout_for_state(titlebar, state);
         let close_clicked = self.render_frame_close_button(ui, &preset_layout);
         self.render_frame_title(ui, state, &preset_layout);
         let zoom_command = self.render_zoom_controls(ui, state, &preset_layout);

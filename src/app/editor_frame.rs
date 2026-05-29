@@ -158,6 +158,34 @@ mod tests {
     }
 
     #[test]
+    fn app_editor_frame_fixed_editor_reclaims_hidden_zoom_space() {
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
+        let titlebar = editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(0.0, 0.0),
+            editor_host::egui::vec2(640.0, EDITOR_FRAME_COMPACT_CHROME_HEIGHT as f32),
+        );
+        let mut state = editor_host::EditorHostState {
+            title: "Fixed editor".to_string(),
+            resizable: true,
+            zoom_percent: 100,
+            close_requested: false,
+            content_size: editor_host::Size {
+                width: 640.0,
+                height: 480.0,
+            },
+            preset: None,
+        };
+        let resizable_layout = frame.preset_layout_for_state(titlebar, &state);
+
+        state.resizable = false;
+        let fixed_layout = frame.preset_layout_for_state(titlebar, &state);
+
+        assert!(fixed_layout.zoom_row.is_negative());
+        assert!(fixed_layout.title_text.right() > resizable_layout.title_text.right());
+        assert!(fixed_layout.title_text.right() <= fixed_layout.close_button.left() - 8.0);
+    }
+
+    #[test]
     fn app_editor_frame_changes_preset_control_width_smoothly_during_resize() {
         let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
         let mut previous_width = None;

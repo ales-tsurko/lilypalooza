@@ -157,6 +157,36 @@ pub(super) fn changed_editor_size_request(
     Some(requested)
 }
 
+pub(super) fn vst3_editor_view_resizability(view: &ComPtr<IPlugView>) -> Option<bool> {
+    // SAFETY: View is live while attached to this editor session.
+    Some(unsafe { view.canResize() == kResultOk })
+}
+
+pub(super) fn resize_vst3_editor_view(
+    view: &ComPtr<IPlugView>,
+    size: EditorSize,
+) -> Result<EditorSize, EditorError> {
+    let mut rect = rect_from_editor_size(size);
+    trace_vst3(|| format!("editor resize canResize start requested={size:?}"));
+    // SAFETY: View is live for this editor session.
+    if unsafe { view.canResize() } == kResultOk {
+        trace_vst3(|| "editor resize checkSizeConstraint start".to_string());
+        // SAFETY: View receives a stack-owned size rectangle.
+        let _ = unsafe { view.checkSizeConstraint(&mut rect) };
+        trace_vst3(|| {
+            format!(
+                "editor resize onSize start constrained_rect={}",
+                format_view_rect(rect)
+            )
+        });
+        // SAFETY: View receives a stack-owned size rectangle.
+        let result = unsafe { view.onSize(&mut rect) };
+        trace_vst3(|| "editor resize onSize done".to_string());
+        vst3_editor_result(result, "VST3 editor resize failed")?;
+    }
+    Ok(editor_size_from_rect(rect).unwrap_or(size))
+}
+
 impl Drop for Vst3EditorSession {
     fn drop(&mut self) {
         match self.detach() {

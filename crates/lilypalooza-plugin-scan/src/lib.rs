@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub const PLUGIN_VALIDATOR_CONCURRENCY: usize = 1;
 /// Maximum scanner events the app should process in one UI update.
 pub const PLUGIN_SCAN_UI_EVENT_BUDGET: usize = 16;
+const PLUGIN_SCAN_CACHE_VERSION: u32 = 1;
 
 /// Plugin binary format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,8 +153,10 @@ pub struct PluginScanCache {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CachedPluginCandidate {
+    #[serde(default = "legacy_plugin_scan_cache_version")]
+    cache_version: u32,
     fingerprint: PluginCandidateFingerprint,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     validator_fingerprint: Option<PluginCandidateFingerprint>,
     valid: bool,
     #[serde(default)]
@@ -205,10 +208,10 @@ impl PluginScanCache {
         &self,
         path: &Path,
         fingerprint: PluginCandidateFingerprint,
-        validator_fingerprint: Option<PluginCandidateFingerprint>,
+        _validator_fingerprint: Option<PluginCandidateFingerprint>,
     ) -> bool {
         self.entries.get(path).is_none_or(|entry| {
-            entry.fingerprint != fingerprint || entry.validator_fingerprint != validator_fingerprint
+            entry.fingerprint != fingerprint || entry.cache_version != PLUGIN_SCAN_CACHE_VERSION
         })
     }
 
@@ -217,7 +220,7 @@ impl PluginScanCache {
         &mut self,
         path: PathBuf,
         fingerprint: PluginCandidateFingerprint,
-        validator_fingerprint: Option<PluginCandidateFingerprint>,
+        _validator_fingerprint: Option<PluginCandidateFingerprint>,
         valid: bool,
         clap_plugins: Vec<lilypalooza_clap::ClapPluginMetadata>,
         vst3_plugins: Vec<lilypalooza_vst3::Vst3PluginMetadata>,
@@ -225,8 +228,9 @@ impl PluginScanCache {
         self.entries.insert(
             path,
             CachedPluginCandidate {
+                cache_version: PLUGIN_SCAN_CACHE_VERSION,
                 fingerprint,
-                validator_fingerprint,
+                validator_fingerprint: None,
                 valid,
                 clap_plugins,
                 vst3_plugins,
@@ -251,6 +255,10 @@ impl PluginScanCache {
             })
         })
     }
+}
+
+fn legacy_plugin_scan_cache_version() -> u32 {
+    1
 }
 
 enum CachedCandidateResult {
