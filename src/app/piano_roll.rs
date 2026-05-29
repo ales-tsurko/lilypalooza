@@ -1,40 +1,18 @@
 use std::collections::HashMap;
 
 use iced::{
-    Color,
-    Element,
-    Fill,
-    Length,
-    Pixels,
-    Point,
-    Rectangle,
-    Renderer,
-    Size,
-    Theme,
-    alignment,
+    Color, Element, Fill, Length, Pixels, Point, Rectangle, Renderer, Size, Theme, alignment,
     mouse,
     widget::{
-        button,
-        canvas,
-        canvas::Cache,
-        container,
-        mouse_area,
-        row,
-        scrollable,
-        slider,
-        stack,
-        svg,
-        text,
-        text_input,
-        tooltip,
+        button, canvas, canvas::Cache, container, mouse_area, row, scrollable, slider, stack, svg,
+        text, text_input, tooltip,
     },
 };
 use iced_aw::helpers::color_picker_with_change;
 
 use super::{Lilypalooza, Message, PianoRollMessage, dock_view::HeaderControlGroup};
 use crate::{
-    fonts,
-    icons,
+    fonts, icons,
     midi::{MidiNote, MidiRollData, MidiRollFile, MidiTrack, TimeSignatureChange},
     settings::PianoRollViewSettings,
     ui_style,
@@ -50,42 +28,20 @@ use grid_and_labels::*;
 use roll_canvas::*;
 use state_and_controls::*;
 pub(in crate::app) use state_and_controls::{
-    PianoRollState,
-    TrackMixState,
-    content,
-    controls,
-    roll_scroll_id,
-    track_list_scroll_id,
+    PianoRollState, TrackMixState, content, controls, roll_scroll_id, track_list_scroll_id,
     track_list_scroll_y,
 };
 use track_list_and_tempo::*;
 #[cfg(test)]
 mod tests {
     use super::{
-        BAR_LABEL_BOTTOM_PADDING,
-        HEADER_CONTROL_HEIGHT,
-        KEYBOARD_WIDTH,
-        PianoRollState,
-        REWIND_FLAG_BANNER_HEIGHT,
-        REWIND_FLAG_HITBOX_WIDTH,
-        REWIND_FLAG_WIDTH,
-        TEMPO_LABEL_TOP_PADDING,
-        TEMPO_LANE_HEIGHT,
-        TRACK_BUTTON_HEIGHT,
-        TRACK_BUTTON_WIDTH,
-        TRACK_COLOR_BUTTON_GAP,
-        TRACK_COLOR_BUTTON_SIZE,
-        TRACK_LABEL_BUTTON_GAP,
-        TRACK_LIST_SCROLLBAR_GUTTER,
-        TRACK_PANEL_DEFAULT_WIDTH,
-        TRACK_PANEL_MAX_WIDTH,
-        TRACK_PANEL_MIN_WIDTH,
-        TRACK_RESIZE_HANDLE_WIDTH,
-        TRACK_ROW_HEIGHT,
-        TrackMixState,
-        adjacent_subdivision_tick,
-        snap_tick_to_subdivision_grid,
-        track_visibility_alpha,
+        BAR_LABEL_BOTTOM_PADDING, HEADER_CONTROL_HEIGHT, KEYBOARD_WIDTH, PianoRollState,
+        REWIND_FLAG_BANNER_HEIGHT, REWIND_FLAG_HITBOX_WIDTH, REWIND_FLAG_WIDTH,
+        TEMPO_LABEL_TOP_PADDING, TEMPO_LANE_HEIGHT, TRACK_BUTTON_HEIGHT, TRACK_BUTTON_WIDTH,
+        TRACK_COLOR_BUTTON_GAP, TRACK_COLOR_BUTTON_SIZE, TRACK_LABEL_BUTTON_GAP,
+        TRACK_LIST_SCROLLBAR_GUTTER, TRACK_PANEL_DEFAULT_WIDTH, TRACK_PANEL_MAX_WIDTH,
+        TRACK_PANEL_MIN_WIDTH, TRACK_RESIZE_HANDLE_WIDTH, TRACK_ROW_HEIGHT, TrackMixState,
+        adjacent_subdivision_tick, snap_tick_to_subdivision_grid, track_visibility_alpha,
     };
     use crate::{
         midi::{MidiRollData, TimeSignatureChange},

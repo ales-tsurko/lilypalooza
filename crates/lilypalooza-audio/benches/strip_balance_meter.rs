@@ -3,9 +3,7 @@
 use std::{hint::black_box, time::Instant};
 
 use lilypalooza_audio::mixer::{
-    BalanceMeterBenchmarkBlock,
-    BalanceMeterBenchmarkPath,
-    benchmark_process_stereo_balance_meter,
+    BalanceMeterBenchmarkBlock, BalanceMeterBenchmarkPath, benchmark_process_stereo_balance_meter,
 };
 
 const FRAMES: usize = 64;

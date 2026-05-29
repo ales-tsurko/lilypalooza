@@ -8,19 +8,11 @@ use std::{
 };
 
 use editor_host::{
-    EditorFrameCommand,
-    EditorPresetState,
-    InstalledHost,
-    InstalledHostResizeHandle,
-    WindowSnapshot,
+    EditorFrameCommand, EditorPresetState, InstalledHost, InstalledHostResizeHandle, WindowSnapshot,
 };
 use iced::window;
 use lilypalooza_audio::{
-    EditorError,
-    EditorParent,
-    EditorResizeHandler,
-    EditorSession,
-    EditorSize,
+    EditorError, EditorParent, EditorResizeHandler, EditorSession, EditorSize,
 };
 
 mod manager_api;
@@ -32,4 +24,4 @@ use resize_helpers::*;
 pub(in crate::app) use window_state::*;
 use zoom_and_deferred_resize::*;
 #[cfg(test)]
-mod tests;
+mod window_manager_tests;

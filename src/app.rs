@@ -7,31 +7,15 @@ use std::{
 
 use editor_host::WindowSnapshot;
 use iced::{
-    Color,
-    Point,
-    Rectangle,
-    Size,
-    Subscription,
-    Task,
-    event,
-    keyboard,
-    mouse,
+    Color, Point, Rectangle, Size, Subscription, Task, event, keyboard, mouse,
     widget::{Id, pane_grid, svg},
     window,
 };
 use iced_core::{Bytes, image};
 use lilypalooza_audio::{AudioEngine, AudioEngineOptions, MixerState};
 use messages::{
-    EditorMessage,
-    FileMessage,
-    KeyPress,
-    LoggerMessage,
-    Message,
-    MixerMessage,
-    PaneMessage,
-    PianoRollMessage,
-    PromptMessage,
-    ViewerMessage,
+    EditorMessage, FileMessage, KeyPress, LoggerMessage, Message, MixerMessage, PaneMessage,
+    PianoRollMessage, PromptMessage, ViewerMessage,
 };
 use piano_roll::PianoRollState;
 use processor_editor_windows::EditorWindowManager;
@@ -73,10 +57,8 @@ mod workspace_runtime;
 pub(crate) use application::run;
 use application::*;
 pub(in crate::app) use editor_frame::{
-    AppEditorFrame,
-    EDITOR_FRAME_ZOOM_MAX_PERCENT,
-    EDITOR_FRAME_ZOOM_MIN_PERCENT,
+    AppEditorFrame, EDITOR_FRAME_ZOOM_MAX_PERCENT, EDITOR_FRAME_ZOOM_MIN_PERCENT,
 };
 use workspace_runtime::*;
 #[cfg(test)]
-mod tests;
+mod application_tests;

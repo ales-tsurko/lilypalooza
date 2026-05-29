@@ -2,12 +2,8 @@ use knyst::prelude::Beats;
 
 use super::{
     midi_events::{
-        TimedMidiEvent,
-        beats_to_ticks,
-        metronome_clicks_between,
-        normalized_time_signatures,
-        ordered_events_at_same_time,
-        ticks_to_beats,
+        TimedMidiEvent, beats_to_ticks, metronome_clicks_between, normalized_time_signatures,
+        ordered_events_at_same_time, ticks_to_beats,
     },
     scheduler::{MetronomeClick, Sequencer, TimeSignaturePoint},
 };

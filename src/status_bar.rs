@@ -1,8 +1,5 @@
 use iced::{
-    Color,
-    Element,
-    Fill,
-    Theme,
+    Color, Element, Fill, Theme,
     widget::{container, row, text},
 };
 

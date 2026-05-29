@@ -8,15 +8,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::instrument::{
-    BUILTIN_NONE_ID,
-    EffectRuntimeContext,
-    EffectRuntimeSpec,
-    InstrumentRuntimeContext,
-    InstrumentRuntimeSpec,
-    ProcessorDescriptor,
-    ProcessorKind,
-    RuntimeFactoryError,
-    SlotState,
+    BUILTIN_NONE_ID, EffectRuntimeContext, EffectRuntimeSpec, InstrumentRuntimeContext,
+    InstrumentRuntimeSpec, ProcessorDescriptor, ProcessorKind, RuntimeFactoryError, SlotState,
 };
 
 /// Stable processor identifier type used by the registry catalog.
@@ -367,11 +360,7 @@ pub(crate) fn create_effect_runtime(
 mod tests {
     use super::{Backend, Entry, Role, RuntimeFactory, all, entry, is_empty, register};
     use crate::instrument::{
-        BUILTIN_GAIN_ID,
-        ProcessorDescriptor,
-        ProcessorKind,
-        ProcessorState,
-        SlotState,
+        BUILTIN_GAIN_ID, ProcessorDescriptor, ProcessorKind, ProcessorState, SlotState,
     };
 
     const TEST_DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {

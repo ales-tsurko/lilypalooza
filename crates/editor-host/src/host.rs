@@ -1,23 +1,11 @@
 pub use lilypalooza_egui_baseview::egui;
 use lilypalooza_egui_baseview::{
-    EguiApp,
-    EguiWindowHandle,
-    EguiWindowOptions,
-    EguiWindowResizeHandle,
-    open_parented,
+    EguiApp, EguiWindowHandle, EguiWindowOptions, EguiWindowResizeHandle, open_parented,
 };
 use raw_window_handle::{
-    AppKitDisplayHandle,
-    AppKitWindowHandle,
-    RawDisplayHandle,
-    RawWindowHandle,
-    WaylandDisplayHandle,
-    WaylandWindowHandle,
-    Win32WindowHandle,
-    XcbDisplayHandle,
-    XcbWindowHandle,
-    XlibDisplayHandle,
-    XlibWindowHandle,
+    AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
+    WaylandDisplayHandle, WaylandWindowHandle, Win32WindowHandle, XcbDisplayHandle,
+    XcbWindowHandle, XlibDisplayHandle, XlibWindowHandle,
 };
 
 use super::*;

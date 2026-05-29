@@ -13,18 +13,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AppSettings,
-        PlaybackSettings,
-        PluginFormat,
-        PluginSearchPath,
-        ShortcutBinding,
-        ShortcutKey,
-        ShortcutKeyCode,
-        default_plugin_search_paths,
+        AppSettings, PlaybackSettings, PluginFormat, PluginSearchPath, ShortcutBinding,
+        ShortcutKey, ShortcutKeyCode, default_plugin_search_paths,
         formatting::{
-            format_shortcut_binding,
-            parse_shortcut_binding,
-            parse_shortcut_key,
+            format_shortcut_binding, parse_shortcut_binding, parse_shortcut_key,
             shortcut_key_code_string,
         },
         render_settings_file,

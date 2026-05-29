@@ -1,9 +1,7 @@
 use std::cell::OnceCell;
 
 use iced::{
-    Element,
-    Fill,
-    Shrink,
+    Element, Fill, Shrink,
     widget::{container, scrollable, text_editor},
 };
 

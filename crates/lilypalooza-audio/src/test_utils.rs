@@ -1,8 +1,7 @@
 use std::{
     path::PathBuf,
     sync::{
-        Arc,
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
@@ -22,15 +21,7 @@ use knyst::{
     resources::{Resources, ResourcesSettings},
 };
 use midly::{
-    Format,
-    Header,
-    MetaMessage,
-    MidiMessage,
-    Smf,
-    Timing,
-    Track,
-    TrackEvent,
-    TrackEventKind,
+    Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
     num::{u4, u7, u15, u24, u28},
 };
 

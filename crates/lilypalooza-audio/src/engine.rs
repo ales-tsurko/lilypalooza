@@ -15,12 +15,7 @@ use crate::test_utils::TestBackend as TestSupportBackend;
 use crate::{
     instrument::Controller,
     mixer::{
-        Mixer,
-        MixerError,
-        MixerHandle,
-        MixerMeterSnapshot,
-        MixerMeterSnapshotWindow,
-        MixerState,
+        Mixer, MixerError, MixerHandle, MixerMeterSnapshot, MixerMeterSnapshotWindow, MixerState,
         SlotAddress,
     },
     sequencer::{Sequencer, SequencerError, SequencerHandle},
@@ -384,4 +379,4 @@ impl Drop for AudioEngine {
 }
 
 #[cfg(test)]
-mod tests;
+mod engine_tests;

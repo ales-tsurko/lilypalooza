@@ -8,8 +8,7 @@ use std::{
     num::{NonZeroIsize, NonZeroU32},
     ptr::NonNull,
     sync::{
-        Arc,
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
 };
@@ -23,19 +22,11 @@ mod tests {
     use std::ptr::NonNull;
 
     use raw_window_handle::{
-        AppKitDisplayHandle,
-        AppKitWindowHandle,
-        RawDisplayHandle,
-        RawWindowHandle,
+        AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
     };
 
     use super::{
-        EditorFrame,
-        EditorFrameAction,
-        EditorHostOptions,
-        EditorHostState,
-        Size,
-        WindowSnapshot,
+        EditorFrame, EditorFrameAction, EditorHostOptions, EditorHostState, Size, WindowSnapshot,
         host_layout,
     };
 

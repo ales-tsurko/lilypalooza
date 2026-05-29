@@ -1,8 +1,7 @@
 use std::{
     ptr::NonNull,
     sync::{
-        Arc,
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -10,52 +9,26 @@ use std::{
 use block2::RcBlock;
 use lilypalooza_egui_baseview::EguiWindowResizeHandle;
 use objc2::{
-    MainThreadMarker,
-    MainThreadOnly,
+    MainThreadMarker, MainThreadOnly,
     rc::Retained,
     runtime::{AnyObject, NSObjectProtocol, ProtocolObject},
     sel,
 };
 use objc2_app_kit::{
-    NSApplication,
-    NSAutoresizingMaskOptions,
-    NSColor,
-    NSEvent,
-    NSView,
-    NSViewBoundsDidChangeNotification,
-    NSViewFrameDidChangeNotification,
-    NSWindow,
-    NSWindowAnimationBehavior,
-    NSWindowCollectionBehavior,
-    NSWindowOrderingMode,
-    NSWindowStyleMask,
+    NSApplication, NSAutoresizingMaskOptions, NSColor, NSEvent, NSView,
+    NSViewBoundsDidChangeNotification, NSViewFrameDidChangeNotification, NSWindow,
+    NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
     NSWindowTabbingMode,
 };
 use objc2_foundation::{
-    NSNotification,
-    NSNotificationCenter,
-    NSOperationQueue,
-    NSPoint,
-    NSRect,
-    NSSize,
-    NSString,
+    NSNotification, NSNotificationCenter, NSOperationQueue, NSPoint, NSRect, NSSize, NSString,
 };
 use objc2_quartz_core::{CALayer, CATransaction};
 use raw_window_handle::RawWindowHandle;
 
 use crate::{
-    EditorFrame,
-    EditorHostOptions,
-    EditorPresetState,
-    EguiFrameHost,
-    Error,
-    InstalledHost,
-    ResizeAnchor,
-    SharedSize,
-    Size,
-    WindowHandleSnapshot,
-    WindowSnapshot,
-    open_egui_frame,
+    EditorFrame, EditorHostOptions, EditorPresetState, EguiFrameHost, Error, InstalledHost,
+    ResizeAnchor, SharedSize, Size, WindowHandleSnapshot, WindowSnapshot, open_egui_frame,
     trace_editor_host,
 };
 
@@ -917,4 +890,4 @@ fn format_event(event: &NSEvent) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+mod window_tests;

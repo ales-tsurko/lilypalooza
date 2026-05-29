@@ -132,23 +132,24 @@ sudo apt-get install -y \
 ```bash
 make fmt       # nightly rustfmt, using rustfmt.toml
 make check     # stable cargo check for first-party crates
-make lint      # clippy, rustfmt check, duplicated code, unused deps
+make lint      # clippy and first-party rustfmt check
 make fmt-vendor-check # vendored crates with upstream/default rustfmt
-make miri      # nightly Miri for selected callback/scanner crates
-make test-all  # stable workspace tests plus make miri
-make test-cov  # llvm-cov plus cargo-crap report/fail threshold
+make test-all  # stable workspace tests
+make code-health # Miri, duplicated code, unused deps, llvm-cov, CRAP
 ```
 
 `make fmt` and `make lint` format first-party crates with the repository
 `rustfmt.toml`. Vendored crates are checked separately with their own
 `rustfmt.toml` when present, otherwise default rustfmt settings.
 
-`make lint` runs `similarity-rs` on Rust functions. It compares structural
-similarity, not behavior; treat the report as refactoring leads.
+`make code-health` runs `similarity-rs` on Rust functions. It compares
+structural similarity, not behavior; treat the report as refactoring leads. The
+same target also runs `cargo machete`, coverage, CRAP, and package-scoped Miri.
 
-`make test-cov` writes `target/lilypalooza-lcov.info` and
-`target/lilypalooza-crap.md`. CRAP analysis includes tests and excludes build
-scripts and vendored crates.
+`make code-health` writes `target/lilypalooza-lcov.info` and
+`target/lilypalooza-crap.md`. CRAP analysis includes coverage-reported test
+modules and excludes build scripts, examples, benches, vendored crates, and
+external test module roots that llvm-cov does not emit as LCOV source files.
 
 Miri is intentionally package-scoped. The current gate covers
 `lilypalooza-clap`, `lilypalooza-plugin-scan`, and

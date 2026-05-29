@@ -2,18 +2,8 @@
 pub use ::egui;
 pub use baseview::Size;
 use baseview::{
-    Event,
-    EventStatus,
-    MouseButton,
-    MouseEvent,
-    ScrollDelta,
-    Window,
-    WindowHandle,
-    WindowHandler,
-    WindowInfo,
-    WindowOpenOptions,
-    WindowScalePolicy,
-    gl::GlConfig,
+    Event, EventStatus, MouseButton, MouseEvent, ScrollDelta, Window, WindowHandle, WindowHandler,
+    WindowInfo, WindowOpenOptions, WindowScalePolicy, gl::GlConfig,
 };
 use egui::{Pos2, RawInput, Rect, Vec2};
 use egui_glow::Painter;
@@ -30,13 +20,8 @@ use objc2_app_kit::{NSAutoresizingMaskOptions, NSView, NSViewLayerContentsRedraw
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use raw_window_handle::{
-    AppKitWindowHandle,
-    HasRawWindowHandle,
-    RawWindowHandle,
-    WaylandWindowHandle,
-    Win32WindowHandle,
-    XcbWindowHandle,
-    XlibWindowHandle,
+    AppKitWindowHandle, HasRawWindowHandle, RawWindowHandle, WaylandWindowHandle,
+    Win32WindowHandle, XcbWindowHandle, XlibWindowHandle,
 };
 use raw_window_handle_06 as rwh06;
 

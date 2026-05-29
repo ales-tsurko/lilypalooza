@@ -12,13 +12,7 @@ use knyst::{
     handles::{GenericHandle, Handle, HandleData},
     modal_interface::knyst_commands,
     prelude::{
-        BlockSize,
-        GenState,
-        KnystCommands,
-        MultiThreadedKnystCommands,
-        Resources,
-        Sample,
-        impl_gen,
+        BlockSize, GenState, KnystCommands, MultiThreadedKnystCommands, Resources, Sample, impl_gen,
     },
 };
 

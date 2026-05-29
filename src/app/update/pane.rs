@@ -898,4 +898,4 @@ fn vertical_split_axis_for_region(region: DockDropRegion) -> Option<(pane_grid::
 }
 
 #[cfg(test)]
-mod tests;
+mod pane_tests;

@@ -1,19 +1,14 @@
 use std::time::Duration;
 
 use iced::{
-    ContentFit,
-    Element,
-    Fill,
-    Length,
-    alignment,
+    ContentFit, Element, Fill, Length, alignment,
     widget::{button, container, mouse_area, row, slider, svg, text, tooltip},
 };
 use iced_aw::{DropDown, drop_down};
 
 use super::{Lilypalooza, Message, PianoRollMessage, controls};
 use crate::{
-    fonts,
-    icons,
+    fonts, icons,
     midi::{MidiRollData, TimeSignatureChange},
     shortcuts::{self, ShortcutAction},
     ui_style,

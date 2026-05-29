@@ -6,18 +6,9 @@ use knyst::{
 };
 
 use super::{
-    BUILTIN_SOUNDFONT_ID,
-    InstrumentProcessor,
-    InstrumentProcessorNode,
-    InstrumentRuntimeHandle,
-    MidiEvent,
-    Processor,
-    ProcessorDescriptor,
-    ProcessorState,
-    ProcessorStateError,
-    SharedInstrumentResetState,
-    SlotState,
-    SmoothedAudioValue,
+    BUILTIN_SOUNDFONT_ID, InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle,
+    MidiEvent, Processor, ProcessorDescriptor, ProcessorState, ProcessorStateError,
+    SharedInstrumentResetState, SlotState, SmoothedAudioValue,
 };
 use crate::{
     instrument::registry::{self, Entry, RuntimeFactory},

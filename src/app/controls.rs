@@ -4,18 +4,8 @@ use std::{
 };
 
 use iced::{
-    Color,
-    Element,
-    Length,
-    Pixels,
-    Point,
-    Radians,
-    Rectangle,
-    Renderer,
-    Theme,
-    alignment,
-    keyboard,
-    mouse,
+    Color, Element, Length, Pixels, Point, Radians, Rectangle, Renderer, Theme, alignment,
+    keyboard, mouse,
     widget::{
         canvas,
         canvas::{self as canvas_widget, Path, Stroke, Text},
@@ -35,39 +25,18 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use iced::{
-        Point,
-        Rectangle,
-        keyboard,
-        mouse,
+        Point, Rectangle, keyboard, mouse,
         widget::canvas::{self as canvas_widget, Program},
     };
 
     use super::{
-        COMPACT_HORIZONTAL_SLIDER_METRICS,
-        FINE_DRAG_MULTIPLIER,
-        GAIN_MIN_DB,
-        GAIN_SCALE_DB_MARKS,
-        GAIN_SCALE_LABEL_MIN_GAP,
-        GainFader,
-        GainFaderState,
-        HORIZONTAL_SLIDER_METRICS,
-        HorizontalSlider,
-        HorizontalSliderScale,
-        HorizontalSliderState,
-        Knob,
-        KnobMode,
-        gain_db_to_normalized,
-        gain_db_to_normalized_with_max,
-        gain_fader_handle_y,
-        gain_fader_rail_bounds,
-        gain_normalized_to_db,
-        gain_normalized_to_db_with_max,
-        gain_scale_label,
-        gain_value_to_y,
-        horizontal_slider_handle_x,
-        is_double_click,
-        visible_gain_scale_marks,
-        y_to_gain_value,
+        COMPACT_HORIZONTAL_SLIDER_METRICS, FINE_DRAG_MULTIPLIER, GAIN_MIN_DB, GAIN_SCALE_DB_MARKS,
+        GAIN_SCALE_LABEL_MIN_GAP, GainFader, GainFaderState, HORIZONTAL_SLIDER_METRICS,
+        HorizontalSlider, HorizontalSliderScale, HorizontalSliderState, Knob, KnobMode,
+        gain_db_to_normalized, gain_db_to_normalized_with_max, gain_fader_handle_y,
+        gain_fader_rail_bounds, gain_normalized_to_db, gain_normalized_to_db_with_max,
+        gain_scale_label, gain_value_to_y, horizontal_slider_handle_x, is_double_click,
+        visible_gain_scale_marks, y_to_gain_value,
     };
 
     fn shift_toggle_drag_values<P>(

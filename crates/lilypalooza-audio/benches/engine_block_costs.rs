@@ -15,38 +15,15 @@ use knyst::{
     resources::Resources,
 };
 use lilypalooza_audio::{
-    AudioEngine,
-    AudioEngineOptions,
-    BUILTIN_SOUNDFONT_ID,
-    Controller,
-    ControllerError,
-    InstrumentProcessor,
-    MidiEvent,
-    MixerState,
-    Processor,
-    ProcessorDescriptor,
-    ProcessorState,
-    ProcessorStateError,
-    SlotState,
-    SoundfontResource,
-    TrackId,
+    AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, Controller, ControllerError,
+    InstrumentProcessor, MidiEvent, MixerState, Processor, ProcessorDescriptor, ProcessorState,
+    ProcessorStateError, SlotState, SoundfontResource, TrackId,
     instrument::{
-        InstrumentRuntimeContext,
-        InstrumentRuntimeSpec,
-        RuntimeBinding,
-        RuntimeFactoryError,
+        InstrumentRuntimeContext, InstrumentRuntimeSpec, RuntimeBinding, RuntimeFactoryError,
     },
 };
 use midly::{
-    Format,
-    Header,
-    MetaMessage,
-    MidiMessage,
-    Smf,
-    Timing,
-    Track,
-    TrackEvent,
-    TrackEventKind,
+    Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
     num::{u4, u7, u15, u24, u28},
 };
 

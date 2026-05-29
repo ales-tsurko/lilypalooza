@@ -7,8 +7,7 @@ use resvg::{tiny_skia, usvg};
 
 use super::{
     messages::{KeyPress, MixerMessage},
-    score_cursor,
-    *,
+    score_cursor, *,
 };
 use crate::{
     error_prompt::{ErrorFatality, ErrorPrompt, PromptButtons},
@@ -38,8 +37,7 @@ use score_preview::*;
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_svg_coordinate_size_from_source,
-        parse_svg_size_from_source,
+        parse_svg_coordinate_size_from_source, parse_svg_size_from_source,
         should_commit_track_rename_before_message,
     };
     use crate::app::{

@@ -1,16 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use lilypalooza_audio::{
-    AudioEngine,
-    AudioEngineOptions,
-    BusId,
-    EditorError,
-    EditorParent,
-    EditorSession,
-    EditorSize,
-    MixerState,
-    SlotState,
-    TrackId,
+    AudioEngine, AudioEngineOptions, BusId, EditorError, EditorParent, EditorSession, EditorSize,
+    MixerState, SlotState, TrackId,
 };
 
 use super::{Lilypalooza, MixerHistoryMode, mixer_message_history_mode};

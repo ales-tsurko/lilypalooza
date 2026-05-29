@@ -1,12 +1,5 @@
 use iced::{
-    Border,
-    Color,
-    ContentFit,
-    Length,
-    Shadow,
-    Theme,
-    Vector,
-    border,
+    Border, Color, ContentFit, Length, Shadow, Theme, Vector, border,
     widget::{button, container, scrollable, svg, text_editor, text_input},
 };
 use iced_aw::style::{Status as AwStatus, color_picker::Style as AwColorPickerStyle};

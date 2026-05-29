@@ -2,8 +2,7 @@
 
 use std::{
     collections::HashMap,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process::Command,
     sync::mpsc,
@@ -792,4 +791,4 @@ where
 }
 
 #[cfg(test)]
-mod tests;
+mod scan_tests;

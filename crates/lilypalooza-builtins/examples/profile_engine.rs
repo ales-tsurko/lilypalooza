@@ -13,25 +13,12 @@ use std::{
 };
 
 use lilypalooza_audio::{
-    AudioEngine,
-    AudioEngineOptions,
-    BUILTIN_SOUNDFONT_ID,
-    MixerState,
-    SlotState,
-    SoundfontResource,
-    TrackId,
+    AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, MixerState, SlotState,
+    SoundfontResource, TrackId,
 };
 use lilypalooza_builtins::soundfont_synth;
 use midly::{
-    Format,
-    Header,
-    MetaMessage,
-    MidiMessage,
-    Smf,
-    Timing,
-    Track,
-    TrackEvent,
-    TrackEventKind,
+    Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
     num::{u4, u7, u15, u24, u28},
 };
 

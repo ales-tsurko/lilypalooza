@@ -11,4 +11,4 @@ pub use definitions::*;
 pub use runtime_nodes::*;
 
 #[cfg(test)]
-mod tests;
+mod instrument_tests;

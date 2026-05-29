@@ -1,37 +1,14 @@
 use iced::{
-    Color,
-    ContentFit,
-    Element,
-    Fill,
-    Length,
-    Point,
-    Rectangle,
-    Size,
-    Theme,
-    alignment,
-    mouse,
+    Color, ContentFit, Element, Fill, Length, Point, Rectangle, Size, Theme, alignment, mouse,
     widget::{
-        button,
-        canvas,
-        container,
-        mouse_area,
-        responsive,
-        row,
-        scrollable,
-        stack,
-        svg,
-        text,
+        button, canvas, container, mouse_area, responsive, row, scrollable, stack, svg, text,
         tooltip,
     },
 };
 use iced_core::image;
 
 use super::{
-    Lilypalooza,
-    Message,
-    ScoreCursorPlacement,
-    ViewerMessage,
-    dock_view::HeaderControlGroup,
+    Lilypalooza, Message, ScoreCursorPlacement, ViewerMessage, dock_view::HeaderControlGroup,
 };
 use crate::{fonts, icons, ui_style};
 

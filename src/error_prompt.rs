@@ -1,10 +1,5 @@
 use iced::{
-    Color,
-    Element,
-    Fill,
-    Length,
-    Theme,
-    alignment,
+    Color, Element, Fill, Length, Theme, alignment,
     widget::{button, column, container, opaque, row, svg, text},
 };
 

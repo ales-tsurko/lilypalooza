@@ -1,14 +1,8 @@
 use iced::keyboard;
 
 use crate::settings::{
-    ShortcutActionId,
-    ShortcutBinding,
-    ShortcutBindingOverride,
-    ShortcutKey,
-    ShortcutKeyCode,
-    ShortcutNamedKey,
-    ShortcutSettings,
-    WorkspacePane,
+    ShortcutActionId, ShortcutBinding, ShortcutBindingOverride, ShortcutKey, ShortcutKeyCode,
+    ShortcutNamedKey, ShortcutSettings, WorkspacePane,
 };
 
 mod actions;

@@ -4,54 +4,18 @@ use std::{
 };
 
 use iced::{
-    Color,
-    ContentFit,
-    Element,
-    Fill,
-    Length,
-    Padding,
-    Point,
-    Rectangle,
-    Size,
-    Theme,
-    alignment,
-    border,
-    mouse,
+    Color, ContentFit, Element, Fill, Length, Padding, Point, Rectangle, Size, Theme, alignment,
+    border, mouse,
     widget::{
-        Column,
-        Tooltip,
-        button,
-        canvas,
-        container,
-        mouse_area,
-        opaque,
-        pane_grid,
-        responsive,
-        row,
-        scrollable,
-        slider,
-        stack,
-        svg,
-        text,
-        text_input,
-        tooltip,
+        Column, Tooltip, button, canvas, container, mouse_area, opaque, pane_grid, responsive, row,
+        scrollable, slider, stack, svg, text, text_input, tooltip,
     },
 };
 
 use super::{
-    DockDropRegion,
-    EditorFileMenuSection,
-    EditorHeaderMenuSection,
-    Lilypalooza,
-    Message,
-    PaneMessage,
-    ProjectMenuSection,
-    WorkspacePaneKind,
-    messages::ShortcutsMessage,
-    mixer,
-    piano_roll,
-    score_view,
-    transport_bar,
+    DockDropRegion, EditorFileMenuSection, EditorHeaderMenuSection, Lilypalooza, Message,
+    PaneMessage, ProjectMenuSection, WorkspacePaneKind, messages::ShortcutsMessage, mixer,
+    piano_roll, score_view, transport_bar,
 };
 use crate::{fonts, icons, shortcuts, ui_style};
 
@@ -64,17 +28,11 @@ use editor_menus::*;
 use editor_tabs::*;
 use toolbar_and_panes::*;
 pub(super) use toolbar_and_panes::{
-    HEADER_CONTROL_HEIGHT,
-    HeaderControlGroup,
-    TOOLBAR_HEIGHT,
-    delayed_tooltip,
-    view,
+    HEADER_CONTROL_HEIGHT, HeaderControlGroup, TOOLBAR_HEIGHT, delayed_tooltip, view,
 };
 use workspace_layout::*;
 pub(super) use workspace_layout::{
-    compact_control_icon,
-    workspace_group_min_height,
-    workspace_group_min_width,
+    compact_control_icon, workspace_group_min_height, workspace_group_min_width,
 };
 #[cfg(test)]
 mod tests {

@@ -1,15 +1,10 @@
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 
 use iced::{
-    Color,
-    Element,
-    Fill,
-    Theme,
-    border,
+    Color, Element, Fill, Theme, border,
     widget::{button, container, keyed_column, text},
 };
 use iced_code_editor::{CodeEditor, Message as EditorWidgetMessage, theme::ThemeTuning};

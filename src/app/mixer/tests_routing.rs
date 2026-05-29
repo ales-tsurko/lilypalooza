@@ -1,19 +1,10 @@
 use iced::{
-    Color,
-    Element,
-    Length,
-    Point,
-    Theme,
+    Color, Element, Length, Point, Theme,
     widget::{button, container},
 };
 use iced_test::{Simulator, simulator};
 use lilypalooza_audio::{
-    AudioEngine,
-    AudioEngineOptions,
-    BUILTIN_GAIN_ID,
-    BUILTIN_SOUNDFONT_ID,
-    MixerState,
-    SlotState,
+    AudioEngine, AudioEngineOptions, BUILTIN_GAIN_ID, BUILTIN_SOUNDFONT_ID, MixerState, SlotState,
     mixer::{MixerMeterSnapshotWindow, StripMeterSnapshot, TrackRoute},
 };
 

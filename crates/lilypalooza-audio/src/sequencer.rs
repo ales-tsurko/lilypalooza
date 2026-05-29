@@ -3,8 +3,7 @@
 use std::{
     collections::{BTreeSet, HashMap},
     sync::{
-        Arc,
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
 };
@@ -13,13 +12,8 @@ use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use knyst::{
     prelude::{
-        Beats,
-        KnystCommands,
-        MultiThreadedKnystCommands,
-        SchedulerChange,
-        SchedulerExtension,
-        SchedulerExtensionContext,
-        TransportState,
+        Beats, KnystCommands, MultiThreadedKnystCommands, SchedulerChange, SchedulerExtension,
+        SchedulerExtensionContext, TransportState,
     },
     scheduling::{MusicalTimeMap, TempoChange},
     time::{SUBBEAT_TESIMALS_PER_BEAT, Seconds},
@@ -39,4 +33,4 @@ mod scheduler;
 pub use scheduler::{Sequencer, SequencerError, SequencerHandle};
 
 #[cfg(test)]
-mod tests;
+mod sequencer_tests;

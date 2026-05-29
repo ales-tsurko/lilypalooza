@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -926,4 +925,4 @@ fn note_pitch_range(notes: &[MidiNote]) -> (u8, u8) {
 }
 
 #[cfg(test)]
-mod tests;
+mod midi_tests;

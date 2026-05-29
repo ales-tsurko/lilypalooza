@@ -5,20 +5,11 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use iced::{
-    Color,
-    Element,
-    Length,
-    Pixels,
-    Rectangle,
-    Renderer,
-    Theme,
-    alignment,
+    Color, Element, Length, Pixels, Rectangle, Renderer, Theme, alignment,
     widget::{
         canvas,
         canvas::{self as canvas_widget, Path, Stroke, Text},
-        row,
-        shader,
-        shader as shader_widget,
+        row, shader, shader as shader_widget,
     },
 };
 use lilypalooza_audio::mixer::{STRIP_METER_MAX_DB, STRIP_METER_MIN_DB, StripMeterSnapshot};
@@ -618,17 +609,9 @@ mod tests {
     use lilypalooza_audio::mixer::{ChannelMeterSnapshot, StripMeterSnapshot};
 
     use super::{
-        FADER_HANDLE_VISUAL_WIDTH,
-        METER_TOTAL_WIDTH,
-        MeterColors,
-        SCALE_DB_MARKS,
-        SCALE_LABEL_MIN_GAP,
-        brighten_color,
-        meter_db_to_normalized,
-        meter_gradient_color,
-        meter_rail_layout,
-        meter_shader_data,
-        visible_scale_marks,
+        FADER_HANDLE_VISUAL_WIDTH, METER_TOTAL_WIDTH, MeterColors, SCALE_DB_MARKS,
+        SCALE_LABEL_MIN_GAP, brighten_color, meter_db_to_normalized, meter_gradient_color,
+        meter_rail_layout, meter_shader_data, visible_scale_marks,
     };
     use crate::app::controls::fader_rail_layout;
 

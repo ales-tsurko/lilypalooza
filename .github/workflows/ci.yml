@@ -65,11 +65,11 @@ jobs:
       - name: Run tests
         run: make test-all
 
-      - name: Coverage and CRAP
-        run: make test-cov
-
       - name: Lint
         run: make lint
+
+      - name: Code health
+        run: make code-health
 
       - name: Vendor format
         run: make fmt-vendor-check

@@ -1,22 +1,13 @@
 use super::{
     editor::{
-        call_plug_view_on_size,
-        editor_size_from_rect,
-        format_view_rect,
-        trace_vst3,
+        call_plug_view_on_size, editor_size_from_rect, format_view_rect, trace_vst3,
         trace_vst3_editor,
     },
     probe::*,
     runtime::{
-        activate_buses,
-        connect_component_and_controller,
-        create_controller,
-        log_vst3_lifecycle_result,
-        process_input_count,
-        process_inputs_ptr,
-        sync_controller_component_state,
-        trace_process_done,
-        trace_process_start,
+        activate_buses, connect_component_and_controller, create_controller,
+        log_vst3_lifecycle_result, process_input_count, process_inputs_ptr,
+        sync_controller_component_state, trace_process_done, trace_process_start,
     },
     *,
 };

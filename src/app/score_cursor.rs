@@ -13,16 +13,9 @@ mod parsing;
 use matching::*;
 use parsing::*;
 pub(in crate::app) use parsing::{
-    ScoreCursorMaps,
-    ScoreCursorPlacement,
-    SvgNoteAnchor,
-    SystemBand,
-    build_score_cursor_maps,
-    parse_svg_note_anchors,
-    parse_svg_system_bands,
-    point_and_click_target_at,
-    score_contains_repeats,
-    score_disables_point_and_click,
+    ScoreCursorMaps, ScoreCursorPlacement, SvgNoteAnchor, SystemBand, build_score_cursor_maps,
+    parse_svg_note_anchors, parse_svg_system_bands, point_and_click_target_at,
+    score_contains_repeats, score_disables_point_and_click,
 };
 #[cfg(test)]
 mod tests {

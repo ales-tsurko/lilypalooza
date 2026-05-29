@@ -56,10 +56,7 @@ pub(crate) fn ellipsize_middle(value: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_TRACK_NAME_LEN,
-        default_track_name,
-        effective_track_name,
-        ellipsize_middle,
+        MAX_TRACK_NAME_LEN, default_track_name, effective_track_name, ellipsize_middle,
         normalized_track_name_override,
     };
 

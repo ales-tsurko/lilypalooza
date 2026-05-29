@@ -6,9 +6,7 @@ mod metronome_synth;
 pub mod soundfont_synth;
 
 use lilypalooza_audio::{
-    BUILTIN_GAIN_ID,
-    BUILTIN_METRONOME_ID,
-    BUILTIN_SOUNDFONT_ID,
+    BUILTIN_GAIN_ID, BUILTIN_METRONOME_ID, BUILTIN_SOUNDFONT_ID,
     instrument::registry::{self, Entry, RuntimeFactory},
 };
 

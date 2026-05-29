@@ -1,6 +1,5 @@
 use iced::{
-    Color,
-    Task,
+    Color, Task,
     widget::{
         Id,
         operation::{focus, select_all},

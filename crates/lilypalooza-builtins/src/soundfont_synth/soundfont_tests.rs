@@ -6,38 +6,19 @@
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
 use lilypalooza_audio::{
-    BUILTIN_SOUNDFONT_ID,
-    SlotState,
-    SoundfontPreset,
+    BUILTIN_SOUNDFONT_ID, SlotState, SoundfontPreset,
     instrument::{EditorSize, InstrumentProcessor, InstrumentRuntimeContext, MidiEvent, Processor},
     soundfont::{LoadedSoundfont, SoundfontResource, SoundfontSynthSettings},
 };
 use lilypalooza_egui_baseview::EguiApp;
 
 use super::{
-    DESCRIPTOR,
-    EDITOR_HEIGHT,
-    EDITOR_WIDTH,
-    ProgramChoice,
-    SoundfontProcessor,
-    SoundfontProcessorState,
-    create_runtime,
-    descriptor,
-    egui,
-    encode_state,
-    format_output_gain_db,
-    output_gain_from_db,
-    output_gain_to_db,
+    DESCRIPTOR, EDITOR_HEIGHT, EDITOR_WIDTH, ProgramChoice, SoundfontProcessor,
+    SoundfontProcessorState, create_runtime, descriptor, egui, encode_state, format_output_gain_db,
+    output_gain_from_db, output_gain_to_db,
     retro_ui::{
-        draw_led,
-        install_retro_style,
-        pos,
-        program_list,
-        rect,
-        retro,
-        retro_choice_list,
-        retro_group,
-        retro_select_box,
+        draw_led, install_retro_style, pos, program_list, rect, retro, retro_choice_list,
+        retro_group, retro_select_box,
     },
     soundfont_presets,
 };

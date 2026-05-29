@@ -1,9 +1,6 @@
 use super::{
     runtime::{
-        host_extension_for_id,
-        host_request_callback,
-        host_request_process,
-        host_request_restart,
+        host_extension_for_id, host_request_callback, host_request_process, host_request_restart,
     },
     *,
 };

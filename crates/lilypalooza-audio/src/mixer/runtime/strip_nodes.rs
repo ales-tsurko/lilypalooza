@@ -3,13 +3,8 @@ use wide::f32x4;
 
 use super::{SharedStripLevel, SharedStripMeter};
 use crate::instrument::{
-    InstrumentProcessor,
-    ScheduledInstrumentEvent,
-    SharedAudioValue,
-    SharedInstrumentResetState,
-    SmoothedAudioValue,
-    decode_instrument_event,
-    generation_is_current_or_newer,
+    InstrumentProcessor, ScheduledInstrumentEvent, SharedAudioValue, SharedInstrumentResetState,
+    SmoothedAudioValue, decode_instrument_event, generation_is_current_or_newer,
 };
 
 pub(crate) fn process_stereo_balance_meter_scalar(

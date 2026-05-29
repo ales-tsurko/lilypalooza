@@ -6,36 +6,17 @@ use std::{
 };
 
 use editor_host::{
-    EditorFrame,
-    EditorFrameAction,
-    EditorHostOptions,
-    EditorHostState,
-    InstalledHost,
-    WindowSnapshot,
-    host_layout,
+    EditorFrame, EditorFrameAction, EditorHostOptions, EditorHostState, InstalledHost,
+    WindowSnapshot, host_layout,
 };
 use iced::{
-    Color,
-    Element,
-    Length,
-    Size,
-    Subscription,
-    Task,
+    Color, Element, Length, Size, Subscription, Task,
     widget::{container, text},
     window,
 };
 use lilypalooza_audio::{
-    AudioEngine,
-    AudioEngineOptions,
-    BUILTIN_SOUNDFONT_ID,
-    EditorDescriptor,
-    EditorParent,
-    EditorSession,
-    MixerState,
-    SlotAddress,
-    SlotState,
-    SoundfontResource,
-    TrackId,
+    AudioEngine, AudioEngineOptions, BUILTIN_SOUNDFONT_ID, EditorDescriptor, EditorParent,
+    EditorSession, MixerState, SlotAddress, SlotState, SoundfontResource, TrackId,
 };
 use lilypalooza_builtins::soundfont_synth;
 use num_traits::ToPrimitive;

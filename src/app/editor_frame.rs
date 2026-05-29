@@ -11,9 +11,7 @@ mod render;
 use helpers::*;
 use model::*;
 pub(super) use model::{
-    AppEditorFrame,
-    EDITOR_FRAME_ZOOM_MAX_PERCENT,
-    EDITOR_FRAME_ZOOM_MIN_PERCENT,
+    AppEditorFrame, EDITOR_FRAME_ZOOM_MAX_PERCENT, EDITOR_FRAME_ZOOM_MIN_PERCENT,
 };
 #[cfg(test)]
 mod tests {

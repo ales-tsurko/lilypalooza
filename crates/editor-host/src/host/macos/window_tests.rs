@@ -4,14 +4,9 @@ use objc2_app_kit::{NSAutoresizingMaskOptions, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
 use super::{
-    content_frame_for_host,
-    content_view_autoresizing_mask,
-    content_view_masks_to_bounds,
-    editor_window_style_mask,
-    embedded_subview_extent,
-    host_window_frame_resized_from_bottom,
-    host_window_frame_resized_from_bottom_clamped,
-    host_window_frame_resized_from_top,
+    content_frame_for_host, content_view_autoresizing_mask, content_view_masks_to_bounds,
+    editor_window_style_mask, embedded_subview_extent, host_window_frame_resized_from_bottom,
+    host_window_frame_resized_from_bottom_clamped, host_window_frame_resized_from_top,
     native_content_resize_tracking_enabled,
 };
 use crate::{Rect, host_layout};

@@ -4,10 +4,7 @@ use lilypalooza_egui_baseview::egui;
 use num_traits::ToPrimitive;
 
 use super::{
-    PROGRAM_SCROLL_WHEEL_POINTS_PER_ROW,
-    ProgramChoice,
-    RETRO_DISPLAY_FONT,
-    RETRO_UI_FONT,
+    PROGRAM_SCROLL_WHEEL_POINTS_PER_ROW, ProgramChoice, RETRO_DISPLAY_FONT, RETRO_UI_FONT,
     positive_rows,
 };
 

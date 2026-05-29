@@ -7,10 +7,7 @@ use num_traits::ToPrimitive;
 
 use super::db_to_amplitude;
 use crate::mixer::{
-    ChannelMeterSnapshot,
-    STRIP_METER_MAX_DB,
-    STRIP_METER_MIN_DB,
-    StripMeterSnapshot,
+    ChannelMeterSnapshot, STRIP_METER_MAX_DB, STRIP_METER_MIN_DB, StripMeterSnapshot,
 };
 
 const METER_FLOOR: f32 = 0.00003162278;

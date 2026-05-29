@@ -7,14 +7,8 @@ use std::{
 };
 
 use crate::instrument::{
-    InstrumentProcessor,
-    MidiEvent,
-    ParameterDescriptor,
-    Processor,
-    ProcessorDescriptor,
-    ProcessorState,
-    ProcessorStateError,
-    SmoothedAudioValue,
+    InstrumentProcessor, MidiEvent, ParameterDescriptor, Processor, ProcessorDescriptor,
+    ProcessorState, ProcessorStateError, SmoothedAudioValue,
 };
 
 const MIN_GAIN_DB: f32 = -36.0;

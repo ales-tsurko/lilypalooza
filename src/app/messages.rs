@@ -2,11 +2,7 @@ use std::path::PathBuf;
 
 use editor_host::WindowSnapshot;
 use iced::{
-    Color,
-    Size,
-    event,
-    keyboard,
-    mouse,
+    Color, Size, event, keyboard, mouse,
     time::Instant,
     widget::{pane_grid, text_editor},
     window,
@@ -15,11 +11,7 @@ use iced_code_editor::Message as EditorWidgetMessage;
 use iced_core::image;
 
 use super::{
-    EditorFileMenuSection,
-    EditorHeaderMenuSection,
-    ProjectMenuSection,
-    WorkspacePaneKind,
-    mixer,
+    EditorFileMenuSection, EditorHeaderMenuSection, ProjectMenuSection, WorkspacePaneKind, mixer,
 };
 #[derive(Debug, Clone)]
 pub(super) enum Message {

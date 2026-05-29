@@ -1,32 +1,17 @@
 use editor_host::{
-    EditorFrameCommand,
-    EditorHostOptions,
-    EditorPresetItem,
-    EditorPresetOrigin,
-    EditorPresetState,
-    InstalledHost,
-    WindowSnapshot,
-    route_app_quit_to_window_close,
+    EditorFrameCommand, EditorHostOptions, EditorPresetItem, EditorPresetOrigin, EditorPresetState,
+    InstalledHost, WindowSnapshot, route_app_quit_to_window_close,
 };
 use iced::window;
 use lilypalooza_audio::{
-    BUILTIN_SOUNDFONT_ID,
-    BusId,
-    BusSend,
-    EditorParent,
-    ProcessorKind,
-    SlotState,
-    TrackId,
+    BUILTIN_SOUNDFONT_ID, BusId, BusSend, EditorParent, ProcessorKind, SlotState, TrackId,
 };
 use lilypalooza_builtins::soundfont_synth::{self, SoundfontProcessorState};
 
 use super::{super::messages::MixerMessage, *};
 use crate::app::{
     mixer::{
-        ProcessorBrowserBackend,
-        ProcessorBrowserSectionKey,
-        ProcessorChoice,
-        ProcessorSlotSegment,
+        ProcessorBrowserBackend, ProcessorBrowserSectionKey, ProcessorChoice, ProcessorSlotSegment,
     },
     processor_editor_windows::{EditorTarget, snapshot_into_editor_parent},
 };
