@@ -8,6 +8,7 @@ members = [
     "crates/editor-host",
     "crates/lilypalooza-audio",
     "crates/lilypalooza-builtins",
+    "crates/lilypalooza-au",
     "crates/lilypalooza-clap",
     "crates/lilypalooza-egui-baseview",
     "crates/lilypalooza-plugin-scan",
@@ -33,6 +34,7 @@ iced_aw = { path = "crates/vendor/iced_aw", default-features = false, features =
 iced_core = { workspace = true }
 iced-code-editor = { path = "crates/vendor/iced-code-editor" }
 lilypalooza-audio = { path = "crates/lilypalooza-audio" }
+lilypalooza-au = { path = "crates/lilypalooza-au" }
 lilypalooza-builtins = { path = "crates/lilypalooza-builtins" }
 lilypalooza-clap = { path = "crates/lilypalooza-clap" }
 lilypalooza-plugin-scan = { path = "crates/lilypalooza-plugin-scan" }

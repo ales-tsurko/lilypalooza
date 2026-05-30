@@ -14,10 +14,12 @@ score preview, plugin hosting, and project persistence.
 - watched LilyPond sources with automatic recompilation on save/external change
 - score preview with point-and-click navigation back to source
 - MIDI playback with transport, piano roll and feature-full DAW-grade mixer
-- DAW-style processor slots for built-in, CLAP, and VST3 instruments/effects
+- DAW-style processor slots for built-in, AUv2, CLAP, and VST3
+  instruments/effects
 - built-in SoundFont sampler
 - plugin editor windows with preset controls and native embedded plugin views
-- non-blocking CLAP/VST3 scanning with isolated validation and persistent cache
+- non-blocking AUv2/CLAP/VST3 scanning with isolated validation and persistent
+  cache
 - mixer buses, output routing, sends, pre/post fader sends, feedback prevention,
   effect bypass, effect reordering, and plugin delay compensation
 - dockable multi-pane workspace with editor, score, piano roll, mixer, logs, and
@@ -61,7 +63,7 @@ lilypalooza/settings.toml
 
 The file is generated with documented defaults. Important sections include:
 
-- `clap_search_paths` and `vst3_search_paths`
+- `au_search_paths`, `clap_search_paths`, and `vst3_search_paths`
 - editor view and theme settings
 - shortcut overrides
 - playback SoundFonts and audio output device
@@ -72,6 +74,8 @@ includes:
 ```text
 /Library/Audio/Plug-Ins/CLAP
 ~/Library/Audio/Plug-Ins/CLAP
+/Library/Audio/Plug-Ins/Components
+~/Library/Audio/Plug-Ins/Components
 /Library/Audio/Plug-Ins/VST3
 ~/Library/Audio/Plug-Ins/VST3
 ```
@@ -93,6 +97,8 @@ routing, and user processor presets.
 ## Workspace Crates
 
 - `lilypalooza-audio`: engine, mixer, routing, processor interfaces, PDC
+- `lilypalooza-au`: macOS-only AUv2 discovery, runtime, state, audio, and
+  generic controls
 - `lilypalooza-builtins`: built-in processors such as SF-01 and Gain
 - `lilypalooza-clap`: CLAP discovery, runtime, state, audio, and editor adapter
 - `lilypalooza-vst3`: VST3 discovery, runtime, audio, and editor adapter
@@ -180,6 +186,6 @@ cargo run -p lilypalooza-builtins --example profile_engine
 ## Status
 
 The app is under active development. macOS is the primary tested platform right
-now. CLAP and VST3 hosting are implemented; Windows and X11 paths are kept in
-the architecture but mostly placeholders yet. Wayland plugin editor hosting is
-not a current target.
+now. AUv2, CLAP, and VST3 hosting are implemented; Windows and X11 paths are
+kept in the architecture but mostly placeholders yet. Wayland plugin editor
+hosting is not a current target.

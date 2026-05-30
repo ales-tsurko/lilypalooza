@@ -395,9 +395,7 @@ pub(super) fn instrument_track_area(
                         editor_enabled: track
                             .instrument_slot()
                             .filter(|slot| !slot.is_empty())
-                            .and_then(|slot| slot.descriptor())
-                            .and_then(|descriptor| descriptor.editor)
-                            .is_some(),
+                            .is_some_and(processor_slot_editor_enabled),
                         effects: effects.clone(),
                         hovered_processor_slot,
                         color_bits: color_bits(track_color),

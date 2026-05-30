@@ -16,7 +16,7 @@ impl Lilypalooza {
             "Scanning plugins from {} path(s)",
             self.plugin_search_paths
                 .iter()
-                .filter(|path| path.enabled)
+                .filter(|path| path.enabled && path.format.is_supported_on_current_platform())
                 .count()
         ));
         let cache = self.plugin_scan_cache.clone();
@@ -46,12 +46,10 @@ impl Lilypalooza {
                 self.logger.push(line);
                 None
             }
-            lilypalooza_plugin_scan::PluginScanEvent::ClapPlugins(plugins) => {
-                lilypalooza_clap::register_plugins(plugins);
-                None
-            }
-            lilypalooza_plugin_scan::PluginScanEvent::Vst3Plugins(plugins) => {
-                lilypalooza_vst3::register_plugins(plugins);
+            lilypalooza_plugin_scan::PluginScanEvent::AuPlugins(_)
+            | lilypalooza_plugin_scan::PluginScanEvent::ClapPlugins(_)
+            | lilypalooza_plugin_scan::PluginScanEvent::Vst3Plugins(_) => {
+                register_scanned_plugins(event);
                 None
             }
             lilypalooza_plugin_scan::PluginScanEvent::Finished { cache, .. } => {
@@ -212,5 +210,21 @@ impl Lilypalooza {
                     .and_then(|score| score.path.parent().map(Path::to_path_buf))
             })
             .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+fn register_scanned_plugins(event: lilypalooza_plugin_scan::PluginScanEvent) {
+    match event {
+        lilypalooza_plugin_scan::PluginScanEvent::AuPlugins(plugins) => {
+            lilypalooza_au::register_plugins(plugins);
+        }
+        lilypalooza_plugin_scan::PluginScanEvent::ClapPlugins(plugins) => {
+            lilypalooza_clap::register_plugins(plugins);
+        }
+        lilypalooza_plugin_scan::PluginScanEvent::Vst3Plugins(plugins) => {
+            lilypalooza_vst3::register_plugins(plugins);
+        }
+        lilypalooza_plugin_scan::PluginScanEvent::Log(_)
+        | lilypalooza_plugin_scan::PluginScanEvent::Finished { .. } => {}
     }
 }

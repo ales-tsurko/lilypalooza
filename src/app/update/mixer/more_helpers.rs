@@ -398,7 +398,17 @@ impl Lilypalooza {
     }
 
     pub(super) fn open_editor_target(&mut self, target: EditorTarget) -> Task<Message> {
+        log::trace!(
+            target: "lilypalooza::editor_windows",
+            "open editor requested target={target:?}"
+        );
         if let Some(window_id) = self.processor_editor_windows.focus_existing(target) {
+            log::trace!(
+                target: "lilypalooza::editor_windows",
+                "open editor found existing target={target:?} window_id={window_id:?} pending={} visible={}",
+                self.processor_editor_windows.pending_contains(window_id),
+                self.processor_editor_windows.window_visible(window_id)
+            );
             return if self.processor_editor_windows.pending_contains(window_id) {
                 Task::none()
             } else if self.processor_editor_windows.window_visible(window_id) {
@@ -412,18 +422,34 @@ impl Lilypalooza {
         }
 
         let Some(playback) = self.playback.as_ref() else {
+            log::trace!(
+                target: "lilypalooza::editor_windows",
+                "open editor ignored target={target:?}: playback is missing"
+            );
             return Task::none();
         };
         let Some(strip) = playback.mixer_state().strip_by_index(target.strip_index) else {
+            log::trace!(
+                target: "lilypalooza::editor_windows",
+                "open editor ignored target={target:?}: strip is missing"
+            );
             return Task::none();
         };
         let Some(slot) = strip.slot(target.slot_index) else {
+            log::trace!(
+                target: "lilypalooza::editor_windows",
+                "open editor ignored target={target:?}: slot is missing"
+            );
             return Task::none();
         };
         let Ok(Some(controller)) = playback.controller(lilypalooza_audio::SlotAddress {
             strip_index: target.strip_index,
             slot_index: target.slot_index,
         }) else {
+            log::trace!(
+                target: "lilypalooza::editor_windows",
+                "open editor ignored target={target:?}: controller is missing"
+            );
             return Task::none();
         };
         let controller = std::sync::Arc::new(std::sync::Mutex::new(controller));
@@ -465,6 +491,12 @@ impl Lilypalooza {
             }
         };
         let native_editor_available = descriptor.is_some() && native_session.is_some();
+        log::trace!(
+            target: "lilypalooza::editor_windows",
+            "open editor target={target:?} title={title:?} descriptor={} native_session={} native_editor_available={native_editor_available}",
+            descriptor.is_some(),
+            native_session.is_some()
+        );
         let descriptor = descriptor.unwrap_or(lilypalooza_audio::EditorDescriptor {
             default_size: crate::app::GENERIC_CONTROLLER_DEFAULT_SIZE,
             min_size: Some(lilypalooza_audio::EditorSize {
@@ -482,6 +514,13 @@ impl Lilypalooza {
 
         let (window_id, open_task) =
             window::open(processor_editor_window_settings(descriptor, None));
+        log::trace!(
+            target: "lilypalooza::editor_windows",
+            "open editor creating window target={target:?} window_id={window_id:?} default_size={}x{} resizable={}",
+            descriptor.default_size.width,
+            descriptor.default_size.height,
+            descriptor.resizable
+        );
         self.processor_editor_windows.begin_open_with_controller(
             crate::app::processor_editor_windows::EditorOpenRequest {
                 target,
@@ -769,7 +808,8 @@ pub(super) fn processor_slot(
         crate::app::mixer::ProcessorBrowserBackend::BuiltIn => {
             SlotState::built_in(processor_id, lilypalooza_audio::ProcessorState::default())
         }
-        crate::app::mixer::ProcessorBrowserBackend::Clap
+        crate::app::mixer::ProcessorBrowserBackend::Au
+        | crate::app::mixer::ProcessorBrowserBackend::Clap
         | crate::app::mixer::ProcessorBrowserBackend::Vst3 => SlotState::new(
             ProcessorKind::Plugin {
                 plugin_id: processor_id.to_string(),

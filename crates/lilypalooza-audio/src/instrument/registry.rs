@@ -31,6 +31,8 @@ pub enum Role {
 pub enum Backend {
     /// Built into the application.
     BuiltIn,
+    /// Audio Unit plugin backend.
+    Au,
     /// CLAP plugin backend.
     Clap,
     /// VST3 plugin backend.

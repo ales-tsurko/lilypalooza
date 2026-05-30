@@ -153,13 +153,14 @@ impl Lilypalooza {
         };
 
         if !path.exists() {
-            let (clap_search_paths, vst3_search_paths) =
+            let (au_search_paths, clap_search_paths, vst3_search_paths) =
                 settings::split_plugin_search_paths(&self.plugin_search_paths);
             let settings = settings::AppSettings {
                 editor_view: self.editor.view_settings(),
                 editor_theme: self.editor.theme_settings(),
                 editor_recent_files_limit: self.editor_recent_files_limit,
                 playback: self.playback_settings.clone(),
+                au_search_paths,
                 clap_search_paths,
                 vst3_search_paths,
                 shortcuts: self.shortcut_settings.clone(),

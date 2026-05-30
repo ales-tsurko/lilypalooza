@@ -49,7 +49,13 @@ fn cache_marks_changed_candidate_as_stale() {
     };
 
     assert!(cache.is_stale(&path, old));
-    cache.mark_checked(path.clone(), old, None, true, Vec::new(), Vec::new());
+    cache.mark_checked(
+        path.clone(),
+        old,
+        None,
+        true,
+        CheckedPluginMetadata::default(),
+    );
     assert!(!cache.is_stale(&path, old));
     assert!(cache.is_stale(&path, new));
 }
@@ -76,12 +82,36 @@ fn cache_ignores_changed_validator_binary_fingerprint() {
         candidate,
         old_validator,
         true,
-        Vec::new(),
-        Vec::new(),
+        CheckedPluginMetadata::default(),
     );
 
     assert!(!cache.is_stale_for_validator(&path, candidate, old_validator));
     assert!(!cache.is_stale_for_validator(&path, candidate, new_validator));
+}
+
+#[test]
+fn cache_marks_older_cache_version_as_stale() {
+    let (_dir, path) = test_path("test.clap");
+    let fingerprint = PluginCandidateFingerprint {
+        modified_millis: 10,
+        len: 20,
+    };
+    let mut cache = PluginScanCache::default();
+
+    cache.entries.insert(
+        path.clone(),
+        CachedPluginCandidate {
+            cache_version: legacy_plugin_scan_cache_version(),
+            fingerprint,
+            validator_fingerprint: None,
+            valid: true,
+            au_plugins: Vec::new(),
+            clap_plugins: Vec::new(),
+            vst3_plugins: Vec::new(),
+        },
+    );
+
+    assert!(cache.is_stale(&path, fingerprint));
 }
 
 #[test]
@@ -117,6 +147,39 @@ fn vst3_root_collects_vst3_candidates_recursively() {
     assert_eq!(candidates, vec![nested]);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn au_root_collects_component_candidates_recursively() {
+    let dir = test_dir();
+    std::fs::write(dir.path().join("a.clap"), "").expect("clap file");
+    let nested = dir.path().join("Vendor").join("b.component");
+    std::fs::create_dir_all(&nested).expect("component bundle");
+    let root = PluginSearchPath {
+        format: PluginFormat::Au,
+        path: dir.path().to_path_buf(),
+        enabled: true,
+    };
+
+    let candidates = candidates_for_root(&root).expect("scan root");
+
+    assert_eq!(candidates, vec![nested]);
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn au_root_is_rejected_on_non_macos() {
+    let dir = test_dir();
+    let root = PluginSearchPath {
+        format: PluginFormat::Au,
+        path: dir.path().to_path_buf(),
+        enabled: true,
+    };
+
+    let error = candidates_for_root(&root).unwrap_err();
+
+    assert!(error.contains("only supported on macOS"));
+}
+
 #[test]
 fn cache_roundtrips_from_explicit_path() {
     let (_cache_dir, path) = test_path("plugin-cache.ron");
@@ -131,8 +194,7 @@ fn cache_roundtrips_from_explicit_path() {
         fingerprint,
         None,
         true,
-        Vec::new(),
-        Vec::new(),
+        CheckedPluginMetadata::default(),
     );
 
     cache.save_to(&path).expect("cache should save");
@@ -163,8 +225,10 @@ fn unchanged_valid_plugin_is_reused_when_revalidation_fails() {
             len: 2,
         }),
         true,
-        Vec::new(),
-        plugins,
+        CheckedPluginMetadata {
+            vst3_plugins: plugins,
+            ..CheckedPluginMetadata::default()
+        },
     );
     let (sender, receiver) = mpsc::channel();
     let mut summary = PluginScanSummary::default();
@@ -239,6 +303,7 @@ fn empty_clap_validation_result_parses_as_empty_plugin_list() {
 
     match plugins {
         ValidatedPlugins::Clap(plugins) => assert!(plugins.is_empty()),
+        ValidatedPlugins::Au(_) => panic!("expected CLAP plugins"),
         ValidatedPlugins::Vst3(_) => panic!("expected CLAP plugins"),
     }
 }
@@ -252,6 +317,7 @@ fn non_success_validator_with_valid_report_is_accepted() {
 
     match plugins {
         ValidatedPlugins::Vst3(plugins) => assert_eq!(plugins.len(), 1),
+        ValidatedPlugins::Au(_) => panic!("expected VST3 plugins"),
         ValidatedPlugins::Clap(_) => panic!("expected VST3 plugins"),
     }
 }
@@ -266,6 +332,7 @@ fn validator_stdout_prefix_noise_is_ignored() {
 
     match plugins {
         ValidatedPlugins::Vst3(plugins) => assert_eq!(plugins[0].name, "Plugin"),
+        ValidatedPlugins::Au(_) => panic!("expected VST3 plugins"),
         ValidatedPlugins::Clap(_) => panic!("expected VST3 plugins"),
     }
 }

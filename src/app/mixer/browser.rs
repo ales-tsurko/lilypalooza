@@ -429,15 +429,15 @@ pub(super) fn processor_choice_group_label(choice: &ProcessorChoice) -> String {
         } => registry::entry(processor_id)
             .map(|entry| match backend {
                 ProcessorBrowserBackend::BuiltIn => entry.category.into_owned(),
-                ProcessorBrowserBackend::Clap | ProcessorBrowserBackend::Vst3 => {
-                    entry.manufacturer.into_owned()
-                }
+                ProcessorBrowserBackend::Au
+                | ProcessorBrowserBackend::Clap
+                | ProcessorBrowserBackend::Vst3 => entry.manufacturer.into_owned(),
             })
             .unwrap_or_else(|| match backend {
                 ProcessorBrowserBackend::BuiltIn => "Built-in".to_string(),
-                ProcessorBrowserBackend::Clap | ProcessorBrowserBackend::Vst3 => {
-                    "Unknown Manufacturer".to_string()
-                }
+                ProcessorBrowserBackend::Au
+                | ProcessorBrowserBackend::Clap
+                | ProcessorBrowserBackend::Vst3 => "Unknown Manufacturer".to_string(),
             }),
     }
 }
@@ -454,6 +454,7 @@ pub(super) fn processor_choices(role: ProcessorSlotRole) -> Vec<ProcessorChoice>
                 processor_id: entry.id.to_string(),
                 name: entry.name.to_string(),
                 backend: match entry.backend {
+                    registry::Backend::Au => ProcessorBrowserBackend::Au,
                     registry::Backend::BuiltIn => ProcessorBrowserBackend::BuiltIn,
                     registry::Backend::Clap => ProcessorBrowserBackend::Clap,
                     registry::Backend::Vst3 => ProcessorBrowserBackend::Vst3,
@@ -483,6 +484,7 @@ pub(super) fn selected_processor_choice(
         processor_id: entry.id.to_string(),
         name: entry.name.to_string(),
         backend: match entry.backend {
+            registry::Backend::Au => ProcessorBrowserBackend::Au,
             registry::Backend::BuiltIn => ProcessorBrowserBackend::BuiltIn,
             registry::Backend::Clap => ProcessorBrowserBackend::Clap,
             registry::Backend::Vst3 => ProcessorBrowserBackend::Vst3,

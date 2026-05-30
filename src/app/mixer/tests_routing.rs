@@ -472,6 +472,11 @@ fn processor_browser_entries_show_multiple_backends_on_one_page() {
             backend: ProcessorBrowserBackend::BuiltIn,
         },
         InstrumentChoice::Processor {
+            processor_id: "au:/tmp/vendor.component#aumu-Au01-Vend".to_string(),
+            name: "AU Instrument".to_string(),
+            backend: ProcessorBrowserBackend::Au,
+        },
+        InstrumentChoice::Processor {
             processor_id: plugin_id.to_string(),
             name: "CLAP Instrument".to_string(),
             backend: ProcessorBrowserBackend::Clap,
@@ -485,7 +490,7 @@ fn processor_browser_entries_show_multiple_backends_on_one_page() {
         .map(|backend| backend.title.as_str())
         .collect::<Vec<_>>();
 
-    assert_eq!(titles, vec!["Built-in", "CLAP"]);
+    assert_eq!(titles, vec!["Built-in", "AU", "CLAP"]);
 }
 
 #[test]
@@ -594,6 +599,18 @@ fn instrument_trigger_label_uses_none_for_empty_choice() {
         instrument_trigger_label(Some(&InstrumentChoice::None)),
         "Empty"
     );
+}
+
+#[test]
+fn plugin_slots_enable_generic_editor_without_native_descriptor() {
+    let slot = SlotState::new(
+        lilypalooza_audio::ProcessorKind::Plugin {
+            plugin_id: "au:/tmp/Synth.component#aumu-Syn1-Test".to_string(),
+        },
+        lilypalooza_audio::ProcessorState::default(),
+    );
+
+    assert!(processor_slot_editor_enabled(&slot));
 }
 
 #[test]

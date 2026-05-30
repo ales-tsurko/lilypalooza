@@ -16,16 +16,36 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub const PLUGIN_VALIDATOR_CONCURRENCY: usize = 1;
 /// Maximum scanner events the app should process in one UI update.
 pub const PLUGIN_SCAN_UI_EVENT_BUDGET: usize = 16;
-const PLUGIN_SCAN_CACHE_VERSION: u32 = 1;
+const PLUGIN_SCAN_CACHE_VERSION: u32 = 2;
 
 /// Plugin binary format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PluginFormat {
+    /// Audio Unit plugin.
+    Au,
     /// CLAP plugin.
     Clap,
     /// VST3 plugin.
     Vst3,
+}
+
+impl PluginFormat {
+    /// Returns whether this plugin format can be loaded on the current platform.
+    #[must_use]
+    pub fn is_supported_on_current_platform(self) -> bool {
+        match self {
+            Self::Au => cfg!(target_os = "macos"),
+            Self::Clap | Self::Vst3 => true,
+        }
+    }
+
+    fn unsupported_platform_error(self) -> Option<&'static str> {
+        (!self.is_supported_on_current_platform()).then_some(match self {
+            Self::Au => "AU plugins are only supported on macOS",
+            Self::Clap | Self::Vst3 => "plugin format is not supported on this platform",
+        })
+    }
 }
 
 /// One plugin search root.
@@ -53,6 +73,8 @@ impl Default for PluginSearchPath {
 /// Background scanner event.
 #[derive(Debug)]
 pub enum PluginScanEvent {
+    /// Validated AUv2 plugin metadata.
+    AuPlugins(Vec<lilypalooza_au::AuPluginMetadata>),
     /// Human-readable progress line.
     Log(String),
     /// Validated CLAP plugin metadata.
@@ -160,9 +182,22 @@ struct CachedPluginCandidate {
     validator_fingerprint: Option<PluginCandidateFingerprint>,
     valid: bool,
     #[serde(default)]
+    au_plugins: Vec<lilypalooza_au::AuPluginMetadata>,
+    #[serde(default)]
     clap_plugins: Vec<lilypalooza_clap::ClapPluginMetadata>,
     #[serde(default)]
     vst3_plugins: Vec<lilypalooza_vst3::Vst3PluginMetadata>,
+}
+
+/// Validated plugin metadata grouped by backend for scan-cache storage.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CheckedPluginMetadata {
+    /// Validated AUv2 plugin metadata.
+    pub au_plugins: Vec<lilypalooza_au::AuPluginMetadata>,
+    /// Validated CLAP plugin metadata.
+    pub clap_plugins: Vec<lilypalooza_clap::ClapPluginMetadata>,
+    /// Validated VST3 plugin metadata.
+    pub vst3_plugins: Vec<lilypalooza_vst3::Vst3PluginMetadata>,
 }
 
 impl PluginScanCache {
@@ -222,8 +257,7 @@ impl PluginScanCache {
         fingerprint: PluginCandidateFingerprint,
         _validator_fingerprint: Option<PluginCandidateFingerprint>,
         valid: bool,
-        clap_plugins: Vec<lilypalooza_clap::ClapPluginMetadata>,
-        vst3_plugins: Vec<lilypalooza_vst3::Vst3PluginMetadata>,
+        plugins: CheckedPluginMetadata,
     ) {
         self.entries.insert(
             path,
@@ -232,8 +266,9 @@ impl PluginScanCache {
                 fingerprint,
                 validator_fingerprint: None,
                 valid,
-                clap_plugins,
-                vst3_plugins,
+                au_plugins: plugins.au_plugins,
+                clap_plugins: plugins.clap_plugins,
+                vst3_plugins: plugins.vst3_plugins,
             },
         );
     }
@@ -245,10 +280,12 @@ impl PluginScanCache {
     ) -> Option<CachedCandidateResult> {
         self.entries.get(path).and_then(|entry| {
             (entry.fingerprint == fingerprint).then(|| {
-                if entry.valid && !entry.clap_plugins.is_empty() {
-                    CachedCandidateResult::ValidClapPlugins(entry.clap_plugins.clone())
+                if entry.valid && !entry.au_plugins.is_empty() {
+                    CachedCandidateResult::Valid(ValidatedPlugins::Au(entry.au_plugins.clone()))
+                } else if entry.valid && !entry.clap_plugins.is_empty() {
+                    CachedCandidateResult::Valid(ValidatedPlugins::Clap(entry.clap_plugins.clone()))
                 } else if entry.valid && !entry.vst3_plugins.is_empty() {
-                    CachedCandidateResult::ValidVst3Plugins(entry.vst3_plugins.clone())
+                    CachedCandidateResult::Valid(ValidatedPlugins::Vst3(entry.vst3_plugins.clone()))
                 } else {
                     CachedCandidateResult::Invalid
                 }
@@ -262,8 +299,7 @@ fn legacy_plugin_scan_cache_version() -> u32 {
 }
 
 enum CachedCandidateResult {
-    ValidClapPlugins(Vec<lilypalooza_clap::ClapPluginMetadata>),
-    ValidVst3Plugins(Vec<lilypalooza_vst3::Vst3PluginMetadata>),
+    Valid(ValidatedPlugins),
     Invalid,
 }
 
@@ -306,7 +342,10 @@ fn scan_worker(
     let mut summary = PluginScanSummary::default();
     let validator_fingerprint = PluginCandidateFingerprint::from_path(&validator).ok();
 
-    for root in search_paths.into_iter().filter(|path| path.enabled) {
+    for root in search_paths
+        .into_iter()
+        .filter(|path| path.enabled && path.format.is_supported_on_current_platform())
+    {
         let Some(candidates) = scan_candidates_for_root(&root, &sender) else {
             continue;
         };
@@ -411,13 +450,8 @@ fn use_cached_scan_candidate(
     sender: &mpsc::Sender<PluginScanEvent>,
 ) {
     match cache.cached_candidate(candidate, fingerprint) {
-        Some(CachedCandidateResult::ValidClapPlugins(plugins)) => {
-            summary.valid_plugins += plugins.len();
-            send_scan_event(sender, PluginScanEvent::ClapPlugins(plugins));
-        }
-        Some(CachedCandidateResult::ValidVst3Plugins(plugins)) => {
-            summary.valid_plugins += plugins.len();
-            send_scan_event(sender, PluginScanEvent::Vst3Plugins(plugins));
+        Some(CachedCandidateResult::Valid(plugins)) => {
+            send_cached_plugins(plugins, summary, sender)
         }
         Some(CachedCandidateResult::Invalid) | None => {
             summary.invalid_candidates += 1;
@@ -562,8 +596,7 @@ fn mark_invalid_scan_candidate(
         fingerprint,
         validator_fingerprint,
         false,
-        Vec::new(),
-        Vec::new(),
+        CheckedPluginMetadata::default(),
     );
     send_scan_event(sender, PluginScanEvent::Log(log_message));
 }
@@ -583,37 +616,40 @@ fn reuse_cached_valid_candidate(
     reason: &str,
 ) -> bool {
     match cache.cached_candidate(candidate, fingerprint) {
-        Some(CachedCandidateResult::ValidClapPlugins(plugins)) => {
-            summary.valid_plugins += plugins.len();
+        Some(CachedCandidateResult::Valid(plugins)) => {
+            let format_label = plugins.format_label();
             send_scan_event(
                 sender,
                 PluginScanEvent::Log(format!(
-                    "Reusing cached CLAP plugin metadata for {} ({reason})",
+                    "Reusing cached {format_label} plugin metadata for {} ({reason})",
                     candidate.display()
                 )),
             );
-            send_scan_event(sender, PluginScanEvent::ClapPlugins(plugins));
-            true
-        }
-        Some(CachedCandidateResult::ValidVst3Plugins(plugins)) => {
-            summary.valid_plugins += plugins.len();
-            send_scan_event(
-                sender,
-                PluginScanEvent::Log(format!(
-                    "Reusing cached VST3 plugin metadata for {} ({reason})",
-                    candidate.display()
-                )),
-            );
-            send_scan_event(sender, PluginScanEvent::Vst3Plugins(plugins));
+            send_cached_plugins(plugins, summary, sender);
             true
         }
         Some(CachedCandidateResult::Invalid) | None => false,
     }
 }
 
+fn send_cached_plugins(
+    plugins: ValidatedPlugins,
+    summary: &mut PluginScanSummary,
+    sender: &mpsc::Sender<PluginScanEvent>,
+) {
+    summary.valid_plugins += plugins.len();
+    plugins.send_event(sender);
+}
+
 /// Returns plugin candidates directly under one search root.
 pub fn candidates_for_root(root: &PluginSearchPath) -> Result<Vec<PathBuf>, String> {
+    if let Some(error) = root.format.unsupported_platform_error() {
+        return Err(error.to_string());
+    }
     match root.format {
+        PluginFormat::Au => {
+            lilypalooza_au::candidate_paths(&root.path).map_err(|error| error.to_string())
+        }
         PluginFormat::Clap => {
             lilypalooza_clap::candidate_paths(&root.path).map_err(|error| error.to_string())
         }
@@ -624,6 +660,7 @@ pub fn candidates_for_root(root: &PluginSearchPath) -> Result<Vec<PathBuf>, Stri
 }
 
 enum ValidatedPlugins {
+    Au(Vec<lilypalooza_au::AuPluginMetadata>),
     Clap(Vec<lilypalooza_clap::ClapPluginMetadata>),
     Vst3(Vec<lilypalooza_vst3::Vst3PluginMetadata>),
 }
@@ -631,6 +668,7 @@ enum ValidatedPlugins {
 impl ValidatedPlugins {
     fn len(&self) -> usize {
         match self {
+            Self::Au(plugins) => plugins.len(),
             Self::Clap(plugins) => plugins.len(),
             Self::Vst3(plugins) => plugins.len(),
         }
@@ -638,6 +676,7 @@ impl ValidatedPlugins {
 
     fn format_label(&self) -> &'static str {
         match self {
+            Self::Au(_) => "AU",
             Self::Clap(_) => "CLAP",
             Self::Vst3(_) => "VST3",
         }
@@ -650,22 +689,26 @@ impl ValidatedPlugins {
         fingerprint: PluginCandidateFingerprint,
         validator_fingerprint: Option<PluginCandidateFingerprint>,
     ) {
-        let (clap, vst3) = match self {
-            Self::Clap(plugins) => (plugins.clone(), Vec::new()),
-            Self::Vst3(plugins) => (Vec::new(), plugins.clone()),
+        let plugins = match self {
+            Self::Au(plugins) => CheckedPluginMetadata {
+                au_plugins: plugins.clone(),
+                ..CheckedPluginMetadata::default()
+            },
+            Self::Clap(plugins) => CheckedPluginMetadata {
+                clap_plugins: plugins.clone(),
+                ..CheckedPluginMetadata::default()
+            },
+            Self::Vst3(plugins) => CheckedPluginMetadata {
+                vst3_plugins: plugins.clone(),
+                ..CheckedPluginMetadata::default()
+            },
         };
-        cache.mark_checked(
-            candidate,
-            fingerprint,
-            validator_fingerprint,
-            true,
-            clap,
-            vst3,
-        );
+        cache.mark_checked(candidate, fingerprint, validator_fingerprint, true, plugins);
     }
 
     fn send_event(self, sender: &mpsc::Sender<PluginScanEvent>) {
         match self {
+            Self::Au(plugins) => send_scan_event(sender, PluginScanEvent::AuPlugins(plugins)),
             Self::Clap(plugins) => send_scan_event(sender, PluginScanEvent::ClapPlugins(plugins)),
             Self::Vst3(plugins) => send_scan_event(sender, PluginScanEvent::Vst3Plugins(plugins)),
         }
@@ -678,9 +721,41 @@ fn validate_candidate(
     validator: &Path,
 ) -> Result<ValidatedPlugins, String> {
     match format {
+        PluginFormat::Au => validate_au_candidate(path, validator),
         PluginFormat::Clap => validate_clap_candidate(path, validator),
         PluginFormat::Vst3 => validate_vst3_candidate(path, validator),
     }
+}
+
+fn validate_au_candidate(path: &Path, validator: &Path) -> Result<ValidatedPlugins, String> {
+    let output = Command::new(validator)
+        .arg("--format")
+        .arg(lilypalooza_au::FORMAT)
+        .arg("--path")
+        .arg(path)
+        .output()
+        .map_err(|error| format!("failed to run validator {}: {error}", validator.display()))?;
+    parse_au_validator_output(output.status.success(), &output.stdout, &output.stderr)
+}
+
+fn parse_au_validator_output(
+    success: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<ValidatedPlugins, String> {
+    parse_validator_report::<lilypalooza_au::ValidationReport>(
+        success,
+        stdout,
+        stderr,
+        au_report_plugins,
+    )
+}
+
+fn au_report_plugins(report: lilypalooza_au::ValidationReport) -> Result<ValidatedPlugins, String> {
+    report
+        .result
+        .map(ValidatedPlugins::Au)
+        .map_err(|error| error.to_string())
 }
 
 fn validate_vst3_candidate(path: &Path, validator: &Path) -> Result<ValidatedPlugins, String> {

@@ -3070,6 +3070,7 @@ dependencies = [
  "iced_aw 0.13.1",
  "iced_core",
  "iced_test",
+ "lilypalooza-au",
  "lilypalooza-audio",
  "lilypalooza-builtins",
  "lilypalooza-clap",
@@ -3086,6 +3087,22 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "toml",
+]
+
+[[package]]
+name = "lilypalooza-au"
+version = "0.1.0"
+dependencies = [
+ "core-foundation 0.9.4",
+ "coreaudio-sys",
+ "lilypalooza-audio",
+ "log",
+ "num-traits",
+ "plist",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3162,6 +3179,7 @@ dependencies = [
 name = "lilypalooza-plugin-scan"
 version = "0.1.0"
 dependencies = [
+ "lilypalooza-au",
  "lilypalooza-clap",
  "lilypalooza-vst3",
  "ron",
@@ -3174,6 +3192,7 @@ dependencies = [
 name = "lilypalooza-plugin-validator"
 version = "0.1.0"
 dependencies = [
+ "lilypalooza-au",
  "lilypalooza-clap",
  "lilypalooza-vst3",
  "serde",

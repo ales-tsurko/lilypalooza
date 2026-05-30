@@ -14,13 +14,18 @@ pub(super) fn effect_slot_dependencies(
             instance_id: slot.instance_id,
             instance_label_index: slot.instance_label_index,
             selected: selected_processor_choice(Some(slot), ProcessorSlotRole::Effect),
-            editor_enabled: slot
-                .descriptor()
-                .and_then(|descriptor| descriptor.editor)
-                .is_some(),
+            editor_enabled: processor_slot_editor_enabled(slot),
             bypassed: slot.bypassed,
         })
         .collect()
+}
+
+pub(super) fn processor_slot_editor_enabled(slot: &SlotState) -> bool {
+    matches!(slot.kind, lilypalooza_audio::ProcessorKind::Plugin { .. })
+        || slot
+            .descriptor()
+            .and_then(|descriptor| descriptor.editor)
+            .is_some()
 }
 
 pub(super) fn effect_slot_display_labels(effects: &[EffectSlotDependency]) -> Vec<Option<String>> {

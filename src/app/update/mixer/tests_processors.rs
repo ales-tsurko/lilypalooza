@@ -83,6 +83,39 @@ pub(super) fn open_processor_editor_without_native_session_opens_generic_control
 }
 
 #[test]
+pub(super) fn generic_processor_editor_close_hides_window_for_reopen() {
+    let mut app = test_app();
+    let target = EditorTarget {
+        strip_index: 1,
+        slot_index: 0,
+    };
+
+    let _discarded = app.open_editor(
+        target,
+        "Track 1".to_string(),
+        None,
+        Ok(None),
+        crate::app::processor_editor_windows::empty_editor_controller(),
+    );
+    let window_id = app
+        .processor_editor_windows
+        .window_for_target(target)
+        .expect("generic editor should have a window");
+    app.processor_editor_windows
+        .attach(window_id, None, fake_editor_parent())
+        .expect("generic editor should attach");
+
+    let _discarded = app.handle_processor_editor_close_requested(window_id);
+
+    assert!(app.processor_editor_windows.contains_window(target));
+    assert!(!app.processor_editor_windows.window_visible(window_id));
+
+    let _discarded = app.open_editor_target(target);
+
+    assert!(app.processor_editor_windows.window_visible(window_id));
+}
+
+#[test]
 pub(super) fn processor_editor_window_settings_can_disable_resizing() {
     let descriptor = lilypalooza_audio::EditorDescriptor {
         default_size: EditorSize {

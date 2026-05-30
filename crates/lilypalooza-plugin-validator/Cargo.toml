@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+lilypalooza-au = { path = "../lilypalooza-au" }
 lilypalooza-clap = { path = "../lilypalooza-clap" }
 lilypalooza-vst3 = { path = "../lilypalooza-vst3" }
 serde = { version = "1.0", features = ["derive"] }

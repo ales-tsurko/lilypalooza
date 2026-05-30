@@ -73,9 +73,18 @@ mod tests {
     fn default_plugin_search_paths_include_all_platform_formats() {
         let paths = default_plugin_search_paths();
 
+        #[cfg(target_os = "macos")]
+        assert!(paths.iter().any(|path| path.format == PluginFormat::Au));
         assert!(paths.iter().any(|path| path.format == PluginFormat::Clap));
         assert!(paths.iter().any(|path| path.format == PluginFormat::Vst3));
         assert!(paths.iter().all(|path| path.enabled));
+        #[cfg(target_os = "macos")]
+        assert!(paths.iter().any(|path| {
+            path.path
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("component")
+        }));
         assert!(paths.iter().any(|path| {
             path.path
                 .to_string_lossy()
@@ -97,6 +106,7 @@ mod tests {
         let parsed: AppSettings =
             toml::from_str(&contents).expect("rendered default settings should parse back");
 
+        assert!(contents.contains("au_search_paths = ["));
         assert!(contents.contains("clap_search_paths = ["));
         assert!(contents.contains("vst3_search_paths = ["));
         assert!(!contents.contains("[[plugin_search_paths]]"));
@@ -106,6 +116,7 @@ mod tests {
     #[test]
     fn settings_roundtrip_parses_plugin_search_path_lists() {
         let settings = AppSettings {
+            au_search_paths: vec![PathBuf::from("/plugins/components")],
             clap_search_paths: vec![PathBuf::from("/plugins/clap")],
             vst3_search_paths: vec![PathBuf::from("/plugins/vst3")],
             ..AppSettings::default()
@@ -116,23 +127,29 @@ mod tests {
         let parsed: AppSettings =
             toml::from_str(&contents).expect("rendered settings should parse back");
 
+        assert_eq!(parsed.au_search_paths, settings.au_search_paths);
         assert_eq!(parsed.clap_search_paths, settings.clap_search_paths);
         assert_eq!(parsed.vst3_search_paths, settings.vst3_search_paths);
-        assert_eq!(
-            parsed.plugin_search_paths(),
-            vec![
-                PluginSearchPath {
-                    format: PluginFormat::Clap,
-                    path: PathBuf::from("/plugins/clap"),
-                    enabled: true,
-                },
-                PluginSearchPath {
-                    format: PluginFormat::Vst3,
-                    path: PathBuf::from("/plugins/vst3"),
-                    enabled: true,
-                },
-            ]
-        );
+        let mut expected_paths = Vec::new();
+        #[cfg(target_os = "macos")]
+        expected_paths.push(PluginSearchPath {
+            format: PluginFormat::Au,
+            path: PathBuf::from("/plugins/components"),
+            enabled: true,
+        });
+        expected_paths.extend([
+            PluginSearchPath {
+                format: PluginFormat::Clap,
+                path: PathBuf::from("/plugins/clap"),
+                enabled: true,
+            },
+            PluginSearchPath {
+                format: PluginFormat::Vst3,
+                path: PathBuf::from("/plugins/vst3"),
+                enabled: true,
+            },
+        ]);
+        assert_eq!(parsed.plugin_search_paths(), expected_paths);
     }
 
     #[test]

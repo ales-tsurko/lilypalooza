@@ -8,6 +8,7 @@ CARGO_PACKAGES := \
 	-p lilypalooza \
 	-p editor-host \
 	-p lilypalooza-audio \
+	-p lilypalooza-au \
 	-p lilypalooza-builtins \
 	-p lilypalooza-clap \
 	-p lilypalooza-egui-baseview \
@@ -23,6 +24,7 @@ SIMILARITY_PATHS := \
 	src \
 	crates/editor-host/src \
 	crates/lilypalooza-audio/src \
+	crates/lilypalooza-au/src \
 	crates/lilypalooza-builtins/src \
 	crates/lilypalooza-clap/src \
 	crates/lilypalooza-egui-baseview/src \

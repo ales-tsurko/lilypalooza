@@ -214,7 +214,19 @@ pub(crate) use lilypalooza_plugin_scan::{PluginFormat, PluginSearchPath};
 
 #[cfg(test)]
 pub(crate) fn default_plugin_search_paths() -> Vec<PluginSearchPath> {
-    plugin_search_paths_from_lists(&default_clap_search_paths(), &default_vst3_search_paths())
+    plugin_search_paths_from_lists(
+        &default_au_search_paths(),
+        &default_clap_search_paths(),
+        &default_vst3_search_paths(),
+    )
+}
+
+pub(crate) fn default_au_search_paths() -> Vec<PathBuf> {
+    default_plugin_search_path_specs()
+        .into_iter()
+        .filter(|(format, _)| *format == PluginFormat::Au)
+        .map(|(_, path)| expand_home(path))
+        .collect()
 }
 
 pub(crate) fn default_clap_search_paths() -> Vec<PathBuf> {
@@ -236,6 +248,8 @@ pub(crate) fn default_vst3_search_paths() -> Vec<PathBuf> {
 #[cfg(target_os = "macos")]
 fn default_plugin_search_path_specs() -> Vec<(PluginFormat, &'static str)> {
     vec![
+        (PluginFormat::Au, "/Library/Audio/Plug-Ins/Components"),
+        (PluginFormat::Au, "~/Library/Audio/Plug-Ins/Components"),
         (PluginFormat::Clap, "/Library/Audio/Plug-Ins/CLAP"),
         (PluginFormat::Clap, "~/Library/Audio/Plug-Ins/CLAP"),
         (PluginFormat::Vst3, "/Library/Audio/Plug-Ins/VST3"),
@@ -290,16 +304,36 @@ fn expand_home(path: &str) -> PathBuf {
 }
 
 fn plugin_search_paths_from_lists(
+    au_search_paths: &[PathBuf],
     clap_search_paths: &[PathBuf],
     vst3_search_paths: &[PathBuf],
 ) -> Vec<PluginSearchPath> {
-    clap_search_paths
-        .iter()
-        .map(|path| PluginSearchPath {
+    let au_paths = {
+        #[cfg(target_os = "macos")]
+        {
+            au_search_paths
+                .iter()
+                .map(|path| PluginSearchPath {
+                    format: PluginFormat::Au,
+                    path: path.clone(),
+                    enabled: true,
+                })
+                .collect::<Vec<_>>()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = au_search_paths;
+            Vec::new()
+        }
+    };
+
+    au_paths
+        .into_iter()
+        .chain(clap_search_paths.iter().map(|path| PluginSearchPath {
             format: PluginFormat::Clap,
             path: path.clone(),
             enabled: true,
-        })
+        }))
         .chain(vst3_search_paths.iter().map(|path| PluginSearchPath {
             format: PluginFormat::Vst3,
             path: path.clone(),
@@ -310,18 +344,24 @@ fn plugin_search_paths_from_lists(
 
 pub(crate) fn split_plugin_search_paths(
     paths: &[PluginSearchPath],
-) -> (Vec<PathBuf>, Vec<PathBuf>) {
+) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
+    let mut au_search_paths = Vec::new();
     let mut clap_search_paths = Vec::new();
     let mut vst3_search_paths = Vec::new();
 
     for path in paths.iter().filter(|path| path.enabled) {
         match path.format {
+            PluginFormat::Au => {
+                if cfg!(target_os = "macos") {
+                    au_search_paths.push(path.path.clone());
+                }
+            }
             PluginFormat::Clap => clap_search_paths.push(path.path.clone()),
             PluginFormat::Vst3 => vst3_search_paths.push(path.path.clone()),
         }
     }
 
-    (clap_search_paths, vst3_search_paths)
+    (au_search_paths, clap_search_paths, vst3_search_paths)
 }
 
 fn default_editor_recent_files_limit() -> usize {
@@ -615,6 +655,8 @@ pub(crate) struct AppSettings {
     )]
     pub(crate) editor_recent_files_limit: usize,
     pub(crate) playback: PlaybackSettings,
+    #[serde(default = "default_au_search_paths")]
+    pub(crate) au_search_paths: Vec<PathBuf>,
     #[serde(default = "default_clap_search_paths")]
     pub(crate) clap_search_paths: Vec<PathBuf>,
     #[serde(default = "default_vst3_search_paths")]
@@ -630,6 +672,7 @@ impl Default for AppSettings {
             editor_theme: EditorThemeSettings::default(),
             editor_recent_files_limit: default_editor_recent_files_limit(),
             playback: PlaybackSettings::default(),
+            au_search_paths: default_au_search_paths(),
             clap_search_paths: default_clap_search_paths(),
             vst3_search_paths: default_vst3_search_paths(),
             shortcuts: ShortcutSettings::default(),
@@ -639,7 +682,11 @@ impl Default for AppSettings {
 
 impl AppSettings {
     pub(crate) fn plugin_search_paths(&self) -> Vec<PluginSearchPath> {
-        plugin_search_paths_from_lists(&self.clap_search_paths, &self.vst3_search_paths)
+        plugin_search_paths_from_lists(
+            &self.au_search_paths,
+            &self.clap_search_paths,
+            &self.vst3_search_paths,
+        )
     }
 }
 
@@ -694,6 +741,8 @@ pub(crate) fn render_settings_file(settings: &AppSettings) -> Result<String, tom
         "# Plugin scan roots. The scanner runs in the background and validates candidates in an \
          isolated helper process.\n",
     );
+    push_path_list(&mut out, "au_search_paths", &settings.au_search_paths);
+    out.push('\n');
     push_path_list(&mut out, "clap_search_paths", &settings.clap_search_paths);
     out.push('\n');
     push_path_list(&mut out, "vst3_search_paths", &settings.vst3_search_paths);

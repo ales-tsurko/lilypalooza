@@ -211,6 +211,10 @@ impl Lilypalooza {
     }
 
     pub(in crate::app) fn handle_window_closed(&mut self, window_id: window::Id) -> Task<Message> {
+        log::trace!(
+            target: "lilypalooza::editor_windows",
+            "window closed window_id={window_id:?}"
+        );
         let deferred = match self.pending_mixer_message_after_editor_close.take() {
             Some((pending_window_id, message)) if pending_window_id == window_id => Some(message),
             other => {
@@ -357,7 +361,15 @@ impl Lilypalooza {
         &mut self,
         window_id: window::Id,
     ) -> Task<Message> {
+        log::trace!(
+            target: "lilypalooza::editor_windows",
+            "close requested window_id={window_id:?}"
+        );
         let Some((_target, errors)) = self.processor_editor_windows.hide_window(window_id) else {
+            log::trace!(
+                target: "lilypalooza::editor_windows",
+                "close requested ignored window_id={window_id:?}: window is not tracked"
+            );
             return Task::none();
         };
         for error in errors {

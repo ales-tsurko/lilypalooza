@@ -328,13 +328,14 @@ impl Lilypalooza {
             .is_some_and(|path| self.editor.find_tab_by_path(path).is_some());
 
         if !settings_file_open {
-            let (clap_search_paths, vst3_search_paths) =
+            let (au_search_paths, clap_search_paths, vst3_search_paths) =
                 settings::split_plugin_search_paths(&self.plugin_search_paths);
             settings::save(&settings::AppSettings {
                 editor_view: self.editor.view_settings(),
                 editor_theme: self.editor.theme_settings(),
                 editor_recent_files_limit: self.editor_recent_files_limit,
                 playback: self.playback_settings.clone(),
+                au_search_paths,
                 clap_search_paths,
                 vst3_search_paths,
                 shortcuts: self.shortcut_settings.clone(),

@@ -272,6 +272,7 @@ pub(super) type InstrumentChoice = ProcessorChoice;
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum ProcessorBrowserBackend {
     BuiltIn,
+    Au,
     Clap,
     Vst3,
 }
@@ -279,6 +280,7 @@ pub(super) enum ProcessorBrowserBackend {
 impl ProcessorBrowserBackend {
     fn label(self) -> &'static str {
         match self {
+            Self::Au => "AU",
             Self::BuiltIn => "Built-in",
             Self::Clap => "CLAP",
             Self::Vst3 => "VST3",

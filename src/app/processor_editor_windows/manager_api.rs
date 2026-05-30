@@ -8,6 +8,15 @@ impl EditorWindowManager {
     pub(in crate::app) fn focus_existing(&mut self, target: EditorTarget) -> Option<window::Id> {
         if let Some(window) = self.windows.get(&target) {
             self.focused = Some(target);
+            log::trace!(
+                target: "lilypalooza::editor_windows",
+                "focus existing attached target={target:?} window_id={:?} visible={} host={} native_editor_available={} controls_visible={}",
+                window.host_window_id,
+                window.visible,
+                window.host.is_some(),
+                window.native_editor_available,
+                window.controls_visible.load(Ordering::Relaxed)
+            );
             return Some(window.host_window_id);
         }
         if let Some((window_id, _)) = self
@@ -16,6 +25,10 @@ impl EditorWindowManager {
             .find(|(_, window)| window.target == target)
         {
             self.focused = Some(target);
+            log::trace!(
+                target: "lilypalooza::editor_windows",
+                "focus existing pending target={target:?} window_id={window_id:?}"
+            );
             return Some(*window_id);
         }
         None
@@ -43,6 +56,15 @@ impl EditorWindowManager {
     }
 
     pub(in crate::app) fn begin_open_with_controller(&mut self, request: EditorOpenRequest) {
+        log::trace!(
+            target: "lilypalooza::editor_windows",
+            "begin open target={:?} window_id={:?} title={:?} native_editor_available={} controls_visible={}",
+            request.target,
+            request.window_id,
+            request.title,
+            request.native_editor_available,
+            request.controls_visible.load(Ordering::Relaxed)
+        );
         self.pending.insert(
             request.window_id,
             PendingEditorWindow {
@@ -66,6 +88,14 @@ impl EditorWindowManager {
         parent: EditorParent,
     ) -> Result<(), EditorError> {
         let mut pending = self.take_pending_editor_window(window_id)?;
+        log::trace!(
+            target: "lilypalooza::editor_windows",
+            "attach begin target={:?} window_id={window_id:?} host={} native_editor_available={} controls_visible={}",
+            pending.target,
+            host.is_some(),
+            pending.native_editor_available,
+            pending.controls_visible.load(Ordering::Relaxed)
+        );
         let resize_base_content_size = host
             .as_ref()
             .map(|host| Arc::new(SharedContentSize::new(host.content_size())));
@@ -140,6 +170,14 @@ impl EditorWindowManager {
             },
         );
         self.windows_by_id.insert(window_id, pending.target);
+        log::trace!(
+            target: "lilypalooza::editor_windows",
+            "attach complete target={:?} window_id={window_id:?} content_size={}x{} host={} visible=true",
+            pending.target,
+            sizing.content_size.width,
+            sizing.content_size.height,
+            self.windows.get(&pending.target).is_some_and(|window| window.host.is_some())
+        );
         Ok(())
     }
 
@@ -446,6 +484,14 @@ impl EditorWindowManager {
     ) -> Option<(EditorTarget, Vec<String>)> {
         let target = *self.windows_by_id.get(&window_id)?;
         let window = self.windows.get_mut(&target)?;
+        log::trace!(
+            target: "lilypalooza::editor_windows",
+            "hide window target={target:?} window_id={window_id:?} was_visible={} host={} native_editor_available={} controls_visible={}",
+            window.visible,
+            window.host.is_some(),
+            window.native_editor_available,
+            window.controls_visible.load(Ordering::Relaxed)
+        );
         let mut errors = Vec::new();
         if self.focused == Some(target) {
             self.focused = None;
@@ -491,6 +537,14 @@ impl EditorWindowManager {
         let Some(window) = self.windows.get_mut(&target) else {
             return Vec::new();
         };
+        log::trace!(
+            target: "lilypalooza::editor_windows",
+            "show window target={target:?} window_id={window_id:?} was_visible={} host={} native_editor_available={} controls_visible={}",
+            window.visible,
+            window.host.is_some(),
+            window.native_editor_available,
+            window.controls_visible.load(Ordering::Relaxed)
+        );
         let mut errors = Vec::new();
         if let Some(host) = window.host.as_mut() {
             host.clear_close_requested();
