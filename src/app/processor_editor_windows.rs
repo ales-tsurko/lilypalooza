@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::sync::Mutex;
 use std::{
     collections::HashMap,
     sync::{
@@ -11,9 +13,13 @@ use editor_host::{
     EditorFrameCommand, EditorPresetState, InstalledHost, InstalledHostResizeHandle, WindowSnapshot,
 };
 use iced::window;
+#[cfg(test)]
+use lilypalooza_audio::{Controller, ControllerError, ProcessorDescriptor, ProcessorState};
 use lilypalooza_audio::{
     EditorError, EditorParent, EditorResizeHandler, EditorSession, EditorSize,
 };
+
+use crate::app::SharedController;
 
 mod manager_api;
 mod resize_helpers;

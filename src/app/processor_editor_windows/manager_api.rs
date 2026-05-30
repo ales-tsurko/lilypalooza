@@ -21,6 +21,7 @@ impl EditorWindowManager {
         None
     }
 
+    #[cfg(test)]
     pub(in crate::app) fn begin_open(
         &mut self,
         target: EditorTarget,
@@ -29,17 +30,33 @@ impl EditorWindowManager {
         session: Box<dyn EditorSession>,
         window_id: window::Id,
     ) {
-        self.pending.insert(
+        self.begin_open_with_controller(EditorOpenRequest {
+            target,
+            title,
+            resizable,
+            session,
+            controller: empty_editor_controller(),
+            native_editor_available: true,
+            controls_visible: Arc::new(AtomicBool::new(false)),
             window_id,
+        });
+    }
+
+    pub(in crate::app) fn begin_open_with_controller(&mut self, request: EditorOpenRequest) {
+        self.pending.insert(
+            request.window_id,
             PendingEditorWindow {
-                target,
-                title,
-                resizable,
-                host_window_id: window_id,
-                session,
+                target: request.target,
+                title: request.title,
+                resizable: request.resizable,
+                host_window_id: request.window_id,
+                session: request.session,
+                controller: request.controller,
+                native_editor_available: request.native_editor_available,
+                controls_visible: request.controls_visible,
             },
         );
-        self.focused = Some(target);
+        self.focused = Some(request.target);
     }
 
     pub(in crate::app) fn attach(
@@ -60,6 +77,7 @@ impl EditorWindowManager {
             resize_base_content_size.as_ref(),
             startup_baseline_pending.as_ref(),
             &pending_programmatic_outer_resizes,
+            &pending.controls_visible,
         )?;
         pending.session.attach(parent)?;
         let tracks_native_content_resize = configure_native_resize_tracking(
@@ -80,6 +98,12 @@ impl EditorWindowManager {
             &pending_programmatic_outer_resizes,
         );
         let sizing = sizing?;
+        if pending.controls_visible.load(Ordering::Relaxed)
+            && let Some(host) = host.as_mut()
+        {
+            host.set_content_visible(false)
+                .map_err(|error| EditorError::HostUnavailable(error.to_string()))?;
+        }
         if let Some(base_content_size) = resize_base_content_size.as_ref() {
             base_content_size.store(sizing.content_size);
         }
@@ -95,6 +119,10 @@ impl EditorWindowManager {
                 host_window_id: pending.host_window_id,
                 host,
                 session: pending.session,
+                controller: pending.controller,
+                native_editor_available: pending.native_editor_available,
+                controls_visible: pending.controls_visible,
+                native_view_content_size: None,
                 visible: true,
                 tracks_native_content_resize,
                 base_content_size: sizing.content_size,
@@ -160,6 +188,75 @@ impl EditorWindowManager {
                 self.pending.iter().find_map(|(window_id, pending)| {
                     (pending.target == target).then_some(*window_id)
                 })
+            })
+    }
+
+    pub(in crate::app) fn frame_controller_for_window(
+        &self,
+        window_id: window::Id,
+    ) -> Option<(SharedController, bool, Arc<AtomicBool>)> {
+        self.windows_by_id
+            .get(&window_id)
+            .and_then(|target| {
+                self.windows.get(target).map(|window| {
+                    (
+                        Arc::clone(&window.controller),
+                        window.native_editor_available,
+                        Arc::clone(&window.controls_visible),
+                    )
+                })
+            })
+            .or_else(|| {
+                self.pending.get(&window_id).map(|window| {
+                    (
+                        Arc::clone(&window.controller),
+                        window.native_editor_available,
+                        Arc::clone(&window.controls_visible),
+                    )
+                })
+            })
+    }
+
+    pub(in crate::app) fn set_controls_visible(
+        &mut self,
+        target: EditorTarget,
+        visible: bool,
+    ) -> Vec<String> {
+        let Some(window) = self.windows.get_mut(&target) else {
+            for pending in self.pending.values() {
+                if pending.target == target {
+                    pending.controls_visible.store(visible, Ordering::Relaxed);
+                    break;
+                }
+            }
+            return Vec::new();
+        };
+        window.controls_visible.store(visible, Ordering::Relaxed);
+        let mut errors = Vec::new();
+        apply_editor_view_visibility(window, visible, &mut errors);
+        errors
+    }
+
+    #[cfg(test)]
+    pub(in crate::app) fn editor_view_state(&self, target: EditorTarget) -> Option<(bool, bool)> {
+        self.windows
+            .get(&target)
+            .map(|window| {
+                (
+                    window.native_editor_available,
+                    window.controls_visible.load(Ordering::Relaxed),
+                )
+            })
+            .or_else(|| {
+                self.pending
+                    .values()
+                    .find(|window| window.target == target)
+                    .map(|window| {
+                        (
+                            window.native_editor_available,
+                            window.controls_visible.load(Ordering::Relaxed),
+                        )
+                    })
             })
     }
 

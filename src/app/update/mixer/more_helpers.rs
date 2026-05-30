@@ -426,11 +426,24 @@ impl Lilypalooza {
         }) else {
             return Task::none();
         };
+        let controller = std::sync::Arc::new(std::sync::Mutex::new(controller));
         let title = self.editor_window_title(&strip.name, slot, target.slot_index);
-        let descriptor = controller.descriptor().editor;
-        let session_result = controller.create_editor_session();
+        let (descriptor, session_result) = controller
+            .lock()
+            .map(|controller| {
+                (
+                    controller.descriptor().editor,
+                    controller.create_editor_session(),
+                )
+            })
+            .unwrap_or_else(|error| {
+                (
+                    None,
+                    Err(lilypalooza_audio::EditorError::Backend(error.to_string())),
+                )
+            });
 
-        self.open_editor(target, title, descriptor, session_result)
+        self.open_editor(target, title, descriptor, session_result, controller)
     }
 
     pub(super) fn open_editor(
@@ -442,22 +455,44 @@ impl Lilypalooza {
             Option<Box<dyn lilypalooza_audio::EditorSession>>,
             lilypalooza_audio::EditorError,
         >,
+        controller: crate::app::SharedController,
     ) -> Task<Message> {
-        let Some(descriptor) = descriptor else {
-            return Task::none();
+        let native_session = match session_result {
+            Ok(session) => session,
+            Err(error) => {
+                self.log_processor_editor_error("create editor", error);
+                None
+            }
         };
-        let Ok(Some(session)) = session_result else {
-            return Task::none();
-        };
+        let native_editor_available = descriptor.is_some() && native_session.is_some();
+        let descriptor = descriptor.unwrap_or(lilypalooza_audio::EditorDescriptor {
+            default_size: crate::app::GENERIC_CONTROLLER_DEFAULT_SIZE,
+            min_size: Some(lilypalooza_audio::EditorSize {
+                width: 320,
+                height: 220,
+            }),
+            resizable: true,
+        });
+        let controls_visible =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(!native_editor_available));
+        let session = native_session.unwrap_or_else(|| {
+            Box::new(crate::app::processor_editor_windows::GenericEditorSession)
+                as Box<dyn lilypalooza_audio::EditorSession>
+        });
 
         let (window_id, open_task) =
             window::open(processor_editor_window_settings(descriptor, None));
-        self.processor_editor_windows.begin_open(
-            target,
-            title,
-            descriptor.resizable,
-            session,
-            window_id,
+        self.processor_editor_windows.begin_open_with_controller(
+            crate::app::processor_editor_windows::EditorOpenRequest {
+                target,
+                title,
+                resizable: descriptor.resizable,
+                session,
+                controller,
+                native_editor_available,
+                controls_visible,
+                window_id,
+            },
         );
         open_task.map(|_| Message::Noop)
     }
@@ -476,6 +511,14 @@ impl Lilypalooza {
                     .set_zoom_percent(target, percent);
                 for error in errors {
                     self.log_processor_editor_error("resize editor", error);
+                }
+            }
+            EditorFrameCommand::SetControlsVisible(visible) => {
+                let errors = self
+                    .processor_editor_windows
+                    .set_controls_visible(target, visible);
+                for error in errors {
+                    self.log_processor_editor_error("switch editor view", error);
                 }
             }
             EditorFrameCommand::LoadPreset(id) => self.load_processor_preset_for_target(target, id),

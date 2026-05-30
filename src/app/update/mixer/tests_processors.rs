@@ -54,9 +54,32 @@ pub(super) fn open_processor_editor_defers_initial_size_until_parent_attach() {
         Ok(Some(Box::new(InitialSizeEditorSession {
             calls: Rc::clone(&calls),
         }))),
+        crate::app::processor_editor_windows::empty_editor_controller(),
     );
 
     assert_eq!(*calls.borrow(), 0);
+}
+
+#[test]
+pub(super) fn open_processor_editor_without_native_session_opens_generic_controls() {
+    let mut app = test_app();
+    let target = EditorTarget {
+        strip_index: 1,
+        slot_index: 0,
+    };
+
+    let _discarded = app.open_editor(
+        target,
+        "Track 1".to_string(),
+        None,
+        Ok(None),
+        crate::app::processor_editor_windows::empty_editor_controller(),
+    );
+
+    assert_eq!(
+        app.processor_editor_windows.editor_view_state(target),
+        Some((false, true))
+    );
 }
 
 #[test]

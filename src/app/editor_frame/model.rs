@@ -10,6 +10,8 @@ pub(super) const EDITOR_FRAME_PRESET_BROWSER_HEIGHT: f32 = 116.0;
 pub(super) const EDITOR_FRAME_ICON_SIZE: f32 = 13.0;
 pub(super) const EDITOR_FRAME_ZOOM_CONTROL_WIDTH: f32 = 68.0;
 pub(super) const EDITOR_FRAME_ZOOM_CONTROL_HEIGHT: f32 = 22.0;
+pub(super) const EDITOR_FRAME_VIEW_TOGGLE_WIDTH: f32 = 88.0;
+pub(super) const EDITOR_FRAME_VIEW_TOGGLE_HEIGHT: f32 = 22.0;
 pub(in crate::app) const EDITOR_FRAME_ZOOM_MIN_PERCENT: u32 = 50;
 pub(in crate::app) const EDITOR_FRAME_ZOOM_MAX_PERCENT: u32 = 200;
 pub(super) const EDITOR_FRAME_ZOOM_UPDATE_WHILE_EDITING: bool = false;
@@ -23,6 +25,8 @@ pub(super) const EGUI_ICON_CHEVRON_UP: &[u8] =
     include_bytes!("../../../assets/icons/chevron-up.svg");
 pub(super) const EGUI_ICON_PENCIL: &[u8] = include_bytes!("../../../assets/icons/pencil.svg");
 pub(super) const EGUI_ICON_SAVE: &[u8] = include_bytes!("../../../assets/icons/save.svg");
+pub(super) const EGUI_ICON_SLIDERS: &[u8] =
+    include_bytes!("../../../assets/icons/sliders-horizontal.svg");
 pub(super) const EGUI_ICON_TRASH: &[u8] = include_bytes!("../../../assets/icons/trash-2.svg");
 
 #[derive(Clone)]
@@ -34,6 +38,9 @@ pub(in crate::app) struct AppEditorFrame {
     pub(super) renaming_preset_value: String,
     pub(super) rename_focus_requested: bool,
     pub(super) delete_confirmation_preset_id: Option<String>,
+    pub(super) native_editor_available: bool,
+    pub(super) controls_visible: Arc<AtomicBool>,
+    pub(super) generic_controls: Option<GenericControllerEditor>,
     pub(super) icon_textures: HashMap<AppEditorFrameIcon, editor_host::egui::TextureHandle>,
     pub(super) style: AppEditorFrameStyle,
 }
@@ -51,6 +58,11 @@ impl std::fmt::Debug for AppEditorFrame {
             .field(
                 "delete_confirmation_preset_id",
                 &self.delete_confirmation_preset_id,
+            )
+            .field("native_editor_available", &self.native_editor_available)
+            .field(
+                "controls_visible",
+                &self.controls_visible.load(Ordering::Relaxed),
             )
             .field("style", &self.style)
             .finish()
@@ -73,9 +85,24 @@ impl AppEditorFrame {
             renaming_preset_value: String::new(),
             rename_focus_requested: false,
             delete_confirmation_preset_id: None,
+            native_editor_available: true,
+            controls_visible: Arc::new(AtomicBool::new(false)),
+            generic_controls: None,
             icon_textures: HashMap::new(),
             style: AppEditorFrameStyle::from_theme(theme),
         }
+    }
+
+    pub(in crate::app) fn with_generic_controls(
+        mut self,
+        native_editor_available: bool,
+        controls_visible: Arc<AtomicBool>,
+        generic_controls: GenericControllerEditor,
+    ) -> Self {
+        self.native_editor_available = native_editor_available;
+        self.controls_visible = controls_visible;
+        self.generic_controls = Some(generic_controls);
+        self
     }
 }
 
@@ -84,6 +111,7 @@ pub(in crate::app) struct AppEditorFramePresetLayout {
     pub(super) title_text: editor_host::egui::Rect,
     pub(super) zoom_row: editor_host::egui::Rect,
     pub(super) close_button: editor_host::egui::Rect,
+    pub(super) view_toggle: editor_host::egui::Rect,
     pub(super) preset_row: editor_host::egui::Rect,
     pub(super) previous: editor_host::egui::Rect,
     pub(super) name: editor_host::egui::Rect,
@@ -99,18 +127,18 @@ pub(in crate::app) struct AppEditorFramePresetControls {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) struct AppEditorFrameStyle {
-    pub(super) frame_color: editor_host::egui::Color32,
-    pub(super) titlebar_color: editor_host::egui::Color32,
-    pub(super) border_color: editor_host::egui::Color32,
-    pub(super) title_color: editor_host::egui::Color32,
-    pub(super) close_background: editor_host::egui::Color32,
-    pub(super) close_background_hovered: editor_host::egui::Color32,
-    pub(super) close_icon: editor_host::egui::Color32,
-    pub(super) close_icon_hovered: editor_host::egui::Color32,
-    pub(super) control_background: editor_host::egui::Color32,
-    pub(super) control_background_hovered: editor_host::egui::Color32,
-    pub(super) control_background_active: editor_host::egui::Color32,
-    pub(super) muted_text: editor_host::egui::Color32,
+    pub(in crate::app) frame_color: editor_host::egui::Color32,
+    pub(in crate::app) titlebar_color: editor_host::egui::Color32,
+    pub(in crate::app) border_color: editor_host::egui::Color32,
+    pub(in crate::app) title_color: editor_host::egui::Color32,
+    pub(in crate::app) close_background: editor_host::egui::Color32,
+    pub(in crate::app) close_background_hovered: editor_host::egui::Color32,
+    pub(in crate::app) close_icon: editor_host::egui::Color32,
+    pub(in crate::app) close_icon_hovered: editor_host::egui::Color32,
+    pub(in crate::app) control_background: editor_host::egui::Color32,
+    pub(in crate::app) control_background_hovered: editor_host::egui::Color32,
+    pub(in crate::app) control_background_active: editor_host::egui::Color32,
+    pub(in crate::app) muted_text: editor_host::egui::Color32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +214,7 @@ pub(super) enum AppEditorFrameIcon {
     ChevronUp,
     Pencil,
     Save,
+    Sliders,
     Trash,
 }
 
@@ -198,6 +227,7 @@ impl AppEditorFrameIcon {
             Self::ChevronUp => EGUI_ICON_CHEVRON_UP,
             Self::Pencil => EGUI_ICON_PENCIL,
             Self::Save => EGUI_ICON_SAVE,
+            Self::Sliders => EGUI_ICON_SLIDERS,
             Self::Trash => EGUI_ICON_TRASH,
         }
     }
@@ -250,20 +280,26 @@ impl editor_host::EditorFrame for AppEditorFrame {
         let close_clicked = self.render_frame_close_button(ui, &preset_layout);
         self.render_frame_title(ui, state, &preset_layout);
         let zoom_command = self.render_zoom_controls(ui, state, &preset_layout);
+        let view_command = self.render_view_toggle(ui, &preset_layout);
         let preset_command = self.render_preset_strip(ui, state, &preset_layout);
-        editor_frame_action(close_clicked, zoom_command, preset_command)
+        self.render_generic_controls(ui, rect, state);
+        editor_frame_action(close_clicked, zoom_command, view_command, preset_command)
     }
 }
 
 pub(super) fn editor_frame_action(
     close_clicked: bool,
     zoom_command: Option<editor_host::EditorFrameCommand>,
+    view_command: Option<editor_host::EditorFrameCommand>,
     preset_command: Option<editor_host::EditorFrameCommand>,
 ) -> editor_host::EditorFrameAction {
     if close_clicked {
         return editor_host::EditorFrameAction::Close;
     }
     if let Some(command) = zoom_command {
+        return editor_host::EditorFrameAction::Command(command);
+    }
+    if let Some(command) = view_command {
         return editor_host::EditorFrameAction::Command(command);
     }
     if let Some(command) = preset_command {

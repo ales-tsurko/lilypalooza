@@ -196,6 +196,89 @@ pub(in crate::app) fn set_editor_resize_baseline(
     }
 }
 
+pub(in crate::app) fn generic_controller_content_size() -> editor_host::Size {
+    host_size_from_editor_size(crate::app::GENERIC_CONTROLLER_DEFAULT_SIZE)
+}
+
+pub(in crate::app) fn apply_editor_view_visibility(
+    window: &mut EditorWindow,
+    controls_visible: bool,
+    errors: &mut Vec<String>,
+) {
+    if window.host.is_none() {
+        return;
+    }
+    if controls_visible {
+        apply_generic_controls_view(window, errors);
+    } else {
+        apply_native_editor_view(window, errors);
+    }
+}
+
+fn apply_generic_controls_view(window: &mut EditorWindow, errors: &mut Vec<String>) {
+    let Some(host) = window.host.as_mut() else {
+        return;
+    };
+    if window.native_view_content_size.is_none() {
+        window.native_view_content_size = Some(host.content_size());
+    }
+    record_host_result(
+        host.set_native_content_resize_tracking_enabled(false),
+        errors,
+    );
+    record_host_result(host.set_content_visible(false), errors);
+
+    let content_size = generic_controller_content_size();
+    record_programmatic_outer_resize(
+        &window.pending_programmatic_outer_resizes,
+        host,
+        content_size,
+    );
+    record_host_result(host.resize_frame_content_from_top(content_size), errors);
+    host.set_zoom_percent(100);
+}
+
+fn apply_native_editor_view(window: &mut EditorWindow, errors: &mut Vec<String>) {
+    let content_size = window
+        .native_view_content_size
+        .take()
+        .unwrap_or(window.base_content_size);
+    let Some(host) = window.host.as_mut() else {
+        return;
+    };
+    record_programmatic_outer_resize(
+        &window.pending_programmatic_outer_resizes,
+        host,
+        content_size,
+    );
+    record_host_result(host.resize_content_from_top(content_size), errors);
+    record_host_result(host.set_content_visible(true), errors);
+    enable_native_content_resize_tracking(window.tracks_native_content_resize, host, errors);
+    host.set_zoom_percent(zoom_percent_for_content_size(
+        window.base_content_size,
+        content_size,
+    ));
+}
+
+fn enable_native_content_resize_tracking(
+    enabled: bool,
+    host: &mut InstalledHost,
+    errors: &mut Vec<String>,
+) {
+    if enabled {
+        record_host_result(
+            host.set_native_content_resize_tracking_enabled(true),
+            errors,
+        );
+    }
+}
+
+fn record_host_result(result: Result<(), editor_host::Error>, errors: &mut Vec<String>) {
+    if let Err(error) = result {
+        errors.push(error.to_string());
+    }
+}
+
 pub(in crate::app) fn should_sync_native_content_resize(
     visible: bool,
     tracks_native_content_resize: bool,
@@ -207,7 +290,7 @@ pub(in crate::app) fn native_content_resize_observation(
     window: &mut EditorWindow,
     errors: &mut Vec<String>,
 ) -> Option<NativeContentResizeObservation> {
-    if !should_sync_native_content_resize(window.visible, window.tracks_native_content_resize) {
+    if !native_resize_observation_enabled(window) {
         return None;
     }
     let host = window.host.as_mut()?;
@@ -222,6 +305,11 @@ pub(in crate::app) fn native_content_resize_observation(
         native_outer_size: host.outer_size_from_content_size(native_content_size),
         current_content,
     })
+}
+
+fn native_resize_observation_enabled(window: &EditorWindow) -> bool {
+    should_sync_native_content_resize(window.visible, window.tracks_native_content_resize)
+        && !window.controls_visible.load(Ordering::Relaxed)
 }
 
 pub(in crate::app) fn native_resize_host_sizes(

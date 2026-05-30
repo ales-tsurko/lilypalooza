@@ -6,9 +6,10 @@ use knyst::{
 };
 
 use super::{
-    BUILTIN_SOUNDFONT_ID, InstrumentProcessor, InstrumentProcessorNode, InstrumentRuntimeHandle,
-    MidiEvent, Processor, ProcessorDescriptor, ProcessorState, ProcessorStateError,
-    SharedInstrumentResetState, SlotState, SmoothedAudioValue,
+    BUILTIN_SOUNDFONT_ID, Controller, ControllerError, InstrumentProcessor,
+    InstrumentProcessorNode, InstrumentRuntimeHandle, MidiEvent, ParameterDescriptor, Processor,
+    ProcessorDescriptor, ProcessorState, ProcessorStateError, SharedInstrumentResetState,
+    SlotState, SmoothedAudioValue,
 };
 use crate::{
     instrument::registry::{self, Entry, RuntimeFactory},
@@ -57,6 +58,52 @@ fn smoothed_audio_value_continues_from_current_value_when_retargeted() {
 
     assert!((after - before).abs() < 0.1);
     assert!(after > before);
+}
+
+#[test]
+fn controller_parameters_default_to_owned_descriptor_parameters() {
+    struct TestController;
+
+    impl Controller for TestController {
+        fn descriptor(&self) -> &'static ProcessorDescriptor {
+            static PARAMS: &[ParameterDescriptor] = &[ParameterDescriptor {
+                id: "gain",
+                name: "Gain",
+                default: 0.25,
+            }];
+            static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+                name: "Controller",
+                params: PARAMS,
+                editor: None,
+            };
+            &DESCRIPTOR
+        }
+
+        fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
+            Err(ControllerError::UnknownParameter(id.to_string()))
+        }
+
+        fn set_param(&self, id: &str, _normalized: f32) -> Result<(), ControllerError> {
+            Err(ControllerError::UnknownParameter(id.to_string()))
+        }
+
+        fn save_state(&self) -> Result<ProcessorState, ControllerError> {
+            Ok(ProcessorState::default())
+        }
+
+        fn load_state(&self, _state: &ProcessorState) -> Result<(), ControllerError> {
+            Ok(())
+        }
+    }
+
+    let parameters = TestController.parameters();
+
+    assert_eq!(parameters.len(), 1);
+    assert_eq!(parameters[0].id, "gain");
+    assert_eq!(parameters[0].name, "Gain");
+    assert!((parameters[0].default - 0.25).abs() <= f32::EPSILON);
+    assert!(parameters[0].automatable);
+    assert!(!parameters[0].readonly);
 }
 
 struct GateProcessor {

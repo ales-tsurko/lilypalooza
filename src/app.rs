@@ -58,6 +58,7 @@ pub(crate) use application::run;
 use application::*;
 pub(in crate::app) use editor_frame::{
     AppEditorFrame, EDITOR_FRAME_ZOOM_MAX_PERCENT, EDITOR_FRAME_ZOOM_MIN_PERCENT,
+    GENERIC_CONTROLLER_DEFAULT_SIZE, GenericControllerEditor, SharedController,
 };
 use workspace_runtime::*;
 #[cfg(test)]

@@ -44,10 +44,14 @@ pub(in crate::app) struct HostEditorResizeHandler {
     pub(in crate::app) base_content_size: Arc<SharedContentSize>,
     pub(in crate::app) startup_baseline_pending: Arc<AtomicBool>,
     pub(in crate::app) programmatic_outer_resizes: SharedProgrammaticOuterResizes,
+    pub(in crate::app) controls_visible: Arc<AtomicBool>,
 }
 
 impl EditorResizeHandler for HostEditorResizeHandler {
     fn resize_editor(&self, size: EditorSize) -> Result<EditorSize, EditorError> {
+        if self.controls_visible.load(Ordering::Relaxed) {
+            return Ok(size);
+        }
         let content_size = host_size_from_editor_size(size);
         let outer_size = self.host.outer_size_from_content_size(content_size);
         record_programmatic_outer_resize_size(&self.programmatic_outer_resizes, outer_size);
@@ -188,6 +192,10 @@ pub(in crate::app) struct EditorWindow {
     pub(in crate::app) host_window_id: window::Id,
     pub(in crate::app) host: Option<InstalledHost>,
     pub(in crate::app) session: Box<dyn EditorSession>,
+    pub(in crate::app) controller: SharedController,
+    pub(in crate::app) native_editor_available: bool,
+    pub(in crate::app) controls_visible: Arc<AtomicBool>,
+    pub(in crate::app) native_view_content_size: Option<editor_host::Size>,
     pub(in crate::app) visible: bool,
     pub(in crate::app) tracks_native_content_resize: bool,
     pub(in crate::app) base_content_size: editor_host::Size,
@@ -259,6 +267,20 @@ pub(in crate::app) struct PendingEditorWindow {
     pub(in crate::app) resizable: bool,
     pub(in crate::app) host_window_id: window::Id,
     pub(in crate::app) session: Box<dyn EditorSession>,
+    pub(in crate::app) controller: SharedController,
+    pub(in crate::app) native_editor_available: bool,
+    pub(in crate::app) controls_visible: Arc<AtomicBool>,
+}
+
+pub(in crate::app) struct EditorOpenRequest {
+    pub(in crate::app) target: EditorTarget,
+    pub(in crate::app) title: String,
+    pub(in crate::app) resizable: bool,
+    pub(in crate::app) session: Box<dyn EditorSession>,
+    pub(in crate::app) controller: SharedController,
+    pub(in crate::app) native_editor_available: bool,
+    pub(in crate::app) controls_visible: Arc<AtomicBool>,
+    pub(in crate::app) window_id: window::Id,
 }
 
 pub(in crate::app) struct RemovedEditorWindow {
@@ -267,9 +289,69 @@ pub(in crate::app) struct RemovedEditorWindow {
     pub(in crate::app) session: Box<dyn EditorSession>,
 }
 
+pub(in crate::app) struct GenericEditorSession;
+
+impl EditorSession for GenericEditorSession {
+    fn tracks_native_content_resize(&self) -> bool {
+        false
+    }
+
+    fn attach(&mut self, _parent: EditorParent) -> Result<(), EditorError> {
+        Ok(())
+    }
+
+    fn detach(&mut self) -> Result<(), EditorError> {
+        Ok(())
+    }
+
+    fn set_visible(&mut self, _visible: bool) -> Result<(), EditorError> {
+        Ok(())
+    }
+
+    fn resize(&mut self, size: EditorSize) -> Result<EditorSize, EditorError> {
+        Ok(size)
+    }
+}
+
 pub(in crate::app) struct AttachedHostSizing {
     pub(in crate::app) content_size: editor_host::Size,
     pub(in crate::app) wait_for_embedded_startup_baseline: bool,
+}
+
+#[cfg(test)]
+pub(in crate::app) struct EmptyEditorController;
+
+#[cfg(test)]
+impl Controller for EmptyEditorController {
+    fn descriptor(&self) -> &'static ProcessorDescriptor {
+        static DESCRIPTOR: ProcessorDescriptor = ProcessorDescriptor {
+            name: "Processor",
+            params: &[],
+            editor: None,
+        };
+        &DESCRIPTOR
+    }
+
+    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
+        Err(ControllerError::UnknownParameter(id.to_string()))
+    }
+
+    fn set_param(&self, id: &str, _normalized: f32) -> Result<(), ControllerError> {
+        Err(ControllerError::UnknownParameter(id.to_string()))
+    }
+
+    fn save_state(&self) -> Result<ProcessorState, ControllerError> {
+        Ok(ProcessorState::default())
+    }
+
+    fn load_state(&self, _state: &ProcessorState) -> Result<(), ControllerError> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(in crate::app) fn empty_editor_controller() -> SharedController {
+    Arc::new(Mutex::new(Box::new(EmptyEditorController)))
 }
 
 impl RemovedEditorWindow {
@@ -293,6 +375,7 @@ pub(in crate::app) fn install_host_resize_handler(
     base_content_size: Option<&Arc<SharedContentSize>>,
     startup_baseline_pending: Option<&Arc<AtomicBool>>,
     programmatic_outer_resizes: &SharedProgrammaticOuterResizes,
+    controls_visible: &Arc<AtomicBool>,
 ) -> Result<(), EditorError> {
     let Some(host) = host else {
         return Ok(());
@@ -309,6 +392,7 @@ pub(in crate::app) fn install_host_resize_handler(
         base_content_size: Arc::clone(base_content_size),
         startup_baseline_pending: Arc::clone(startup_baseline_pending),
         programmatic_outer_resizes: Arc::clone(programmatic_outer_resizes),
+        controls_visible: Arc::clone(controls_visible),
     })))
 }
 
@@ -431,6 +515,9 @@ pub(in crate::app) fn apply_requested_content_resize_for_window(
     window: &mut EditorWindow,
     on_error: &mut impl FnMut(String),
 ) {
+    if window.controls_visible.load(Ordering::Relaxed) {
+        return;
+    }
     match window.session.requested_size() {
         Ok(Some(size)) => {
             apply_requested_content_size(trace_counter, target, window, size, on_error);

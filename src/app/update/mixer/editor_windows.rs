@@ -303,11 +303,19 @@ impl Lilypalooza {
             options = options.with_owner(owner);
         }
 
-        match editor_host::install_editor_host(
-            host,
-            &options,
-            crate::app::AppEditorFrame::from_theme(&self.theme),
-        ) {
+        let mut frame = crate::app::AppEditorFrame::from_theme(&self.theme);
+        if let Some((controller, native_editor_available, controls_visible)) = self
+            .processor_editor_windows
+            .frame_controller_for_window(window_id)
+        {
+            frame = frame.with_generic_controls(
+                native_editor_available,
+                controls_visible,
+                crate::app::GenericControllerEditor::new(controller),
+            );
+        }
+
+        match editor_host::install_editor_host(host, &options, frame) {
             Ok(host) => Some(host),
             Err(error) => {
                 self.log_processor_editor_error("install host", error);

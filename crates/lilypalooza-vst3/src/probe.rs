@@ -409,6 +409,16 @@ pub(super) fn c_char_array_to_string(bytes: &[c_char]) -> String {
     String::from_utf8_lossy(&bytes).trim().to_string()
 }
 
+pub(super) fn tchar_array_to_string(bytes: &[TChar]) -> String {
+    let len = bytes
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(bytes.len());
+    String::from_utf16_lossy(bytes.get(..len).unwrap_or(bytes))
+        .trim()
+        .to_string()
+}
+
 pub(super) fn copy_tchar_string(src: &str, dst: &mut [TChar]) {
     let mut len = 0;
     for (src, dst) in src.encode_utf16().zip(dst.iter_mut()) {

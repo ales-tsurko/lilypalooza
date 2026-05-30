@@ -1,17 +1,28 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use iced::Color;
 
 use crate::ui_style;
 
+mod generic_controller;
 mod helpers;
 mod model;
 mod render;
 
+pub(in crate::app) use generic_controller::{
+    GENERIC_CONTROLLER_DEFAULT_SIZE, GenericControllerEditor, SharedController,
+};
 use helpers::*;
 use model::*;
 pub(super) use model::{
-    AppEditorFrame, EDITOR_FRAME_ZOOM_MAX_PERCENT, EDITOR_FRAME_ZOOM_MIN_PERCENT,
+    AppEditorFrame, AppEditorFrameStyle, EDITOR_FRAME_ZOOM_MAX_PERCENT,
+    EDITOR_FRAME_ZOOM_MIN_PERCENT,
 };
 #[cfg(test)]
 mod tests {
@@ -186,6 +197,37 @@ mod tests {
     }
 
     #[test]
+    fn app_editor_frame_controls_view_reclaims_zoom_space() {
+        let controls_visible = Arc::new(AtomicBool::new(true));
+        let frame = AppEditorFrame::from_theme(&iced::Theme::Dark).with_generic_controls(
+            true,
+            Arc::clone(&controls_visible),
+            GenericControllerEditor::new(
+                crate::app::processor_editor_windows::empty_editor_controller(),
+            ),
+        );
+        let titlebar = editor_host::egui::Rect::from_min_size(
+            editor_host::egui::pos2(0.0, 0.0),
+            editor_host::egui::vec2(640.0, EDITOR_FRAME_COMPACT_CHROME_HEIGHT as f32),
+        );
+        let state = editor_host::EditorHostState {
+            title: "Editor".to_string(),
+            resizable: true,
+            zoom_percent: 100,
+            close_requested: false,
+            content_size: editor_host::Size {
+                width: 640.0,
+                height: 480.0,
+            },
+            preset: None,
+        };
+        let layout = frame.preset_layout_for_state(titlebar, &state);
+
+        assert!(layout.zoom_row.is_negative());
+        assert!(titlebar.contains_rect(layout.view_toggle));
+    }
+
+    #[test]
     fn app_editor_frame_changes_preset_control_width_smoothly_during_resize() {
         let frame = AppEditorFrame::from_theme(&iced::Theme::Dark);
         let mut previous_width = None;
@@ -253,6 +295,7 @@ mod tests {
             AppEditorFrameIcon::ChevronUp,
             AppEditorFrameIcon::Pencil,
             AppEditorFrameIcon::Save,
+            AppEditorFrameIcon::Sliders,
             AppEditorFrameIcon::Trash,
         ] {
             let svg = std::str::from_utf8(icon.svg_bytes()).expect("icon should be utf8 svg");

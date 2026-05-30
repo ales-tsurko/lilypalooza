@@ -351,6 +351,141 @@ impl ClapRuntimeInner {
             })
     }
 
+    pub(super) fn parameters(&self) -> Vec<lilypalooza_audio::ParameterInfo> {
+        let Some(params) = self.plugin_extension::<clap_plugin_params>(CLAP_EXT_PARAMS) else {
+            return self
+                .descriptor
+                .params
+                .iter()
+                .map(lilypalooza_audio::ParameterInfo::from)
+                .collect();
+        };
+        let (Some(count), Some(get_info)) = (params.count, params.get_info) else {
+            return Vec::new();
+        };
+        // SAFETY: Params extension table belongs to this live plugin.
+        let count = unsafe { count(self.plugin.as_ptr()) };
+        let mut out = Vec::new();
+        for index in 0..count {
+            let mut info = std::mem::MaybeUninit::<clap_param_info>::zeroed();
+            // SAFETY: `info` points to writable storage for the CLAP parameter info result.
+            if !unsafe { get_info(self.plugin.as_ptr(), index, info.as_mut_ptr()) } {
+                continue;
+            }
+            // SAFETY: CLAP returned success and initialized the output struct.
+            let info = unsafe { info.assume_init() };
+            if info.flags & CLAP_PARAM_IS_HIDDEN != 0 {
+                continue;
+            }
+            out.push(clap_parameter_info(info));
+        }
+        out
+    }
+
+    pub(super) fn get_param(&self, id: u32) -> Result<f32, ControllerError> {
+        let params = self
+            .plugin_extension::<clap_plugin_params>(CLAP_EXT_PARAMS)
+            .ok_or_else(|| ControllerError::UnknownParameter(id.to_string()))?;
+        let get_value = params
+            .get_value
+            .ok_or_else(|| ControllerError::UnknownParameter(id.to_string()))?;
+        let info = self
+            .parameter_info_by_id(id)
+            .ok_or_else(|| ControllerError::UnknownParameter(id.to_string()))?;
+        let mut value = 0.0;
+        // SAFETY: Params extension table belongs to this live plugin and `value` is writable.
+        if !unsafe { get_value(self.plugin.as_ptr(), id, &mut value) } {
+            return Err(ControllerError::UnknownParameter(id.to_string()));
+        }
+        Ok(normalize_clap_parameter_value(&info, value))
+    }
+
+    pub(super) fn set_param(&self, id: u32, normalized: f32) -> Result<(), ControllerError> {
+        let info = self
+            .parameter_info_by_id(id)
+            .ok_or_else(|| ControllerError::UnknownParameter(id.to_string()))?;
+        if info.flags & CLAP_PARAM_IS_READONLY != 0 {
+            return Err(ControllerError::Backend(format!(
+                "CLAP parameter {id} is read-only"
+            )));
+        }
+        let value = denormalize_clap_parameter_value(&info, normalized);
+        let event = clap_event_param_value {
+            header: clap_param_event_header(
+                CLAP_EVENT_PARAM_VALUE,
+                std::mem::size_of::<clap_event_param_value>(),
+            ),
+            param_id: id,
+            cookie: info.cookie,
+            note_id: -1,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            value,
+        };
+        self.flush_single_param_event(&event.header)
+    }
+
+    pub(super) fn flush_param_gesture(
+        &self,
+        id: u32,
+        event_type: u16,
+    ) -> Result<(), ControllerError> {
+        let event = clap_event_param_gesture {
+            header: clap_param_event_header(
+                event_type,
+                std::mem::size_of::<clap_event_param_gesture>(),
+            ),
+            param_id: id,
+        };
+        self.flush_single_param_event(&event.header)
+    }
+
+    fn flush_single_param_event(&self, event: &clap_event_header) -> Result<(), ControllerError> {
+        let Some(flush) = self
+            .plugin_extension::<clap_plugin_params>(CLAP_EXT_PARAMS)
+            .and_then(|params| params.flush)
+        else {
+            return Err(ControllerError::Backend(
+                "CLAP params.flush is unavailable".to_string(),
+            ));
+        };
+        let mut event_list = SingleClapEventList { event };
+        let in_events = clap_input_events {
+            ctx: (&mut event_list as *mut SingleClapEventList<'_>).cast(),
+            size: Some(single_clap_event_list_size),
+            get: Some(single_clap_event_list_get),
+        };
+        let out_events = clap_output_events {
+            ctx: std::ptr::null_mut(),
+            try_push: Some(clap_output_events_try_push),
+        };
+        // SAFETY: The plugin pointer and event lists are valid for the duration of the call.
+        unsafe { flush(self.plugin.as_ptr(), &in_events, &out_events) };
+        Ok(())
+    }
+
+    fn parameter_info_by_id(&self, id: u32) -> Option<clap_param_info> {
+        let params = self.plugin_extension::<clap_plugin_params>(CLAP_EXT_PARAMS)?;
+        let (Some(count), Some(get_info)) = (params.count, params.get_info) else {
+            return None;
+        };
+        // SAFETY: Params extension table belongs to this live plugin.
+        let count = unsafe { count(self.plugin.as_ptr()) };
+        for index in 0..count {
+            let mut info = std::mem::MaybeUninit::<clap_param_info>::zeroed();
+            // SAFETY: `info` points to writable storage for the CLAP parameter info result.
+            if unsafe { get_info(self.plugin.as_ptr(), index, info.as_mut_ptr()) } {
+                // SAFETY: CLAP returned success and initialized the output struct.
+                let info = unsafe { info.assume_init() };
+                if info.id == id {
+                    return Some(info);
+                }
+            }
+        }
+        None
+    }
+
     pub(super) fn save_state(&mut self) -> Result<ProcessorState, ControllerError> {
         let Some(state) = self.plugin_extension::<clap_plugin_state>(CLAP_EXT_STATE) else {
             return Ok(ProcessorState::default());
@@ -508,6 +643,98 @@ pub(super) unsafe extern "C" fn clap_output_events_try_push(
     true
 }
 
+pub(super) struct SingleClapEventList<'a> {
+    pub(super) event: &'a clap_event_header,
+}
+
+unsafe fn single_clap_event_list<'a>(
+    list: *const clap_input_events,
+) -> Option<&'a SingleClapEventList<'a>> {
+    // SAFETY: callers pass the CLAP list pointer created for one synchronous flush call.
+    let list = unsafe { list.as_ref() }?;
+    // SAFETY: `ctx` is set to a valid `SingleClapEventList` for the flush call.
+    unsafe { (list.ctx as *const SingleClapEventList<'a>).as_ref() }
+}
+
+pub(super) unsafe extern "C" fn single_clap_event_list_size(list: *const clap_input_events) -> u32 {
+    if list.is_null() {
+        return 0;
+    }
+    // SAFETY: `ctx` is set to a valid `SingleClapEventList` for the flush call.
+    u32::from(unsafe { single_clap_event_list(list) }.is_some())
+}
+
+pub(super) unsafe extern "C" fn single_clap_event_list_get(
+    list: *const clap_input_events,
+    index: u32,
+) -> *const clap_event_header {
+    if index != 0 {
+        return std::ptr::null();
+    }
+    // SAFETY: `ctx` is set to a valid `SingleClapEventList` for the flush call.
+    unsafe { single_clap_event_list(list) }.map_or(std::ptr::null(), |list| list.event)
+}
+
+pub(super) fn parse_clap_param_id(id: &str) -> Result<u32, ControllerError> {
+    id.parse::<u32>()
+        .map_err(|_error| ControllerError::UnknownParameter(id.to_string()))
+}
+
+pub(super) fn clap_parameter_info(info: clap_param_info) -> lilypalooza_audio::ParameterInfo {
+    let name = clap_char_array_to_string(&info.name);
+    lilypalooza_audio::ParameterInfo {
+        id: info.id.to_string(),
+        name: if name.is_empty() {
+            format!("Parameter {}", info.id)
+        } else {
+            name
+        },
+        default: normalize_clap_parameter_value(&info, info.default_value),
+        automatable: info.flags & CLAP_PARAM_IS_AUTOMATABLE != 0,
+        readonly: info.flags & CLAP_PARAM_IS_READONLY != 0,
+    }
+}
+
+pub(super) fn normalize_clap_parameter_value(info: &clap_param_info, value: f64) -> f32 {
+    let range = info.max_value - info.min_value;
+    if !range.is_finite() || range.abs() <= f64::EPSILON {
+        return 0.0;
+    }
+    ((value - info.min_value) / range).clamp(0.0, 1.0) as f32
+}
+
+pub(super) fn denormalize_clap_parameter_value(info: &clap_param_info, normalized: f32) -> f64 {
+    let range = info.max_value - info.min_value;
+    if !range.is_finite() || range.abs() <= f64::EPSILON {
+        return info.default_value;
+    }
+    info.min_value + range * f64::from(normalized.clamp(0.0, 1.0))
+}
+
+pub(super) fn clap_param_event_header(event_type: u16, size: usize) -> clap_event_header {
+    clap_event_header {
+        size: size as u32,
+        time: 0,
+        space_id: CLAP_CORE_EVENT_SPACE_ID,
+        type_: event_type,
+        flags: CLAP_EVENT_IS_LIVE,
+    }
+}
+
+pub(super) fn clap_char_array_to_string(bytes: &[c_char]) -> String {
+    let len = bytes
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(bytes.len());
+    let bytes = bytes
+        .get(..len)
+        .unwrap_or(bytes)
+        .iter()
+        .map(|value| value.cast_unsigned())
+        .collect::<Vec<_>>();
+    String::from_utf8_lossy(&bytes).trim().to_string()
+}
+
 pub(super) fn clap_flush_params_if_requested(
     host: &HostContext,
     plugin: *const clap_plugin,
@@ -620,12 +847,43 @@ impl Controller for ClapController {
             .descriptor
     }
 
-    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
-        Err(ControllerError::UnknownParameter(id.to_string()))
+    fn parameters(&self) -> Vec<lilypalooza_audio::ParameterInfo> {
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .parameters()
     }
 
-    fn set_param(&self, id: &str, _normalized: f32) -> Result<(), ControllerError> {
-        Err(ControllerError::UnknownParameter(id.to_string()))
+    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
+        let param_id = parse_clap_param_id(id)?;
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_param(param_id)
+    }
+
+    fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError> {
+        let param_id = parse_clap_param_id(id)?;
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_param(param_id, normalized)
+    }
+
+    fn begin_edit(&self, id: &str) -> Result<(), ControllerError> {
+        let param_id = parse_clap_param_id(id)?;
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .flush_param_gesture(param_id, CLAP_EVENT_PARAM_GESTURE_BEGIN)
+    }
+
+    fn end_edit(&self, id: &str) -> Result<(), ControllerError> {
+        let param_id = parse_clap_param_id(id)?;
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .flush_param_gesture(param_id, CLAP_EVENT_PARAM_GESTURE_END)
     }
 
     fn save_state(&self) -> Result<ProcessorState, ControllerError> {

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-baseview = { version = "0.1.0", features = ["opengl"] }
+baseview = { version = "0.1.1", features = ["opengl"] }
 egui = "0.34.2"
 egui_glow = "0.34.2"
 glow = "0.17.0"

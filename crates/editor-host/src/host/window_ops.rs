@@ -143,6 +143,14 @@ pub fn set_host_window_visible(host: &WindowSnapshot) -> Result<(), Error> {
 }
 
 #[cfg(target_os = "macos")]
+pub(crate) fn set_content_view_visible(
+    content: &WindowSnapshot,
+    visible: bool,
+) -> Result<(), Error> {
+    macos::set_content_view_visible(content, visible)
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn set_host_window_title(host: &WindowSnapshot, title: &str) -> Result<(), Error> {
     macos::set_host_window_title(host, title)
 }
@@ -394,8 +402,9 @@ impl<F: EditorFrame> FrameApp<F> {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum HostLayoutOperation {
+pub(crate) enum HostLayoutOperation {
     Resize(ResizeAnchor),
+    ResizeFrame(ResizeAnchor),
     Sync,
 }
 
@@ -415,14 +424,14 @@ impl FrameWindowResizeTarget for &EguiWindowResizeHandle {
     }
 }
 
-pub(crate) fn resize_installed_host<T: FrameWindowResizeTarget>(
+pub(crate) fn resize_installed_host_layout<T: FrameWindowResizeTarget>(
     host: &WindowSnapshot,
-    content: &WindowSnapshot,
+    content: Option<&WindowSnapshot>,
     content_size: Size,
     titlebar_height: f64,
     frame_thickness: f64,
     frame_window: Option<T>,
-    anchor: ResizeAnchor,
+    operation: HostLayoutOperation,
 ) -> Result<(), Error> {
     apply_installed_host_layout(
         host,
@@ -430,7 +439,7 @@ pub(crate) fn resize_installed_host<T: FrameWindowResizeTarget>(
         content_size,
         titlebar_height,
         frame_thickness,
-        HostLayoutOperation::Resize(anchor),
+        operation,
         frame_window,
     )
 }
@@ -445,7 +454,7 @@ pub(crate) fn sync_installed_host_layout(
 ) -> Result<(), Error> {
     apply_installed_host_layout(
         host,
-        content,
+        Some(content),
         content_size,
         titlebar_height,
         frame_thickness,
@@ -457,7 +466,7 @@ pub(crate) fn sync_installed_host_layout(
 #[cfg(target_os = "macos")]
 fn apply_installed_host_layout<T: FrameWindowResizeTarget>(
     host: &WindowSnapshot,
-    content: &WindowSnapshot,
+    content: Option<&WindowSnapshot>,
     content_size: Size,
     titlebar_height: f64,
     frame_thickness: f64,
@@ -470,44 +479,83 @@ fn apply_installed_host_layout<T: FrameWindowResizeTarget>(
         titlebar_height,
         frame_thickness,
     );
-    apply_macos_installed_host_operation(
+    let args = InstalledHostLayoutArgs {
         host,
         content,
         content_size,
         titlebar_height,
         frame_thickness,
-        operation,
-    )?;
+    };
+    apply_macos_installed_host_operation(args, operation)?;
     resize_frame_window_to_layout(frame_window, layout, content_size);
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn apply_macos_installed_host_operation(
-    host: &WindowSnapshot,
-    content: &WindowSnapshot,
+#[derive(Debug, Clone, Copy)]
+struct InstalledHostLayoutArgs<'a> {
+    host: &'a WindowSnapshot,
+    content: Option<&'a WindowSnapshot>,
     content_size: Size,
     titlebar_height: f64,
     frame_thickness: f64,
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_installed_host_operation(
+    args: InstalledHostLayoutArgs<'_>,
     operation: HostLayoutOperation,
 ) -> Result<(), Error> {
     match operation {
-        HostLayoutOperation::Resize(anchor) => macos::resize_installed_host(
-            host,
-            content,
-            content_size,
-            titlebar_height,
-            frame_thickness,
-            anchor,
-        ),
-        HostLayoutOperation::Sync => macos::sync_installed_host_layout(
-            host,
-            content,
-            content_size,
-            titlebar_height,
-            frame_thickness,
-        ),
+        HostLayoutOperation::Resize(anchor) => apply_macos_content_resize(args, anchor),
+        HostLayoutOperation::ResizeFrame(anchor) => apply_macos_frame_resize(args, anchor),
+        HostLayoutOperation::Sync => apply_macos_layout_sync(args),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn required_content(content: Option<&WindowSnapshot>) -> Result<&WindowSnapshot, Error> {
+    content.ok_or_else(|| Error::Message("content view is missing".to_string()))
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_content_resize(
+    args: InstalledHostLayoutArgs<'_>,
+    anchor: ResizeAnchor,
+) -> Result<(), Error> {
+    macos::resize_installed_host(
+        args.host,
+        required_content(args.content)?,
+        args.content_size,
+        args.titlebar_height,
+        args.frame_thickness,
+        anchor,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_frame_resize(
+    args: InstalledHostLayoutArgs<'_>,
+    anchor: ResizeAnchor,
+) -> Result<(), Error> {
+    macos::resize_installed_frame_host(
+        args.host,
+        args.content_size,
+        args.titlebar_height,
+        args.frame_thickness,
+        anchor,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_layout_sync(args: InstalledHostLayoutArgs<'_>) -> Result<(), Error> {
+    macos::sync_installed_host_layout(
+        args.host,
+        required_content(args.content)?,
+        args.content_size,
+        args.titlebar_height,
+        args.frame_thickness,
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -531,7 +579,7 @@ fn resize_frame_window_to_layout<T: FrameWindowResizeTarget>(
 #[cfg(not(target_os = "macos"))]
 fn apply_installed_host_layout<T: FrameWindowResizeTarget>(
     host: &WindowSnapshot,
-    content: &WindowSnapshot,
+    content: Option<&WindowSnapshot>,
     content_size: Size,
     titlebar_height: f64,
     frame_thickness: f64,
@@ -539,8 +587,12 @@ fn apply_installed_host_layout<T: FrameWindowResizeTarget>(
     frame_window: Option<T>,
 ) -> Result<(), Error> {
     host.raw_window_handle()?;
-    content.raw_window_handle()?;
-    if let HostLayoutOperation::Resize(anchor) = operation {
+    if let Some(content) = content {
+        content.raw_window_handle()?;
+    }
+    if let HostLayoutOperation::Resize(anchor) | HostLayoutOperation::ResizeFrame(anchor) =
+        operation
+    {
         match anchor {
             ResizeAnchor::Top | ResizeAnchor::Bottom => {}
         }

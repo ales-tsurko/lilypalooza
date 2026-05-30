@@ -19,7 +19,9 @@ impl AppEditorFrame {
         preset_layout: &AppEditorFramePresetLayout,
     ) -> bool {
         let close_rect = preset_layout.close_button;
-        let close = ui.allocate_rect(close_rect, editor_host::egui::Sense::click());
+        let close = ui
+            .allocate_rect(close_rect, editor_host::egui::Sense::click())
+            .on_hover_cursor(editor_host::egui::CursorIcon::PointingHand);
         let (close_background, close_icon) = self.close_button_colors(close.hovered());
         ui.painter().rect_filled(close_rect, 4.0, close_background);
         let icon_rect = close_rect.shrink(6.0);
@@ -77,7 +79,7 @@ impl AppEditorFrame {
         state: &editor_host::EditorHostState,
         preset_layout: &AppEditorFramePresetLayout,
     ) -> Option<editor_host::EditorFrameCommand> {
-        if !state.resizable {
+        if !state.resizable || self.controls_visible() {
             return None;
         }
         if preset_layout.zoom_row.left() < preset_layout.preset_row.right() + 8.0 {
@@ -167,10 +169,11 @@ impl AppEditorFrame {
 
     pub(super) fn header_interactive_rects(
         preset_layout: &AppEditorFramePresetLayout,
-    ) -> [editor_host::egui::Rect; 7] {
+    ) -> [editor_host::egui::Rect; 8] {
         [
             preset_layout.close_button,
             preset_layout.zoom_row,
+            preset_layout.view_toggle,
             preset_layout.preset_row,
             preset_layout.previous,
             preset_layout.next,
@@ -262,7 +265,7 @@ impl AppEditorFrame {
         titlebar: editor_host::egui::Rect,
         state: &editor_host::EditorHostState,
     ) -> AppEditorFramePresetLayout {
-        self.preset_layout_with_zoom(titlebar, state.resizable)
+        self.preset_layout_with_zoom(titlebar, state.resizable && !self.controls_visible())
     }
 
     pub(super) fn preset_layout_with_zoom(
@@ -302,6 +305,24 @@ impl AppEditorFrame {
         } else {
             editor_host::egui::Rect::NOTHING
         };
+        let view_toggle = if self.shows_view_toggle() {
+            let view_right = right_control_left - 8.0;
+            let view_left = view_right - EDITOR_FRAME_VIEW_TOGGLE_WIDTH;
+            editor_host::egui::Rect::from_center_size(
+                editor_host::egui::pos2((view_left + view_right) / 2.0, title_row.center().y),
+                editor_host::egui::vec2(
+                    EDITOR_FRAME_VIEW_TOGGLE_WIDTH,
+                    EDITOR_FRAME_VIEW_TOGGLE_HEIGHT,
+                ),
+            )
+        } else {
+            editor_host::egui::Rect::NOTHING
+        };
+        let right_control_left = if self.shows_view_toggle() {
+            view_toggle.left()
+        } else {
+            right_control_left
+        };
         let preset_max_width = (right_control_left - title_gap - left_inset).max(80.0);
         let preset_width = (titlebar.width() - 176.0)
             .clamp(188.0, 360.0)
@@ -337,11 +358,106 @@ impl AppEditorFrame {
             title_text,
             zoom_row,
             close_button,
+            view_toggle,
             preset_row,
             previous,
             name,
             next,
             browser,
+        }
+    }
+
+    pub(super) fn shows_view_toggle(&self) -> bool {
+        self.native_editor_available && self.generic_controls.is_some()
+    }
+
+    pub(super) fn controls_visible(&self) -> bool {
+        self.controls_visible.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn render_view_toggle(
+        &mut self,
+        ui: &mut editor_host::egui::Ui,
+        layout: &AppEditorFramePresetLayout,
+    ) -> Option<editor_host::EditorFrameCommand> {
+        if layout.view_toggle.is_negative() {
+            return None;
+        }
+        let visible = self.controls_visible();
+        let response = ui
+            .allocate_rect(layout.view_toggle, editor_host::egui::Sense::click())
+            .on_hover_cursor(editor_host::egui::CursorIcon::PointingHand);
+        let background = if response.hovered() {
+            self.style.control_background_hovered
+        } else {
+            self.style.control_background
+        };
+        ui.painter()
+            .rect_filled(layout.view_toggle, 5.0, background);
+        ui.painter().rect_stroke(
+            layout.view_toggle,
+            5.0,
+            editor_host::egui::Stroke::new(self.border_width, self.style.border_color),
+            editor_host::egui::StrokeKind::Inside,
+        );
+        if visible {
+            ui.painter().text(
+                layout.view_toggle.center(),
+                editor_host::egui::Align2::CENTER_CENTER,
+                "Native",
+                editor_host::egui::FontId::proportional(ui_style::FONT_SIZE_UI_XS as f32),
+                self.style.title_color,
+            );
+        } else {
+            let icon_rect = editor_host::egui::Rect::from_center_size(
+                editor_host::egui::pos2(
+                    layout.view_toggle.left() + 16.0,
+                    layout.view_toggle.center().y,
+                ),
+                editor_host::egui::vec2(EDITOR_FRAME_ICON_SIZE, EDITOR_FRAME_ICON_SIZE),
+            );
+            self.paint_icon(
+                ui,
+                icon_rect,
+                AppEditorFrameIcon::Sliders,
+                self.style.title_color,
+            );
+            ui.painter().text(
+                editor_host::egui::pos2(
+                    layout.view_toggle.left() + 28.0,
+                    layout.view_toggle.center().y,
+                ),
+                editor_host::egui::Align2::LEFT_CENTER,
+                "Controls",
+                editor_host::egui::FontId::proportional(ui_style::FONT_SIZE_UI_XS as f32),
+                self.style.title_color,
+            );
+        }
+        response.clicked().then(|| {
+            let next_visible = !visible;
+            editor_host::EditorFrameCommand::SetControlsVisible(next_visible)
+        })
+    }
+
+    pub(super) fn render_generic_controls(
+        &mut self,
+        ui: &mut editor_host::egui::Ui,
+        frame_rect: editor_host::egui::Rect,
+        state: &editor_host::EditorHostState,
+    ) {
+        if !self.controls_visible() {
+            return;
+        }
+        let content_top = frame_rect.top() + Self::chrome_height(state) as f32;
+        let content_rect = editor_host::egui::Rect::from_min_max(
+            editor_host::egui::pos2(frame_rect.left() + self.frame_thickness as f32, content_top),
+            editor_host::egui::pos2(
+                frame_rect.right() - self.frame_thickness as f32,
+                frame_rect.bottom() - self.frame_thickness as f32,
+            ),
+        );
+        if let Some(generic_controls) = self.generic_controls.as_mut() {
+            generic_controls.render(ui, content_rect, &self.style);
         }
     }
 
@@ -398,7 +514,9 @@ impl AppEditorFrame {
         let previous =
             self.preset_segment_button(ui, layout.previous, AppEditorFrameIcon::ChevronLeft);
         let next = self.preset_segment_button(ui, layout.next, AppEditorFrameIcon::ChevronRight);
-        let name = ui.allocate_rect(layout.name, editor_host::egui::Sense::click());
+        let name = ui
+            .allocate_rect(layout.name, editor_host::egui::Sense::click())
+            .on_hover_cursor(editor_host::egui::CursorIcon::PointingHand);
         AppEditorFramePresetControls {
             previous,
             name,
@@ -497,7 +615,9 @@ impl AppEditorFrame {
     ) -> editor_host::egui::Response {
         let response = match kind {
             PresetIconButtonKind::Segment => {
-                let response = ui.allocate_rect(rect, editor_host::egui::Sense::click());
+                let response = ui
+                    .allocate_rect(rect, editor_host::egui::Sense::click())
+                    .on_hover_cursor(editor_host::egui::CursorIcon::PointingHand);
                 if response.hovered() {
                     ui.painter().rect_filled(
                         rect.shrink(1.0),
@@ -653,10 +773,16 @@ impl AppEditorFrame {
         row_width: f32,
         row_height: f32,
     ) -> (editor_host::egui::Rect, editor_host::egui::Response) {
-        ui.allocate_exact_size(
+        let (rect, response) = ui.allocate_exact_size(
             editor_host::egui::vec2(row_width, row_height),
             preset_browser_item_sense(mode),
-        )
+        );
+        let response = if mode == PresetBrowserItemMode::Normal {
+            response.on_hover_cursor(editor_host::egui::CursorIcon::PointingHand)
+        } else {
+            response
+        };
+        (rect, response)
     }
 
     pub(super) fn paint_preset_browser_item_background(
@@ -906,7 +1032,9 @@ impl AppEditorFrame {
         ui: &mut editor_host::egui::Ui,
         rect: editor_host::egui::Rect,
     ) -> editor_host::egui::Response {
-        let response = ui.allocate_rect(rect, editor_host::egui::Sense::click());
+        let response = ui
+            .allocate_rect(rect, editor_host::egui::Sense::click())
+            .on_hover_cursor(editor_host::egui::CursorIcon::PointingHand);
         let fill = if response.hovered() {
             self.style.control_background_hovered
         } else {

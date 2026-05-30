@@ -130,6 +130,33 @@ pub struct ParameterDescriptor {
     pub default: f32,
 }
 
+/// Owned runtime parameter description for generic host controls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParameterInfo {
+    /// Stable parameter identifier understood by the processor controller.
+    pub id: String,
+    /// User-visible parameter name.
+    pub name: String,
+    /// Default parameter value in normalized `[0, 1]`.
+    pub default: f32,
+    /// Whether host automation/edit gestures are meaningful for this parameter.
+    pub automatable: bool,
+    /// Whether the host should render the parameter as read-only.
+    pub readonly: bool,
+}
+
+impl From<&ParameterDescriptor> for ParameterInfo {
+    fn from(parameter: &ParameterDescriptor) -> Self {
+        Self {
+            id: parameter.id.to_string(),
+            name: parameter.name.to_string(),
+            default: parameter.default,
+            automatable: true,
+            readonly: false,
+        }
+    }
+}
+
 /// Default editor size in logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EditorSize {
@@ -194,6 +221,14 @@ pub enum ControllerError {
 pub trait Controller: Send {
     /// Returns the static processor descriptor.
     fn descriptor(&self) -> &'static ProcessorDescriptor;
+    /// Returns runtime parameter metadata for generic host controls.
+    fn parameters(&self) -> Vec<ParameterInfo> {
+        self.descriptor()
+            .params
+            .iter()
+            .map(ParameterInfo::from)
+            .collect()
+    }
     /// Reads one parameter as normalized `[0, 1]`.
     fn get_param(&self, id: &str) -> Result<f32, ControllerError>;
     /// Sets one parameter from normalized `[0, 1]`.

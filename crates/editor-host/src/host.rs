@@ -202,6 +202,12 @@ pub(crate) fn same_size(a: Size, b: Size) -> bool {
     (a.width - b.width).abs() < 0.5 && (a.height - b.height).abs() < 0.5
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstalledContentResizeMode {
+    NativeContent,
+    FrameOnly,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Size {
     pub width: f64,
@@ -285,6 +291,7 @@ pub enum EditorFrameCommand {
     DeletePreset(String),
     SavePreset,
     TogglePresetBrowser,
+    SetControlsVisible(bool),
 }
 
 pub trait EditorFrame {
@@ -409,6 +416,22 @@ impl InstalledHost {
         }
     }
 
+    pub fn set_native_content_resize_tracking_enabled(&self, enabled: bool) -> Result<(), Error> {
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(observer) = &self.native_content_resize_observer {
+                observer.set_enabled(enabled, &self.content)
+            } else {
+                Ok(())
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = enabled;
+            self.content.raw_window_handle().map(|_| ())
+        }
+    }
+
     #[must_use]
     pub fn close_requested(&self) -> bool {
         self.close_requested.load(Ordering::Relaxed)
@@ -423,14 +446,14 @@ impl InstalledHost {
             *current = preset;
         }
         if self.frame_window.is_some()
-            && let Err(error) = resize_installed_host(
+            && let Err(error) = resize_installed_host_layout(
                 &self.host,
-                &self.content,
+                Some(&self.content),
                 self.content_size(),
                 self.titlebar_height(),
                 self.frame_thickness,
                 self.frame_window.as_mut(),
-                ResizeAnchor::Bottom,
+                HostLayoutOperation::Resize(ResizeAnchor::Bottom),
             )
         {
             trace_editor_host(|| format!("installed-host preset chrome resize failed: {error}"));
@@ -459,6 +482,10 @@ impl InstalledHost {
 
     pub fn resize_content_from_top(&mut self, content_size: Size) -> Result<(), Error> {
         self.resize_content_with_anchor(content_size, ResizeAnchor::Top)
+    }
+
+    pub fn resize_frame_content_from_top(&mut self, content_size: Size) -> Result<(), Error> {
+        self.resize_frame_content_with_anchor(content_size, ResizeAnchor::Top)
     }
 
     /// Accepts a user-driven outer window resize without writing the same size back to the native
@@ -524,13 +551,33 @@ impl InstalledHost {
         content_size: Size,
         anchor: ResizeAnchor,
     ) -> Result<(), Error> {
+        self.resize_installed_content(
+            content_size,
+            anchor,
+            InstalledContentResizeMode::NativeContent,
+        )
+    }
+
+    fn resize_frame_content_with_anchor(
+        &mut self,
+        content_size: Size,
+        anchor: ResizeAnchor,
+    ) -> Result<(), Error> {
+        self.resize_installed_content(content_size, anchor, InstalledContentResizeMode::FrameOnly)
+    }
+
+    fn resize_installed_content(
+        &mut self,
+        content_size: Size,
+        anchor: ResizeAnchor,
+        mode: InstalledContentResizeMode,
+    ) -> Result<(), Error> {
         let current = self.content_size();
         if same_size(current, content_size) {
             trace_editor_host(|| {
                 format!(
-                    "installed-host resize_content ignored same size current={:?} requested={:?} \
-                     anchor={anchor:?}",
-                    current, content_size
+                    "installed-host resize_content ignored same size mode={mode:?} \
+                     current={current:?} requested={content_size:?} anchor={anchor:?}"
                 )
             });
             return Ok(());
@@ -540,27 +587,38 @@ impl InstalledHost {
         if self.frame_window.is_none() {
             trace_editor_host(|| {
                 format!(
-                    "installed-host resize_content stored without frame current={previous:?} \
-                     requested={content_size:?} anchor={anchor:?}"
+                    "installed-host resize_content stored without frame mode={mode:?} \
+                     current={previous:?} requested={content_size:?} anchor={anchor:?}"
                 )
             });
             return Ok(());
         }
         trace_editor_host(|| {
             format!(
-                "installed-host resize_content applying current={previous:?} \
+                "installed-host resize_content applying mode={mode:?} current={previous:?} \
                  requested={content_size:?} anchor={anchor:?}"
             )
         });
-        resize_installed_host(
-            &self.host,
-            &self.content,
-            self.content_size(),
-            self.titlebar_height(),
-            self.frame_thickness,
-            self.frame_window.as_mut(),
-            anchor,
-        )
+        match mode {
+            InstalledContentResizeMode::NativeContent => resize_installed_host_layout(
+                &self.host,
+                Some(&self.content),
+                self.content_size(),
+                self.titlebar_height(),
+                self.frame_thickness,
+                self.frame_window.as_mut(),
+                HostLayoutOperation::Resize(anchor),
+            ),
+            InstalledContentResizeMode::FrameOnly => resize_installed_host_layout(
+                &self.host,
+                None,
+                self.content_size(),
+                self.titlebar_height(),
+                self.frame_thickness,
+                self.frame_window.as_mut(),
+                HostLayoutOperation::ResizeFrame(anchor),
+            ),
+        }
     }
 
     fn set_content_size(&mut self, content_size: Size) {
@@ -662,6 +720,17 @@ impl InstalledHost {
         }
     }
 
+    pub fn set_content_visible(&mut self, visible: bool) -> Result<(), Error> {
+        #[cfg(target_os = "macos")]
+        {
+            set_content_view_visible(&self.content, visible)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.content.raw_window_handle().map(|_| ())
+        }
+    }
+
     pub fn set_title(&mut self, title: impl Into<String>) -> Result<(), Error> {
         let title = title.into();
         if let Ok(mut current) = self.title.lock() {
@@ -707,14 +776,14 @@ impl InstalledHostResizeHandle {
                  requested={content_size:?} anchor={anchor:?}"
             )
         });
-        resize_installed_host(
+        resize_installed_host_layout(
             &self.host,
-            &self.content,
+            Some(&self.content),
             content_size,
             self.titlebar_height(),
             self.frame_thickness,
             self.frame_window.as_ref(),
-            anchor,
+            HostLayoutOperation::Resize(anchor),
         )
     }
 

@@ -14,8 +14,10 @@ use std::{
 use clap_sys::{
     audio_buffer::clap_audio_buffer,
     events::{
-        CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_IS_LIVE, CLAP_EVENT_MIDI, clap_event_header,
-        clap_event_midi, clap_input_events, clap_output_events,
+        CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_IS_LIVE, CLAP_EVENT_MIDI,
+        CLAP_EVENT_PARAM_GESTURE_BEGIN, CLAP_EVENT_PARAM_GESTURE_END, CLAP_EVENT_PARAM_VALUE,
+        clap_event_header, clap_event_midi, clap_event_param_gesture, clap_event_param_value,
+        clap_input_events, clap_output_events,
     },
     ext::{
         gui::{
@@ -23,7 +25,10 @@ use clap_sys::{
             CLAP_WINDOW_API_X11, clap_host_gui, clap_plugin_gui, clap_window, clap_window_handle,
         },
         latency::{CLAP_EXT_LATENCY, clap_host_latency, clap_plugin_latency},
-        params::{CLAP_EXT_PARAMS, clap_host_params, clap_plugin_params},
+        params::{
+            CLAP_EXT_PARAMS, CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_HIDDEN,
+            CLAP_PARAM_IS_READONLY, clap_host_params, clap_param_info, clap_plugin_params,
+        },
         state::{CLAP_EXT_STATE, clap_host_state, clap_plugin_state},
     },
     factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory},

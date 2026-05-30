@@ -1468,7 +1468,6 @@ fn engine_renders_audio_for_four_track_midi_with_tempo_track() {
     let (backend, backend_handle) = SharedTestBackend::new(44_100, 64, 2);
     let mut engine = AudioEngine::start(MixerState::new(), backend, AudioEngineOptions::default())
         .expect("engine should start");
-    let _audio = backend_handle.start_realtime();
 
     {
         let mut mixer = engine.mixer();
@@ -1489,15 +1488,8 @@ fn engine_renders_audio_for_four_track_midi_with_tempo_track() {
         .expect("midi should load");
     engine.transport().play();
 
-    for _ in 0..1024 {
-        backend_handle.process_block();
-        if backend_handle.output_has_signal() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(2));
-    }
-
-    panic!(
+    assert!(
+        wait_for_backend_signal(&backend_handle, 1024),
         "engine four-track end-to-end path produced silence; debug state: {:?}",
         engine.sequencer.debug_state()
     );

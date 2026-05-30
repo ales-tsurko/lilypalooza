@@ -317,6 +317,48 @@ fn processor_editor_window_manager_polls_requested_editor_resize() {
 }
 
 #[test]
+fn processor_editor_window_manager_skips_requested_editor_resize_while_controls_visible() {
+    let mut manager = EditorWindowManager::default();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let target = EditorTarget {
+        strip_index: 1,
+        slot_index: 0,
+    };
+    let window_id = window::Id::unique();
+    manager.begin_open(
+        target,
+        "Track 1".to_string(),
+        true,
+        Box::new(RequestedSizeEditorSession {
+            calls: Arc::clone(&calls),
+        }),
+        window_id,
+    );
+    manager
+        .attach(
+            window_id,
+            None,
+            EditorParent {
+                window: iced::window::raw_window_handle::RawWindowHandle::AppKit(
+                    iced::window::raw_window_handle::AppKitWindowHandle::new(std::ptr::NonNull::<
+                        std::ffi::c_void,
+                    >::dangling(
+                    )),
+                ),
+                display: None,
+            },
+        )
+        .expect("attach should succeed");
+    manager.set_controls_visible(target, true);
+
+    let mut errors = Vec::new();
+    manager.apply_requested_content_resizes(|error| errors.push(error));
+
+    assert!(errors.is_empty());
+    assert_eq!(calls.load(Ordering::Acquire), 0);
+}
+
+#[test]
 fn processor_editor_resize_negotiation_uses_session_accepted_size() {
     let requested = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut session = AdjustingResizeEditorSession {

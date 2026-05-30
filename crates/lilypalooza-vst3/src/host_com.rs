@@ -794,6 +794,72 @@ impl Vst3RuntimeInner {
         unsafe { self.processor.getLatencySamples() }
     }
 
+    pub(super) fn parameters(&self) -> Vec<lilypalooza_audio::ParameterInfo> {
+        let Some(controller) = self.controller.as_ref() else {
+            return self
+                .descriptor
+                .params
+                .iter()
+                .map(lilypalooza_audio::ParameterInfo::from)
+                .collect();
+        };
+        // SAFETY: Controller is initialized and owned by this runtime.
+        let count = unsafe { controller.getParameterCount() }.max(0);
+        let mut parameters = Vec::new();
+        for index in 0..count {
+            let mut info = std::mem::MaybeUninit::<ParameterInfo>::zeroed();
+            // SAFETY: `info` points to writable storage for the VST3 parameter info result.
+            let result = unsafe { controller.getParameterInfo(index, info.as_mut_ptr()) };
+            if result != kResultOk {
+                continue;
+            }
+            // SAFETY: VST3 returned success and initialized the output struct.
+            let info = unsafe { info.assume_init() };
+            if info.flags & ParameterInfo_::ParameterFlags_::kIsHidden != 0 {
+                continue;
+            }
+            let name = tchar_array_to_string(&info.title);
+            parameters.push(lilypalooza_audio::ParameterInfo {
+                id: info.id.to_string(),
+                name: if name.is_empty() {
+                    format!("Parameter {}", info.id)
+                } else {
+                    name
+                },
+                default: normalized_f64_to_f32(info.defaultNormalizedValue),
+                automatable: info.flags & ParameterInfo_::ParameterFlags_::kCanAutomate != 0,
+                readonly: info.flags & ParameterInfo_::ParameterFlags_::kIsReadOnly != 0,
+            });
+        }
+        parameters
+    }
+
+    pub(super) fn get_param(&self, id: ParamID) -> Result<f32, ControllerError> {
+        let Some(controller) = self.controller.as_ref() else {
+            return Err(ControllerError::UnknownParameter(id.to_string()));
+        };
+        // SAFETY: Controller is initialized and owned by this runtime.
+        Ok(normalized_f64_to_f32(unsafe {
+            controller.getParamNormalized(id)
+        }))
+    }
+
+    pub(super) fn set_param(&self, id: ParamID, normalized: f32) -> Result<(), ControllerError> {
+        let Some(controller) = self.controller.as_ref() else {
+            return Err(ControllerError::UnknownParameter(id.to_string()));
+        };
+        // SAFETY: Controller is initialized and owned by this runtime.
+        let result =
+            unsafe { controller.setParamNormalized(id, f64::from(normalized.clamp(0.0, 1.0))) };
+        if result == kResultOk {
+            Ok(())
+        } else {
+            Err(ControllerError::Backend(format!(
+                "VST3 setParamNormalized({id}) failed: {result}"
+            )))
+        }
+    }
+
     pub(super) fn save_state(&mut self) -> Result<ProcessorState, ControllerError> {
         Ok(ProcessorState::default())
     }
@@ -902,5 +968,13 @@ impl Vst3RuntimeInner {
         log_vst3_lifecycle_result("prepare_destroy component.terminate", unsafe {
             self.component.terminate()
         });
+    }
+}
+
+pub(super) fn normalized_f64_to_f32(value: f64) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0) as f32
+    } else {
+        0.0
     }
 }

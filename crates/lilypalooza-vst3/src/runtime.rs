@@ -7,6 +7,11 @@ pub(super) fn log_vst3_lifecycle_result(operation: &str, result: tresult) {
     }
 }
 
+pub(super) fn parse_vst3_param_id(id: &str) -> Result<ParamID, ControllerError> {
+    id.parse::<ParamID>()
+        .map_err(|_error| ControllerError::UnknownParameter(id.to_string()))
+}
+
 pub(super) fn connect_component_and_controller(
     component: &ComPtr<IComponent>,
     controller: Option<&ComPtr<IEditController>>,
@@ -374,12 +379,27 @@ impl Controller for Vst3Controller {
             .descriptor
     }
 
-    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
-        Err(ControllerError::UnknownParameter(id.to_string()))
+    fn parameters(&self) -> Vec<lilypalooza_audio::ParameterInfo> {
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .parameters()
     }
 
-    fn set_param(&self, id: &str, _normalized: f32) -> Result<(), ControllerError> {
-        Err(ControllerError::UnknownParameter(id.to_string()))
+    fn get_param(&self, id: &str) -> Result<f32, ControllerError> {
+        let param_id = parse_vst3_param_id(id)?;
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_param(param_id)
+    }
+
+    fn set_param(&self, id: &str, normalized: f32) -> Result<(), ControllerError> {
+        let param_id = parse_vst3_param_id(id)?;
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_param(param_id, normalized)
     }
 
     fn save_state(&self) -> Result<ProcessorState, ControllerError> {

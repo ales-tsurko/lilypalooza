@@ -27,9 +27,9 @@ pub use instrument::{
     BUILTIN_GAIN_ID, BUILTIN_METRONOME_ID, BUILTIN_NONE_ID, BUILTIN_SOUNDFONT_ID, Controller,
     ControllerError, EditorDescriptor, EditorError, EditorParent, EditorResizeHandler,
     EditorSession, EditorSize, EffectProcessor, EffectRuntimeHandle, InstrumentProcessor,
-    InstrumentRuntimeHandle, MidiEvent, ParameterDescriptor, Processor, ProcessorDescriptor,
-    ProcessorKind, ProcessorState, ProcessorStateError, SharedAudioValue, SlotState,
-    SmoothedAudioValue,
+    InstrumentRuntimeHandle, MidiEvent, ParameterDescriptor, ParameterInfo, Processor,
+    ProcessorDescriptor, ProcessorKind, ProcessorState, ProcessorStateError, SharedAudioValue,
+    SlotState, SmoothedAudioValue,
 };
 pub use mixer::{
     BusId, BusSend, INSTRUMENT_TRACK_COUNT, MixerError, MixerHandle, MixerState, SlotAddress,

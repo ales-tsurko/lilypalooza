@@ -261,6 +261,47 @@ pub fn resize_installed_host(
     Ok(())
 }
 
+pub fn resize_installed_frame_host(
+    host: &WindowSnapshot,
+    content_size: Size,
+    titlebar_height: f64,
+    frame_thickness: f64,
+    anchor: ResizeAnchor,
+) -> Result<(), Error> {
+    let layout = crate::host_layout(
+        content_size.width,
+        content_size.height,
+        titlebar_height,
+        frame_thickness,
+    );
+    let host_view = ns_view_from_snapshot(host)?;
+    let host_window = host_view
+        .window()
+        .ok_or_else(|| Error::Message("host window is missing".to_string()))?;
+    let before_window_frame = host_window.frame();
+    let before_host_frame = host_view.frame();
+    without_implicit_layer_animations(|| {
+        resize_host_window_clamped_to_screen(
+            &host_window,
+            layout.outer_width,
+            layout.outer_height,
+            anchor,
+        );
+        host_view.setFrameSize(NSSize::new(layout.outer_width, layout.outer_height));
+    });
+    trace_editor_host(|| {
+        format!(
+            "macos resize_installed_frame_host anchor={anchor:?} content={content_size:?} window \
+             {} -> {} host_frame {} -> {}",
+            format_rect(before_window_frame),
+            format_rect(host_window.frame()),
+            format_rect(before_host_frame),
+            format_rect(host_view.frame())
+        )
+    });
+    Ok(())
+}
+
 pub fn sync_installed_host_layout(
     host: &WindowSnapshot,
     content: &WindowSnapshot,
@@ -326,8 +367,15 @@ pub struct NativeContentResizeObserver {
 
 impl NativeContentResizeObserver {
     pub fn enable(&self, content: &WindowSnapshot) -> Result<(), Error> {
-        self.enabled.store(true, Ordering::Release);
-        enable_embedded_content_resize_notifications(content)
+        self.set_enabled(true, content)
+    }
+
+    pub fn set_enabled(&self, enabled: bool, content: &WindowSnapshot) -> Result<(), Error> {
+        self.enabled.store(enabled, Ordering::Release);
+        if enabled {
+            enable_embedded_content_resize_notifications(content)?;
+        }
+        Ok(())
     }
 }
 
@@ -468,14 +516,14 @@ fn apply_embedded_content_resize(context: &NativeContentResizeContext) {
     trace_editor_host(|| {
         format!("macos embedded content resize apply current={current:?} measured={measured:?}")
     });
-    if let Err(error) = crate::resize_installed_host(
+    if let Err(error) = crate::resize_installed_host_layout(
         &context.host,
-        &context.content,
+        Some(&context.content),
         measured,
         titlebar_height,
         context.frame_thickness,
         context.frame_window.as_ref(),
-        ResizeAnchor::Top,
+        crate::HostLayoutOperation::Resize(ResizeAnchor::Top),
     ) {
         trace_editor_host(|| format!("macos embedded content notification resize failed: {error}"));
     }
@@ -575,6 +623,12 @@ pub fn set_host_window_visible(host: &WindowSnapshot, visible: bool) -> Result<(
         host_window.orderOut(None);
     }
 
+    Ok(())
+}
+
+pub fn set_content_view_visible(content: &WindowSnapshot, visible: bool) -> Result<(), Error> {
+    let content_view = ns_view_from_snapshot(content)?;
+    content_view.setHidden(!visible);
     Ok(())
 }
 
