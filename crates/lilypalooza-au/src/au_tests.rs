@@ -91,6 +91,26 @@ fn au_probe_ignores_unsupported_component_types() {
 }
 
 #[test]
+fn au_registry_entry_exposes_native_editor_descriptor() {
+    let entry = registry_entry_for_plugin(AuPluginMetadata {
+        processor_id: "au:/Plug/Test.component#aumu-Tst1-Acme".to_string(),
+        component: AuComponentId {
+            component_type: probe::test_fourcc("aumu"),
+            component_subtype: probe::test_fourcc("Tst1"),
+            component_manufacturer: probe::test_fourcc("Acme"),
+        },
+        name: "Acme Synth".to_string(),
+        vendor: Some("Acme".to_string()),
+        version: Some("1.0.0".to_string()),
+        role: registry::Role::Instrument,
+        path: Path::new("/Plug/Test.component").to_path_buf(),
+    });
+
+    let editor = entry.descriptor.editor.expect("native editor descriptor");
+    assert!(!editor.resizable);
+}
+
+#[test]
 fn stable_processor_id_uses_component_codes() {
     let id = stable_processor_id(
         Path::new("/Plug/Test.component"),

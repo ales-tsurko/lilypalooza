@@ -428,6 +428,11 @@ mod tests {
             ),
             &state
         ));
+        assert!(editor_host::EditorFrame::should_begin_window_drag(
+            &frame,
+            layout.title_text.center(),
+            &state
+        ));
         assert!(!editor_host::EditorFrame::should_begin_window_drag(
             &frame,
             layout.preset_row.center(),

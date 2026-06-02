@@ -17,6 +17,7 @@ use lilypalooza_audio::{
 };
 use serde::{Deserialize, Serialize};
 
+mod editor;
 mod probe;
 mod runtime;
 
@@ -60,7 +61,7 @@ fn registry_entry_for_plugin(plugin: AuPluginMetadata) -> registry::Entry {
     let descriptor = Box::leak(Box::new(ProcessorDescriptor {
         name: Box::leak(plugin.name.clone().into_boxed_str()),
         params: &[],
-        editor: None,
+        editor: Some(editor::DEFAULT_AU_EDITOR_DESCRIPTOR),
     }));
     let runtime = match plugin.role {
         registry::Role::Instrument => registry::RuntimeFactory::Instrument(create_au_instrument),
@@ -250,7 +251,7 @@ impl Controller for AuController {
     fn create_editor_session(
         &self,
     ) -> Result<Option<Box<dyn lilypalooza_audio::EditorSession>>, EditorError> {
-        Ok(None)
+        editor::create_editor_session(self.shared.clone())
     }
 }
 

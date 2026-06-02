@@ -497,14 +497,19 @@ impl Lilypalooza {
             descriptor.is_some(),
             native_session.is_some()
         );
-        let descriptor = descriptor.unwrap_or(lilypalooza_audio::EditorDescriptor {
+        let generic_descriptor = lilypalooza_audio::EditorDescriptor {
             default_size: crate::app::GENERIC_CONTROLLER_DEFAULT_SIZE,
             min_size: Some(lilypalooza_audio::EditorSize {
                 width: 320,
                 height: 220,
             }),
             resizable: true,
-        });
+        };
+        let descriptor = if native_editor_available {
+            descriptor.unwrap_or(generic_descriptor)
+        } else {
+            generic_descriptor
+        };
         let controls_visible =
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(!native_editor_available));
         let session = native_session.unwrap_or_else(|| {

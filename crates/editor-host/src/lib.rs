@@ -26,8 +26,8 @@ mod tests {
     };
 
     use super::{
-        EditorFrame, EditorFrameAction, EditorHostOptions, EditorHostState, Size, WindowSnapshot,
-        host_layout,
+        EditorFrame, EditorFrameAction, EditorHostOptions, EditorHostState,
+        MIN_FRAME_CONTENT_WIDTH, Size, WindowSnapshot, host_layout,
     };
 
     fn assert_f64_close(actual: f64, expected: f64) {
@@ -90,6 +90,17 @@ mod tests {
     }
 
     #[test]
+    fn host_layout_keeps_tiny_content_inside_minimum_width_frame() {
+        let layout = host_layout(1.0, 1.0, 34.0, 2.0);
+
+        assert_f64_close(layout.outer_width, MIN_FRAME_CONTENT_WIDTH + 4.0);
+        assert_f64_close(layout.outer_height, 39.0);
+        assert_f64_close(layout.content.width, MIN_FRAME_CONTENT_WIDTH);
+        assert_f64_close(layout.content.height, 1.0);
+        assert_f64_close(layout.titlebar.width, MIN_FRAME_CONTENT_WIDTH);
+    }
+
+    #[test]
     fn content_size_from_outer_size_removes_frame_and_titlebar() {
         assert_eq!(
             super::content_size_from_outer_size(
@@ -103,6 +114,24 @@ mod tests {
             Size {
                 width: 820.0,
                 height: 456.0,
+            }
+        );
+    }
+
+    #[test]
+    fn content_size_from_outer_size_keeps_minimum_width() {
+        assert_eq!(
+            super::content_size_from_outer_size(
+                Size {
+                    width: 5.0,
+                    height: 39.0,
+                },
+                34.0,
+                2.0,
+            ),
+            Size {
+                width: MIN_FRAME_CONTENT_WIDTH,
+                height: 1.0,
             }
         );
     }

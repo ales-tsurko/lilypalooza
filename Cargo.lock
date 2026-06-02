@@ -3093,12 +3093,15 @@ dependencies = [
 name = "lilypalooza-au"
 version = "0.1.0"
 dependencies = [
- "core-foundation 0.9.4",
  "coreaudio-sys",
  "lilypalooza-audio",
  "log",
  "num-traits",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "plist",
+ "raw-window-handle 0.6.2",
  "serde",
  "serde_json",
  "tempfile",

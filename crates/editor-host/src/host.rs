@@ -136,6 +136,8 @@ pub struct EditorFrameLayout {
     pub content: Rect,
 }
 
+pub const MIN_FRAME_CONTENT_WIDTH: f64 = 360.0;
+
 #[must_use]
 pub fn host_layout(
     content_width: f64,
@@ -145,7 +147,8 @@ pub fn host_layout(
 ) -> EditorFrameLayout {
     let frame = frame_thickness.max(0.0);
     let titlebar_height = titlebar_height.max(20.0);
-    let outer_width = content_width + frame * 2.0;
+    let content_slot_width = content_width.max(MIN_FRAME_CONTENT_WIDTH);
+    let outer_width = content_slot_width + frame * 2.0;
     let outer_height = content_height + titlebar_height + frame * 2.0;
 
     EditorFrameLayout {
@@ -154,13 +157,13 @@ pub fn host_layout(
         titlebar: Rect {
             x: frame,
             y: frame + content_height,
-            width: content_width,
+            width: content_slot_width,
             height: titlebar_height,
         },
         content: Rect {
             x: frame,
             y: frame,
-            width: content_width,
+            width: content_slot_width,
             height: content_height,
         },
     }
@@ -175,7 +178,7 @@ pub fn content_size_from_outer_size(
     let frame = frame_thickness.max(0.0);
     let titlebar_height = titlebar_height.max(20.0);
     Size {
-        width: (outer_size.width - frame * 2.0).max(1.0),
+        width: (outer_size.width - frame * 2.0).max(MIN_FRAME_CONTENT_WIDTH),
         height: (outer_size.height - titlebar_height - frame * 2.0).max(1.0),
     }
 }

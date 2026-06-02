@@ -83,6 +83,43 @@ pub(super) fn open_processor_editor_without_native_session_opens_generic_control
 }
 
 #[test]
+pub(super) fn open_processor_editor_with_unavailable_native_session_uses_generic_window() {
+    let mut app = test_app();
+    let target = EditorTarget {
+        strip_index: 1,
+        slot_index: 0,
+    };
+
+    let _discarded = app.open_editor(
+        target,
+        "Track 1".to_string(),
+        Some(lilypalooza_audio::EditorDescriptor {
+            default_size: EditorSize {
+                width: 900,
+                height: 700,
+            },
+            min_size: None,
+            resizable: false,
+        }),
+        Ok(None),
+        crate::app::processor_editor_windows::empty_editor_controller(),
+    );
+    let window_id = app
+        .processor_editor_windows
+        .window_for_target(target)
+        .expect("generic fallback editor should have a pending window");
+
+    assert_eq!(
+        app.processor_editor_windows.editor_view_state(target),
+        Some((false, true))
+    );
+    assert_eq!(
+        app.processor_editor_windows.window_resizable(window_id),
+        Some(true)
+    );
+}
+
+#[test]
 pub(super) fn generic_processor_editor_close_hides_window_for_reopen() {
     let mut app = test_app();
     let target = EditorTarget {

@@ -207,6 +207,24 @@ impl AuRuntime {
         .unwrap_or(0)
     }
 
+    pub(super) fn raw_unit(&self) -> coreaudio_sys::AudioUnit {
+        self.unit
+    }
+
+    pub(super) fn has_native_editor(&self) -> bool {
+        property_size(
+            self.unit,
+            coreaudio_sys::kAudioUnitProperty_CocoaUI,
+            coreaudio_sys::kAudioUnitScope_Global,
+            0,
+        )
+        .is_ok_and(|size| {
+            usize::try_from(size).is_ok_and(|size| {
+                size >= std::mem::size_of::<coreaudio_sys::AudioUnitCocoaViewInfo>()
+            })
+        })
+    }
+
     pub fn render_instrument(
         &mut self,
         left: &mut [f32],
@@ -478,6 +496,10 @@ impl AuRuntime {
 
     pub fn latency_samples(&self) -> u32 {
         0
+    }
+
+    pub(super) fn has_native_editor(&self) -> bool {
+        false
     }
 
     pub fn render_instrument(
@@ -881,7 +903,7 @@ fn get_property_into<T>(
 }
 
 #[cfg(target_os = "macos")]
-fn property_size(
+pub(super) fn property_size(
     unit: coreaudio_sys::AudioUnit,
     property: u32,
     scope: u32,
@@ -904,7 +926,10 @@ fn property_size(
 }
 
 #[cfg(target_os = "macos")]
-fn core_audio_status(operation: &'static str, status: i32) -> Result<(), AuRuntimeError> {
+pub(super) fn core_audio_status(
+    operation: &'static str,
+    status: i32,
+) -> Result<(), AuRuntimeError> {
     if status == 0 {
         Ok(())
     } else {
