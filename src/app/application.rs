@@ -157,6 +157,7 @@ pub(super) struct Lilypalooza {
     pub(super) compile_session: Option<lilypond::CompileSession>,
     pub(super) playback: Option<AudioEngine>,
     pub(super) soundfont_status: SoundfontStatus,
+    pub(super) lilypond_settings: settings::LilypondSettings,
     pub(super) playback_settings: settings::PlaybackSettings,
     pub(super) plugin_search_paths: Vec<settings::PluginSearchPath>,
     pub(super) plugin_scan: lilypalooza_plugin_scan::PluginScanState,
@@ -739,6 +740,7 @@ pub(super) fn new_with_loaded_state(
         compile_session: None,
         playback,
         soundfont_status: SoundfontStatus::NotSelected,
+        lilypond_settings: stored_settings.lilypond.clone(),
         playback_settings: stored_settings.playback.clone(),
         plugin_search_paths: stored_settings.plugin_search_paths(),
         plugin_scan: lilypalooza_plugin_scan::PluginScanState::default(),
@@ -896,10 +898,14 @@ pub(super) fn new_with_loaded_state(
         stored_state.has_clean_untitled_editor_tab,
     );
 
+    let lilypond_settings = app.lilypond_settings.clone();
     let mut startup_tasks = vec![
         open_main_window.map(|_| Message::Noop),
         Task::perform(
-            async { lilypond::check_lilypond().map_err(|error| error.to_string()) },
+            async move {
+                lilypond::check_lilypond_executable(lilypond_settings.executable.as_deref())
+                    .map_err(|error| error.to_string())
+            },
             Message::StartupChecked,
         ),
     ];

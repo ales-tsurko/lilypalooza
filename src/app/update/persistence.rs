@@ -334,6 +334,7 @@ impl Lilypalooza {
                 editor_view: self.editor.view_settings(),
                 editor_theme: self.editor.theme_settings(),
                 editor_recent_files_limit: self.editor_recent_files_limit,
+                lilypond: self.lilypond_settings.clone(),
                 playback: self.playback_settings.clone(),
                 au_search_paths,
                 clap_search_paths,

@@ -1,7 +1,7 @@
 use std::{
     fmt,
     io::{self, BufRead, BufReader, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
     thread,
@@ -11,22 +11,23 @@ use thiserror::Error;
 
 /// LilyPond executable name looked up in `PATH`.
 pub const LILYPOND_BIN: &str = "lilypond";
-/// Minimum supported LilyPond version used by [`check_lilypond`].
+/// Minimum supported LilyPond version used by [`check_lilypond_executable`].
 pub const MIN_LILYPOND_VERSION: Version = Version::new(2, 24, 0);
 
-/// Checks that LilyPond is installed and satisfies [`MIN_LILYPOND_VERSION`].
-pub fn check_lilypond() -> Result<VersionCheck, LilypondError> {
-    check_lilypond_with_min_version(MIN_LILYPOND_VERSION)
+/// Checks a configured LilyPond executable against [`MIN_LILYPOND_VERSION`].
+pub fn check_lilypond_executable(executable: Option<&Path>) -> Result<VersionCheck, LilypondError> {
+    check_lilypond_executable_with_min_version(executable, MIN_LILYPOND_VERSION)
 }
 
-/// Checks that LilyPond is installed and satisfies the provided minimum version.
-pub fn check_lilypond_with_min_version(
+/// Checks the configured LilyPond executable against the provided minimum version.
+pub fn check_lilypond_executable_with_min_version(
+    executable: Option<&Path>,
     min_required: Version,
 ) -> Result<VersionCheck, LilypondError> {
-    let output = Command::new(LILYPOND_BIN)
+    let output = Command::new(lilypond_program(executable))
         .arg("--version")
         .output()
-        .map_err(map_spawn_error)?;
+        .map_err(|error| map_spawn_error(error, executable))?;
 
     if !output.status.success() {
         let details = String::from_utf8_lossy(&output.stderr).to_string();
@@ -59,7 +60,7 @@ pub fn check_lilypond_with_min_version(
 
 /// Starts a LilyPond compilation process and returns a session for non-blocking log polling.
 pub fn spawn_compile(request: CompileRequest) -> Result<CompileSession, LilypondError> {
-    let mut command = Command::new(LILYPOND_BIN);
+    let mut command = Command::new(lilypond_program(request.executable.as_deref()));
     command
         .args(&request.args)
         .arg(&request.score_path)
@@ -70,7 +71,9 @@ pub fn spawn_compile(request: CompileRequest) -> Result<CompileSession, Lilypond
         command.current_dir(working_dir);
     }
 
-    let mut child = command.spawn().map_err(map_spawn_error)?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| map_spawn_error(error, request.executable.as_deref()))?;
 
     let stdout = child
         .stdout
@@ -166,7 +169,7 @@ pub struct VersionCheck {
 pub enum LilypondError {
     /// LilyPond binary could not be found in `PATH`.
     #[error("binary not found in PATH: {bin}")]
-    BinaryNotFound { bin: &'static str },
+    BinaryNotFound { bin: String },
     /// A LilyPond command failed with a non-zero status.
     #[error("{context} failed: {details}")]
     CommandFailed {
@@ -190,6 +193,8 @@ pub enum LilypondError {
 /// Compile request configuration for a single LilyPond invocation.
 #[derive(Debug, Clone)]
 pub struct CompileRequest {
+    /// Optional LilyPond executable. Defaults to `lilypond` in `PATH`.
+    pub executable: Option<PathBuf>,
     /// Path to the `.ly` score file.
     pub score_path: PathBuf,
     /// Extra CLI arguments passed to LilyPond.
@@ -202,6 +207,7 @@ impl CompileRequest {
     /// Creates a request for the given score path.
     pub fn new(score_path: impl Into<PathBuf>) -> Self {
         Self {
+            executable: None,
             score_path: score_path.into(),
             args: Vec::new(),
             working_dir: None,
@@ -275,9 +281,23 @@ where
     })
 }
 
-fn map_spawn_error(error: io::Error) -> LilypondError {
+fn lilypond_program(executable: Option<&Path>) -> &std::ffi::OsStr {
+    executable
+        .map(Path::as_os_str)
+        .unwrap_or_else(|| std::ffi::OsStr::new(LILYPOND_BIN))
+}
+
+fn lilypond_program_label(executable: Option<&Path>) -> String {
+    executable
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| LILYPOND_BIN.to_string())
+}
+
+fn map_spawn_error(error: io::Error, executable: Option<&Path>) -> LilypondError {
     if error.kind() == io::ErrorKind::NotFound {
-        LilypondError::BinaryNotFound { bin: LILYPOND_BIN }
+        LilypondError::BinaryNotFound {
+            bin: lilypond_program_label(executable),
+        }
     } else {
         LilypondError::Io(error)
     }

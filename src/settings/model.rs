@@ -210,6 +210,13 @@ pub(crate) struct PlaybackSettings {
     pub(crate) chase_notes_on_seek: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct LilypondSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) executable: Option<PathBuf>,
+}
+
 pub(crate) use lilypalooza_plugin_scan::{PluginFormat, PluginSearchPath};
 
 #[cfg(test)]
@@ -654,6 +661,7 @@ pub(crate) struct AppSettings {
         skip_serializing_if = "is_default_editor_recent_files_limit"
     )]
     pub(crate) editor_recent_files_limit: usize,
+    pub(crate) lilypond: LilypondSettings,
     pub(crate) playback: PlaybackSettings,
     #[serde(default = "default_au_search_paths")]
     pub(crate) au_search_paths: Vec<PathBuf>,
@@ -671,6 +679,7 @@ impl Default for AppSettings {
             editor_view: EditorViewSettings::default(),
             editor_theme: EditorThemeSettings::default(),
             editor_recent_files_limit: default_editor_recent_files_limit(),
+            lilypond: LilypondSettings::default(),
             playback: PlaybackSettings::default(),
             au_search_paths: default_au_search_paths(),
             clap_search_paths: default_clap_search_paths(),
@@ -816,6 +825,15 @@ pub(crate) fn render_settings_file(settings: &AppSettings) -> Result<String, tom
         &settings.editor_recent_files_limit.to_string(),
         &defaults.editor_recent_files_limit.to_string(),
     );
+
+    out.push_str("\n[lilypond]\n");
+    out.push_str("# LilyPond executable. Leave commented to use lilypond from PATH.\n");
+    if let Some(executable) = &settings.lilypond.executable {
+        out.push_str("executable = ");
+        out.push_str(&format!("{:?}\n", executable.display().to_string()));
+    } else {
+        out.push_str("# executable = \"/absolute/path/to/lilypond\"\n");
+    }
 
     out.push_str("\n[playback]\n");
     out.push_str("# Default startup SoundFont files.\n");

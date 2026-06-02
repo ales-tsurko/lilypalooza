@@ -16,8 +16,10 @@ pub(super) fn request_open_score_dialog() -> Task<Message> {
 pub(super) fn compile_request_for_score(
     score_path: &Path,
     output_prefix: &Path,
+    lilypond: &crate::settings::LilypondSettings,
 ) -> lilypond::CompileRequest {
     let mut request = lilypond::CompileRequest::new(score_path.to_path_buf());
+    request.executable = lilypond.executable.clone();
     request.args = lilypond_compile_args(output_prefix);
     request.working_dir = score_path.parent().map(Path::to_path_buf);
     request

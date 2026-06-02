@@ -25,7 +25,8 @@ impl Lilypalooza {
             }
         };
 
-        let request = compile_request_for_score(&selected_score.0, &output_prefix);
+        let request =
+            compile_request_for_score(&selected_score.0, &output_prefix, &self.lilypond_settings);
         self.logger.push("Starting LilyPond compile".to_string());
         self.compile_generation = self.compile_generation.wrapping_add(1);
         self.start_compile_request(request);

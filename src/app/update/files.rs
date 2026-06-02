@@ -18,9 +18,10 @@ use compile_helpers::*;
 use watcher_helpers::*;
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
-    use super::lilypond_compile_args;
+    use super::{compile_request_for_score, lilypond_compile_args};
+    use crate::settings::LilypondSettings;
 
     #[test]
     fn lilypond_compile_args_keep_interactive_svg_output() {
@@ -32,5 +33,23 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "-dpoint-and-click=note-event"));
         assert_eq!(args[args.len() - 2], "-o");
         assert_eq!(args[args.len() - 1], "/tmp/out");
+    }
+
+    #[test]
+    fn compile_request_uses_configured_lilypond_executable() {
+        let lilypond = LilypondSettings {
+            executable: Some(PathBuf::from("target/test-lilypond")),
+        };
+
+        let request = compile_request_for_score(
+            Path::new("score/main.ly"),
+            Path::new("target/out"),
+            &lilypond,
+        );
+
+        assert_eq!(
+            request.executable,
+            Some(PathBuf::from("target/test-lilypond"))
+        );
     }
 }

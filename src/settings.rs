@@ -13,8 +13,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AppSettings, PlaybackSettings, PluginFormat, PluginSearchPath, ShortcutBinding,
-        ShortcutKey, ShortcutKeyCode, default_plugin_search_paths,
+        AppSettings, LilypondSettings, PlaybackSettings, PluginFormat, PluginSearchPath,
+        ShortcutBinding, ShortcutKey, ShortcutKeyCode, default_plugin_search_paths,
         formatting::{
             format_shortcut_binding, parse_shortcut_binding, parse_shortcut_key,
             shortcut_key_code_string,
@@ -28,11 +28,33 @@ mod tests {
             render_settings_file(&AppSettings::default()).expect("default settings should render");
 
         assert!(contents.contains("[playback]"));
+        assert!(contents.contains("[lilypond]"));
+        assert!(contents.contains("# executable = \"/absolute/path/to/lilypond\""));
         assert!(contents.contains("# soundfonts = [\"/absolute/path/to/file.sf2\"]"));
         assert!(contents.contains("# device = \"default\""));
         assert!(contents.contains("# sample_rate = 48000"));
         assert!(contents.contains("# block_size = 64"));
         assert!(contents.contains("# chase_notes_on_seek = false"));
+    }
+
+    #[test]
+    fn settings_roundtrip_parses_lilypond_settings() {
+        let settings = AppSettings {
+            lilypond: LilypondSettings {
+                executable: Some(PathBuf::from("target/test-lilypond")),
+            },
+            ..AppSettings::default()
+        };
+
+        let contents =
+            render_settings_file(&settings).expect("settings with LilyPond path should render");
+        let parsed: AppSettings =
+            toml::from_str(&contents).expect("rendered settings should parse back");
+
+        assert_eq!(
+            parsed.lilypond.executable,
+            Some(PathBuf::from("target/test-lilypond"))
+        );
     }
 
     #[test]
