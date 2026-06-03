@@ -675,17 +675,21 @@ pub(crate) struct AppSettings {
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self {
-            editor_view: EditorViewSettings::default(),
-            editor_theme: EditorThemeSettings::default(),
-            editor_recent_files_limit: default_editor_recent_files_limit(),
-            lilypond: LilypondSettings::default(),
-            playback: PlaybackSettings::default(),
-            au_search_paths: default_au_search_paths(),
-            clap_search_paths: default_clap_search_paths(),
-            vst3_search_paths: default_vst3_search_paths(),
-            shortcuts: ShortcutSettings::default(),
-        }
+        app_settings_default()
+    }
+}
+
+fn app_settings_default() -> AppSettings {
+    AppSettings {
+        editor_view: EditorViewSettings::default(),
+        editor_theme: EditorThemeSettings::default(),
+        editor_recent_files_limit: default_editor_recent_files_limit(),
+        lilypond: LilypondSettings::default(),
+        playback: PlaybackSettings::default(),
+        au_search_paths: default_au_search_paths(),
+        clap_search_paths: default_clap_search_paths(),
+        vst3_search_paths: default_vst3_search_paths(),
+        shortcuts: ShortcutSettings::default(),
     }
 }
 
